@@ -111,8 +111,17 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int skip = 0, int take = 200);
 
     /// <summary>
+    /// Finished runs (Completed/Failed/Cancelled), not pinned, that still name a
+    /// worktree or local branch or own a session snapshot: what the retention
+    /// sweeper's backstop removes. Untracked, oldest first in a stable order; the
+    /// caller still applies its rule for Failed runs and pages past the
+    /// candidates it keeps with <paramref name="skip"/>.
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetRunsWithLeftoverLocalStateAsync(int skip = 0, int take = 200);
+
+    /// <summary>
     /// Every run that still names a worktree, in any state, untracked: what
-    /// Settings &gt; Storage measures and picks cleanup candidates from.
+    /// Settings &gt; Storage measures.
     /// </summary>
     Task<IReadOnlyList<LoopRun>> GetRunsWithWorktreeAsync();
 
@@ -193,6 +202,22 @@ public interface ILoopRunStore
     /// new reason.
     /// </summary>
     Task SetHumanFeedbackReasonAsync(Guid runId, string? reason);
+
+    /// <summary>
+    /// End the run, touching only its status, completion time, human-feedback
+    /// reason and UpdatedAt, so a pointer or pin another writer changed since the
+    /// caller read the run is not written back over. A copy of the run this store
+    /// already tracks is brought in step.
+    /// </summary>
+    Task MarkEndedAsync(Guid runId, LoopRunStatus status, DateTime completedAt, string? humanFeedbackReason);
+
+    /// <summary>
+    /// Pin or unpin the run, touching only <c>Retain</c> (and UpdatedAt), so the
+    /// pointers an end-of-run cleanup cleared, or a status another writer set, are
+    /// not written back. A copy of the run this store already tracks is brought in
+    /// step. False when there is no such run.
+    /// </summary>
+    Task<bool> SetRetainAsync(Guid runId, bool retain);
 
     /// <summary>
     /// Clear the run's <c>WorktreePath</c> and <c>BranchName</c> once the state

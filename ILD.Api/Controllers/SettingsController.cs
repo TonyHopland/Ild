@@ -232,7 +232,7 @@ public class SettingsController : ControllerBase
             case AppSettingKeys.RunRetentionDays:
                 if (!int.TryParse(value, out var days) || days < 0 || days > 3650)
                 {
-                    error = "run.retentionDays must be an integer between 0 (delete when done) and 3650";
+                    error = "run.retentionDays must be an integer between 0 (delete at the next cleanup) and 3650";
                     return false;
                 }
                 break;

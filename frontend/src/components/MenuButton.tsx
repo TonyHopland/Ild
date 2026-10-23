@@ -9,6 +9,8 @@ export interface MenuItem {
   /** Shown in the danger colour; still one click, the action itself confirms if it needs to. */
   danger?: boolean;
   disabled?: boolean;
+  /** What choosing it does, shown as its tooltip. */
+  title?: string;
 }
 
 /**
@@ -124,6 +126,7 @@ export default function MenuButton({
               tabIndex={-1}
               className={`menu-item ${item.danger ? "menu-item-danger" : ""}`}
               disabled={item.disabled}
+              title={item.title}
               onClick={() => {
                 close(true);
                 item.onSelect();

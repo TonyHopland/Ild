@@ -159,6 +159,20 @@ public class LoopRunStore : ILoopRunStore
             .Skip(skip).Take(take)
             .ToListAsync();
 
+    public async Task<IReadOnlyList<LoopRun>> GetRunsWithLeftoverLocalStateAsync(int skip = 0, int take = 200)
+        => await _db.LoopRuns.AsNoTracking()
+            .Where(r => !r.Retain
+                && (r.Status == LoopRunStatus.Completed
+                    || r.Status == LoopRunStatus.Failed
+                    || r.Status == LoopRunStatus.Cancelled)
+                && ((r.WorktreePath != null && r.WorktreePath != "")
+                    || (r.BranchName != null && r.BranchName != "")
+                    || _db.AdapterSessionSnapshots.Any(s => s.LoopRunId == r.Id)))
+            .OrderBy(r => r.CompletedAt)
+            .ThenBy(r => r.Id)
+            .Skip(skip).Take(take)
+            .ToListAsync();
+
     public async Task<IReadOnlyList<LoopRun>> GetRunsWithWorktreeAsync()
         => await _db.LoopRuns.AsNoTracking()
             .Where(r => r.WorktreePath != null && r.WorktreePath != "")
@@ -443,6 +457,40 @@ public class LoopRunStore : ILoopRunStore
             SetUnchanged(tracked.Property(r => r.HumanFeedbackReason), reason);
             SetUnchanged(tracked.Property(r => r.UpdatedAt), at);
         }
+    }
+
+    public async Task MarkEndedAsync(Guid runId, LoopRunStatus status, DateTime completedAt, string? humanFeedbackReason)
+    {
+        humanFeedbackReason = humanFeedbackReason is null ? null : AppDbContext.WithoutNul(humanFeedbackReason);
+        var at = DateTime.UtcNow;
+        await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, status)
+                .SetProperty(r => r.CompletedAt, completedAt)
+                .SetProperty(r => r.HumanFeedbackReason, humanFeedbackReason)
+                .SetProperty(r => r.UpdatedAt, at));
+        if (_db.ChangeTracker.Entries<LoopRun>().FirstOrDefault(e => e.Entity.Id == runId) is { } tracked)
+        {
+            SetUnchanged(tracked.Property(r => r.Status), status);
+            SetUnchanged(tracked.Property(r => r.CompletedAt), completedAt);
+            SetUnchanged(tracked.Property(r => r.HumanFeedbackReason), humanFeedbackReason);
+            SetUnchanged(tracked.Property(r => r.UpdatedAt), at);
+        }
+    }
+
+    public async Task<bool> SetRetainAsync(Guid runId, bool retain)
+    {
+        var at = DateTime.UtcNow;
+        var set = await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Retain, retain).SetProperty(r => r.UpdatedAt, at));
+        if (_db.ChangeTracker.Entries<LoopRun>().FirstOrDefault(e => e.Entity.Id == runId) is { } tracked)
+        {
+            SetUnchanged(tracked.Property(r => r.Retain), retain);
+            SetUnchanged(tracked.Property(r => r.UpdatedAt), at);
+        }
+        return set > 0;
     }
 
     public async Task<bool> ClearLocalGitStateAsync(Guid runId)

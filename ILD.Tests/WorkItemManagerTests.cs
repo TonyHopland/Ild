@@ -5,6 +5,7 @@ using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using System.Text.Json;
 
@@ -586,7 +587,7 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task CleanupToDone_keeps_worktree_and_marks_workitem_Done()
+    public async Task CleanupToDone_of_a_Failed_run_marks_workitem_Done_and_leaves_its_worktree_to_the_sweeper()
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
@@ -623,9 +624,8 @@ public class WorkItemManagerTests
 
         await mgr.CleanupToDoneAsync(TestActors.Human, id);
 
-        // Worktree and branch live exactly as long as the run row: nothing is
-        // destroyed here — the retention sweeper (or a manual run delete)
-        // reclaims them together with the run.
+        // A Failed run is not ended by the Done transition; the sweeper's
+        // backstop removes its local state now that its item is Done.
         repoMgr.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
@@ -637,7 +637,7 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task CleanupToBacklog_keeps_worktree_resets_to_Backlog_and_finishes_run()
+    public async Task CleanupToBacklog_resets_to_Backlog_and_finishes_run()
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
@@ -676,9 +676,6 @@ public class WorkItemManagerTests
 
         await mgr.CleanupToBacklogAsync(TestActors.Human, id);
 
-        // Worktree and branch stay with the run row for inspection; the next
-        // run gets its own branch/worktree, so nothing can leak into it.
-        repoMgr.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Backlog, after!.Status);
         Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
@@ -686,9 +683,142 @@ public class WorkItemManagerTests
         Assert.Null(after.CurrentLoopRunId);
         var freshRun = db.Fresh().LoopRuns.Single(r => r.Id == runId);
         Assert.Equal(LoopRunStatus.Completed, freshRun.Status);
-        Assert.Equal("/tmp/worktrees/test-wi", freshRun.WorktreePath);
-        Assert.Equal("ild/wi-x-run-1", freshRun.BranchName);
         Assert.NotNull(freshRun.CompletedAt);
+    }
+
+    public enum HandEnd { DragToDone, CleanupToDone, CleanupToBacklog }
+
+    private static Task<bool> EndByHandAsync(WorkItemManager mgr, HandEnd route, string workItemId) => route switch
+    {
+        HandEnd.DragToDone => mgr.TransitionToDoneAsync(TestActors.Human, workItemId),
+        HandEnd.CleanupToDone => mgr.CleanupToDoneAsync(TestActors.Human, workItemId),
+        _ => mgr.CleanupToBacklogAsync(TestActors.Human, workItemId),
+    };
+
+    /// <summary>
+    /// A manager wired with the real end-of-run cleaner, whose scopes see the same
+    /// database and the same engine as the manager does.
+    /// </summary>
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<ILoopEngine> engine, HashSet<Guid> owned, IFinishedRunCleaner cleaner) SetupWithCleaner()
+    {
+        var db = new TestDb();
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var owned = new HashSet<Guid>();
+        var engine = new Mock<ILoopEngine>();
+        engine.Setup(e => e.GetActiveRunIdsAsync()).ReturnsAsync(() => owned.ToArray());
+        var reclaimer = new Mock<IRunReclaimer>();
+        reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(true);
+        var services = new ServiceCollection();
+        services.AddScopedRunStores(db);
+        services.AddSingleton(reclaimer.Object);
+        services.AddSingleton(engine.Object);
+        services.AddRealFinishedRunCleaner();
+        var cleaner = services.BuildServiceProvider().GetRequiredService<IFinishedRunCleaner>();
+        var eventLog = new Mock<IEventLogService>();
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance,
+            engine: engine.Object, runReclaimer: reclaimer.Object, finishedRunCleaner: cleaner);
+        return (mgr, db, repo.Id, engine, owned, cleaner);
+    }
+
+    private static async Task<Guid> SeedRunWithLocalStateAsync(TestDb db, string workItemId, LoopRunStatus status)
+    {
+        var (runId, _) = SeedRunWithVersion(db, workItemId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
+        run!.Status = status;
+        run.WorktreePath = "/tmp/worktrees/hand-ended";
+        run.BranchName = "ild/wi-x-run-hand";
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        await FinishedRunCleanerWiring.SeedSnapshotAsync(db, runId);
+        return runId;
+    }
+
+    [Theory]
+    [InlineData(HandEnd.DragToDone)]
+    [InlineData(HandEnd.CleanupToDone)]
+    [InlineData(HandEnd.CleanupToBacklog)]
+    public async Task Ending_a_parked_run_by_hand_removes_its_local_state_and_keeps_the_run(HandEnd route)
+    {
+        var (mgr, db, repoId, _, _, _) = SetupWithCleaner();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
+        var runId = await SeedRunWithLocalStateAsync(db, id, LoopRunStatus.WaitingHuman);
+
+        Assert.True(await EndByHandAsync(mgr, route, id));
+
+        var run = db.Fresh().LoopRuns.Single(r => r.Id == runId);
+        Assert.True(run.Status is LoopRunStatus.Completed or LoopRunStatus.Cancelled);
+        Assert.NotNull(run.CompletedAt);
+        Assert.Null(run.WorktreePath);
+        Assert.Null(run.BranchName);
+        Assert.Equal(0, FinishedRunCleanerWiring.SnapshotCount(db, runId));
+        Assert.Equal(route == HandEnd.CleanupToBacklog ? RemoteWorkItemStatus.Backlog : RemoteWorkItemStatus.Done,
+            (await mgr.GetWorkItemAsync(id))!.Status);
+    }
+
+    [Theory]
+    [InlineData(HandEnd.DragToDone)]
+    [InlineData(HandEnd.CleanupToDone)]
+    [InlineData(HandEnd.CleanupToBacklog)]
+    public async Task Ending_a_run_the_engine_still_drives_removes_nothing_until_its_loop_lets_go(HandEnd route)
+    {
+        var (mgr, db, repoId, engine, owned, cleaner) = SetupWithCleaner();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
+        var runId = await SeedRunWithLocalStateAsync(db, id, LoopRunStatus.Running);
+        owned.Add(runId);
+        // As the engine does: the row is ended at once, the loop unwinds later.
+        engine.Setup(e => e.StopRunAsync(runId, It.IsAny<string>())).Returns(async () =>
+        {
+            await using var ctx = db.Fresh();
+            var row = await ctx.LoopRuns.SingleAsync(r => r.Id == runId);
+            row.Status = LoopRunStatus.Cancelled;
+            row.CompletedAt = DateTime.UtcNow;
+            await ctx.SaveChangesAsync();
+            return id;
+        });
+
+        await EndByHandAsync(mgr, route, id);
+
+        var during = db.Fresh().LoopRuns.Single(r => r.Id == runId);
+        Assert.Equal("/tmp/worktrees/hand-ended", during.WorktreePath);
+        Assert.Equal("ild/wi-x-run-hand", during.BranchName);
+        Assert.Equal(1, FinishedRunCleanerWiring.SnapshotCount(db, runId));
+
+        // The loop exits and hands the run to the cleaner.
+        owned.Remove(runId);
+        await cleaner.RemoveLocalStateAsync(runId);
+
+        var after = db.Fresh().LoopRuns.Single(r => r.Id == runId);
+        Assert.Null(after.WorktreePath);
+        Assert.Null(after.BranchName);
+        Assert.Equal(0, FinishedRunCleanerWiring.SnapshotCount(db, runId));
+    }
+
+    [Theory]
+    [InlineData(HandEnd.CleanupToDone)]
+    [InlineData(HandEnd.CleanupToBacklog)]
+    public async Task Ending_a_run_by_hand_never_writes_back_pointers_the_engines_cleaner_already_cleared(HandEnd route)
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
+        // The manager holds the run as it read it, worktree and all.
+        var runId = await SeedRunWithLocalStateAsync(db, id, LoopRunStatus.Cancelled);
+        Assert.NotNull(await db.LoopRuns.GetLatestByWorkItemAsync(id));
+
+        // Meanwhile the engine's loop unwinds and its cleaner clears the pointers.
+        await new ILD.Data.Stores.LoopRunStore(db.Fresh()).ClearLocalGitStateAsync(runId);
+
+        await EndByHandAsync(mgr, route, id);
+
+        var after = db.Fresh().LoopRuns.Single(r => r.Id == runId);
+        Assert.Null(after.WorktreePath);
+        Assert.Null(after.BranchName);
+        Assert.NotNull(after.CompletedAt);
     }
 
     [Fact]

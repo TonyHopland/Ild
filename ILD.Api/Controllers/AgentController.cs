@@ -950,7 +950,9 @@ public class AgentController : ControllerBase
     /// <summary>
     /// The analytics dashboard's per-template rows for the same filters, each with
     /// per-node figures from the runs that still exist (<c>runsWithNodeDetail</c>
-    /// of them; deleted runs keep no per-node history).
+    /// of them; deleted runs keep no per-node history). A finished run is kept for
+    /// the run retention period and then deleted; its worktree goes when it ends,
+    /// unless it is pinned.
     /// </summary>
     [HttpGet("analytics/templates")]
     public async Task<IActionResult> GetTemplateAnalytics(

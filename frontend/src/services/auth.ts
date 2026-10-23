@@ -56,8 +56,6 @@ import {
   UserSession,
   WorkItemServerConfig,
   StorageOverview,
-  WorktreeCleanupCandidates,
-  WorktreeCleanupResult,
   RunAnalyticsOverview,
   AnalyticsFilters,
   NetworkForward,
@@ -1243,12 +1241,6 @@ export const storageService = {
   /** Measuring walks the disk, so a caller that loses interest should abort it. */
   getOverview: async (signal?: AbortSignal): Promise<StorageOverview> => {
     return api.get<StorageOverview>("/storage", signal);
-  },
-  getCleanupCandidates: async (): Promise<WorktreeCleanupCandidates> => {
-    return api.get<WorktreeCleanupCandidates>("/storage/worktree-cleanup");
-  },
-  cleanUpWorktrees: async (runIds: string[]): Promise<WorktreeCleanupResult> => {
-    return api.post<WorktreeCleanupResult>("/storage/worktree-cleanup", { runIds });
   },
   /** Deletes a repository's kept preview data: the storage page's Delete and the repository's Reset. Refused (409) while a preview of the repository is running. */
   deletePreviewData: async (repositoryId: string): Promise<void> => {

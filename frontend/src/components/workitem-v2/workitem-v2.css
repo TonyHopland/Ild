@@ -1211,6 +1211,12 @@
   margin: 0.25rem 0 0.5rem;
 }
 
+.wiv2-run-ended-note {
+  margin: 0.25rem 0 0.5rem;
+  color: #a0a0b0;
+  font-size: 0.8rem;
+}
+
 .wiv2-abandon-confirm {
   display: inline-flex;
   align-items: center;

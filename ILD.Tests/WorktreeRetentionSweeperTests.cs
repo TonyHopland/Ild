@@ -2,6 +2,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
+using ILD.Data;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
@@ -29,7 +30,7 @@ public class WorktreeRetentionSweeperTests
 
         await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 30));
 
-        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.Once);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.AtLeastOnce);
         Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
     }
 
@@ -83,13 +84,14 @@ public class WorktreeRetentionSweeperTests
 
         if (reclaimed)
         {
-            reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.Once);
+            reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.AtLeastOnce);
             Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
         }
         else
         {
-            reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
-            Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
+            var kept = await ReadAsync(db, run.Id);
+            Assert.NotNull(kept);
+            Assert.Null(kept!.WorktreePath);
         }
     }
 
@@ -145,7 +147,7 @@ public class WorktreeRetentionSweeperTests
             .ReturnsAsync(new WorkItemView { Id = workItemId, Status = RemoteWorkItemStatus.Done });
         await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays));
 
-        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == old.Id)), Times.Once);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == old.Id)), Times.AtLeastOnce);
         Assert.Null(await db.LoopRuns.GetByIdAsync(old.Id));
     }
 
@@ -182,7 +184,6 @@ public class WorktreeRetentionSweeperTests
             Assert.Null(await db.LoopRuns.GetByIdAsync(id));
         foreach (var id in keptRuns)
             Assert.NotNull(await db.LoopRuns.GetByIdAsync(id));
-        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.WorkItemId == activeItem)), Times.Never);
     }
 
     [Fact]
@@ -202,7 +203,7 @@ public class WorktreeRetentionSweeperTests
 
         // Reclaim was attempted but reported failure: the row must survive so a
         // later sweep can retry — deleting it would orphan the worktree forever.
-        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.Once);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.AtLeastOnce);
         Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
 
         // A later sweep where the reclaim succeeds deletes the row.
@@ -279,11 +280,13 @@ public class WorktreeRetentionSweeperTests
             });
             return m.Object;
         });
+        services.AddScoped<IAdapterSessionSnapshotStore>(sp => new AdapterSessionSnapshotStore(sp.GetRequiredService<AppDbContext>()));
         services.AddSingleton(reclaimer.Object);
         services.AddSingleton(settings.Object);
-        var scopes = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+        services.AddSingleton(TestActors.Instance);
+        services.AddRealFinishedRunCleaner();
 
-        await InvokeSweepOnceAsync(new WorktreeRetentionSweeper(scopes, TestActors.Instance, NullLogger<WorktreeRetentionSweeper>.Instance));
+        await InvokeSweepOnceAsync(NewSweeper(services.BuildServiceProvider()));
 
         await using var check = db.Fresh();
         Assert.False(await check.LoopRuns.AnyAsync(r => r.Id == first.Id));
@@ -319,6 +322,134 @@ public class WorktreeRetentionSweeperTests
             Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
     }
 
+    public enum Item { Running, HumanFeedback, Done, Gone }
+
+    /// <summary>
+    /// The backstop: whatever a finished run left behind — from before end-of-run removal
+    /// existed, a crash, or a removal that failed — goes on the next pass, while the run
+    /// row stays until retention.
+    /// </summary>
+    [Theory]
+    [InlineData(LoopRunStatus.Completed, Item.Running, true)]
+    [InlineData(LoopRunStatus.Completed, Item.Done, true)]
+    [InlineData(LoopRunStatus.Cancelled, Item.HumanFeedback, true)]
+    [InlineData(LoopRunStatus.Cancelled, Item.Gone, true)]
+    [InlineData(LoopRunStatus.Failed, Item.Done, true)]
+    [InlineData(LoopRunStatus.Failed, Item.Gone, true)]
+    // A Failed run of an item still in play may be reopened; it keeps everything.
+    [InlineData(LoopRunStatus.Failed, Item.HumanFeedback, false)]
+    [InlineData(LoopRunStatus.Failed, Item.Running, false)]
+    [InlineData(LoopRunStatus.WaitingHuman, Item.Done, false)]
+    [InlineData(LoopRunStatus.Running, Item.Done, false)]
+    public async Task Sweep_removes_what_a_finished_run_left_behind_and_keeps_the_run_until_retention(
+        LoopRunStatus status, Item item, bool removed)
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var workItemId = Guid.NewGuid().ToString();
+        var run = SeedRun(db, version.Id, workItemId, status,
+            completedAt: status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman ? null : DateTime.UtcNow.AddDays(-1),
+            worktree: "/tmp/wt/left", branch: "ild/wi-x-run-left");
+        await FinishedRunCleanerWiring.SeedSnapshotAsync(db, run.Id);
+        var workItems = item == Item.Gone
+            ? new Mock<IWorkItemManager>()
+            : WorkItemsReturning(workItemId, item switch
+            {
+                Item.Running => RemoteWorkItemStatus.Running,
+                Item.HumanFeedback => RemoteWorkItemStatus.HumanFeedback,
+                _ => RemoteWorkItemStatus.Done,
+            });
+        var reclaimer = ReclaimerReturning(true);
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 14));
+
+        var after = await ReadAsync(db, run.Id);
+        Assert.NotNull(after);
+        if (removed)
+        {
+            reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.Once);
+            Assert.Null(after!.WorktreePath);
+            Assert.Null(after.BranchName);
+            Assert.Equal(0, FinishedRunCleanerWiring.SnapshotCount(db, run.Id));
+        }
+        else
+        {
+            reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
+            Assert.Equal("/tmp/wt/left", after!.WorktreePath);
+            Assert.Equal("ild/wi-x-run-left", after.BranchName);
+            Assert.Equal(1, FinishedRunCleanerWiring.SnapshotCount(db, run.Id));
+        }
+    }
+
+    [Fact]
+    public async Task Sweep_deletes_snapshots_a_finished_run_left_behind_without_a_worktree()
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var workItemId = Guid.NewGuid().ToString();
+        var run = SeedRun(db, version.Id, workItemId, LoopRunStatus.Completed,
+            completedAt: DateTime.UtcNow.AddDays(-1), worktree: null, branch: null);
+        await FinishedRunCleanerWiring.SeedSnapshotAsync(db, run.Id);
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, WorkItemsReturning(workItemId, RemoteWorkItemStatus.Running).Object,
+            ReclaimerReturning(true).Object, retentionDays: 14));
+
+        Assert.Equal(0, FinishedRunCleanerWiring.SnapshotCount(db, run.Id));
+        Assert.NotNull(await ReadAsync(db, run.Id));
+    }
+
+    [Fact]
+    public async Task Sweep_leaves_a_finished_run_the_engine_still_drives_alone()
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var workItemId = Guid.NewGuid().ToString();
+        var run = SeedRun(db, version.Id, workItemId, LoopRunStatus.Cancelled,
+            completedAt: DateTime.UtcNow.AddDays(-1), worktree: "/tmp/wt/owned", branch: "ild/wi-x-run-owned");
+        await FinishedRunCleanerWiring.SeedSnapshotAsync(db, run.Id);
+        var reclaimer = ReclaimerReturning(true);
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, WorkItemsReturning(workItemId, RemoteWorkItemStatus.Done).Object,
+            reclaimer.Object, retentionDays: 14, run.Id));
+
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
+        Assert.Equal("/tmp/wt/owned", (await ReadAsync(db, run.Id))!.WorktreePath);
+        Assert.Equal(1, FinishedRunCleanerWiring.SnapshotCount(db, run.Id));
+    }
+
+    [Fact]
+    public async Task A_pinned_run_keeps_everything_until_it_is_unpinned_and_then_the_next_sweep_removes_its_leftovers()
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var workItemId = Guid.NewGuid().ToString();
+        var run = SeedRun(db, version.Id, workItemId, LoopRunStatus.Completed,
+            completedAt: DateTime.UtcNow.AddDays(-1), worktree: "/tmp/wt/pinned", branch: "ild/wi-x-run-pinned", retain: true);
+        await FinishedRunCleanerWiring.SeedSnapshotAsync(db, run.Id);
+        var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.Done);
+        var reclaimer = ReclaimerReturning(true);
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 14));
+
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
+        Assert.Equal("/tmp/wt/pinned", (await ReadAsync(db, run.Id))!.WorktreePath);
+        Assert.Equal(1, FinishedRunCleanerWiring.SnapshotCount(db, run.Id));
+
+        await using (var user = db.Fresh())
+        {
+            (await user.LoopRuns.SingleAsync(r => r.Id == run.Id)).Retain = false;
+            await user.SaveChangesAsync();
+        }
+        db.Context.ChangeTracker.Clear();
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 14));
+
+        var after = await ReadAsync(db, run.Id);
+        Assert.NotNull(after);
+        Assert.Null(after!.WorktreePath);
+        Assert.Equal(0, FinishedRunCleanerWiring.SnapshotCount(db, run.Id));
+    }
+
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
@@ -330,7 +461,7 @@ public class WorktreeRetentionSweeperTests
     }
 
     private static LoopRun SeedRun(TestDb db, Guid versionId, string workItemId, LoopRunStatus status,
-        DateTime? completedAt, string worktree, string branch, bool retain = false, DateTime? startedAt = null)
+        DateTime? completedAt, string? worktree, string? branch, bool retain = false, DateTime? startedAt = null)
     {
         var run = new LoopRun
         {
@@ -391,19 +522,33 @@ public class WorktreeRetentionSweeperTests
         return m;
     }
 
-    private static WorktreeRetentionSweeper BuildSweeper(TestDb db, IWorkItemManager workItems, IRunReclaimer reclaimer, int retentionDays)
+    private static WorktreeRetentionSweeper BuildSweeper(
+        TestDb db, IWorkItemManager workItems, IRunReclaimer reclaimer, int retentionDays, params Guid[] engineOwned)
     {
         var settings = new Mock<ISchedulerSettingsService>();
         settings.Setup(s => s.GetRunRetentionDaysAsync(It.IsAny<CancellationToken>())).ReturnsAsync(retentionDays);
+        var engine = new Mock<ILoopEngine>();
+        engine.Setup(e => e.GetActiveRunIdsAsync()).ReturnsAsync(engineOwned);
 
         var services = new ServiceCollection();
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
+        services.AddSingleton<IAdapterSessionSnapshotStore>(new AdapterSessionSnapshotStore(db.Context));
         services.AddSingleton(workItems);
         services.AddSingleton(reclaimer);
         services.AddSingleton(settings.Object);
-        var provider = services.BuildServiceProvider();
-        var scopes = provider.GetRequiredService<IServiceScopeFactory>();
-        return new WorktreeRetentionSweeper(scopes, TestActors.Instance, NullLogger<WorktreeRetentionSweeper>.Instance);
+        services.AddSingleton(engine.Object);
+        services.AddSingleton(TestActors.Instance);
+        services.AddRealFinishedRunCleaner();
+        return NewSweeper(services.BuildServiceProvider());
+    }
+
+    private static WorktreeRetentionSweeper NewSweeper(IServiceProvider provider)
+        => ActivatorUtilities.CreateInstance<WorktreeRetentionSweeper>(provider);
+
+    private static async Task<LoopRun?> ReadAsync(TestDb db, Guid runId)
+    {
+        await using var ctx = db.Fresh();
+        return await ctx.LoopRuns.AsNoTracking().FirstOrDefaultAsync(r => r.Id == runId);
     }
 
     private static Task InvokeSweepOnceAsync(WorktreeRetentionSweeper sweeper) =>

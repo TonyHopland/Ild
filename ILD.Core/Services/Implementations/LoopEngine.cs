@@ -307,6 +307,8 @@ public sealed class LoopEngine : ILoopEngine
             try { cts.Cancel(); } catch { }
         }
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Cancelled);
+        // A parked run is cleaned here; one a loop still drives is cleaned as the loop exits.
+        await TrySafe(runId, () => RemoveLocalStateIfEndedAsync(runId));
         return run.WorkItemId;
     }
 
@@ -783,7 +785,11 @@ public sealed class LoopEngine : ILoopEngine
         run.CurrentNodeId = cleanup.Id;
         await loopRunStore.UpdateRunAsync(run);
         await ExecuteSingleNodeAsync(run, cleanup, sp, CancellationToken.None);
+        await TrySafe(runId, () => RemoveLocalStateIfEndedAsync(runId));
     }
+
+    private Task RemoveLocalStateIfEndedAsync(Guid runId)
+        => _sp.GetService<IFinishedRunCleaner>()?.RemoveLocalStateAsync(runId) ?? Task.CompletedTask;
 
     // ----- Core loop -----
 
@@ -849,6 +855,8 @@ public sealed class LoopEngine : ILoopEngine
                 _runTasks.TryRemove(runId, out _);
                 _runCts.TryRemove(runId, out _);
                 cts.Dispose();
+                // Only now that no loop owns the run may its worktree go.
+                await TrySafe(runId, () => RemoveLocalStateIfEndedAsync(runId));
             }
         });
         _runTasks[runId] = task;

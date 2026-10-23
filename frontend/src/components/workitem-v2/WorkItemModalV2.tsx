@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import "./workitem-v2.css";
-import { WorkItem, WorkItemStatus } from "../../types";
+import { LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
 import { workItemService } from "../../services/auth";
 import useRenderedPrompt from "../../hooks/useRenderedPrompt";
 import ConfirmModal from "../ConfirmModal";
@@ -292,7 +292,14 @@ export default function WorkItemModalV2({
   // Files and Preview read the run's worktree; without one they stay in the
   // strip, disabled with a reason, instead of opening onto an empty panel.
   const hasWorktree = Boolean(workItem.worktreePath);
-  const noWorktree = "No worktree yet: available once a run has started";
+  const currentRunStatus = detail.runs.find((r) => r.id === workItem.currentLoopRunId)?.status;
+  const currentRunFinished =
+    currentRunStatus === LoopRunStatus.Completed ||
+    currentRunStatus === LoopRunStatus.Cancelled ||
+    currentRunStatus === LoopRunStatus.Failed;
+  const noWorktree = currentRunFinished
+    ? "No worktree: the item's run has finished"
+    : "No worktree yet: available once a run has started";
   // A tab's dot says what is going on there; screen readers hear it in words.
   const tabs: { id: TabId; label: string; dot?: string | false; disabledReason?: string }[] = [
     { id: "overview", label: "Overview" },
@@ -326,6 +333,7 @@ export default function WorkItemModalV2({
         {
           id: "cleanup-done",
           label: "Clean up → Done",
+          title: `End the run and mark the work item Done. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept.`,
           disabled: currentRunBlocked,
           onSelect: () =>
             void detail.runLock.hold(
@@ -337,6 +345,7 @@ export default function WorkItemModalV2({
         {
           id: "cleanup-backlog",
           label: "Clean up → Backlog",
+          title: `End the run and send the work item back to Backlog. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept.`,
           disabled: currentRunBlocked,
           onSelect: () =>
             void detail.runLock.hold(

@@ -665,6 +665,11 @@ export interface LoopRun {
   aiTraversalCount?: number;
   startedAt: string;
   completedAt: string | null;
+  /**
+   * Until when an ended run's history is kept: when it ended plus the retention
+   * days. Null while the run has not ended, or is pinned; absent on run lists.
+   */
+  historyKeptUntil?: string | null;
   /** Run-level token/cost totals summed from the run's nodes. */
   totalInputTokens?: number;
   totalOutputTokens?: number;
@@ -1034,33 +1039,6 @@ export interface StorageCategory {
 
 export interface StorageOverview {
   categories: StorageCategory[];
-}
-
-export interface WorktreeCleanupCandidate {
-  runId: string;
-  workItemId: string;
-  workItemTitle: string;
-  repositoryId: string | null;
-  repositoryName: string | null;
-  bytes: number | null;
-  incomplete: boolean;
-}
-
-export interface WorktreeCleanupCandidates {
-  candidates: WorktreeCleanupCandidate[];
-  totalBytes: number | null;
-}
-
-export interface WorktreeCleanupRunResult {
-  runId: string;
-  outcome: "Cleaned" | "Skipped" | "Failed";
-  bytes: number | null;
-  reason: string | null;
-}
-
-export interface WorktreeCleanupResult {
-  results: WorktreeCleanupRunResult[];
-  totalBytes: number | null;
 }
 
 export interface RemoteProviderTypeOption {

@@ -214,7 +214,9 @@ export default function HaltSteerControls({
             (confirmingAbandon ? (
               <span className="wiv2-abandon-confirm" role="group" aria-label="Confirm abandon run">
                 <span className="wiv2-abandon-prompt">
-                  Abandon this run and reset the work item to Backlog?
+                  Abandon this run and reset the work item to Backlog? Its worktree, local branch
+                  and AI session data are removed unless it is pinned; the run and its history are
+                  kept.
                 </span>
                 <button
                   type="button"
@@ -239,7 +241,7 @@ export default function HaltSteerControls({
                 className="btn btn-sm btn-danger"
                 onClick={() => setConfirmingAbandon(true)}
                 disabled={blocked}
-                title="Stop this run and send the work item back to Backlog so you can edit the description and try again on a new run"
+                title="Stop this run and send the work item back to Backlog so you can edit the description and try again on a new run. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept."
               >
                 Abandon run
               </button>

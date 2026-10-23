@@ -21,9 +21,7 @@ using static ILD.Tests.Integration.StorageApiTests;
 namespace ILD.Tests.Integration;
 
 /// <summary>
-/// Settings &gt; Storage: the cleanup of worktrees whose work items are Done, and
-/// who may call the storage endpoints. Freed sizes are checked against real files
-/// on disk — allocated blocks and hard links.
+/// Settings &gt; Storage: who may call the storage endpoints.
 /// </summary>
 [SupportedOSPlatform("linux")]
 public class StorageApiTests
@@ -35,225 +33,9 @@ public class StorageApiTests
     internal const long Slack = 128 * KiB;
 
     [Fact]
-    public async Task Cleanup_lists_every_finished_unpinned_run_of_a_Done_item_with_nothing_active_and_what_removing_it_frees()
-    {
-        var items = new WorkItems();
-        items.Add("wi-done", "Done item", RemoteWorkItemStatus.Done);
-        items.Add("wi-busy", "Busy item", RemoteWorkItemStatus.Done);
-        items.Add("wi-waiting", "Waiting item", RemoteWorkItemStatus.Done);
-        items.Add("wi-open", "Open item", RemoteWorkItemStatus.HumanFeedback);
-        await using var factory = new ApiFactory(configureServices: services =>
-        {
-            services.ReplaceSingleton(items.Client);
-            services.ReplaceSingleton<IRunReclaimer>(new RecordingReclaimer());
-        });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        using var scratch = new TempDir();
-        var worktrees = scratch.Path;
-        var alpha = await SeedRepositoryAsync(factory, "alpha");
-
-        string Tree(string name) { var p = Path.Combine(worktrees, name); Directory.CreateDirectory(p); return p; }
-        var d1Path = Tree("d1");
-        var d2Path = Tree("d2");
-        var d3Path = Tree("d3");
-        WriteFile(Path.Combine(d1Path, "own.bin"), 1 * MiB);
-        WriteFile(Path.Combine(d1Path, "both.bin"), 2 * MiB);
-        HardLink(Path.Combine(d1Path, "both.bin"), Path.Combine(d2Path, "both.bin"));
-        WriteFile(Path.Combine(worktrees, ".store", "pkg.bin"), 4 * MiB);
-        HardLink(Path.Combine(worktrees, ".store", "pkg.bin"), Path.Combine(d1Path, "pkg.bin"));
-        WriteFile(Path.Combine(d3Path, "own.bin"), 512 * KiB);
-
-        var d1 = await SeedRunAsync(factory, "wi-done", LoopRunStatus.Completed, d1Path, alpha);
-        var d2 = await SeedRunAsync(factory, "wi-done", LoopRunStatus.Failed, d2Path, alpha);
-        var d3 = await SeedRunAsync(factory, "wi-done", LoopRunStatus.Cancelled, d3Path, repositoryId: null);
-        await SeedRunAsync(factory, "wi-done", LoopRunStatus.Completed, Tree("pinned"), alpha, retain: true);
-        await SeedRunAsync(factory, "wi-done", LoopRunStatus.Completed, worktreePath: null, alpha);
-        await SeedRunAsync(factory, "wi-busy", LoopRunStatus.Completed, Tree("busy-old"), alpha);
-        await SeedRunAsync(factory, "wi-busy", LoopRunStatus.Running, Tree("busy-live"), alpha);
-        await SeedRunAsync(factory, "wi-waiting", LoopRunStatus.Completed, Tree("waiting-old"), alpha);
-        await SeedRunAsync(factory, "wi-waiting", LoopRunStatus.WaitingHuman, Tree("waiting-live"), alpha);
-        await SeedRunAsync(factory, "wi-open", LoopRunStatus.Completed, Tree("open"), alpha);
-        await SeedRunAsync(factory, "wi-gone", LoopRunStatus.Completed, Tree("gone"), alpha);
-
-        var response = await client.GetAsync("/api/v1/storage/worktree-cleanup", TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.DoesNotContain(worktrees, body, StringComparison.Ordinal);
-        using var doc = JsonDocument.Parse(body);
-        var candidates = doc.RootElement.GetProperty("candidates").EnumerateArray()
-            .ToDictionary(c => c.GetProperty("runId").GetGuid());
-        Assert.Equal(new[] { d1, d2, d3 }.OrderBy(id => id), candidates.Keys.OrderBy(id => id));
-
-        var first = candidates[d1];
-        Assert.Equal("wi-done", first.GetProperty("workItemId").GetString());
-        Assert.Equal("Done item", first.GetProperty("workItemTitle").GetString());
-        Assert.Equal(alpha, first.GetProperty("repositoryId").GetGuid());
-        Assert.Equal("alpha", first.GetProperty("repositoryName").GetString());
-        Assert.Equal(JsonValueKind.Null, candidates[d3].GetProperty("repositoryId").ValueKind);
-        Assert.Equal(JsonValueKind.Null, candidates[d3].GetProperty("repositoryName").ValueKind);
-        Assert.All(candidates.Values, c => Assert.False(c.GetProperty("incomplete").GetBoolean()));
-
-        // Alone, d1 frees only own.bin: both.bin is still linked from d2 and
-        // pkg.bin from the store. Together d1+d2 also free both.bin, never pkg.bin.
-        AssertAbout(1 * MiB, Bytes(first));
-        Assert.True(Bytes(candidates[d2]) < Slack);
-        AssertAbout(512 * KiB, Bytes(candidates[d3]));
-        AssertAbout(1 * MiB + 2 * MiB + 512 * KiB, doc.RootElement.GetProperty("totalBytes").GetInt64());
-    }
-
-    [Fact]
-    public async Task Confirming_cleans_up_only_the_sent_runs_still_eligible_and_reports_each_one()
-    {
-        var items = new WorkItems();
-        foreach (var id in new[] { "wi-a", "wi-b", "wi-c", "wi-d", "wi-e", "wi-f" })
-            items.Add(id, "Item " + id, RemoteWorkItemStatus.Done);
-        items.Add("wi-open", "Open item", RemoteWorkItemStatus.Ready);
-        var reclaimer = new RecordingReclaimer();
-        await using var factory = new ApiFactory(configureServices: services =>
-        {
-            services.ReplaceSingleton(items.Client);
-            services.ReplaceSingleton<IRunReclaimer>(reclaimer);
-        });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        using var scratch = new TempDir();
-        var worktrees = scratch.Path;
-        var alpha = await SeedRepositoryAsync(factory, "alpha");
-
-        async Task<Guid> Eligible(string workItemId)
-        {
-            var path = Path.Combine(worktrees, workItemId);
-            WriteFile(Path.Combine(path, "own.bin"), 1 * MiB);
-            return await SeedRunAsync(factory, workItemId, LoopRunStatus.Completed, path, alpha);
-        }
-        var cleaned = await Eligible("wi-a");
-        var reopened = await Eligible("wi-b");
-        var pinned = await Eligible("wi-c");
-        var restarted = await Eligible("wi-d");
-        var stuck = await Eligible("wi-e");
-        var notSent = await Eligible("wi-f");
-        var neverEligible = await SeedRunAsync(factory, "wi-open", LoopRunStatus.Completed, Path.Combine(worktrees, "open"), alpha);
-        reclaimer.FailFor.Add(stuck);
-
-        var listed = JsonDocument.Parse(await client.GetStringAsync("/api/v1/storage/worktree-cleanup", TestContext.Current.CancellationToken));
-        Assert.Equal(
-            new[] { cleaned, reopened, pinned, restarted, stuck, notSent }.OrderBy(id => id),
-            listed.RootElement.GetProperty("candidates").EnumerateArray().Select(c => c.GetProperty("runId").GetGuid()).OrderBy(id => id));
-
-        // Between the list and the confirm, the world moves on.
-        items.Add("wi-b", "Item wi-b", RemoteWorkItemStatus.HumanFeedback);
-        await UpdateRunAsync(factory, pinned, r => r.Retain = true);
-        await SeedRunAsync(factory, "wi-d", LoopRunStatus.Running, Path.Combine(worktrees, "wi-d-new"), alpha);
-        var before = await ReadRunAsync(factory, stuck);
-        var unknown = Guid.NewGuid();
-
-        var response = await client.PostAsJsonAsync("/api/v1/storage/worktree-cleanup",
-            new { runIds = new[] { cleaned, reopened, pinned, restarted, stuck, neverEligible, unknown } },
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        var results = doc.RootElement.GetProperty("results").EnumerateArray()
-            .ToDictionary(r => r.GetProperty("runId").GetGuid());
-        Assert.Equal(7, results.Count);
-
-        Assert.Equal("Cleaned", results[cleaned].GetProperty("outcome").GetString(), ignoreCase: true);
-        // Measured before the reclaim took the directory away.
-        AssertAbout(1 * MiB, Bytes(results[cleaned]));
-        Assert.Equal(Bytes(results[cleaned]), doc.RootElement.GetProperty("totalBytes").GetInt64());
-        foreach (var skipped in new[] { reopened, pinned, restarted, neverEligible, unknown })
-        {
-            Assert.Equal("Skipped", results[skipped].GetProperty("outcome").GetString(), ignoreCase: true);
-            Assert.False(string.IsNullOrWhiteSpace(results[skipped].GetProperty("reason").GetString()));
-        }
-        Assert.Equal("Failed", results[stuck].GetProperty("outcome").GetString(), ignoreCase: true);
-
-        Assert.Equal(new[] { cleaned, stuck }.OrderBy(id => id), reclaimer.Reclaimed.OrderBy(id => id));
-        var after = await ReadRunAsync(factory, cleaned);
-        Assert.NotNull(after);
-        Assert.Null(after!.WorktreePath);
-        Assert.Null(after.BranchName);
-        var stuckAfter = await ReadRunAsync(factory, stuck);
-        Assert.Equal(before!.WorktreePath, stuckAfter!.WorktreePath);
-        Assert.Equal(before.BranchName, stuckAfter.BranchName);
-        foreach (var untouched in new[] { reopened, pinned, restarted, notSent, neverEligible })
-        {
-            var run = await ReadRunAsync(factory, untouched);
-            Assert.NotNull(run!.WorktreePath);
-            Assert.NotNull(run.BranchName);
-        }
-    }
-
-    [Fact]
-    public async Task A_cleanup_request_without_valid_run_ids_is_refused_and_changes_nothing()
-    {
-        var items = new WorkItems();
-        items.Add("wi-a", "Item", RemoteWorkItemStatus.Done);
-        var reclaimer = new RecordingReclaimer();
-        await using var factory = new ApiFactory(configureServices: services =>
-        {
-            services.ReplaceSingleton(items.Client);
-            services.ReplaceSingleton<IRunReclaimer>(reclaimer);
-        });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        using var scratch = new TempDir();
-        var path = Path.Combine(scratch.Path, "wi-a");
-        Directory.CreateDirectory(path);
-        var eligible = await SeedRunAsync(factory, "wi-a", LoopRunStatus.Completed, path, repositoryId: null);
-
-        foreach (var json in new[] { "{}", "{\"runIds\":null}", "{\"runIds\":[]}", $"{{\"runIds\":[\"{eligible}\",\"not-a-guid\"]}}" })
-        {
-            var response = await client.PostAsync("/api/v1/storage/worktree-cleanup",
-                new StringContent(json, Encoding.UTF8, "application/json"), TestContext.Current.CancellationToken);
-
-            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-            Assert.False(string.IsNullOrWhiteSpace(doc.RootElement.GetProperty("error").GetString()), json);
-        }
-
-        Assert.Empty(reclaimer.Reclaimed);
-        Assert.Equal(path, (await ReadRunAsync(factory, eligible))!.WorktreePath);
-    }
-
-    [Fact]
-    public async Task With_the_WorkItem_server_unreachable_both_cleanup_endpoints_answer_503_and_change_nothing()
-    {
-        var server = new Mock<IWorkItemServerClient>();
-        var outage = new HttpRequestException("Connection refused (workitem-server:8081)");
-        server.Setup(c => c.GetAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(outage);
-        server.Setup(c => c.ListAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<RemoteWorkItemStatus?>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(outage);
-        var reclaimer = new RecordingReclaimer();
-        await using var factory = new ApiFactory(configureServices: services =>
-        {
-            services.ReplaceSingleton(server.Object);
-            services.ReplaceSingleton<IRunReclaimer>(reclaimer);
-        });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        using var scratch = new TempDir();
-        var path = Path.Combine(scratch.Path, "wi-a");
-        Directory.CreateDirectory(path);
-        var run = await SeedRunAsync(factory, "wi-a", LoopRunStatus.Completed, path, repositoryId: null);
-
-        var list = await client.GetAsync("/api/v1/storage/worktree-cleanup", TestContext.Current.CancellationToken);
-        var confirm = await client.PostAsJsonAsync("/api/v1/storage/worktree-cleanup", new { runIds = new[] { run } }, TestContext.Current.CancellationToken);
-
-        foreach (var response in new[] { list, confirm })
-        {
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-            Assert.False(string.IsNullOrWhiteSpace(doc.RootElement.GetProperty("error").GetString()));
-        }
-        Assert.Empty(reclaimer.Reclaimed);
-        Assert.Equal(path, (await ReadRunAsync(factory, run))!.WorktreePath);
-    }
-
-    [Fact]
     public async Task Every_storage_endpoint_is_for_the_user_only()
     {
-        var reclaimer = new RecordingReclaimer();
-        await using var factory = new ApiFactory(configureServices: services => services.ReplaceSingleton<IRunReclaimer>(reclaimer));
+        await using var factory = new ApiFactory();
         var anonymous = factory.CreateClient();
         var agent = factory.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
@@ -263,16 +45,11 @@ public class StorageApiTests
         foreach (var (caller, expected) in new[] { (anonymous, HttpStatusCode.Unauthorized), (agent, HttpStatusCode.Forbidden) })
         {
             Assert.Equal(expected, (await caller.GetAsync("/api/v1/storage", ct)).StatusCode);
-            Assert.Equal(expected, (await caller.GetAsync("/api/v1/storage/worktree-cleanup", ct)).StatusCode);
-            Assert.Equal(expected, (await caller.PostAsJsonAsync("/api/v1/storage/worktree-cleanup", new { runIds = new[] { Guid.NewGuid() } }, ct)).StatusCode);
         }
-        Assert.Empty(reclaimer.Reclaimed);
 
         // ...and not merely refused because nothing answers there.
         var user = await factory.CreateAuthenticatedClientAsync();
         Assert.Equal(HttpStatusCode.OK, (await user.GetAsync("/api/v1/storage", ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await user.GetAsync("/api/v1/storage/worktree-cleanup", ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await user.PostAsJsonAsync("/api/v1/storage/worktree-cleanup", new { runIds = new[] { Guid.NewGuid() } }, ct)).StatusCode);
     }
 
     // --- disk helpers ---
@@ -398,62 +175,6 @@ public class StorageApiTests
         return run.Id;
     }
 
-    private static async Task UpdateRunAsync(ApiFactory factory, Guid runId, Action<LoopRun> change)
-    {
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        change(await db.LoopRuns.SingleAsync(r => r.Id == runId));
-        await db.SaveChangesAsync();
-    }
-
-    private static async Task<LoopRun?> ReadRunAsync(ApiFactory factory, Guid runId)
-    {
-        using var scope = factory.Services.CreateScope();
-        return await scope.ServiceProvider.GetRequiredService<AppDbContext>().LoopRuns.AsNoTracking().FirstOrDefaultAsync(r => r.Id == runId);
-    }
-
-    /// <summary>
-    /// The WorkItem server as its client reports it (WorkItemServerClient: a 404
-    /// is null), with statuses a test can change between two requests.
-    /// </summary>
-    private sealed class WorkItems
-    {
-        private readonly Dictionary<string, RemoteWorkItem> _items = new();
-        private readonly Mock<IWorkItemServerClient> _client = new();
-
-        public WorkItems()
-        {
-            _client.Setup(c => c.GetAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((WorkItemServerOptions _, string id, CancellationToken _) => _items.GetValueOrDefault(id));
-            _client.Setup(c => c.ListAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<RemoteWorkItemStatus?>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((WorkItemServerOptions _, RemoteWorkItemStatus? status, IReadOnlyList<string>? _, CancellationToken _) =>
-                    (IReadOnlyList<RemoteWorkItem>)_items.Values.Where(i => status == null || i.Status == status).ToList());
-        }
-
-        public IWorkItemServerClient Client => _client.Object;
-
-        public void Add(string id, string title, RemoteWorkItemStatus status)
-            => _items[id] = new RemoteWorkItem { Id = id, Title = title, Status = status };
-    }
-
-    /// <summary>
-    /// Stands in for RunReclaimer: on success the worktree directory is gone, as
-    /// it is after <c>git worktree remove</c>; on failure nothing changes.
-    /// </summary>
-    private sealed class RecordingReclaimer : IRunReclaimer
-    {
-        public List<Guid> Reclaimed { get; } = [];
-        public HashSet<Guid> FailFor { get; } = [];
-
-        public Task<bool> ReclaimLocalStateAsync(LoopRun run)
-        {
-            lock (Reclaimed) Reclaimed.Add(run.Id);
-            if (FailFor.Contains(run.Id)) return Task.FromResult(false);
-            if (run.WorktreePath != null && Directory.Exists(run.WorktreePath))
-                Directory.Delete(run.WorktreePath, recursive: true);
-            return Task.FromResult(true);
-        }
-    }
 }
 
 /// <summary>

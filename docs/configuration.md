@@ -345,7 +345,7 @@ setting off, previews run side by side as before.
 abandoned branch, left in the shared folder. **Reset preview data** on the
 repository (next to the setting) empties it, after a confirmation that it wipes
 the preview data of every work item in the repository. Nothing else removes it:
-not Done, run or worktree cleanup, the retention sweep, deleting work items or the
+not Done, the end of a run, run or worktree cleanup, the retention sweep, deleting work items or the
 repository, nor turning the setting off. The only other way is the **Preview
 data** entry on the Storage settings page, which also lists folders whose
 repository is deleted or has the setting off. Both refuse while a preview of the
@@ -764,8 +764,9 @@ to run tests directly should clear `NODE_USE_ENV_PROXY` too. Two consequences:
 The log is swept, not kept forever: an entry older than
 `network.logRetentionDays` (default `30`, capped at 3650, `0` keeps the log
 forever) is deleted by a background sweep that runs every six hours. Like
-`run.retentionDays` (default `0`: a run is deleted at the next sweep after its
-work item is Done, and never while the item is still in play), the window is
+`run.retentionDays` (default `14`: a finished run's record is deleted once that
+many days have passed and its work item is Done, never while the item is still
+in play; its worktree went when it ended), the window is
 read on every pass, so a change in Settings takes effect on the next sweep
 without a restart, and a sweep that removed anything refreshes an open log view.
 

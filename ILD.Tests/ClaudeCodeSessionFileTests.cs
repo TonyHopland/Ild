@@ -277,6 +277,8 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
             => inner.ReadHeadAsync(key, cancellationToken);
         public Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default)
             => inner.ForkAsync(source, destination, cancellationToken);
+        public Task<int> DeleteForRunAsync(Guid loopRunId, CancellationToken cancellationToken = default)
+            => inner.DeleteForRunAsync(loopRunId, cancellationToken);
     }
 
     [Fact]

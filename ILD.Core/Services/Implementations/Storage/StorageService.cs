@@ -1,6 +1,5 @@
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
-using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -11,8 +10,6 @@ public sealed class StorageService : IStorageService
 {
     private readonly ILoopRunStore _runs;
     private readonly IProviderStore _providers;
-    private readonly IWorkItemManager _workItems;
-    private readonly IRunReclaimer _reclaimer;
     private readonly IConfiguration _config;
     private readonly string _dataRoot;
     private readonly string _worktreesRoot;
@@ -21,15 +18,11 @@ public sealed class StorageService : IStorageService
     public StorageService(
         ILoopRunStore runs,
         IProviderStore providers,
-        IWorkItemManager workItems,
-        IRunReclaimer reclaimer,
         IConfiguration config,
         ChatOptions chatOptions)
     {
         _runs = runs;
         _providers = providers;
-        _workItems = workItems;
-        _reclaimer = reclaimer;
         _config = config;
         _dataRoot = Path.GetFullPath(HostPath(config, "App:DataPath"));
         _worktreesRoot = Path.GetFullPath(HostPath(config, "App:WorktreesPath"));
@@ -93,122 +86,6 @@ public sealed class StorageService : IStorageService
             scan.Run(cancellationToken);
         return new StorageOverview(
             new[] { worktrees, clones, previewData, chats, agents, temp, other }.Select(c => c.ToCategory(measured)).ToList());
-    }
-
-    public async Task<WorktreeCleanupCandidates> GetCleanupCandidatesAsync(CancellationToken cancellationToken)
-    {
-        var activeWorkItemIds = await _runs.GetActiveWorkItemIdsAsync();
-        var runs = (await _runs.GetRunsWithWorktreeAsync())
-            .Where(r => RunIneligibility(r, activeWorkItemIds) is null)
-            .ToList();
-
-        var workItems = new Dictionary<string, WorkItemView?>(StringComparer.Ordinal);
-        foreach (var workItemId in runs.Select(r => r.WorkItemId).Distinct(StringComparer.Ordinal))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            workItems[workItemId] = await _workItems.GetWorkItemAsync(workItemId);
-        }
-        var eligible = runs.Where(r => WorkItemIneligibility(workItems[r.WorkItemId]) is null).ToList();
-
-        var repositories = (await _providers.GetAllRepositoriesAsync()).ToDictionary(r => r.Id);
-        var candidates = eligible.Select(run =>
-        {
-            var (bytes, incomplete) = Freed([run.WorktreePath!], cancellationToken);
-            var repositoryName = run.RepositoryId is { } id ? repositories.GetValueOrDefault(id)?.Name : null;
-            return new WorktreeCleanupCandidate(
-                run.Id, run.WorkItemId, workItems[run.WorkItemId]!.Title, run.RepositoryId, repositoryName, bytes, incomplete);
-        }).ToList();
-        var (totalBytes, _) = Freed(eligible.Select(r => r.WorktreePath!), cancellationToken);
-        return new WorktreeCleanupCandidates(candidates, totalBytes);
-    }
-
-    public async Task<WorktreeCleanupResult> CleanUpWorktreesAsync(IReadOnlyCollection<Guid> runIds)
-    {
-        var results = new List<WorktreeCleanupRunResult>();
-        var actedOnAny = false;
-        foreach (var runId in runIds.Distinct())
-        {
-            var run = await _runs.GetByIdAsync(runId);
-            if (run is null)
-            {
-                results.Add(new(runId, WorktreeCleanupOutcome.Skipped, null, RunNotFound));
-                continue;
-            }
-
-            WorkItemView? workItem;
-            try
-            {
-                workItem = await _workItems.GetWorkItemAsync(run.WorkItemId);
-            }
-            catch (Exception ex) when (actedOnAny && WorkItemServerUnreachable.Is(ex))
-            {
-                results.Add(new(runId, WorktreeCleanupOutcome.Skipped, null, "The WorkItem Server could not be reached."));
-                continue;
-            }
-
-            // Reading the work item tracks all its runs in this scope, so a run read
-            // before it, in this pass or an earlier one, holds values from back then.
-            await _runs.ReloadAsync(run);
-            var reason = RunIneligibility(run, await _runs.GetActiveWorkItemIdsAsync()) ?? WorkItemIneligibility(workItem);
-            if (reason is not null)
-            {
-                results.Add(new(runId, WorktreeCleanupOutcome.Skipped, null, reason));
-                continue;
-            }
-
-            var (bytes, _) = Freed([run.WorktreePath!], CancellationToken.None);
-            actedOnAny = true;
-            results.Add(await RunCleanup.CleanUpAsync(run, _reclaimer, _runs) switch
-            {
-                RunCleanupOutcome.Cleaned => new(runId, WorktreeCleanupOutcome.Cleaned, bytes, null),
-                RunCleanupOutcome.ReclaimFailed => new(runId, WorktreeCleanupOutcome.Failed, null, "Could not verify the worktree and branch were removed; the run was left as it was."),
-                RunCleanupOutcome.RunGone => new(runId, WorktreeCleanupOutcome.Skipped, null, RunNotFound),
-                _ => new(runId, WorktreeCleanupOutcome.Skipped, null, NotFinished),
-            });
-        }
-
-        var totalBytes = FileStatus.IsSupported
-            ? results.Where(r => r.Outcome == WorktreeCleanupOutcome.Cleaned).Sum(r => r.Bytes ?? 0)
-            : (long?)null;
-        return new WorktreeCleanupResult(results, totalBytes);
-    }
-
-    private const string RunNotFound = "The run does not exist.";
-    private const string NotFinished = "The run has not finished.";
-
-    private static string? RunIneligibility(LoopRun run, IReadOnlyCollection<string> activeWorkItemIds)
-    {
-        if (string.IsNullOrEmpty(run.WorktreePath))
-            return "The run has no worktree.";
-        if (!RunCleanup.IsFinished(run))
-            return NotFinished;
-        if (run.Retain)
-            return "The run is pinned.";
-        if (activeWorkItemIds.Contains(run.WorkItemId, StringComparer.Ordinal))
-            return "Its work item has an active run.";
-        return null;
-    }
-
-    private static string? WorkItemIneligibility(WorkItemView? workItem)
-    {
-        if (workItem is null)
-            return "Its work item was not found on the WorkItem Server.";
-        if (workItem.Status != RemoteWorkItemStatus.Done)
-            return "Its work item is no longer Done.";
-        return null;
-    }
-
-    /// <summary>What removing <paramref name="worktrees"/> together frees: files no link outside them keeps.</summary>
-    private static (long? Bytes, bool Incomplete) Freed(IEnumerable<string> worktrees, CancellationToken cancellationToken)
-    {
-        if (!FileStatus.IsSupported)
-            return (null, false);
-        var freed = new UsageTally();
-        var scan = new DiskUsageScan();
-        foreach (var worktree in worktrees)
-            scan.Add(worktree, freed, shared: new UsageTally());
-        scan.Run(cancellationToken);
-        return (freed.Bytes, freed.Incomplete);
     }
 
     private static UsageTally RepositoryEntry(CategoryTally category, Guid? repositoryId, IReadOnlyDictionary<Guid, Repository> repositories)

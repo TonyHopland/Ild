@@ -6,8 +6,9 @@ namespace ILD.Core.Services.Interfaces;
 /// Destroys the local git state a run owns — its worktree and its per-run
 /// branch (ADR-0008). Every path that takes a run's worktree away comes
 /// through here: the retention sweeper, manual deletion (the run delete
-/// endpoint, or deleting the whole work item), and manual cleanup, which is
-/// the one that keeps the run row. Remote branches and PRs are never touched.
+/// endpoint, or deleting the whole work item), and Run Cleanup — by hand or
+/// when the run ends (<see cref="IFinishedRunCleaner"/>) — which keeps the run
+/// row. Remote branches and PRs are never touched.
 /// </summary>
 public interface IRunReclaimer
 {

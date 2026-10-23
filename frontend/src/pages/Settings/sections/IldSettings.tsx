@@ -169,16 +169,18 @@ export default function IldSettings() {
         </div>
         <NumericSettingField
           settingKey={SchedulerSettingKeys.RunRetentionDays}
-          label="Delete finished runs after"
+          label="Keep finished runs for"
           min={0}
           max={3650}
-          fallback={0}
-          minLabel="0 (when done)"
+          fallback={14}
+          minLabel="0 (next cleanup)"
           unit="days"
         >
-          A finished run&apos;s worktree, branch, and history are deleted once its work item is Done
-          and the run finished more than this many days ago. With <strong>0</strong> that is the
-          next cleanup pass after Done. Runs pinned with “Retain” are never deleted.
+          A run&apos;s worktree, local branch and AI session data are removed as soon as the run
+          ends. The run itself — its node path, event log, human feedback and PR snapshot — stays
+          readable in the run view, analytics and the retro tools for this many days, then is
+          deleted. <strong>0</strong> deletes it at the next cleanup. A run pinned with “Retain”
+          keeps its worktree, branch, AI session data and history until it is unpinned.
         </NumericSettingField>
       </section>
 

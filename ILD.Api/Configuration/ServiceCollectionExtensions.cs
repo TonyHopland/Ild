@@ -77,6 +77,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<StuckRunWatchdog>();
         services.AddHostedService<ThrottledRunResumeSweeper>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();
+        services.AddSingleton<IFinishedRunCleaner, FinishedRunCleaner>();
         services.AddScoped<IStorageService, StorageService>();
         services.AddScoped<IBranchNameOverrideService, BranchNameOverrideService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();

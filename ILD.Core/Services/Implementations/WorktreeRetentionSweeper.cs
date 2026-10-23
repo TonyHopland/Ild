@@ -9,20 +9,30 @@ using Microsoft.Extensions.Logging;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// Reclaims disk from finished runs. Each run keeps its own worktree and branch
-/// so finished runs stay inspectable (see ADR-0008); this sweeper deletes the
-/// whole run — worktree, local branch, and the run row (nodes, edge traversals,
-/// event logs cascade) — once its work item is <c>Done</c> and the run finished
-/// more than <see cref="AppSettingKeys.RunRetentionDays"/> days ago. With the
-/// default of <c>0</c> that is the first pass after the work item is Done.
+/// Deletes finished runs past retention, and removes what finished runs left
+/// behind. A run's worktree, local branch and session snapshots go when it ends
+/// (<see cref="IFinishedRunCleaner"/>); its row stays so its history can be read.
+/// Each pass:
+/// <list type="number">
+/// <item>deletes the whole run — worktree, local branch, and the run row (nodes,
+/// edge traversals, event logs and session snapshots cascade) — once its work
+/// item is <c>Done</c> and the run finished more than
+/// <see cref="AppSettingKeys.RunRetentionDays"/> days ago;</item>
+/// <item>as a backstop, removes the worktree, branch and session snapshots still
+/// left by a finished run (a crash, a failed removal, a run that ended before
+/// end-of-run removal existed) through the same cleaner, keeping the row. A
+/// Failed run is only cleaned once its work item is Done or gone, since one of
+/// an item still in play may be reopened.</item>
+/// </list>
 ///
 /// Safety rails:
 /// <list type="bullet">
-/// <item>Runs pinned with <c>Retain == true</c> are never touched.</item>
-/// <item>No run of a work item that is not <c>Done</c> is reclaimed — neither
+/// <item>Runs pinned with <c>Retain == true</c>, and runs the engine still
+/// drives, are never touched.</item>
+/// <item>No run of a work item that is not <c>Done</c> is deleted — neither
 /// its current run nor one a newer run superseded — so a parked Failed run isn't
 /// yanked out from under a human reviewing it. Runs of a work item the server no
-/// longer has are reclaimed.</item>
+/// longer has are deleted.</item>
 /// <item>Remote branches/PRs are left intact — only local state is reclaimed.</item>
 /// </list>
 /// A pass runs every 6 hours, the first 10 minutes after start, and pages
@@ -42,10 +52,13 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<WorktreeRetentionSweeper> _log;
     private readonly WorkItemActor _actor;
+    private readonly IFinishedRunCleaner _cleaner;
 
-    public WorktreeRetentionSweeper(IServiceScopeFactory scopes, BootstrapCredentials instance, ILogger<WorktreeRetentionSweeper> log)
+    public WorktreeRetentionSweeper(
+        IServiceScopeFactory scopes, BootstrapCredentials instance, IFinishedRunCleaner cleaner, ILogger<WorktreeRetentionSweeper> log)
     {
         _scopes = scopes;
+        _cleaner = cleaner;
         _actor = WorkItemActor.System(instance.Username, "run retention");
         _log = log;
     }
@@ -106,6 +119,52 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
 
         if (reclaimed > 0)
             _log.LogInformation("Worktree retention reclaimed {Count} runs terminal before {Cutoff:o}", reclaimed, cutoff);
+
+        var cleaned = 0;
+        var left = 0;
+        // Paged by the runs left as they were: a cleaned run no longer matches the
+        // query and drops out, so skipping the ones left reaches the next unseen
+        // candidate. Were a cleaned run still to match, the worst case is that a
+        // candidate is skipped and waits for the next pass.
+        while (true)
+        {
+            var page = await runStore.GetRunsWithLeftoverLocalStateAsync(left, PageSize);
+            foreach (var candidate in page)
+            {
+                if (ct.IsCancellationRequested) return;
+                if (await TryRemoveLeftoversAsync(candidate.Id, candidate.Status, candidate.WorkItemId, itemInPlay))
+                    cleaned++;
+                else
+                    left++;
+            }
+            if (page.Count < PageSize) break;
+        }
+
+        if (cleaned > 0)
+            _log.LogInformation("Worktree retention removed what {Count} finished runs left behind", cleaned);
+    }
+
+    private async Task<bool> TryRemoveLeftoversAsync(
+        Guid runId, LoopRunStatus status, string workItemId, Dictionary<string, bool> itemInPlay)
+    {
+        if (status != LoopRunStatus.Failed)
+            return await _cleaner.RemoveLocalStateAsync(runId);
+
+        using var scope = _scopes.CreateScope();
+        if (await IsInPlayAsync(scope.ServiceProvider.GetRequiredService<IWorkItemManager>(), workItemId, itemInPlay))
+            return false;
+        return await _cleaner.RemoveLocalStateAsync(runId, allowFailed: true);
+    }
+
+    private static async Task<bool> IsInPlayAsync(IWorkItemManager workItems, string workItemId, Dictionary<string, bool> itemInPlay)
+    {
+        if (!itemInPlay.TryGetValue(workItemId, out var inPlay))
+        {
+            var wi = await workItems.GetWorkItemAsync(workItemId);
+            inPlay = wi is not null && wi.Status != RemoteWorkItemStatus.Done;
+            itemInPlay[workItemId] = inPlay;
+        }
+        return inPlay;
     }
 
     private async Task<bool> TryReclaimAsync(
@@ -131,13 +190,8 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
 
         // Keep every run of a work item that is still in play, superseded or
         // not; only reclaim once the work item is Done.
-        if (!itemInPlay.TryGetValue(run.WorkItemId, out var inPlay))
-        {
-            var wi = await workItems.GetWorkItemAsync(run.WorkItemId);
-            inPlay = wi is not null && wi.Status != RemoteWorkItemStatus.Done;
-            itemInPlay[run.WorkItemId] = inPlay;
-        }
-        if (inPlay) return false;
+        if (await IsInPlayAsync(workItems, run.WorkItemId, itemInPlay)) return false;
+        if (await RunCleanup.IsDrivenByEngineAsync(sp, run.Id)) return false;
 
         // Only drop the run row once its local git state is verified gone;
         // otherwise keep the row so the next sweep can retry — a deleted

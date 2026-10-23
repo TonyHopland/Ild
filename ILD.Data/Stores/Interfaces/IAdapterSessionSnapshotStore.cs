@@ -56,6 +56,9 @@ public interface IAdapterSessionSnapshotStore
     /// False, writing nothing, when the source has no snapshot.
     /// </summary>
     Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes every snapshot the run owns, with its chunks; how many there were.</summary>
+    Task<int> DeleteForRunAsync(Guid loopRunId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Which snapshot: its owner (a run or a chat), adapter and session id.</summary>
