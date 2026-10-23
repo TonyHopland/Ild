@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A run's worktree, local branch and AI session data are removed as soon as it ends, and the run itself is kept for 14 days by default.** Installs that never changed the retention setting move from 0 to 14 days.
+- **A run's worktree, local branch and AI session data are removed as soon as it ends, and the run itself is kept for 14 days by default.** This replaces 0.19.0's default of 0: installs that never changed the retention setting move from 0 to 14 days.
 
 ### Added
 
@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Going Back right after starting a chat shows the start form, not the new chat.**
 
 ## [0.19.0] - 2026-10-21
+
+### Changed
+
+- **Finished runs are deleted once their work item is Done, by default.** Breaking: a saved retention of 0 used to keep runs forever and now deletes them at the next cleanup after Done, and untouched installs move from 30 days to 0. Runs of a work item that is not Done are no longer deleted at all. To keep runs, pin them with Retain or set a number of days.
 
 ### Added
 
