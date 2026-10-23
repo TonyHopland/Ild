@@ -226,7 +226,7 @@ public class WorkItemManager : IWorkItemManager
     {
         var page = await ListPageAsync(new WorkItemListQuery
         {
-            Status = status,
+            Statuses = status is { } s ? [s] : null,
             CreatedByLoopRunId = createdByLoopRunId,
             RepositoryId = repositoryId,
             OrderBy = WorkItemOrderBy.CreatedAt,
@@ -240,8 +240,9 @@ public class WorkItemManager : IWorkItemManager
     {
         var opts = await _options.ResolveForRepositoryAsync(query.RepositoryId);
         // Actionability reads the status of every dependency, so only then is
-        // the whole list needed; otherwise the server narrows to the status.
-        var all = await _server.ListAsync(opts, query.ActionableOnly ? null : query.Status, tags: null);
+        // the whole list needed; otherwise the server narrows to a single status.
+        RemoteWorkItemStatus? serverStatus = !query.ActionableOnly && query.Statuses is { Count: 1 } one ? one.Single() : null;
+        var all = await _server.ListAsync(opts, serverStatus, tags: null);
         if (all.Count == 0) return new WorkItemPage(Array.Empty<WorkItemView>(), 0);
 
         // A view's creator is its current run's, falling back to the item's own,
@@ -286,7 +287,7 @@ public class WorkItemManager : IWorkItemManager
     {
         var opts = await _options.ResolveForRepositoryAsync(query.RepositoryId);
         var all = await _server.ListAsync(opts, status: null, tags: null);
-        var byStatus = ApplyListQuery(all, query with { Status = null }, all.ToDictionary(w => w.Id, w => w.Status))
+        var byStatus = ApplyListQuery(all, query with { Statuses = null }, all.ToDictionary(w => w.Id, w => w.Status))
             .GroupBy(w => w.Status)
             .ToDictionary(g => g.Key, g => g.Count());
         return Enum.GetValues<RemoteWorkItemStatus>().ToDictionary(s => s, s => byStatus.GetValueOrDefault(s));
@@ -356,7 +357,7 @@ public class WorkItemManager : IWorkItemManager
     {
         creatorOf ??= w => w.CreatedByLoopRunId;
         var filtered = items;
-        if (query.Status.HasValue) filtered = filtered.Where(w => w.Status == query.Status.Value);
+        if (query.Statuses is { Count: > 0 } statuses) filtered = filtered.Where(w => statuses.Contains(w.Status));
         if (query.RepositoryId.HasValue) filtered = filtered.Where(w => w.RepositoryId == query.RepositoryId.Value);
         if (query.CreatedByLoopRunId.HasValue) filtered = filtered.Where(w => creatorOf(w) == query.CreatedByLoopRunId.Value);
         var wanted = (query.Tags ?? Array.Empty<string>())
