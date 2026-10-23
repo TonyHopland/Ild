@@ -33,8 +33,8 @@ public interface IRemoteWorkItemCoordinator
     /// <summary>
     /// A human starts one Ready item now, the way a pass claims and starts it,
     /// but without checking its repository's parallelism limit. The instance's
-    /// concurrency cap still applies, and a scheduler pause does not. Once in,
-    /// the start finishes even if <paramref name="ct"/> is cancelled, so a claim
+    /// concurrency cap still applies, and so does shutdown; a scheduler pause
+    /// does not. Once in, the start finishes even if <paramref name="ct"/> is cancelled, so a claim
     /// is never left half done.
     /// </summary>
     Task<HandStartResult> StartIgnoringRepositoryLimitAsync(WorkItemServerOptions opts, string workItemId, int maxConcurrent, WorkItemActor actor, CancellationToken ct = default);
@@ -47,6 +47,7 @@ public enum HandStartResult
     NotFound,
     NotReady,
     AtConcurrencyLimit,
+    ShuttingDown,
 }
 
 public sealed class PollCycleResult
@@ -95,6 +96,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     private readonly ILogger<RemoteWorkItemCoordinator>? _logger;
     private readonly RepositoryParallelismHolds _repositoryHolds;
     private readonly ReadyClaimGate _claimGate;
+    private readonly IShutdownState _shutdown;
 
     public RemoteWorkItemCoordinator(
         IWorkItemServerClient client,
@@ -107,7 +109,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         IWorkItemNotifier? workItemNotifier = null,
         ILogger<RemoteWorkItemCoordinator>? logger = null,
         RepositoryParallelismHolds? repositoryHolds = null,
-        ReadyClaimGate? claimGate = null)
+        ReadyClaimGate? claimGate = null,
+        IShutdownState? shutdown = null)
     {
         _client = client;
         _resolver = resolver;
@@ -120,6 +123,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         _logger = logger;
         _repositoryHolds = repositoryHolds ?? new RepositoryParallelismHolds();
         _claimGate = claimGate ?? new ReadyClaimGate();
+        _shutdown = shutdown ?? ShutdownState.NeverStopping;
     }
 
     public async Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default)
@@ -292,6 +296,9 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     public async Task<HandStartResult> StartIgnoringRepositoryLimitAsync(WorkItemServerOptions opts, string workItemId, int maxConcurrent, WorkItemActor actor, CancellationToken ct = default)
     {
         using var claimTurn = await _claimGate.EnterAsync(ct);
+        // Checked once in, because the wait for a pass can outlast the moment
+        // shutdown began; the pass itself stops claiming then.
+        if (_shutdown.IsStopping) return HandStartResult.ShuttingDown;
 
         var item = await _client.GetAsync(opts, workItemId, CancellationToken.None);
         if (item is null) return HandStartResult.NotFound;
@@ -375,8 +382,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         // LoopRun, kick off LoopEngine". The engine resolves the
         // template from the work item's tags and creates the run; if
         // that fails it transitions the item back to HumanFeedback so
-        // the server reflects reality. Failures here are logged but
-        // never abort the poll cycle — the next pass can retry.
+        // the server reflects reality. Failures here are logged, and
+        // the item is handed back for review rather than thrown.
         try
         {
             await _engine.StartRunAsync(ready.Id, ct);

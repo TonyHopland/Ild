@@ -964,23 +964,32 @@ public class WorkItemsController : ControllerBase
         [FromServices] IRemoteWorkItemCoordinator coordinator,
         [FromServices] ISchedulerSettingsService schedulerSettings,
         [FromServices] IWorkItemServerOptionsResolver serverOptions,
-        [FromServices] IShutdownState shutdown,
+        [FromServices] IWorkItemScheduler scheduler,
         CancellationToken cancellationToken)
     {
         if (SignedInUser is not { } user)
             return Unauthorized();
-        if (shutdown.IsStopping)
-            return Conflict(new { error = "ILD is shutting down." });
 
-        var opts = await serverOptions.ResolveForWorkItemAsync(id, cancellationToken);
-        var maxConcurrent = await schedulerSettings.GetMaxConcurrentAsync(cancellationToken);
-        return await coordinator.StartIgnoringRepositoryLimitAsync(opts, id, maxConcurrent, user, cancellationToken) switch
+        return await ForwardToWorkItemServerAsync(async () =>
         {
-            HandStartResult.NotFound => NotFound(),
-            HandStartResult.NotReady => Conflict(new { error = "Only a Ready item can be started." }),
-            HandStartResult.AtConcurrencyLimit => Conflict(new { error = "ILD is already running as many work items as it is allowed to." }),
-            _ => await _workItemManager.GetWorkItemAsync(id) is { } started ? Ok(started) : NotFound(),
-        };
+            var opts = await serverOptions.ResolveForWorkItemAsync(id, cancellationToken);
+            var maxConcurrent = await schedulerSettings.GetMaxConcurrentAsync(cancellationToken);
+            switch (await coordinator.StartIgnoringRepositoryLimitAsync(opts, id, maxConcurrent, user, cancellationToken))
+            {
+                case HandStartResult.NotFound:
+                    return NotFound();
+                case HandStartResult.NotReady:
+                    return Conflict(new { error = "Only a Ready item can be started." });
+                case HandStartResult.AtConcurrencyLimit:
+                    return Conflict(new { error = "ILD is already running as many work items as it is allowed to." });
+                case HandStartResult.ShuttingDown:
+                    return Conflict(new { error = "ILD is shutting down." });
+            }
+            // A pass now recounts the repository, so the items it still holds
+            // show the slot this one took.
+            scheduler.Pulse();
+            return await _workItemManager.GetWorkItemAsync(id) is { } started ? Ok(started) : NotFound();
+        });
     }
 
     [HttpGet("{id}/dependencies")]
