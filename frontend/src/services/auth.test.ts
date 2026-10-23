@@ -227,11 +227,11 @@ describe("workItemService taskboard listing URL contract", () => {
     return new URL(url as string, "http://example.test");
   }
 
-  test("getPage sends the column's status, the filter and the window", async () => {
+  test("getPage sends the column's statuses, the filter and the window", async () => {
     fetchSpy.mockResolvedValue(okJsonResponse({ items: [], total: 0 }));
 
     await workItemService.getPage({
-      status: WorkItemStatus.Backlog,
+      statuses: [WorkItemStatus.WorkQueue, WorkItemStatus.Ready],
       search: "login",
       repositoryId: "repo-1",
       tags: ["frontend", "urgent"],
@@ -241,7 +241,7 @@ describe("workItemService taskboard listing URL contract", () => {
 
     const url = requested();
     expect(url.pathname).toBe("/api/v1/workitems/page");
-    expect(url.searchParams.get("status")).toBe("Backlog");
+    expect(url.searchParams.getAll("status")).toEqual(["WorkQueue", "Ready"]);
     expect(url.searchParams.get("search")).toBe("login");
     expect(url.searchParams.get("repositoryId")).toBe("repo-1");
     expect(url.searchParams.getAll("tags")).toEqual(["frontend", "urgent"]);

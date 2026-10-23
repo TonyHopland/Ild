@@ -117,9 +117,9 @@ export function showChatActions(name: string): void {
   if (actions.getAttribute("aria-expanded") !== "true") fireEvent.click(actions);
 }
 
-/** A board page request, as the Taskboard sends it for one status column. */
+/** A board page request, as the Taskboard sends it for one column and the statuses it holds. */
 export interface FakeBoardPageQuery {
-  status: string;
+  statuses: string[];
   search?: string;
   repositoryId?: string;
   tags?: string[];
@@ -155,7 +155,7 @@ export function mockTaskboardServer(initial: WorkItem[]) {
   const items = [...initial];
   const page = (q: FakeBoardPageQuery) => {
     const matching = items
-      .filter((wi) => wi.status === q.status && matchesFakeFilter(wi, q))
+      .filter((wi) => q.statuses.includes(wi.status) && matchesFakeFilter(wi, q))
       .sort(compareServerOrder);
     return { items: matching.slice(q.skip, q.skip + q.take), total: matching.length };
   };

@@ -317,4 +317,93 @@ describe("WorkItemCard", () => {
 
     expect(container.textContent).not.toContain("repository parallelism limit");
   });
+
+  describe("the waiting reason pill of a Work queue column card", () => {
+    const PILLS = [
+      "Waiting on dependencies",
+      "Waiting: repository parallelism limit (3/3 in progress)",
+      "Scheduler paused",
+      "Ready",
+    ];
+    const hold = { inProgress: 3, limit: 3 };
+
+    test.each([
+      ["a Work queue item", { status: WorkItemStatus.WorkQueue }, false, PILLS[0]],
+      ["a Work queue item while paused", { status: WorkItemStatus.WorkQueue }, true, PILLS[0]],
+      [
+        "a Ready item held by its repository",
+        { status: WorkItemStatus.Ready, repositoryParallelismHold: hold },
+        false,
+        PILLS[1],
+      ],
+      [
+        "a Ready item held by its repository while paused",
+        { status: WorkItemStatus.Ready, repositoryParallelismHold: hold },
+        true,
+        PILLS[1],
+      ],
+      [
+        "a Ready item while paused",
+        { status: WorkItemStatus.Ready, repositoryParallelismHold: null },
+        true,
+        PILLS[2],
+      ],
+      [
+        "a Ready item with the scheduler running",
+        { status: WorkItemStatus.Ready, repositoryParallelismHold: null },
+        false,
+        PILLS[3],
+      ],
+      [
+        "a Ready item before the scheduler state is known",
+        { status: WorkItemStatus.Ready, repositoryParallelismHold: null },
+        undefined,
+        PILLS[3],
+      ],
+    ] as [string, Partial<WorkItem>, boolean | undefined, string][])(
+      "%s shows exactly one pill",
+      (_name, overrides, schedulerPaused, expected) => {
+        render(<WorkItemCard workItem={makeItem(overrides)} schedulerPaused={schedulerPaused} />);
+
+        const pills = screen.getAllByText(expected);
+        expect(pills).toHaveLength(1);
+        expect(pills[0].classList.contains("pill")).toBe(true);
+        for (const other of PILLS.filter((p) => p !== expected)) {
+          expect(screen.queryByText(other)).toBeNull();
+        }
+      },
+    );
+
+    test.each([WorkItemStatus.Backlog, WorkItemStatus.Running, WorkItemStatus.Done])(
+      "a %s card shows no waiting reason pill, even while paused",
+      (status) => {
+        render(<WorkItemCard workItem={makeItem({ status })} schedulerPaused />);
+
+        for (const pill of PILLS) expect(screen.queryByText(pill)).toBeNull();
+      },
+    );
+
+    test("held and paused Ready cards share a muted look a plain Ready or Work queue card lacks", () => {
+      const classesOf = (overrides: Partial<WorkItem>, schedulerPaused: boolean) => {
+        const { container } = render(
+          <WorkItemCard workItem={makeItem(overrides)} schedulerPaused={schedulerPaused} />,
+        );
+        const classes = Array.from(container.querySelector("[data-work-item-id]")!.classList);
+        cleanup();
+        return classes;
+      };
+      const held = classesOf(
+        { status: WorkItemStatus.Ready, repositoryParallelismHold: hold },
+        false,
+      );
+      const paused = classesOf({ status: WorkItemStatus.Ready }, true);
+      const plain = classesOf({ status: WorkItemStatus.Ready }, false);
+      const queued = classesOf({ status: WorkItemStatus.WorkQueue }, true);
+
+      const muted = held.filter(
+        (c) => paused.includes(c) && !plain.includes(c) && !queued.includes(c),
+      );
+      expect(muted).not.toHaveLength(0);
+    });
+  });
 });

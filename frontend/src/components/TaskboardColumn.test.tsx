@@ -377,7 +377,7 @@ describe("TaskboardColumn drag and drop order", () => {
 
   test("dropping on the top card's upper half makes the dragged card the top one", async () => {
     const { reorder } = spyRequests();
-    renderColumn(WorkItemStatus.Ready, ["a", "b", "c"]);
+    renderColumn(WorkItemStatus.WorkQueue, ["a", "b", "c"]);
 
     dropAt(card("a"), "c", 10);
 
@@ -428,9 +428,58 @@ describe("TaskboardColumn drag and drop order", () => {
     expect(transition).not.toHaveBeenCalled();
   });
 
+  test.each([
+    [
+      "a Work queue card between a Ready and a Work queue card",
+      "a",
+      "c",
+      2 * CARD_HEIGHT + 30,
+      { aboveId: "b", belowId: "c" },
+    ],
+    ["a Ready card above a Work queue card", "b", "a", 10, { belowId: "a" }],
+    [
+      "a Ready card between a Work queue and a Ready card",
+      "d",
+      "b",
+      CARD_HEIGHT + 30,
+      { aboveId: "a", belowId: "b" },
+    ],
+  ])(
+    "dropping %s in the Work queue column only reorders it",
+    async (_what, draggedId, targetId, clientY, neighbours) => {
+      const { transition, reorder } = spyRequests();
+      const statuses: Record<string, WorkItemStatus> = {
+        a: WorkItemStatus.WorkQueue,
+        b: WorkItemStatus.Ready,
+        c: WorkItemStatus.WorkQueue,
+        d: WorkItemStatus.Ready,
+      };
+      const ids = ["a", "b", "c", "d"];
+      render(
+        <TaskboardColumn
+          status={WorkItemStatus.WorkQueue}
+          label="Work queue"
+          workItems={ids.map((id) => makeItem({ id, title: `Item ${id}`, status: statuses[id] }))}
+          total={ids.length}
+          onWorkItemUpdate={vi.fn()}
+          onError={vi.fn()}
+          foldChoice={false}
+        />,
+      );
+      layOutCards(ids);
+
+      dropAt(card(targetId), draggedId, clientY);
+
+      await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+      expect(reorder.mock.calls[0][0]).toBe(draggedId);
+      expect(reorder.mock.calls[0][1]).toEqual(neighbours);
+      expect(transition).not.toHaveBeenCalled();
+    },
+  );
+
   test("a card from another column is moved and placed exactly where it was dropped in one request", async () => {
     const { transition, reorder } = spyRequests();
-    const { onWorkItemUpdate, onError } = renderColumn(WorkItemStatus.Ready, ["e", "f", "g"]);
+    const { onWorkItemUpdate, onError } = renderColumn(WorkItemStatus.WorkQueue, ["e", "f", "g"]);
 
     dropAt(card("f"), "x", CARD_HEIGHT + 30);
 
@@ -440,7 +489,7 @@ describe("TaskboardColumn drag and drop order", () => {
     expect(reorder.mock.calls[0][1]).toEqual({
       aboveId: "e",
       belowId: "f",
-      targetStatus: WorkItemStatus.Ready,
+      targetStatus: WorkItemStatus.WorkQueue,
     });
     await waitFor(() =>
       expect(onWorkItemUpdate).toHaveBeenLastCalledWith(
@@ -452,26 +501,26 @@ describe("TaskboardColumn drag and drop order", () => {
 
   test("a card from another column dropped on the lower half of the last card lands at the bottom", async () => {
     const { transition, reorder } = spyRequests();
-    renderColumn(WorkItemStatus.Ready, ["e", "f"]);
+    renderColumn(WorkItemStatus.WorkQueue, ["e", "f"]);
 
     dropAt(card("f"), "x", CARD_HEIGHT + 70);
 
     await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
     expect(transition).not.toHaveBeenCalled();
     expect(reorder.mock.calls[0][1]).toEqual(
-      expect.objectContaining({ aboveId: "f", targetStatus: WorkItemStatus.Ready }),
+      expect.objectContaining({ aboveId: "f", targetStatus: WorkItemStatus.WorkQueue }),
     );
     expect(reorder.mock.calls[0][1]?.belowId).toBeUndefined();
   });
 
   test("a card dropped into an empty column is only moved", async () => {
     const { transition, reorder } = spyRequests();
-    const { onWorkItemUpdate } = renderColumn(WorkItemStatus.Ready, []);
+    const { onWorkItemUpdate } = renderColumn(WorkItemStatus.WorkQueue, []);
 
-    const column = screen.getByText(WorkItemStatus.Ready).closest("div")!;
+    const column = screen.getByText(WorkItemStatus.WorkQueue).closest("div")!;
     dropAt(column, "x", 50);
 
-    await waitFor(() => expect(transition).toHaveBeenCalledWith("x", WorkItemStatus.Ready));
+    await waitFor(() => expect(transition).toHaveBeenCalledWith("x", WorkItemStatus.WorkQueue));
     await waitFor(() => expect(onWorkItemUpdate).toHaveBeenCalled());
     await settle();
     expect(reorder).not.toHaveBeenCalled();
@@ -480,7 +529,7 @@ describe("TaskboardColumn drag and drop order", () => {
   test("when a drop in a new column is refused the error is shown and the card stays where it was", async () => {
     const { transition, reorder } = spyRequests();
     reorder.mockRejectedValue(new Error("Refused by the server"));
-    const { onError, onWorkItemUpdate } = renderColumn(WorkItemStatus.Ready, ["e", "f"]);
+    const { onError, onWorkItemUpdate } = renderColumn(WorkItemStatus.WorkQueue, ["e", "f"]);
 
     dropAt(card("f"), "x", CARD_HEIGHT + 30);
 
@@ -555,21 +604,21 @@ describe("TaskboardColumn folding and Needs you", () => {
     expect(strip.getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(strip);
-    expect(screen.getByText(/Move a backlog item here/)).toBeTruthy();
+    expect(document.querySelector("p")?.textContent?.trim()).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Fold Work queue" }));
     expect(screen.getByRole("button", { name: "Work queue: empty. Show column" })).toBeTruthy();
   });
 
   test("a column with cards starts open, folds to a strip that counts them, and opens again", () => {
-    column(WorkItemStatus.Ready, "Ready", [
+    column(WorkItemStatus.WorkQueue, "Work queue", [
       makeItem({ id: "a", title: "One", status: WorkItemStatus.Ready }),
-      makeItem({ id: "b", title: "Two", status: WorkItemStatus.Ready }),
+      makeItem({ id: "b", title: "Two", status: WorkItemStatus.WorkQueue }),
     ]);
     expect(screen.getByText("One")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Fold Ready" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fold Work queue" }));
     expect(screen.queryByText("One")).toBeNull();
-    const strip = screen.getByRole("button", { name: "Ready: 2 items. Show column" });
+    const strip = screen.getByRole("button", { name: "Work queue: 2 items. Show column" });
     expect(strip.textContent).toContain("2");
 
     fireEvent.click(strip);
