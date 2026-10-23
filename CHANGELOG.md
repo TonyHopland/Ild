@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dragging a card on the Taskboard shows a steady drop line and a move cursor everywhere over a column, gaps and header included.**
+
 ## [0.21.0] - 2026-10-23
 
 ### Changed

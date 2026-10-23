@@ -36,6 +36,7 @@ export default function WorkItemCard({
 }: WorkItemCardProps) {
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", workItem.id);
   };
 
