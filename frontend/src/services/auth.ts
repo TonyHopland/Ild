@@ -380,6 +380,14 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/transition`, { targetStatus });
   },
 
+  /**
+   * Starts a Ready item now, past its repository's parallelism limit but not past
+   * the concurrency cap, and returns it as the server now holds it.
+   */
+  startAnyway: async (id: string): Promise<WorkItem> => {
+    return api.post<WorkItem>(`/workitems/${id}/start`, {});
+  },
+
   /** Moves an item to a status and reads it back as the server now holds it. */
   moveTo: async (id: string, targetStatus: string): Promise<WorkItem> => {
     await workItemService.transition(id, targetStatus);

@@ -25,10 +25,29 @@ public interface IRemoteWorkItemCoordinator
     /// skipped, so nothing auto-promotes from Ready into Running. Every other
     /// step — heartbeating the active set, resuming WaitingForIld runs, closing
     /// runs behind items the server has finished, reporting active human
-    /// feedback — runs as normal. Humans can still promote Ready items manually
-    /// through the work-item transition API.
+    /// feedback — runs as normal. Humans can still start a Ready item by hand
+    /// with <see cref="StartIgnoringRepositoryLimitAsync"/>.
     /// </param>
     Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default);
+
+    /// <summary>
+    /// A human starts one Ready item now, the way a pass claims and starts it,
+    /// but without checking its repository's parallelism limit. The instance's
+    /// concurrency cap still applies, and so does shutdown; a scheduler pause
+    /// does not. Once in, the start finishes even if <paramref name="ct"/> is
+    /// cancelled, so a claim is never left half done.
+    /// </summary>
+    Task<HandStartResult> StartIgnoringRepositoryLimitAsync(WorkItemServerOptions opts, string workItemId, int maxConcurrent, WorkItemActor actor, CancellationToken ct = default);
+}
+
+public enum HandStartResult
+{
+    /// <summary>The item left Ready: it is Running, or in HumanFeedback because no single loop matched or its run failed to start.</summary>
+    Started,
+    NotFound,
+    NotReady,
+    AtConcurrencyLimit,
+    ShuttingDown,
 }
 
 public sealed class PollCycleResult
@@ -76,6 +95,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     private readonly IWorkItemNotifier _workItemNotifier;
     private readonly ILogger<RemoteWorkItemCoordinator>? _logger;
     private readonly RepositoryParallelismHolds _repositoryHolds;
+    private readonly ReadyClaimGate _claimGate;
+    private readonly IShutdownState _shutdown;
 
     public RemoteWorkItemCoordinator(
         IWorkItemServerClient client,
@@ -87,7 +108,9 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         IAiProviderConcurrencyTracker? aiTracker = null,
         IWorkItemNotifier? workItemNotifier = null,
         ILogger<RemoteWorkItemCoordinator>? logger = null,
-        RepositoryParallelismHolds? repositoryHolds = null)
+        RepositoryParallelismHolds? repositoryHolds = null,
+        ReadyClaimGate? claimGate = null,
+        IShutdownState? shutdown = null)
     {
         _client = client;
         _resolver = resolver;
@@ -99,10 +122,14 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
         _logger = logger;
         _repositoryHolds = repositoryHolds ?? new RepositoryParallelismHolds();
+        _claimGate = claimGate ?? new ReadyClaimGate();
+        _shutdown = shutdown ?? ShutdownState.NeverStopping;
     }
 
     public async Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default)
     {
+        using var claimTurn = await _claimGate.EnterAsync(ct);
+
         // The Active Work Item Set, derived fresh from the runs still alive
         // locally. Deliberately local rather than the server's Running status:
         // the cap is this instance's own capacity, and reading it off the server
@@ -193,9 +220,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             }
         }
 
-        // 3. Claim Ready items, room permitting. Tag → template resolution
-        //    happens up-front so no-match / ambiguous cases never enter the
-        //    Running state on the server.
+        // 3. Claim Ready items, room permitting.
         var hasActiveHumanFeedback = poll.ActiveItems.Any(w => w.Status == RemoteWorkItemStatus.HumanFeedback);
         var blockedByCap = false;
 
@@ -209,7 +234,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
 
         // While paused, leave Ready items untouched: the whole claim loop is the
         // auto-promotion path, so skipping it is what "pause" means. A human can
-        // still promote a Ready item to Running manually via the transition API.
+        // still start a Ready item by hand (StartIgnoringRepositoryLimitAsync).
         foreach (var ready in claimReadyItems ? poll.ReadyItems : Enumerable.Empty<RemoteWorkItem>())
         {
             // Before the global cap and template resolution, so an item its
@@ -229,112 +254,14 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             if (ct.IsCancellationRequested) break;
             attempted.Add(ready.Id);
 
-            var resolution = _resolver.Resolve(ready.Tags);
-            if (resolution.Kind != LoopTemplateResolutionKind.Single)
-            {
-                var reason = resolution.Kind switch
-                {
-                    LoopTemplateResolutionKind.None => "No loop found for existing tags",
-                    LoopTemplateResolutionKind.Ambiguous =>
-                        $"Multiple loop templates match tags: {string.Join(", ", resolution.MatchingTemplateNames)}",
-                    _ => "Unable to resolve template",
-                };
-                var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
-                {
-                    TargetStatus = RemoteWorkItemStatus.HumanFeedback,
-                    Reason = reason,
-                }, _scheduler, ct);
-                if (!transition.Success)
-                {
-                    _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback: {Reason}",
-                        ready.Id, transition.Reason);
-                    continue;
-                }
-                await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, reason);
-                await _workItemNotifier.WorkItemStateChangedAsync(
-                    ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.HumanFeedback);
-                escalated.Add(ready);
-                // Needs you holds a repository slot, so this item takes one.
-                SlotsOf(ready)?.Take();
-                continue;
-            }
-
-            var claim = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
-            {
-                TargetStatus = RemoteWorkItemStatus.Running,
-                Reason = "Claimed to run",
-            }, _scheduler, ct);
-            if (claim.Success)
-            {
-                slotHolders.Add(ready.Id);
-                claimed.Add(ready);
-                // Unlike the global slot, never handed back in this pass: a run
-                // that fails to start leaves the item in Running or HumanFeedback,
-                // and both hold the repository slot.
-                SlotsOf(ready)?.Take();
-
-                // The raw client claim above bypasses WorkItemManager, and
-                // the engine's subsequent transition is a no-op (prev ==
-                // actual == Running) so its notifier is suppressed. Emit
-                // the SignalR event here so the taskboard sees the move
-                // out of Ready without a page refresh.
-                await _workItemNotifier.WorkItemStateChangedAsync(
-                    ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Running);
-
-                // Per PRD §3.2 step 4: a successful claim must "create a local
-                // LoopRun, kick off LoopEngine". The engine resolves the
-                // template from the work item's tags and creates the run; if
-                // that fails it transitions the item back to HumanFeedback so
-                // the server reflects reality. Failures here are logged but
-                // never abort the poll cycle — the next pass can retry.
-                try
-                {
-                    await _engine.StartRunAsync(ready.Id, ct);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex,
-                        "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
-                    // The claim stands on the server with nothing driving it, so
-                    // hand it back for review. Release the slot even if the remote
-                    // transition fails: no live run can use this instance's capacity.
-                    // StartRunAsync ends any run it had already created as
-                    // Failed, so no orphan keeps the slot on the next pass, and
-                    // the reason belongs to the item rather than to that run.
-                    slotHolders.Remove(ready.Id);
-                    try
-                    {
-                        var startFailure = $"Failed to start run: {ex.Message}";
-                        var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
-                        {
-                            TargetStatus = RemoteWorkItemStatus.HumanFeedback,
-                            Reason = startFailure,
-                        }, _scheduler, ct);
-                        if (!transition.Success)
-                        {
-                            _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback after run start failure: {Reason}",
-                                ready.Id, transition.Reason);
-                            continue;
-                        }
-                        await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, startFailure);
-                        await _workItemNotifier.WorkItemStateChangedAsync(
-                            ready.Id, RemoteWorkItemStatus.Running, RemoteWorkItemStatus.HumanFeedback);
-                        escalated.Add(ready);
-                    }
-                    catch (Exception unwindEx)
-                    {
-                        _logger?.LogWarning(unwindEx,
-                            "Failed to hand back work item {WorkItemId} after run start failure", ready.Id);
-                    }
-                }
-            }
-            else if (RepositorySlotStatuses.Contains(claim.ActualStatus))
-            {
-                // Lost-claim race: another instance got there first, so the
-                // item is in progress all the same and holds its repository
-                // slot. The next poll will simply not see it again.
-                SlotsOf(ready)?.Take();
-            }
+            var outcome = await ClaimAndStartAsync(opts, ready, _scheduler, "Claimed to run", ct);
+            if (outcome.Running) slotHolders.Add(ready.Id);
+            if (outcome.Claimed) claimed.Add(ready);
+            if (outcome.Escalated) escalated.Add(ready);
+            // Unlike the global slot, never handed back in this pass: a run
+            // that fails to start leaves the item in Running or HumanFeedback,
+            // and both hold the repository slot.
+            if (outcome.HoldsRepositorySlot) SlotsOf(ready)?.Take();
         }
 
         // Counts only grow within a pass, so an item skipped above is still
@@ -364,6 +291,141 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             SlotHolders = slotHolders.OrderBy(id => id, StringComparer.Ordinal).ToList(),
             BlockedByCap = blockedByCap,
         };
+    }
+
+    public async Task<HandStartResult> StartIgnoringRepositoryLimitAsync(WorkItemServerOptions opts, string workItemId, int maxConcurrent, WorkItemActor actor, CancellationToken ct = default)
+    {
+        using var claimTurn = await _claimGate.EnterAsync(ct);
+        // Checked once in, because the wait for a pass can outlast the moment
+        // shutdown began; the pass itself stops claiming then.
+        if (_shutdown.IsStopping) return HandStartResult.ShuttingDown;
+
+        var item = await _client.GetAsync(opts, workItemId, CancellationToken.None);
+        if (item is null) return HandStartResult.NotFound;
+        if (item.Status != RemoteWorkItemStatus.Ready) return HandStartResult.NotReady;
+        // The same measure of the cap as a pass's slot ledger starts from.
+        if ((await _loopRunStore.GetActiveWorkItemIdsAsync()).Count >= maxConcurrent)
+            return HandStartResult.AtConcurrencyLimit;
+
+        var outcome = await ClaimAndStartAsync(opts, item, actor,
+            "Started by hand, ignoring the repository parallelism limit", CancellationToken.None);
+        return outcome.Claimed || outcome.Escalated ? HandStartResult.Started : HandStartResult.NotReady;
+    }
+
+    /// <summary>What <see cref="ClaimAndStartAsync"/> did with one Ready item.</summary>
+    /// <param name="Claimed">Moved to Running by this claimer, whether or not its run then started.</param>
+    /// <param name="Running">Claimed and its run started, so it holds a concurrency slot.</param>
+    /// <param name="Escalated">Moved to HumanFeedback, either straight from Ready or after its run failed to start.</param>
+    /// <param name="HoldsRepositorySlot">In progress now, by this claimer or another one.</param>
+    private readonly record struct ClaimOutcome(bool Claimed, bool Running, bool Escalated, bool HoldsRepositorySlot);
+
+    /// <summary>
+    /// Claim one Ready item and start its run: tag → template resolution first,
+    /// so no-match / ambiguous cases never enter the Running state on the
+    /// server, then the claim, then the run. Checks no limit; that is the
+    /// caller's job.
+    /// </summary>
+    private async Task<ClaimOutcome> ClaimAndStartAsync(
+        WorkItemServerOptions opts, RemoteWorkItem ready, WorkItemActor actor, string claimReason, CancellationToken ct)
+    {
+        var resolution = _resolver.Resolve(ready.Tags);
+        if (resolution.Kind != LoopTemplateResolutionKind.Single)
+        {
+            var reason = resolution.Kind switch
+            {
+                LoopTemplateResolutionKind.None => "No loop found for existing tags",
+                LoopTemplateResolutionKind.Ambiguous =>
+                    $"Multiple loop templates match tags: {string.Join(", ", resolution.MatchingTemplateNames)}",
+                _ => "Unable to resolve template",
+            };
+            var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
+            {
+                TargetStatus = RemoteWorkItemStatus.HumanFeedback,
+                Reason = reason,
+            }, actor, ct);
+            if (!transition.Success)
+            {
+                _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback: {Reason}",
+                    ready.Id, transition.Reason);
+                return default;
+            }
+            await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, reason);
+            await _workItemNotifier.WorkItemStateChangedAsync(
+                ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.HumanFeedback);
+            // Needs you holds a repository slot, so this item takes one.
+            return new ClaimOutcome(Claimed: false, Running: false, Escalated: true, HoldsRepositorySlot: true);
+        }
+
+        var claim = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
+        {
+            TargetStatus = RemoteWorkItemStatus.Running,
+            Reason = claimReason,
+        }, actor, ct);
+        if (!claim.Success)
+        {
+            // Lost-claim race: another instance got there first, so the
+            // item is in progress all the same and holds its repository
+            // slot. The next poll will simply not see it again.
+            return new ClaimOutcome(Claimed: false, Running: false, Escalated: false,
+                HoldsRepositorySlot: RepositorySlotStatuses.Contains(claim.ActualStatus));
+        }
+
+        // The raw client claim above bypasses WorkItemManager, and
+        // the engine's subsequent transition is a no-op (prev ==
+        // actual == Running) so its notifier is suppressed. Emit
+        // the SignalR event here so the taskboard sees the move
+        // out of Ready without a page refresh.
+        await _workItemNotifier.WorkItemStateChangedAsync(
+            ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Running);
+
+        // Per PRD §3.2 step 4: a successful claim must "create a local
+        // LoopRun, kick off LoopEngine". The engine resolves the
+        // template from the work item's tags and creates the run; if
+        // that fails it transitions the item back to HumanFeedback so
+        // the server reflects reality. Failures here are logged, and
+        // the item is handed back for review rather than thrown.
+        try
+        {
+            await _engine.StartRunAsync(ready.Id, ct);
+            return new ClaimOutcome(Claimed: true, Running: true, Escalated: false, HoldsRepositorySlot: true);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex,
+                "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
+            // The claim stands on the server with nothing driving it, so
+            // hand it back for review. Release the slot even if the remote
+            // transition fails: no live run can use this instance's capacity.
+            // StartRunAsync ends any run it had already created as
+            // Failed, so no orphan keeps the slot on the next pass, and
+            // the reason belongs to the item rather than to that run.
+            var notRunning = new ClaimOutcome(Claimed: true, Running: false, Escalated: false, HoldsRepositorySlot: true);
+            try
+            {
+                var startFailure = $"Failed to start run: {ex.Message}";
+                var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
+                {
+                    TargetStatus = RemoteWorkItemStatus.HumanFeedback,
+                    Reason = startFailure,
+                }, actor, ct);
+                if (!transition.Success)
+                {
+                    _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback after run start failure: {Reason}",
+                        ready.Id, transition.Reason);
+                    return notRunning;
+                }
+                await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, startFailure);
+                await _workItemNotifier.WorkItemStateChangedAsync(
+                    ready.Id, RemoteWorkItemStatus.Running, RemoteWorkItemStatus.HumanFeedback);
+                return notRunning with { Escalated = true };
+            }
+            catch (Exception unwindEx)
+            {
+                _logger?.LogWarning(unwindEx,
+                    "Failed to hand back work item {WorkItemId} after run start failure", ready.Id);
+                return notRunning;
+            }
+        }
     }
 
     private static readonly RemoteWorkItemStatus[] RepositorySlotStatuses =

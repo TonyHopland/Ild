@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import "./workitem-v2.css";
-import { LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
+import { type ApiError, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
 import { workItemService } from "../../services/auth";
 import useRenderedPrompt from "../../hooks/useRenderedPrompt";
 import ConfirmModal from "../ConfirmModal";
@@ -20,6 +20,7 @@ import {
   feedbackReasonLabel,
   feedbackReasonTone,
   pillClass,
+  repositoryHoldLabel,
   workItemStatusLabel,
   workItemStatusTone,
 } from "../../utils/labels";
@@ -100,7 +101,8 @@ export default function WorkItemModalV2({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
-  // Backlog to Work queue without dragging the card, which a phone cannot do.
+  // Backlog to Work queue without dragging the card, which a phone cannot do,
+  // and a Ready item its repository's limit holds back started anyway.
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   // A refusal was about the item as it was: once it has moved or changed state,
@@ -113,6 +115,19 @@ export default function WorkItemModalV2({
       onSave(await workItemService.moveTo(workItem!.id, WorkItemStatus.WorkQueue));
     } catch (error) {
       setMoveError(errorMessage(error, "Could not move it to the work queue."));
+    } finally {
+      setMoving(false);
+    }
+  };
+  const repositoryHold =
+    workItem?.status === WorkItemStatus.Ready ? (workItem.repositoryParallelismHold ?? null) : null;
+  const startAnyway = async () => {
+    setMoving(true);
+    setMoveError(null);
+    try {
+      onSave(await workItemService.startAnyway(workItem!.id));
+    } catch (error) {
+      setMoveError((error as ApiError | Error | undefined)?.message || "Could not start it.");
     } finally {
       setMoving(false);
     }
@@ -574,6 +589,9 @@ export default function WorkItemModalV2({
                     {feedbackReasonLabel(workItem.humanFeedbackReason)}
                   </span>
                 )}
+                {repositoryHold && (
+                  <span className={pillClass("info")}>{repositoryHoldLabel(repositoryHold)}</span>
+                )}
               </div>
             </div>
             <div className="wiv2-header-actions">
@@ -631,6 +649,16 @@ export default function WorkItemModalV2({
                     disabled={moving || detail.busy}
                   >
                     Move to Work queue
+                  </button>
+                )}
+                {repositoryHold && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void startAnyway()}
+                    disabled={moving || detail.busy}
+                  >
+                    Start anyway (ignore repository limit)
                   </button>
                 )}
               </div>
