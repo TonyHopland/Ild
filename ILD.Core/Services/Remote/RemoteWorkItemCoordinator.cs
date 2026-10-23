@@ -34,8 +34,8 @@ public interface IRemoteWorkItemCoordinator
     /// A human starts one Ready item now, the way a pass claims and starts it,
     /// but without checking its repository's parallelism limit. The instance's
     /// concurrency cap still applies, and so does shutdown; a scheduler pause
-    /// does not. Once in, the start finishes even if <paramref name="ct"/> is cancelled, so a claim
-    /// is never left half done.
+    /// does not. Once in, the start finishes even if <paramref name="ct"/> is
+    /// cancelled, so a claim is never left half done.
     /// </summary>
     Task<HandStartResult> StartIgnoringRepositoryLimitAsync(WorkItemServerOptions opts, string workItemId, int maxConcurrent, WorkItemActor actor, CancellationToken ct = default);
 }
