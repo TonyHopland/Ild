@@ -50,15 +50,17 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ### Features
 
-**Taskboard** — every work item across the seven statuses, in one view. Work queue and Ready items share the Work queue column, each card saying why it waits; the order is a preference, not a line: Ild starts the top-most item that can start, and a waiting item doesn't hold up the ones below it. A running card carries the node it is on and how long it has been running; a parked one says why it stopped, down to the PR's CI and review verdicts. Tags that name a loop template are highlighted, because that is what decides which loop the item runs.
+**Taskboard** — every work item, from backlog to done, in one view. Each card in the Work queue says why it waits or that it is ready to go; the order is a preference, not a line: Ild starts the top-most item that can start, and a waiting item doesn't hold up the ones below it. A running card carries the node it is on and how long it has been running; a parked one says why it stopped, down to the PR's CI and review verdicts. Tags that name a loop template are highlighted, because that is what decides which loop the item runs.
 
 ![Taskboard](docs/screenshots/TaskboardOverview.png)
 
-**AI chat** — a chat bubble on every page, wired to the same work-item tools the loops use. Ask it what is on the board and it reads the real one; tell it to file something and the card is there when you close the panel.
+**AI chat** — a chat bubble on every page, wired to the same work-item tools the loops use. Ask it what is on the board and it reads the real one; tell it to file something and the card is there when you close the panel. It knows which work item you have open, so you can ask about that one directly — what its run is doing, why a step failed, what its branch changes.
 
 ![AI chat](docs/screenshots/ChatWorkItems.png)
 
-**Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Condition`, `Human`, and `Cleanup` nodes. This is the `DevTeam` loop: an orchestrator that routes to a spec analyst, an explorer, a developer, a QA engineer and a reviewer, with named edges — `qa_failed`, `on_merge_conflict`, `ask_human` — carrying the work back to whichever role should handle it.
+**Scheduled chats** — a chat can start itself on a timer with a prompt you set. Run a weekly retro: the agent reads the loop analytics, the paths runs took, the feedback you gave and the review comments they got, and proposes changes to loop templates and global variables for you to approve, so the loops get better at your work week by week. Or run a nightly check that files a work item for whatever it finds.
+
+**Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Condition`, `Human`, and `Cleanup` nodes. This is the `DevTeam` loop: an orchestrator that routes to a spec analyst, an explorer, a developer, a QA engineer and a reviewer, with named edges — `qa_failed`, `on_merge_conflict`, `ask_human` — carrying the work back to whichever role should handle it. You don't have to wire it by hand: open the AI chat on the Loop Editor and it can read the loop on the canvas and build or change it with you. It edits the canvas, and saving stays with you.
 
 ![Loop Editor](docs/screenshots/LoopEditorExample.png)
 
@@ -69,6 +71,8 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 **Human gates** — when a loop reaches a `Human` or `PR` node it parks and waits. The Action tab shows why it stopped, the pull request's state and review thread, and one button per way out of the node — here **Approve**, **Merge** and **Reject**.
 
 ![Human gates](docs/screenshots/HumanFeedbackPr.png)
+
+**AutoMerge** — not every change needs you at the end. Tag a work item `AutoMerge` and its pull request merges itself once every check is green: through the forge's own auto-merge where it has one, and by Ild where it doesn't. If the merge can't go through, the item asks you to merge it by hand. Remove the tag before then and nothing merges.
 
 **Files diff** — the Files tab shows the exact git diff produced by the AI agent inside its isolated worktree, so you can review every addition and deletion before the branch is pushed or a PR is opened.
 
