@@ -75,7 +75,7 @@ public class LoopRunsController : ControllerBase
     /// </summary>
     private async Task<DateTime?> HistoryKeptUntilAsync(ILD.Data.Entities.LoopRun run)
     {
-        if (run.Retain || run.Status is not (LoopRunStatus.Completed or LoopRunStatus.Cancelled) || run.CompletedAt is not { } endedAt)
+        if (run.Retain || !RunCleanup.HasEnded(run) || run.CompletedAt is not { } endedAt)
             return null;
         return endedAt.AddDays(await _settings.GetRunRetentionDaysAsync());
     }

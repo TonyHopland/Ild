@@ -232,6 +232,38 @@ public sealed class FinishedRunCleanerTests : IDisposable
         _reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Once);
     }
 
+    [Fact]
+    public async Task A_removal_asked_for_with_allowFailed_while_one_is_in_flight_is_honoured()
+    {
+        // The engine's own attempt does not clean a Failed run; the sweeper's, made
+        // while that attempt still sees the run owned, does.
+        var runId = await SeedRunAsync(LoopRunStatus.Failed);
+        _owned.Add(runId);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        _engine.Setup(e => e.GetActiveRunIdsAsync()).Returns(async () =>
+        {
+            var owned = _owned.ToArray();
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }
+            return (IEnumerable<Guid>)owned;
+        });
+
+        var engineAttempt = _cleaner.RemoveLocalStateAsync(runId);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        _owned.Remove(runId);
+        Assert.False(await _cleaner.RemoveLocalStateAsync(runId, allowFailed: true));
+
+        release.SetResult();
+        Assert.True(await engineAttempt);
+        Assert.Null(Read(runId)!.WorktreePath);
+        _reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Once);
+    }
+
     private async Task<Guid> SeedRunAsync(LoopRunStatus status, bool retain = false, bool withGitState = true)
     {
         var id = Guid.NewGuid();

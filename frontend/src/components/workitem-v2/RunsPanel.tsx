@@ -32,6 +32,7 @@ import Icon from "../Icon";
 import MenuButton, { type MenuItem } from "../MenuButton";
 import { nodeStatusLabel, pillClass, runStatusLabel, runStatusTone } from "../../utils/labels";
 import { nodeTakesRetry, runOffersRetry, runTakesRetryNow } from "./retry";
+import { runHasEnded } from "../../utils/runEnded";
 
 interface EffectiveInput {
   nodeType?: string;
@@ -334,8 +335,7 @@ interface RunsPanelProps {
  * waits for the work item to be Done, so until it is the date is a lower bound.
  */
 function EndedRunNote({ run, workItemDone }: { run: LoopRun; workItemDone: boolean }) {
-  const ended = run.status === LoopRunStatus.Completed || run.status === LoopRunStatus.Cancelled;
-  if (!ended || run.hasLocalGitState !== false) return null;
+  if (!runHasEnded(run.status) || run.hasLocalGitState !== false) return null;
   if (run.retain)
     return (
       <p className="wiv2-run-ended-note">

@@ -99,7 +99,6 @@ public class WorkItemManager : IWorkItemManager
     private Task RemoveLocalStateAsync(Guid runId)
         => _finishedRunCleaner?.RemoveLocalStateAsync(runId) ?? Task.CompletedTask;
 
-
     private static bool IsAlive(LoopRunStatus status)
         => status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman;
 

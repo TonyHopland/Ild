@@ -122,6 +122,10 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
 
         var cleaned = 0;
         var left = 0;
+        // Paged by the runs left as they were: a cleaned run no longer matches the
+        // query and drops out, so skipping the ones left reaches the next unseen
+        // candidate. Were a cleaned run still to match, the worst case is that a
+        // candidate is skipped and waits for the next pass.
         while (true)
         {
             var page = await runStore.GetRunsWithLeftoverLocalStateAsync(left, PageSize);
@@ -187,7 +191,7 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
         // Keep every run of a work item that is still in play, superseded or
         // not; only reclaim once the work item is Done.
         if (await IsInPlayAsync(workItems, run.WorkItemId, itemInPlay)) return false;
-        if (sp.GetService<ILoopEngine>() is { } engine && (await engine.GetActiveRunIdsAsync()).Contains(run.Id)) return false;
+        if (await RunCleanup.IsDrivenByEngineAsync(sp, run.Id)) return false;
 
         // Only drop the run row once its local git state is verified gone;
         // otherwise keep the row so the next sweep can retry — a deleted

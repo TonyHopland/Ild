@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -12,7 +11,9 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
 {
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<FinishedRunCleaner> _log;
-    private readonly ConcurrentDictionary<Guid, InFlight> _inFlight = new();
+    private readonly object _gate = new();
+    // Guarded by _gate.
+    private readonly Dictionary<Guid, Request> _inFlight = new();
 
     public FinishedRunCleaner(IServiceScopeFactory scopes, ILogger<FinishedRunCleaner> log)
     {
@@ -21,46 +22,43 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
     }
 
     /// <summary>
-    /// The removal running for one run, and whether a call arrived while it ran.
-    /// Such a call may know the run has ended, or been let go by the engine, after
-    /// the running one read it, so it is not dropped: the running one goes again
-    /// unless it already removed everything.
+    /// The removal running for one run. A call that arrives meanwhile may know more
+    /// than the running one did when it read the run — that the run has ended, or
+    /// that the engine let it go — so it asks for another attempt instead of being
+    /// dropped.
     /// </summary>
-    private sealed class InFlight
+    private sealed class Request
     {
         public bool Again;
         public bool AllowFailed;
-        public bool Done;
     }
 
     public async Task<bool> RemoveLocalStateAsync(Guid runId, bool allowFailed = false)
     {
-        var mine = new InFlight { AllowFailed = allowFailed };
-        while (_inFlight.GetOrAdd(runId, mine) is var current && current != mine)
+        Request mine;
+        lock (_gate)
         {
-            lock (current)
+            if (_inFlight.TryGetValue(runId, out var running))
             {
-                if (!current.Done)
-                {
-                    current.Again = true;
-                    current.AllowFailed |= allowFailed;
-                    return false;
-                }
+                running.Again = true;
+                running.AllowFailed |= allowFailed;
+                return false;
             }
+            _inFlight[runId] = mine = new Request { AllowFailed = allowFailed };
         }
 
         while (true)
         {
-            var removed = await RemoveOnceAsync(runId, mine.AllowFailed);
-            lock (mine)
+            var removed = await RemoveOnceAsync(runId, allowFailed);
+            lock (_gate)
             {
                 if (removed || !mine.Again)
                 {
-                    mine.Done = true;
-                    _inFlight.TryRemove(new KeyValuePair<Guid, InFlight>(runId, mine));
+                    _inFlight.Remove(runId);
                     return removed;
                 }
                 mine.Again = false;
+                allowFailed = mine.AllowFailed;
             }
         }
     }
@@ -72,16 +70,13 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
             using var scope = _scopes.CreateScope();
             var sp = scope.ServiceProvider;
 
-            // The engine is a singleton that ends runs through here, so it is looked
-            // up per call rather than taken in the constructor.
-            if (sp.GetService<ILoopEngine>() is { } engine && (await engine.GetActiveRunIdsAsync()).Contains(runId))
+            if (await RunCleanup.IsDrivenByEngineAsync(sp, runId))
                 return false;
 
             var runs = sp.GetRequiredService<ILoopRunStore>();
             var run = await runs.GetByIdAsync(runId);
             if (run is null || run.Retain) return false;
-            if (run.Status is not (LoopRunStatus.Completed or LoopRunStatus.Cancelled)
-                && !(allowFailed && run.Status == LoopRunStatus.Failed))
+            if (!RunCleanup.HasEnded(run) && !(allowFailed && run.Status == LoopRunStatus.Failed))
                 return false;
 
             var outcome = await RunCleanup.CleanUpAsync(

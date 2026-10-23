@@ -2,6 +2,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -32,6 +33,23 @@ public static class RunCleanup
     /// </summary>
     public static bool IsFinished(LoopRun run)
         => run.Status is LoopRunStatus.Completed or LoopRunStatus.Failed or LoopRunStatus.Cancelled;
+
+    /// <summary>
+    /// Whether the run has ended: Completed or Cancelled. Narrower than
+    /// <see cref="IsFinished"/>, which also counts Failed: a person may clean up a
+    /// Failed run by hand, but it has not ended — it can still be retried — so its
+    /// local state is not removed on its own and its history has no end date.
+    /// </summary>
+    public static bool HasEnded(LoopRun run)
+        => run.Status is LoopRunStatus.Completed or LoopRunStatus.Cancelled;
+
+    /// <summary>
+    /// Whether the engine still drives the run, so nothing may touch its worktree.
+    /// The engine is looked up here rather than injected, because it ends runs
+    /// through the <see cref="FinishedRunCleaner"/>; false where there is none.
+    /// </summary>
+    public static async Task<bool> IsDrivenByEngineAsync(IServiceProvider services, Guid runId)
+        => services.GetService<ILoopEngine>() is { } engine && (await engine.GetActiveRunIdsAsync()).Contains(runId);
 
     public static async Task<RunCleanupOutcome> CleanUpAsync(
         LoopRun run, IRunReclaimer reclaimer, ILoopRunStore runs, IAdapterSessionSnapshotStore snapshots)
