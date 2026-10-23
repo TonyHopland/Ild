@@ -211,7 +211,7 @@ export default function TaskboardColumn({
                 title={orderNote}
               >
                 <Icon name="info" size={14} />
-                <span id={orderNoteId} className="sr-only">
+                <span id={orderNoteId} className="taskboard-column-tooltip">
                   {orderNote}
                 </span>
               </span>

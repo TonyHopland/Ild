@@ -348,10 +348,13 @@ public class WorkItemManagerTests
         await mgr.AddDependencyAsync(TestActors.Human, freed, dep);
         await mgr.TransitionToWorkQueueAsync(TestActors.Human, freed);
         await mgr.TransitionToHumanFeedbackAsync(TestActors.Human, dep, "Node Failed");
+        var readFailed = false;
         if (failing == "list read")
             ((FakeWorkItemServerClient)db.ServerClient).OnList = status =>
             {
-                if (status == RemoteWorkItemStatus.Ready) throw new TaskCanceledException("The read timed out.");
+                if (status != RemoteWorkItemStatus.Ready) return;
+                readFailed = true;
+                throw new TaskCanceledException("The read timed out.");
             };
         else
             notifier.Setup(n => n.WorkItemStateChangedAsync(freed, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready))
@@ -362,6 +365,8 @@ public class WorkItemManagerTests
 
         Assert.Equal(RemoteWorkItemStatus.Done, (await mgr.GetWorkItemAsync(dep))!.Status);
         scheduler.Verify(s => s.Pulse(), Times.AtLeastOnce);
+        if (failing == "list read") Assert.True(readFailed);
+        else notifier.Verify(n => n.WorkItemStateChangedAsync(freed, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready), Times.Once);
     }
 
     [Fact]

@@ -110,6 +110,8 @@
 }
 
 .taskboard-column-heading {
+  position: relative;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -126,6 +128,36 @@
 
 .taskboard-column-info:hover,
 .taskboard-column-info:focus-visible {
+  color: var(--text);
+}
+
+/* The order note: read out as the icon's description, and shown under the
+   heading while the icon has keyboard focus (a mouse gets the icon's title). */
+.taskboard-column-tooltip {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.taskboard-column-info:focus-visible .taskboard-column-tooltip {
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+  padding: var(--space-2);
+  background-color: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 400;
   color: var(--text);
 }
 
