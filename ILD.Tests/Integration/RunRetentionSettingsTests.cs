@@ -7,8 +7,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ILD.Tests.Integration;
 
 /// <summary>
-/// run.retentionDays: 0 on a fresh install, where 0 means a finished run is deleted
-/// at the next sweep once its work item is Done; an integer from 0 to 3650.
+/// run.retentionDays: 14 on a fresh install, so a finished run lasts from one weekly
+/// retro to the next; an integer from 0 to 3650, where 0 deletes it at the next cleanup.
 /// </summary>
 public class RunRetentionSettingsTests
 {
@@ -22,23 +22,23 @@ public class RunRetentionSettingsTests
         => client.PutAsJsonAsync($"/api/v1/settings/{Key}", new { value }, TestContext.Current.CancellationToken);
 
     [Fact]
-    public async Task A_fresh_install_reports_0_days_and_the_sweeper_reads_0()
+    public async Task A_fresh_install_reports_14_days_and_the_sweeper_reads_14()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var all = await client.GetFromJsonAsync<JsonElement[]>("/api/v1/settings", TestContext.Current.CancellationToken);
         var values = all!.ToDictionary(s => s.GetProperty("key").GetString()!, s => s.GetProperty("value").GetString());
-        Assert.Equal("0", values[Key]);
-        Assert.Equal("0", await StoredAsync(client));
+        Assert.Equal("14", values[Key]);
+        Assert.Equal("14", await StoredAsync(client));
 
         using var scope = factory.Services.CreateScope();
         var settings = scope.ServiceProvider.GetRequiredService<ISchedulerSettingsService>();
-        Assert.Equal(0, await settings.GetRunRetentionDaysAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(14, await settings.GetRunRetentionDaysAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
-    public async Task The_days_take_0_to_3650_and_the_refusal_calls_0_delete_when_done()
+    public async Task The_days_take_0_to_3650_a_stored_0_stays_0_and_the_refusal_no_longer_calls_0_when_done()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
@@ -50,12 +50,17 @@ public class RunRetentionSettingsTests
             Assert.Equal(valid, await StoredAsync(client));
         }
 
+        using (var scope = factory.Services.CreateScope())
+            Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<ISchedulerSettingsService>()
+                .GetRunRetentionDaysAsync(TestContext.Current.CancellationToken));
+
         foreach (var invalid in new[] { "-1", "3651", "7.5", "" })
         {
             using var refused = await PutAsync(client, invalid);
             Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
             var error = await refused.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-            Assert.Contains("when done", error);
+            Assert.Contains("3650", error);
+            Assert.DoesNotContain("when done", error);
             Assert.DoesNotContain("disabled", error);
             Assert.Equal("0", await StoredAsync(client));
         }

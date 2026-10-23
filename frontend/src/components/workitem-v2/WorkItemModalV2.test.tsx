@@ -1273,6 +1273,31 @@ describe("WorkItemModalV2", () => {
     }
   });
 
+  test("once the item's run has ended and its worktree is gone, Files and Preview no longer say one is coming", async () => {
+    const ended = makeRun({
+      status: LoopRunStatus.Cancelled,
+      hasLocalGitState: false,
+      historyKeptUntil: "2025-01-16T01:00:00Z",
+    });
+    mockServices([ended]);
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Run cancelled",
+        currentLoopRunId: ended.id,
+        startedAt: ended.startedAt,
+        completedAt: ended.completedAt,
+      }),
+    );
+
+    for (const name of ["Files", "Preview"]) {
+      const tab = screen.getByRole("tab", { name });
+      await waitFor(() => expect(tab.getAttribute("title")).not.toMatch(/once a run has started/i));
+      expect(tab.getAttribute("title")).toMatch(/worktree/i);
+      expect(tab.getAttribute("aria-disabled")).toBe("true");
+    }
+  });
+
   test("with a worktree Files and Preview open as usual", async () => {
     mockServices();
     await renderDialog(makeWorkItem({ worktreePath: "/worktrees/repo/wi-1" }));

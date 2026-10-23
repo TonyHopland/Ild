@@ -50,16 +50,17 @@ public class LoopRunsIntegrationTests
 
     /// <summary>
     /// Cleanup is the non-destructive counterpart of Delete (ADR-0008): the run
-    /// row and its history survive, but the worktree/branch it named do not, so
-    /// the branch is free for the next run.
+    /// row and its history survive, but the worktree/branch it named and its AI
+    /// session snapshots do not, so the branch is free for the next run.
     /// </summary>
     [Fact]
-    public async Task Cleanup_frees_the_branch_and_keeps_the_run_row()
+    public async Task Cleanup_frees_the_branch_deletes_the_session_snapshots_and_keeps_the_run_row()
     {
         var reclaimer = new StubRunReclaimer(succeeds: true);
         await using var factory = NewFactory(reclaimer);
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/reclaim-me");
+        await SeedSnapshotAsync(factory, runId);
 
         Assert.Contains("already used locally", await BranchWarningAsync(client, "feature/reclaim-me"));
 
@@ -71,7 +72,62 @@ public class LoopRunsIntegrationTests
         Assert.NotNull(run);
         Assert.Null(run!.WorktreePath);
         Assert.Null(run.BranchName);
+        Assert.Equal(0, await SnapshotCountAsync(factory, runId));
         Assert.Null(await BranchWarningAsync(client, "feature/reclaim-me"));
+    }
+
+    [Fact]
+    public async Task Cleanup_of_a_pinned_run_with_only_session_snapshots_left_deletes_them_and_keeps_the_pinned_run()
+    {
+        await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(factory, LoopRunStatus.Completed, branch: null, retain: true);
+        await SeedSnapshotAsync(factory, runId);
+
+        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(0, await SnapshotCountAsync(factory, runId));
+        var run = ReadRun(factory, runId);
+        Assert.NotNull(run);
+        Assert.True(run!.Retain);
+    }
+
+    /// <summary>
+    /// The run view's "history is kept until" date: when the run ended plus the
+    /// retention days in force now, and none for a run that has not ended or is pinned.
+    /// </summary>
+    [Fact]
+    public async Task GetById_says_until_when_an_ended_runs_history_is_kept()
+    {
+        await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var ct = TestContext.Current.CancellationToken;
+        var ended = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        var completed = SeedRun(factory, LoopRunStatus.Completed, branch: null, completedAt: ended);
+        var cancelled = SeedRun(factory, LoopRunStatus.Cancelled, branch: null, completedAt: ended);
+        var pinned = SeedRun(factory, LoopRunStatus.Completed, branch: null, retain: true, completedAt: ended);
+        var running = SeedRun(factory, LoopRunStatus.Running, branch: "feature/live");
+        var waiting = SeedRun(factory, LoopRunStatus.WaitingHuman, branch: "feature/waiting");
+
+        async Task<DateTime?> KeptUntil(Guid id)
+        {
+            var run = await client.GetFromJsonAsync<JsonElement>($"/api/v1/loopruns/{id}", ct);
+            var value = run.GetProperty("historyKeptUntil");
+            if (value.ValueKind == JsonValueKind.Null) return null;
+            var at = value.GetDateTime();
+            return DateTime.SpecifyKind(at.Kind == DateTimeKind.Local ? at.ToUniversalTime() : at, DateTimeKind.Utc);
+        }
+
+        Assert.Equal(ended.AddDays(14), await KeptUntil(completed));
+        Assert.Equal(ended.AddDays(14), await KeptUntil(cancelled));
+        Assert.Null(await KeptUntil(pinned));
+        Assert.Null(await KeptUntil(running));
+        Assert.Null(await KeptUntil(waiting));
+
+        Assert.Equal(HttpStatusCode.OK,
+            (await client.PutAsJsonAsync("/api/v1/settings/run.retentionDays", new { value = "30" }, ct)).StatusCode);
+        Assert.Equal(ended.AddDays(30), await KeptUntil(completed));
     }
 
     [Fact]
@@ -303,7 +359,7 @@ public class LoopRunsIntegrationTests
     private static ApiFactory NewFactory(IRunReclaimer reclaimer)
         => new(configureServices: services => services.ReplaceSingleton(reclaimer));
 
-    private static Guid SeedRun(ApiFactory factory, LoopRunStatus status, string branch)
+    private static Guid SeedRun(ApiFactory factory, LoopRunStatus status, string? branch, bool retain = false, DateTime? completedAt = null)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -324,12 +380,28 @@ public class LoopRunsIntegrationTests
             LoopTemplateVersionId = version.Id,
             Status = status,
             StartedAt = DateTime.UtcNow.AddHours(-2),
-            WorktreePath = "/tmp/ild-test-worktree",
+            CompletedAt = completedAt ?? (status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman ? null : DateTime.UtcNow.AddHours(-1)),
+            WorktreePath = branch is null ? null : "/tmp/ild-test-worktree",
             BranchName = branch,
+            Retain = retain,
         };
         db.LoopRuns.Add(run);
         db.SaveChanges();
         return run.Id;
+    }
+
+    private static async Task SeedSnapshotAsync(ApiFactory factory, Guid runId)
+    {
+        using var scope = factory.Services.CreateScope();
+        await SessionSnapshotTestSupport.SeedAsync(scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IAdapterSessionSnapshotStore>(),
+            ILD.Data.Stores.Interfaces.SessionSnapshotKey.ForRun(runId, "ClaudeCode", "sess-1"), "claude-jsonl", "{\"turn\":1}\n",
+            TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<int> SnapshotCountAsync(ApiFactory factory, Guid runId)
+    {
+        using var scope = factory.Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<AppDbContext>().AdapterSessionSnapshots.CountAsync(s => s.LoopRunId == runId);
     }
 
     private static LoopRun? ReadRun(ApiFactory factory, Guid runId)

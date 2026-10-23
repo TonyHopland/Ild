@@ -447,6 +447,45 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
             Assert.Empty(await db.AdapterSessionSnapshotChunks.ToListAsync(Ct));
     }
 
+    [Fact]
+    public async Task Deleting_a_runs_snapshots_removes_them_with_their_chunks_and_leaves_other_owners_alone()
+    {
+        Guid otherRunId;
+        await using (var db = Context())
+        {
+            var versionId = await db.LoopRuns.Where(r => r.Id == _runId).Select(r => r.LoopTemplateVersionId).SingleAsync(Ct);
+            otherRunId = Guid.NewGuid();
+            db.LoopRuns.Add(new LoopRun
+            {
+                Id = otherRunId,
+                WorkItemId = Guid.NewGuid().ToString(),
+                LoopTemplateVersionId = versionId,
+                Status = LoopRunStatus.Completed,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+            });
+            await db.SaveChangesAsync(Ct);
+        }
+        var chatId = await SeedChatAsync();
+        await SessionSnapshotTestSupport.SeedAsync(Store(), Key("one"), "claude-jsonl", "{\"a\":1}\n", Ct);
+        await SessionSnapshotTestSupport.SeedAsync(Store(), Key("two", "Codex"), "claude-jsonl", "{\"b\":2}\n", Ct);
+        var otherRun = SessionSnapshotKey.ForRun(otherRunId, "ClaudeCode", "sess-1");
+        var chat = SessionSnapshotKey.ForChat(chatId, "ClaudeCode", "sess-1");
+        await SessionSnapshotTestSupport.SeedAsync(Store(), otherRun, "claude-jsonl", "{\"c\":3}\n", Ct);
+        await SessionSnapshotTestSupport.SeedAsync(Store(), chat, "claude-jsonl", "{\"d\":4}\n", Ct);
+
+        Assert.Equal(2, await Store().DeleteForRunAsync(_runId, Ct));
+
+        Assert.Empty(await Store().ListMetadataForRunAsync(_runId, Ct));
+        Assert.Empty(await ChunksAsync(Key("one")));
+        Assert.Empty(await ChunksAsync(Key("two", "Codex")));
+        Assert.Equal("{\"c\":3}\n", await SessionSnapshotTestSupport.ReadAllTextAsync(Store(), otherRun, Ct));
+        Assert.Equal("{\"d\":4}\n", await SessionSnapshotTestSupport.ReadAllTextAsync(Store(), chat, Ct));
+        await using (var db = Context())
+            Assert.Equal(2, await db.AdapterSessionSnapshotChunks.CountAsync(Ct));
+
+        Assert.Equal(0, await Store().DeleteForRunAsync(_runId, Ct));
+    }
+
     private AppDbContext Context()
         => new(new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(_connection)

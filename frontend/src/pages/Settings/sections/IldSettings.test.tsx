@@ -27,7 +27,7 @@ describe("Ild settings", () => {
     await screen.findByText("Must be an integer between 1 and 1000.");
 
     const retention = (await screen.findByDisplayValue("30")) as HTMLInputElement;
-    expect(retention).toBe(screen.getByLabelText(/delete finished runs after/i));
+    expect(retention).toBe(screen.getByLabelText(/keep finished runs for/i));
     fireEvent.change(retention, { target: { value: "0" } });
     fireEvent.blur(retention);
 
@@ -36,20 +36,18 @@ describe("Ild settings", () => {
     });
   });
 
-  test("run retention shows 0 when unread and names 0 as when done", async () => {
+  test("run retention shows 14 when unread and no longer names 0 as when done", async () => {
     vi.spyOn(authServices.settingsService, "get").mockRejectedValue(new Error("offline"));
 
     render(<IldSettings />);
 
-    const retention = (await screen.findByLabelText(
-      /delete finished runs after/i,
-    )) as HTMLInputElement;
-    expect(retention.value).toBe("0");
+    const retention = (await screen.findByLabelText(/keep finished runs for/i)) as HTMLInputElement;
+    expect(retention.value).toBe("14");
 
     fireEvent.change(retention, { target: { value: "3651" } });
     fireEvent.blur(retention);
     const error = await screen.findByText(/^Must be an integer between 0 .* and 3650\.$/);
-    expect(error.textContent).toContain("0 (when done)");
+    expect(error.textContent).not.toContain("when done");
   });
 
   test("saves the AI step cap", async () => {

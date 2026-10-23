@@ -130,6 +130,107 @@ describe("RunsPanel cleanup action", () => {
   });
 });
 
+/** A run's "history is kept" note, found by its anchor text, with all of its text. */
+async function endedRunNote() {
+  const note = await screen.findByText(/history is kept/i);
+  return note.closest("p, div, section")?.textContent ?? note.textContent ?? "";
+}
+
+/** The ways a date might be written; the note must use the API's date, however formatted. */
+function writtenAsDate(iso: string) {
+  const d = new Date(iso);
+  return [
+    d.toLocaleDateString(),
+    d.toLocaleDateString(undefined, { dateStyle: "medium" }),
+    d.toLocaleDateString(undefined, { dateStyle: "long" }),
+  ];
+}
+
+describe("RunsPanel ended run note", () => {
+  // Far from completedAt + any whole default, so a date worked out in the browser shows up wrong.
+  const keptUntil = "2025-03-20T12:00:00Z";
+
+  function renderEnded(detail: LoopRun, status: WorkItemStatus) {
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(
+      <RunsPanel
+        workItem={workItem({ status, currentLoopRunId: detail.id })}
+        runs={[detail]}
+        progressText=""
+      />,
+    );
+  }
+
+  test.each([LoopRunStatus.Completed, LoopRunStatus.Cancelled])(
+    "a %s run of a Done item says its worktree went when it ended and until when its history is kept",
+    async (status) => {
+      renderEnded(
+        run({ status, hasLocalGitState: false, retain: false, historyKeptUntil: keptUntil }),
+        WorkItemStatus.Done,
+      );
+
+      const text = await endedRunNote();
+      expect(text).toMatch(/worktree removed when the run ended/i);
+      expect(writtenAsDate(keptUntil).some((date) => text.includes(date))).toBe(true);
+      expect(text).not.toMatch(/at least/i);
+    },
+  );
+
+  test("while the item is not Done the history is kept until at least the date", async () => {
+    renderEnded(
+      run({ hasLocalGitState: false, retain: false, historyKeptUntil: keptUntil }),
+      WorkItemStatus.Backlog,
+    );
+
+    const text = await endedRunNote();
+    expect(text).toMatch(/at least/i);
+    expect(writtenAsDate(keptUntil).some((date) => text.includes(date))).toBe(true);
+    expect(text).toMatch(/not Done/i);
+  });
+
+  test("a pinned run's history is kept while it is pinned, with no date", async () => {
+    renderEnded(
+      run({ hasLocalGitState: false, retain: true, historyKeptUntil: null }),
+      WorkItemStatus.Done,
+    );
+
+    const text = await endedRunNote();
+    expect(text).toMatch(/pinned/i);
+    expect(text).not.toMatch(/\b20\d\d\b/);
+  });
+
+  test.each([
+    [
+      "a run in progress",
+      run({
+        status: LoopRunStatus.Running,
+        completedAt: null,
+        hasLocalGitState: false,
+        historyKeptUntil: null,
+      }),
+    ],
+    [
+      "a run parked on a person",
+      run({
+        status: LoopRunStatus.WaitingHuman,
+        completedAt: null,
+        hasLocalGitState: false,
+        historyKeptUntil: null,
+      }),
+    ],
+    [
+      "an ended run whose worktree is still there",
+      run({ hasLocalGitState: true, historyKeptUntil: keptUntil }),
+    ],
+  ])("%s gets no note", async (_, detail) => {
+    renderEnded(detail, WorkItemStatus.Done);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /retain/i })).not.toBeNull());
+    expect(screen.queryByText(/history is kept/i)).toBeNull();
+    expect(screen.queryByText(/worktree removed/i)).toBeNull();
+  });
+});
+
 const RUN_A = "aaaaaaaa-1111-4111-8111-111111111111";
 const RUN_B = "bbbbbbbb-2222-4222-8222-222222222222";
 const RUN_C = "cccccccc-3333-4333-8333-333333333333";
