@@ -12,6 +12,7 @@ import {
   LoopTemplate,
   RecoveryPolicy,
   AiProvider,
+  type ApiError,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -1599,13 +1600,17 @@ describe("WorkItemModalV2", () => {
   test("Start anyway is disabled and the dialog stays open while it is on its way, and a refusal shows until the item changes", async () => {
     mockServices();
     let refuse!: () => void;
-    const startAnyway = vi
-      .spyOn(authServices.workItemService, "startAnyway")
-      .mockReturnValue(
-        new Promise<WorkItem>(
-          (_, reject) => (refuse = () => reject(new Error("ILD is at its concurrency limit."))),
-        ),
-      );
+    const startAnyway = vi.spyOn(authServices.workItemService, "startAnyway").mockReturnValue(
+      new Promise<WorkItem>(
+        // Rejected the way the API client rejects a refused request.
+        (_, reject) =>
+          (refuse = () =>
+            reject({
+              status: 409,
+              message: "ILD is at its concurrency limit.",
+            } satisfies ApiError)),
+      ),
+    );
     const onClose = vi.fn();
     const item = makeWorkItem({
       status: WorkItemStatus.Ready,
