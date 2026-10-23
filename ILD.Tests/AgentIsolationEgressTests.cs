@@ -12,7 +12,7 @@ namespace ILD.Tests;
 public class AgentIsolationEgressTests
 {
     private static readonly string[] ProxyKeys =
-        { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy" };
+        { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY" };
 
     private static ProcessStartInfo BuildPsi()
     {
@@ -74,6 +74,10 @@ public class AgentIsolationEgressTests
             Assert.Equal("http://127.0.0.1:3128", psi.Environment[key]);
         Assert.Equal(AgentIsolation.EgressNoProxy, psi.Environment["NO_PROXY"]);
         Assert.Equal(AgentIsolation.EgressNoProxy, psi.Environment["no_proxy"]);
+        // Node's fetch matches http://[::1]:port only against the bracketed entry.
+        Assert.Equal(["localhost", "127.0.0.1", "::1", "[::1]"], psi.Environment["NO_PROXY"]!.Split(','));
+        // Node's built-in fetch ignores the variables above without it.
+        Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
         // The crossing itself is unchanged.
         Assert.Equal("/usr/bin/setpriv", psi.FileName);
         Assert.Equal("/home/agent", psi.Environment["HOME"]);
@@ -99,6 +103,7 @@ public class AgentIsolationEgressTests
         AgentIsolation.Route(psi, agentUser: null, agentGroup: null, agentHome: null, egressProxy: "http://127.0.0.1:3128");
 
         Assert.Equal("http://127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
+        Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
         Assert.NotEqual("/usr/bin/setpriv", psi.FileName);
     }
 
@@ -124,6 +129,7 @@ public class AgentIsolationEgressTests
         Assert.Equal("/usr/bin/setpriv", routed.FileName);
         Assert.Equal("http://provider:11111111-1111-1111-1111-111111111111@127.0.0.1:3128", routed.Environment["HTTPS_PROXY"]);
         Assert.Equal(AgentIsolation.EgressNoProxy, routed.Environment["no_proxy"]);
+        Assert.Equal("1", routed.Environment["NODE_USE_ENV_PROXY"]);
         Assert.Equal("/home/agent", routed.Environment["HOME"]);
     }
 

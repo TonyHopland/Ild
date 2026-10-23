@@ -741,8 +741,14 @@ blocks nothing. Edits apply to the agent's **next connection** — no restart, a
 a host that is newly blacklisted has its open connections reset.
 
 Everything the agent runs is pointed at the proxy through `HTTP_PROXY`,
-`HTTPS_PROXY` and `ALL_PROXY` (both spellings), with loopback on `NO_PROXY` so
-the agent's MCP server still reaches ILD's own API directly. Two consequences:
+`HTTPS_PROXY` and `ALL_PROXY` (both spellings), with loopback on `NO_PROXY`
+(`localhost`, `127.0.0.1`, `::1` and `[::1]`, since some clients match IPv6
+loopback only in brackets) so the agent's MCP server still reaches ILD's own
+API directly. Every launch also gets `NODE_USE_ENV_PROXY=1`: Node's built-in
+`fetch` (corepack's downloads included) ignores the proxy variables without it
+and would connect directly. Node reads it from v24.0.0 and v22.21.0; older
+Node ignores it. A verification or test script that clears the proxy variables
+to run tests directly should clear `NODE_USE_ENV_PROXY` too. Two consequences:
 
 - Only clients that honour a proxy work for the agent when enforcement is on:
   git over HTTPS, curl, npm, pip and the agent CLIs all do; git over SSH and
@@ -751,8 +757,9 @@ the agent's MCP server still reaches ILD's own API directly. Two consequences:
   **forward** and address it on loopback instead; see
   [Reaching a database from a preview](#reaching-a-database-from-a-preview).
 - If `ILD_API_URL` is not a loopback address (a Kubernetes service name, say),
-  add its host to the whitelist before turning `whitelist` mode on, or the
-  agent's tool calls back into ILD are blocked with everything else.
+  the agent's tool calls back into ILD go through the proxy like any other
+  host, Node clients included. Add its host to the whitelist before turning
+  `whitelist` mode on, or those calls are blocked with everything else.
 
 The log is swept, not kept forever: an entry older than
 `network.logRetentionDays` (default `30`, capped at 3650, `0` keeps the log

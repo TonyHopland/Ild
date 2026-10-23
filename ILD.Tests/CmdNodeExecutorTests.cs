@@ -200,6 +200,7 @@ public class CmdNodeExecutorTests : IDisposable
         foreach (var (key, value) in AgentIsolation.EgressProxyEnvironment(proxy))
             Assert.Equal(value, spawned.Environment[key]);
         Assert.Equal(proxy, spawned.Environment["HTTP_PROXY"]);
+        Assert.Equal("1", spawned.Environment["NODE_USE_ENV_PROXY"]);
     }
 
     [Fact]

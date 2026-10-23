@@ -45,7 +45,9 @@ Two parts, deliberately separate.
   CLI adapters, the interactive provider terminal, and Worktree Previews, which
   run as the agent per [ADR-0016](./0016-preview-runs-as-the-agent.md) — is
   pointed at it through `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (both spellings)
-  set in `AgentIsolation.Route`/`RouteCommand`, the same seam that crosses to the
+  plus `NODE_USE_ENV_PROXY=1`, without which Node's built-in `fetch` (corepack
+  included) ignores the other three, all set in
+  `AgentIsolation.Route`/`RouteCommand`, the same seam that crosses to the
   agent uid, so no launch site can forget it. `NO_PROXY` keeps loopback direct
   for the MCP callback to ILD's own API. Orchestrator-side spawns
   (`DropInheritedCapabilities`) are not proxied.
@@ -111,7 +113,8 @@ degradation is never silent.
 - **Only what honours a proxy works for the agent under enforcement.** git over
   SSH, raw TCP, QUIC, anything reading neither `HTTP_PROXY` nor `HTTPS_PROXY`
   fails with a dropped connection rather than an error message. The standard
-  toolchain (git over HTTPS, curl, npm, pip, the agent CLIs) all honour it.
+  toolchain (git over HTTPS, curl, npm, pip, the agent CLIs) all honour it, and
+  Node's built-in `fetch` does too through `NODE_USE_ENV_PROXY=1`.
 - **The proxy is the hostname oracle.** A tool that connects to an IP literal
   through the proxy is logged and judged by that literal; the lists can name IP
   literals exactly for that case.
