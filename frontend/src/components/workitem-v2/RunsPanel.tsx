@@ -300,7 +300,7 @@ interface RunsPanelProps {
   onCleanupDone?: () => void | Promise<unknown>;
   onCleanupBacklog?: () => void | Promise<unknown>;
   /**
-   * Free a finished run's worktree and branch, keeping the run and its history.
+   * Free a finished run's worktree, branch and AI session data, keeping the run and its history.
    * Rejects (409) when the git state survives, so its error is shown.
    */
   onReclaimRun?: (runId: string) => Promise<unknown>;
@@ -326,6 +326,34 @@ interface RunsPanelProps {
    * controls that act on a run. Without it the panel keeps a lock of its own.
    */
   runLock?: RunActionLock;
+}
+
+/**
+ * Where an ended run's worktree went and until when its history is kept. The
+ * date is the server's: the run ended plus the retention days. Retention also
+ * waits for the work item to be Done, so until it is the date is a lower bound.
+ */
+function EndedRunNote({ run, workItemDone }: { run: LoopRun; workItemDone: boolean }) {
+  const ended = run.status === LoopRunStatus.Completed || run.status === LoopRunStatus.Cancelled;
+  if (!ended || run.hasLocalGitState !== false) return null;
+  if (run.retain)
+    return (
+      <p className="wiv2-run-ended-note">
+        Worktree removed. The run history is kept for as long as the run is pinned.
+      </p>
+    );
+  if (!run.historyKeptUntil) return null;
+  const until = new Date(run.historyKeptUntil).toLocaleDateString(undefined, {
+    dateStyle: "medium",
+  });
+  return (
+    <p className="wiv2-run-ended-note">
+      Worktree removed when the run ended.{" "}
+      {workItemDone
+        ? `The run history is kept until ${until}.`
+        : `The run history is kept until at least ${until}, and for as long as the work item is not Done.`}
+    </p>
+  );
 }
 
 type RunDetailProps = Omit<RunsPanelProps, "runs" | "runLock"> & {
@@ -484,9 +512,9 @@ function RunDetail({
   const isLiveRun =
     runDetail.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
 
-  // A finished run keeps its worktree and branch so it stays inspectable
-  // (ADR-0008), which is what blocks a later run wanting the same branch name.
-  // Offered only once there is something left to reclaim.
+  // An ended run loses its worktree and branch on its own unless it is pinned;
+  // a pinned or Failed run keeps them, which is what blocks a later run wanting
+  // the same branch name. Offered only while there is something left to reclaim.
   const canReclaim =
     (runDetail.status === LoopRunStatus.Completed ||
       runDetail.status === LoopRunStatus.Failed ||
@@ -512,6 +540,8 @@ function RunDetail({
           {
             id: "cancel",
             label: "Cancel run",
+            title:
+              "Stop this run. Its worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept.",
             danger: true,
             disabled: busy,
             onSelect: () => void actOnRun("cancel", onCancelRun, "Failed to cancel run."),
@@ -588,8 +618,8 @@ function RunDetail({
           }
           title={
             runDetail.retain
-              ? "Pinned: this run is kept and never auto-deleted. Click to unpin."
-              : "Pin this run so its worktree, branch, and history are never auto-deleted."
+              ? "Pinned: this run's worktree, branch, AI sessions and history are never auto-deleted while it is pinned. Click to unpin."
+              : "Pin this run so its worktree, branch, AI sessions and history are never auto-deleted while it is pinned."
           }
         >
           {runDetail.retain ? "📌 Retained" : "Retain"}
@@ -599,7 +629,8 @@ function RunDetail({
       {confirmingReclaim && onReclaimRun && (
         <div className="wiv2-abandon-confirm" role="group" aria-label="Confirm clean up run">
           <span className="wiv2-abandon-prompt">
-            Delete this run&rsquo;s worktree and local branch? The run and its history are kept.
+            Delete this run&rsquo;s worktree, local branch and AI session data? The run and its
+            history are kept.
           </span>
           <button
             type="button"
@@ -622,7 +653,8 @@ function RunDetail({
       {confirmingDelete && onDeleteRun && (
         <div className="wiv2-abandon-confirm" role="group" aria-label="Confirm delete run">
           <span className="wiv2-abandon-prompt">
-            Delete this loop run and all its event history?
+            Delete this loop run? This deletes the run history itself — its nodes, event log and
+            feedback — along with any worktree, local branch and AI session data it still has.
           </span>
           <button
             type="button"
@@ -642,6 +674,7 @@ function RunDetail({
           </button>
         </div>
       )}
+      <EndedRunNote run={runDetail} workItemDone={workItem.status === WorkItemStatus.Done} />
       <RunCostSummary run={runDetail} />
       <RunVariables variables={runDetail.availableVariables ?? []} />
       <RunSessions runId={runDetail.id} sessions={runDetail.availableSessions ?? []} />

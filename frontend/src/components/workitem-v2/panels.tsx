@@ -270,6 +270,7 @@ function FailedNodeCard({
           type="button"
           className="btn btn-sm btn-secondary"
           disabled={busy}
+          title="End the run and send the work item back to Backlog. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept."
           onClick={() =>
             void detail.runLock.hold(
               workItem.currentLoopRunId,
