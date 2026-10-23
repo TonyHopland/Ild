@@ -1563,6 +1563,108 @@ describe("WorkItemModalV2", () => {
     expect(screen.queryByRole("button", { name: "Move to Work queue" })).toBeNull();
   });
 
+  test("a Ready item its repository's limit holds back says why and starts anyway from the footer", async () => {
+    mockServices();
+    const started = makeWorkItem({
+      status: WorkItemStatus.Running,
+      repositoryParallelismHold: null,
+    });
+    const startAnyway = vi
+      .spyOn(authServices.workItemService, "startAnyway")
+      .mockResolvedValue(started);
+    const onSave = vi.fn();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.Ready,
+        repositoryParallelismHold: { inProgress: 1, limit: 1 },
+      }),
+      { onSave },
+    );
+
+    expect(
+      screen.getByText("Waiting: repository parallelism limit (1/1 in progress)"),
+    ).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Start anyway (ignore repository limit)" }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(startAnyway).toHaveBeenCalledTimes(1);
+    expect(startAnyway).toHaveBeenCalledWith("wi-1");
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(started));
+  });
+
+  test("Start anyway is disabled and the dialog stays open while it is on its way, and a refusal shows until the item changes", async () => {
+    mockServices();
+    let refuse!: () => void;
+    const startAnyway = vi
+      .spyOn(authServices.workItemService, "startAnyway")
+      .mockReturnValue(
+        new Promise<WorkItem>(
+          (_, reject) => (refuse = () => reject(new Error("ILD is at its concurrency limit."))),
+        ),
+      );
+    const onClose = vi.fn();
+    const item = makeWorkItem({
+      status: WorkItemStatus.Ready,
+      repositoryParallelismHold: { inProgress: 2, limit: 1 },
+    });
+    const { rerender } = await renderDialog(item, { onClose });
+    const button = screen.getByRole("button", { name: "Start anyway (ignore repository limit)" });
+
+    await act(async () => {
+      fireEvent.click(button);
+      await Promise.resolve();
+    });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(startAnyway).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => refuse());
+    expect((await screen.findByRole("alert")).textContent).toBe("ILD is at its concurrency limit.");
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Start anyway (ignore repository limit)",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+
+    await rerenderDialog(rerender, { ...item, status: WorkItemStatus.Running });
+    expect(screen.queryByText("ILD is at its concurrency limit.")).toBeNull();
+  });
+
+  test("neither the hold nor Start anyway shows for an item the repository limit is not holding in Ready", async () => {
+    const notHeld: Partial<WorkItem>[] = [
+      { status: WorkItemStatus.Ready, repositoryParallelismHold: null },
+      { status: WorkItemStatus.Ready },
+      { status: WorkItemStatus.Backlog, repositoryParallelismHold: { inProgress: 1, limit: 1 } },
+      { status: WorkItemStatus.WorkQueue, repositoryParallelismHold: { inProgress: 1, limit: 1 } },
+      { status: WorkItemStatus.Running, repositoryParallelismHold: { inProgress: 1, limit: 1 } },
+      {
+        status: WorkItemStatus.HumanFeedback,
+        repositoryParallelismHold: { inProgress: 1, limit: 1 },
+      },
+    ];
+    for (const overrides of notHeld) {
+      mockServices();
+      const { container } = await renderDialog(makeWorkItem(overrides));
+
+      expect(container.ownerDocument.body.textContent).not.toContain(
+        "repository parallelism limit",
+      );
+      expect(
+        screen.queryByRole("button", { name: "Start anyway (ignore repository limit)" }),
+      ).toBeNull();
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
   test("Delete stays out of the footer even when cleanup buttons are present", async () => {
     mockServices();
     await renderDialog(

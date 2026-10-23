@@ -4,6 +4,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 
 namespace ILD.Tests.WorkItemServer;
@@ -513,6 +514,219 @@ public sealed class RepositoryParallelismTests : IDisposable
         _notifier.Verify(n => n.WorkItemStateChangedAsync(held,
             RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Ready), Times.Exactly(2));
     }
+
+    // ── Start anyway: a human starts one Ready item past its repository's limit ──
+
+    private Task<HandStartResult> StartAnywayAsync(string id, int maxConcurrent = 10)
+        => _sut.StartIgnoringRepositoryLimitAsync(Opts, id, maxConcurrent, TestActors.Human, Ct);
+
+    private void SeedLiveRun(string workItemId)
+    {
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t-" + workItemId };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        _db.Context.LoopTemplates.Add(template);
+        _db.Context.LoopTemplateVersions.Add(version);
+        _db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id,
+            Status = LoopRunStatus.Running, StartedAt = DateTime.UtcNow,
+        });
+        _db.Context.SaveChanges();
+    }
+
+    private async Task AssertUntouchedAsync(string id, int historyBefore)
+    {
+        Assert.Equal(RemoteWorkItemStatus.Ready, await StatusOfAsync(id));
+        Assert.Equal(historyBefore, await HistoryCountAsync(id));
+        Assert.Null(await _db.LoopRuns.GetWorkItemStatusReasonAsync(id));
+        _engine.Verify(e => e.StartRunAsync(id, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Start_anyway_runs_one_held_item_leaves_the_limit_as_it_is_and_the_started_item_takes_a_slot()
+    {
+        var repo = AddRepo(parallelism: 1);
+        var a = await AddItemAsync(repo, RemoteWorkItemStatus.Running, "A");
+        var b = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "B");
+        var c = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "C");
+        var mgr = Manager();
+        var held = await PassAsync();
+        Assert.Equal(new[] { b, c }.OrderBy(x => x), Ids(held.HeldByRepositoryLimit).OrderBy(x => x));
+        var repoBefore = _db.Fresh().Repositories.AsNoTracking().Single(r => r.Id == repo);
+        var cHistory = await HistoryCountAsync(c);
+
+        var result = await StartAnywayAsync(b);
+
+        Assert.Equal(HandStartResult.Started, result);
+        Assert.Equal(RemoteWorkItemStatus.Running, await StatusOfAsync(b));
+        _engine.Verify(e => e.StartRunAsync(b, It.IsAny<CancellationToken>()), Times.Once);
+        _notifier.Verify(n => n.WorkItemStateChangedAsync(b, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Running), Times.Once);
+        var claim = (await _db.ServerClient.GetHistoryAsync(Opts, b, Ct))!
+            .Last(e => e.Field == "status" && e.NewValue == nameof(RemoteWorkItemStatus.Running));
+        Assert.Equal(TestActors.Human.Username, claim.Username);
+        await AssertUntouchedAsync(c, cHistory);
+
+        var repoAfter = _db.Fresh().Repositories.AsNoTracking().Single(r => r.Id == repo);
+        Assert.Equal(1, repoAfter.Parallelism);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(repoBefore), System.Text.Json.JsonSerializer.Serialize(repoAfter));
+
+        // B now holds a slot like any other in-progress item.
+        Assert.Empty((await PassAsync()).Claimed);
+        Assert.Equal(new RepositoryParallelismHold(2, 1), (await mgr.GetWorkItemAsync(c))!.RepositoryParallelismHold);
+
+        await MoveAsync(a, RemoteWorkItemStatus.Done);
+        Assert.Empty((await PassAsync()).Claimed);
+        Assert.Equal(new RepositoryParallelismHold(1, 1), (await mgr.GetWorkItemAsync(c))!.RepositoryParallelismHold);
+
+        await MoveAsync(b, RemoteWorkItemStatus.Done);
+        Assert.Equal(new[] { c }, Ids((await PassAsync()).Claimed));
+    }
+
+    [Theory]
+    [InlineData(false, "No loop found for existing tags")]
+    [InlineData(true, "Failed to start run: boom")]
+    public async Task Start_anyway_hands_an_item_to_needs_you_the_way_the_scheduler_does(bool runFailsToStart, string reason)
+    {
+        var repo = AddRepo(parallelism: 1);
+        await AddItemAsync(repo, RemoteWorkItemStatus.Running, "busy");
+        var held = runFailsToStart
+            ? await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "held")
+            : await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "held", tags: NoLoopTag);
+        await PassAsync();
+        if (runFailsToStart)
+            _engine.Setup(e => e.StartRunAsync(held, It.IsAny<CancellationToken>()))
+                   .ThrowsAsync(new InvalidOperationException("boom"));
+
+        var result = await StartAnywayAsync(held);
+
+        Assert.Equal(HandStartResult.Started, result);
+        Assert.Equal(RemoteWorkItemStatus.HumanFeedback, await StatusOfAsync(held));
+        Assert.Equal(reason, (await _db.LoopRuns.GetWorkItemStatusReasonAsync(held))!.Text);
+        var parked = (await _db.ServerClient.GetHistoryAsync(Opts, held, Ct))!
+            .Last(e => e.Field == "status");
+        Assert.Equal(nameof(RemoteWorkItemStatus.HumanFeedback), parked.NewValue);
+        Assert.Equal(reason, parked.Reason);
+        _engine.Verify(e => e.StartRunAsync(held, It.IsAny<CancellationToken>()), Times.Exactly(runFailsToStart ? 1 : 0));
+    }
+
+    [Fact]
+    public async Task Start_anyway_still_respects_the_instances_concurrency_cap()
+    {
+        var repo = AddRepo(parallelism: 1);
+        var busy = await AddItemAsync(repo, RemoteWorkItemStatus.Running, "busy");
+        SeedLiveRun(busy);
+        var held = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "held");
+        await PassAsync(maxConcurrent: 1);
+        var history = await HistoryCountAsync(held);
+
+        Assert.Equal(HandStartResult.AtConcurrencyLimit, await StartAnywayAsync(held, maxConcurrent: 1));
+        await AssertUntouchedAsync(held, history);
+
+        Assert.Equal(HandStartResult.Started, await StartAnywayAsync(held, maxConcurrent: 2));
+        Assert.Equal(RemoteWorkItemStatus.Running, await StatusOfAsync(held));
+    }
+
+    [Theory]
+    [InlineData(RemoteWorkItemStatus.Backlog)]
+    [InlineData(RemoteWorkItemStatus.WorkQueue)]
+    [InlineData(RemoteWorkItemStatus.Running)]
+    [InlineData(RemoteWorkItemStatus.HumanFeedback)]
+    [InlineData(RemoteWorkItemStatus.WaitingForIld)]
+    [InlineData(RemoteWorkItemStatus.Done)]
+    public async Task Start_anyway_refuses_an_item_that_is_not_ready_and_changes_nothing(RemoteWorkItemStatus status)
+    {
+        var repo = AddRepo(parallelism: 1);
+        var item = await AddItemAsync(repo, status, "not ready");
+        var history = await HistoryCountAsync(item);
+
+        Assert.Equal(HandStartResult.NotReady, await StartAnywayAsync(item));
+
+        Assert.Equal(status, await StatusOfAsync(item));
+        Assert.Equal(history, await HistoryCountAsync(item));
+        _engine.Verify(e => e.StartRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Start_anyway_answers_not_found_for_an_unknown_item_and_starts_a_ready_item_nothing_holds_back()
+    {
+        Assert.Equal(HandStartResult.NotFound, await StartAnywayAsync("does-not-exist"));
+
+        var free = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "free");
+
+        Assert.Equal(HandStartResult.Started, await StartAnywayAsync(free));
+        Assert.Equal(RemoteWorkItemStatus.Running, await StatusOfAsync(free));
+        _engine.Verify(e => e.StartRunAsync(free, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    private RemoteWorkItemCoordinator CoordinatorSharing(ReadyClaimGate gate)
+    {
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
+        return new RemoteWorkItemCoordinator(_db.ServerClient, resolver.Object, _engine.Object, _db.LoopRuns,
+            TestActors.Instance, providerStore: _db.Providers, workItemNotifier: _notifier.Object,
+            repositoryHolds: _holds, claimGate: gate);
+    }
+
+    /// <summary>Holds the item's run start open until the test lets it go.</summary>
+    private (Task reached, TaskCompletionSource release) BlockRunStart(string workItemId)
+    {
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _engine.Setup(e => e.StartRunAsync(workItemId, It.IsAny<CancellationToken>()))
+               .Returns(async () => { reached.TrySetResult(); await release.Task; });
+        return (reached.Task, release);
+    }
+
+    [Fact]
+    public async Task A_pass_waits_for_an_in_flight_start_anyway_and_counts_its_slot()
+    {
+        var gate = new ReadyClaimGate();
+        var starter = CoordinatorSharing(gate);
+        var scheduler = CoordinatorSharing(gate);
+        var started = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "started by hand");
+        var (reached, release) = BlockRunStart(started);
+
+        var start = starter.StartIgnoringRepositoryLimitAsync(Opts, started, 1, TestActors.Human, Ct);
+        await reached;
+        var other = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "other");
+        var pass = scheduler.RunPollCycleAsync(Opts, maxConcurrent: 1, claimReadyItems: true, Ct);
+        Assert.False(pass.IsCompleted);
+
+        SeedLiveRun(started);
+        release.SetResult();
+        Assert.Equal(HandStartResult.Started, await start);
+        var result = await pass;
+
+        Assert.Empty(result.Claimed);
+        Assert.True(result.BlockedByCap);
+        Assert.Equal(RemoteWorkItemStatus.Ready, await StatusOfAsync(other));
+        _engine.Verify(e => e.StartRunAsync(other, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_start_anyway_waits_for_an_in_flight_pass_and_counts_what_it_claimed()
+    {
+        var gate = new ReadyClaimGate();
+        var starter = CoordinatorSharing(gate);
+        var scheduler = CoordinatorSharing(gate);
+        var claimedByPass = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "claimed by the pass");
+        var (reached, release) = BlockRunStart(claimedByPass);
+
+        var pass = scheduler.RunPollCycleAsync(Opts, maxConcurrent: 1, claimReadyItems: true, Ct);
+        await reached;
+        var byHand = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "by hand");
+        var history = await HistoryCountAsync(byHand);
+        var start = starter.StartIgnoringRepositoryLimitAsync(Opts, byHand, 1, TestActors.Human, Ct);
+        Assert.False(start.IsCompleted);
+
+        SeedLiveRun(claimedByPass);
+        release.SetResult();
+        Assert.Equal(new[] { claimedByPass }, Ids((await pass).Claimed));
+
+        Assert.Equal(HandStartResult.AtConcurrencyLimit, await start);
+        await AssertUntouchedAsync(byHand, history);
+    }
 }
 
 /// <summary>
@@ -620,5 +834,28 @@ public sealed class RepositoryParallelismScriptedServerTests
         client.Verify(c => c.TransitionAsync(Opts, item.Id, It.IsAny<RemoteTransitionRequest>(),
             It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()), Times.Never);
         engine.Verify(e => e.StartRunAsync(item.Id, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Start_anyway_of_an_item_claimed_elsewhere_between_read_and_claim_is_refused_and_starts_nothing()
+    {
+        var item = Ready("1", null);
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.GetAsync(Opts, item.Id, It.IsAny<CancellationToken>())).ReturnsAsync(item);
+        client.Setup(c => c.TransitionAsync(Opts, item.Id, It.IsAny<RemoteTransitionRequest>(),
+                It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Running });
+        var engine = new Mock<ILoopEngine>();
+        var notifier = new Mock<IWorkItemNotifier>();
+
+        var sut = new RemoteWorkItemCoordinator(client.Object, ResolvesEverything().Object, engine.Object,
+            NoLiveRuns().Object, TestActors.Instance, providerStore: new Mock<IProviderStore>().Object,
+            workItemNotifier: notifier.Object);
+        var result = await sut.StartIgnoringRepositoryLimitAsync(Opts, item.Id, 5, TestActors.Human, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HandStartResult.NotReady, result);
+        engine.Verify(e => e.StartRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
+            It.IsAny<RemoteWorkItemStatus>()), Times.Never);
     }
 }
