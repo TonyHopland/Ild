@@ -34,7 +34,23 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ## Screenshots
 
-**Taskboard** — every work item across the seven statuses, in one view. Work queue and Ready items share the Work queue column, each card saying why it waits; the order is a preference, not a line: Ild starts the top-most item that can start, and a waiting item doesn't hold up the ones below it. A running card carries the node it is on and how long it has been there; a parked one says why it stopped, down to the PR's CI and review verdicts. Tags that name a loop template are highlighted, because that is what decides which loop the item runs.
+### Getting started
+
+**1. Add an agent** — on **AI Providers**, pick the coding agent CLI to run (`opencode`, `pi`, `claude-code`, `copilot` or `codex`), optionally a model and extra arguments, and give it tags. An AI node whose tag matches runs on this provider; the rest run on the default one. CLIs that sign in with a subscription, like Claude Code, are logged in once from the provider's **Open terminal**.
+
+![Add an agent](docs/screenshots/AddAgent.png)
+
+**2. Add a repository** — **Repositories** groups repositories under the remote provider that hosts them (GitHub, Forgejo or Azure DevOps). A repository needs a name, a clone URL and a default branch; a custom `.env` is stored encrypted and handed to its previews without ever being written into the worktree.
+
+![Add a repository](docs/screenshots/AddRepository.png)
+
+**3. Create a work item** — **New work item** on the Taskboard takes a title, a Markdown description, attachments, the repository and tags. A tag that names a loop template decides which loop runs the item. Move it to the Work queue and the scheduler starts it.
+
+![Create a work item](docs/screenshots/NewWorkItem.png)
+
+### Features
+
+**Taskboard** — every work item across the seven statuses, in one view. Work queue and Ready items share the Work queue column, each card saying why it waits; the order is a preference, not a line: Ild starts the top-most item that can start, and a waiting item doesn't hold up the ones below it. A running card carries the node it is on and how long it has been running; a parked one says why it stopped, down to the PR's CI and review verdicts. Tags that name a loop template are highlighted, because that is what decides which loop the item runs.
 
 ![Taskboard](docs/screenshots/TaskboardOverview.png)
 
@@ -46,11 +62,11 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ![Loop Editor](docs/screenshots/LoopEditorExample.png)
 
-**Run timeline** — the Runs tab replays a run node by node: what each one was given, what it produced, how long it took, and what the AI nodes cost in tokens and dollars. Any node can be retried on its own without restarting the loop.
+**Run timeline** — the Runs tab replays a run node by node: what each one was given, what it produced and how long it took, with what the run's AI nodes cost in dollars and tokens on top. **Retry** on a node runs the loop again from there with the same input.
 
 ![Run timeline](docs/screenshots/RunTimeline.png)
 
-**Human gates** — when a loop reaches a `Human` or `PR` node it parks and waits. The Action tab shows why it stopped, the pull request's state and review thread, and the buttons that send it back down a success, failure, or custom edge.
+**Human gates** — when a loop reaches a `Human` or `PR` node it parks and waits. The Action tab shows why it stopped, the pull request's state and review thread, and one button per way out of the node — here **Approve**, **Merge** and **Reject**.
 
 ![Human gates](docs/screenshots/HumanFeedbackPr.png)
 
