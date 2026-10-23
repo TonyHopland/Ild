@@ -25,8 +25,8 @@ public interface IRemoteWorkItemCoordinator
     /// skipped, so nothing auto-promotes from Ready into Running. Every other
     /// step — heartbeating the active set, resuming WaitingForIld runs, closing
     /// runs behind items the server has finished, reporting active human
-    /// feedback — runs as normal. Humans can still promote Ready items manually
-    /// through the work-item transition API.
+    /// feedback — runs as normal. Humans can still start a Ready item by hand
+    /// with <see cref="StartIgnoringRepositoryLimitAsync"/>.
     /// </param>
     Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default);
 
@@ -230,7 +230,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
 
         // While paused, leave Ready items untouched: the whole claim loop is the
         // auto-promotion path, so skipping it is what "pause" means. A human can
-        // still promote a Ready item to Running manually via the transition API.
+        // still start a Ready item by hand (StartIgnoringRepositoryLimitAsync).
         foreach (var ready in claimReadyItems ? poll.ReadyItems : Enumerable.Empty<RemoteWorkItem>())
         {
             // Before the global cap and template resolution, so an item its

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Start anyway, in the dialog of a Ready item its repository's limit holds back, starts that one item now; the limit stays as it is.**
 - **AutoMerge pull requests merge once CI is green even where the provider has no auto-merge; if Ild cannot merge one, it asks you to merge it by hand.**
 
 ### Fixed
