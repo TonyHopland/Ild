@@ -219,10 +219,10 @@ export const workItemService = {
   /** Every work item, newest first, read page by page past the server's per-request cap. */
   getEvery: async (): Promise<WorkItem[]> => readEveryPage((opts) => workItemService.getAll(opts)),
 
-  /** One taskboard column: a window of the items in a status under the board filter. */
+  /** One taskboard column: a window of the items in any of its statuses under the board filter. */
   getPage: async (query: WorkItemPageQuery): Promise<WorkItemPage> => {
     const params = listFilterParams(query);
-    params.set("status", query.status);
+    for (const status of query.statuses) params.append("status", status);
     params.set("skip", String(query.skip));
     params.set("take", String(query.take));
     return api.get<WorkItemPage>(`/workitems/page?${params}`);

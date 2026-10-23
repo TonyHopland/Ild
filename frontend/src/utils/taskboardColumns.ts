@@ -1,7 +1,33 @@
-import type { WorkItem, WorkItemStatus } from "../types";
+import { WorkItemStatus, type WorkItem } from "../types";
+import { WORK_ITEM_STATUS_ORDER, workItemStatusLabel } from "./labels";
 import { matchesTaskboardFilter, type TaskboardFilter } from "./taskboardFilter";
 
-/** What the board holds for one status column. */
+/**
+ * A board column, named by the status it is for. Ready has none of its own:
+ * Ready items wait in the Work queue column, in one board order with the items
+ * still waiting on their dependencies.
+ */
+export type TaskboardColumnKey = Exclude<WorkItemStatus, WorkItemStatus.Ready>;
+
+/** The board's columns, left to right, and the statuses each one holds. */
+export const TASKBOARD_COLUMNS: readonly {
+  key: TaskboardColumnKey;
+  label: string;
+  statuses: WorkItemStatus[];
+}[] = WORK_ITEM_STATUS_ORDER.filter(
+  (status): status is TaskboardColumnKey => status !== WorkItemStatus.Ready,
+).map((key) => ({
+  key,
+  label: workItemStatusLabel(key),
+  statuses: key === WorkItemStatus.WorkQueue ? [key, WorkItemStatus.Ready] : [key],
+}));
+
+/** The column that holds items in this status. */
+export function columnOf(status: WorkItemStatus): TaskboardColumnKey {
+  return status === WorkItemStatus.Ready ? WorkItemStatus.WorkQueue : status;
+}
+
+/** What the board holds for one column. */
 export interface ColumnState {
   /** The loaded window of the column, in server order. */
   items: WorkItem[];
@@ -12,7 +38,7 @@ export interface ColumnState {
   loadingMore: boolean;
 }
 
-export type TaskboardColumns = Record<WorkItemStatus, ColumnState>;
+export type TaskboardColumns = Record<TaskboardColumnKey, ColumnState>;
 
 /**
  * The board order the server pages a column in: the lowest priority first,
@@ -35,9 +61,9 @@ export function insertInServerOrder(items: WorkItem[], item: WorkItem): WorkItem
   return index < 0 ? [...rest, item] : [...rest.slice(0, index), item, ...rest.slice(index)];
 }
 
-function holderOf(board: TaskboardColumns, id: string): WorkItemStatus | undefined {
-  return (Object.keys(board) as WorkItemStatus[]).find((status) =>
-    board[status].items.some((wi) => wi.id === id),
+function holderOf(board: TaskboardColumns, id: string): TaskboardColumnKey | undefined {
+  return (Object.keys(board) as TaskboardColumnKey[]).find((column) =>
+    board[column].items.some((wi) => wi.id === id),
   );
 }
 
@@ -69,8 +95,8 @@ function placeInColumn(column: ColumnState, item: WorkItem, placedAfter?: string
 /**
  * The board with a live copy of an item applied. A card still in its column and
  * still matching the filter moves to its place there in server order; otherwise
- * it leaves the column that held it, and a matching item joins its status
- * column in server order. Either way, one that sorts beyond a column's loaded
+ * it leaves the column that held it, and a matching item joins the column of
+ * its status in server order. Either way, one that sorts beyond a column's loaded
  * cards (see `placeInColumn`) is only counted.
  * `countAsNew` counts an item the board never held (a create); anything else
  * the board did not hold is left for the server's counts to tally.
@@ -83,7 +109,8 @@ export function applyItem(
 ): TaskboardColumns {
   const holder = holderOf(board, item.id);
   const matches = matchesTaskboardFilter(item, filter);
-  if (holder === item.status && matches) {
+  const column = columnOf(item.status);
+  if (holder === column && matches) {
     return {
       ...board,
       [holder]: { ...board[holder], items: placeInColumn(board[holder], item, placedAfter) },
@@ -92,17 +119,17 @@ export function applyItem(
 
   const next = { ...board };
   if (holder) {
-    const column = next[holder];
+    const held = next[holder];
     next[holder] = {
-      ...column,
-      items: column.items.filter((wi) => wi.id !== item.id),
-      total: Math.max(0, column.total - 1),
+      ...held,
+      items: held.items.filter((wi) => wi.id !== item.id),
+      total: Math.max(0, held.total - 1),
     };
   }
-  const target = next[item.status];
+  const target = next[column];
   if (!matches || !target) return holder ? next : board;
 
-  next[item.status] = {
+  next[column] = {
     ...target,
     items: placeInColumn(target, item, placedAfter),
     total: holder || countAsNew ? target.total + 1 : target.total,

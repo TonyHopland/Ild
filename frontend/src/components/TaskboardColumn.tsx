@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
+import { columnOf, type TaskboardColumnKey } from "../utils/taskboardColumns";
 import { workItemService } from "../services/auth";
 import WorkItemCard from "./WorkItemCard";
 import { errorMessage } from "../utils/errorMessage";
@@ -7,10 +8,10 @@ import Icon from "./Icon";
 import "./TaskboardColumn.css";
 
 /** What an empty column says: what lands there and how, once it is opened. */
-const EMPTY_HINT: Record<WorkItemStatus, string> = {
+const EMPTY_HINT: Record<TaskboardColumnKey, string> = {
   [WorkItemStatus.Backlog]: "New work items land here.",
-  [WorkItemStatus.WorkQueue]: "Move a backlog item here to have the scheduler pick it up.",
-  [WorkItemStatus.Ready]: "Queued items whose dependencies are done show up here.",
+  [WorkItemStatus.WorkQueue]:
+    "Move a backlog item here to queue it. Ild starts the top-most item that can start; a waiting item doesn't hold up the ones below it.",
   [WorkItemStatus.Running]: "Ready items start here while the scheduler is running.",
   [WorkItemStatus.HumanFeedback]: "Runs that stop for a decision show up here.",
   [WorkItemStatus.WaitingForIld]: "Items wait here while ILD finishes something on its own.",
@@ -18,6 +19,7 @@ const EMPTY_HINT: Record<WorkItemStatus, string> = {
 };
 
 interface TaskboardColumnProps {
+  // The status the column is named by; a card dropped in from another column moves to it.
   status: WorkItemStatus;
   label: string;
   // The column's loaded cards, in server order.
@@ -46,6 +48,8 @@ interface TaskboardColumnProps {
   // null before they have; the board keeps it among their preferences.
   foldChoice: boolean | null;
   onFoldChange: (folded: boolean) => void;
+  // Whether the scheduler is paused, for the cards' waiting reasons; undefined until read.
+  schedulerPaused?: boolean;
 }
 
 export default function TaskboardColumn({
@@ -65,6 +69,7 @@ export default function TaskboardColumn({
   alone = false,
   foldChoice,
   onFoldChange,
+  schedulerPaused,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
   // Where a card dragged over the column would land: before the loaded card at
@@ -205,7 +210,7 @@ export default function TaskboardColumn({
         </div>
       )}
       <div className="taskboard-column-body">
-        {empty && <p className="taskboard-column-empty">{EMPTY_HINT[status]}</p>}
+        {empty && <p className="taskboard-column-empty">{EMPTY_HINT[columnOf(status)]}</p>}
         {workItems.map((item, i) => (
           <WorkItemCard
             key={item.id}
@@ -221,6 +226,7 @@ export default function TaskboardColumn({
             onMove={onMoveWorkItem}
             loopTemplateNames={loopTemplateNames}
             repositoryName={repositoryName?.(item.repositoryId) ?? undefined}
+            schedulerPaused={schedulerPaused}
           />
         ))}
         {hasMore && (

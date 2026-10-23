@@ -1,27 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { workItemService } from "../../services/auth";
 import { WorkItem, WorkItemListFilter, WorkItemPage, WorkItemStatus } from "../../types";
-import { TASKBOARD_PAGE_SIZE, WORK_ITEM_STATUSES } from "../../utils/constants";
+import { TASKBOARD_PAGE_SIZE } from "../../utils/constants";
 import { errorMessage } from "../../utils/errorMessage";
 import { matchesTaskboardFilter, type TaskboardFilter } from "../../utils/taskboardFilter";
 import {
   appendPage,
+  columnOf,
   findLoadedItem,
   applyItem as applyItemTo,
   type ApplyOptions,
   removeItem as removeItemFrom,
   type ColumnState,
+  TASKBOARD_COLUMNS,
+  type TaskboardColumnKey,
   type TaskboardColumns,
 } from "../../utils/taskboardColumns";
 
-const STATUSES = WORK_ITEM_STATUSES.map((s) => s.value);
+const COLUMNS = TASKBOARD_COLUMNS.map((c) => c.key);
+const STATUSES_OF = Object.fromEntries(
+  TASKBOARD_COLUMNS.map(({ key, statuses }) => [key, statuses]),
+) as Record<TaskboardColumnKey, WorkItemStatus[]>;
 /** The most one page request returns. */
 const MAX_READ = 500;
 
 function emptyColumns(): TaskboardColumns {
   const columns = {} as TaskboardColumns;
-  for (const status of STATUSES) {
-    columns[status] = { items: [], total: 0, loaded: false, loadingMore: false };
+  for (const column of COLUMNS) {
+    columns[column] = { items: [], total: 0, loaded: false, loadingMore: false };
   }
   return columns;
 }
@@ -55,7 +61,8 @@ interface ColumnFetch {
 }
 
 /**
- * The Taskboard's status columns, each paged from the server under `filter`.
+ * The Taskboard's columns, each paged from the server under `filter` across
+ * the statuses it holds, in one board order.
  *
  * A column's membership (which cards, in which order, out of what total) and
  * its cards' contents change independently. Every column read carries the
@@ -88,10 +95,10 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   // Content clock, and each item's latest live change: its copy, or null once removed.
   const clockRef = useRef(0);
   const liveRef = useRef(new Map<string, { at: number; item: WorkItem | null }>());
-  const settledRef = useRef(new Set<WorkItemStatus>());
+  const settledRef = useRef(new Set<TaskboardColumnKey>());
   const countsRef = useRef({ inFlight: false, dirty: false });
-  const refillingRef = useRef(new Set<WorkItemStatus>());
-  const fetchColumnRef = useRef<(status: WorkItemStatus, request: ColumnFetch) => void>(() => {});
+  const refillingRef = useRef(new Set<TaskboardColumnKey>());
+  const fetchColumnRef = useRef<(key: TaskboardColumnKey, request: ColumnFetch) => void>(() => {});
 
   const show = useCallback((next: TaskboardColumns) => {
     if (next === boardRef.current) return;
@@ -100,12 +107,12 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   }, []);
 
   const refillShortColumns = useCallback(() => {
-    for (const status of STATUSES) {
-      const column = boardRef.current[status];
-      if (!column.loaded || column.loadingMore || refillingRef.current.has(status)) continue;
+    for (const key of COLUMNS) {
+      const column = boardRef.current[key];
+      if (!column.loaded || column.loadingMore || refillingRef.current.has(key)) continue;
       if (column.items.length >= Math.min(column.total, TASKBOARD_PAGE_SIZE)) continue;
-      refillingRef.current.add(status);
-      fetchColumnRef.current(status, {
+      refillingRef.current.add(key);
+      fetchColumnRef.current(key, {
         skip: 0,
         take: TASKBOARD_PAGE_SIZE,
         append: false,
@@ -119,9 +126,9 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
     (id: string, item: WorkItem | null, next: TaskboardColumns) => {
       liveRef.current.set(id, { at: ++clockRef.current, item });
       const prev = boardRef.current;
-      for (const status of STATUSES) {
-        if (!sameMembership(prev[status], next[status]))
-          seqRef.current[status] = (seqRef.current[status] ?? 0) + 1;
+      for (const key of COLUMNS) {
+        if (!sameMembership(prev[key], next[key]))
+          seqRef.current[key] = (seqRef.current[key] ?? 0) + 1;
       }
       show(next);
       refillShortColumns();
@@ -129,14 +136,14 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
     [show, refillShortColumns],
   );
 
-  const settle = useCallback((status: WorkItemStatus) => {
-    settledRef.current.add(status);
-    if (settledRef.current.size === STATUSES.length) setIsInitialLoading(false);
+  const settle = useCallback((key: TaskboardColumnKey) => {
+    settledRef.current.add(key);
+    if (settledRef.current.size === COLUMNS.length) setIsInitialLoading(false);
   }, []);
 
   const readWindow = useCallback(
     async (
-      status: WorkItemStatus,
+      key: TaskboardColumnKey,
       skip: number,
       take: number,
       outdated: () => boolean,
@@ -147,7 +154,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
         const chunk = Math.min(MAX_READ, take - items.length);
         const page = await workItemService.getPage({
           ...listFilter(filterRef.current),
-          status,
+          statuses: STATUSES_OF[key],
           skip: skip + items.length,
           take: chunk,
         });
@@ -175,13 +182,13 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           if (generation !== generationRef.current) return;
           const board = boardRef.current;
           const next = { ...board };
-          for (const status of STATUSES) {
-            const total = totals[status];
-            if (typeof total === "number" && total !== board[status].total) {
-              next[status] = { ...board[status], total };
-            }
+          for (const key of COLUMNS) {
+            const counted = STATUSES_OF[key].map((status) => totals[status]);
+            if (!counted.every((total) => typeof total === "number")) continue;
+            const total = counted.reduce((sum, n) => sum + n, 0);
+            if (total !== board[key].total) next[key] = { ...board[key], total };
           }
-          show(STATUSES.some((s) => next[s] !== board[s]) ? next : board);
+          show(COLUMNS.some((k) => next[k] !== board[k]) ? next : board);
           refillShortColumns();
         })
         .catch(() => {
@@ -201,22 +208,22 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   );
 
   const fetchColumn = useCallback(
-    function fetchColumn(status: WorkItemStatus, request: ColumnFetch) {
+    function fetchColumn(key: TaskboardColumnKey, request: ColumnFetch) {
       const generation = generationRef.current;
-      const seq = seqRef.current[status] ?? 0;
+      const seq = seqRef.current[key] ?? 0;
       const issuedAt = clockRef.current;
-      const shown = boardRef.current[status].items.length;
+      const shown = boardRef.current[key].items.length;
       const stale = () => generation !== generationRef.current;
-      const moved = () => (seqRef.current[status] ?? 0) !== seq;
-      readWindow(status, request.skip, request.take, () => stale() || moved())
+      const moved = () => (seqRef.current[key] ?? 0) !== seq;
+      readWindow(key, request.skip, request.take, () => stale() || moved())
         .then((page) => {
           if (stale()) return;
           const board = boardRef.current;
-          const column = board[status];
+          const column = board[key];
           const outgrown = !request.append && column.items.length > shown;
           if (moved() || outgrown) {
             const loaded = column.items.length + (request.append ? TASKBOARD_PAGE_SIZE : 0);
-            fetchColumn(status, {
+            fetchColumn(key, {
               skip: 0,
               take: windowSize(loaded),
               append: false,
@@ -229,33 +236,35 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
             const live = liveRef.current.get(item.id);
             if (!live || live.at <= issuedAt) return [item];
             const copy = live.item;
-            return copy && copy.status === status && matchesTaskboardFilter(copy, filterRef.current)
+            return copy &&
+              columnOf(copy.status) === key &&
+              matchesTaskboardFilter(copy, filterRef.current)
               ? [copy]
               : [];
           });
           show({
             ...board,
-            [status]: {
+            [key]: {
               items: request.append ? appendPage(column.items, fresh) : fresh,
               total: Math.max(0, page.total - (page.items.length - fresh.length)),
               loaded: true,
               loadingMore: request.loadMore ? false : column.loadingMore,
             },
           });
-          settle(status);
-          if (request.refill) refillingRef.current.delete(status);
+          settle(key);
+          if (request.refill) refillingRef.current.delete(key);
           if (fresh.length < page.items.length) refillShortColumns();
           // The read's total predates the live changes since it was issued.
           if (clockRef.current > issuedAt) requestCountsRefresh();
         })
         .catch((error: unknown) => {
           if (stale()) return;
-          if (request.refill) refillingRef.current.delete(status);
+          if (request.refill) refillingRef.current.delete(key);
           if (request.loadMore) {
-            const column = boardRef.current[status];
-            show({ ...boardRef.current, [status]: { ...column, loadingMore: false } });
+            const column = boardRef.current[key];
+            show({ ...boardRef.current, [key]: { ...column, loadingMore: false } });
           }
-          settle(status);
+          settle(key);
           onErrorRef.current(errorMessage(error, "Failed to load work items."));
         });
     },
@@ -271,14 +280,14 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
       refillingRef.current.clear();
       const board = boardRef.current;
       const next = { ...board };
-      for (const status of STATUSES) {
-        if (board[status].loadingMore) next[status] = { ...board[status], loadingMore: false };
+      for (const key of COLUMNS) {
+        if (board[key].loadingMore) next[key] = { ...board[key], loadingMore: false };
       }
-      show(STATUSES.some((s) => next[s] !== board[s]) ? next : board);
-      for (const status of STATUSES) {
-        fetchColumn(status, {
+      show(COLUMNS.some((k) => next[k] !== board[k]) ? next : board);
+      for (const key of COLUMNS) {
+        fetchColumn(key, {
           skip: 0,
-          take: windowed ? windowSize(board[status].items.length) : TASKBOARD_PAGE_SIZE,
+          take: windowed ? windowSize(board[key].items.length) : TASKBOARD_PAGE_SIZE,
           append: false,
           loadMore: false,
           refill: false,
@@ -289,11 +298,11 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   );
 
   const loadMore = useCallback(
-    (status: WorkItemStatus) => {
-      const column = boardRef.current[status];
+    (key: TaskboardColumnKey) => {
+      const column = boardRef.current[key];
       if (!column.loaded || column.loadingMore || column.items.length >= column.total) return;
-      show({ ...boardRef.current, [status]: { ...column, loadingMore: true } });
-      fetchColumn(status, {
+      show({ ...boardRef.current, [key]: { ...column, loadingMore: true } });
+      fetchColumn(key, {
         skip: column.items.length,
         take: TASKBOARD_PAGE_SIZE,
         append: true,
