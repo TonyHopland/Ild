@@ -58,7 +58,9 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ![AI chat](docs/screenshots/ChatWorkItems.png)
 
-**Scheduled chats** — a chat can start itself on a timer with a prompt you set. Run a weekly retro: the agent reads the loop analytics, the paths runs took, the feedback you gave and the review comments they got, and proposes changes to loop templates and global variables for you to approve, so the loops get better at your work week by week. Or run a nightly check that files a work item for whatever it finds.
+**Scheduled chats** — a chat can start itself on a timer with a prompt you set. Run a weekly retro: the agent reads the loop analytics, the paths runs took, the feedback you gave and the review comments they got, and proposes changes to loop templates and global variables for you to approve, so the loops get better at your work week by week. Or run a nightly check that files a work item for whatever it finds. On the Chat page, chats a schedule started carry a clock mark, and starred ones stay at the top.
+
+![Scheduled weekly retro](docs/screenshots/ScheduledChatRetro.png)
 
 **Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Condition`, `Human`, and `Cleanup` nodes. This is the `DevTeam` loop: an orchestrator that routes to a spec analyst, an explorer, a developer, a QA engineer and a reviewer, with named edges — `qa_failed`, `on_merge_conflict`, `ask_human` — carrying the work back to whichever role should handle it. You don't have to wire it by hand: open the AI chat on the Loop Editor and it can read the loop on the canvas and build or change it with you. It edits the canvas, and saving stays with you.
 
