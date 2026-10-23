@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import { columnOf, type TaskboardColumnKey } from "../utils/taskboardColumns";
 import { workItemService } from "../services/auth";
@@ -10,13 +10,16 @@ import "./TaskboardColumn.css";
 /** What an empty column says: what lands there and how, once it is opened. */
 const EMPTY_HINT: Record<TaskboardColumnKey, string> = {
   [WorkItemStatus.Backlog]: "New work items land here.",
-  [WorkItemStatus.WorkQueue]:
-    "Move a backlog item here to queue it. Ild starts the top-most item that can start; a waiting item doesn't hold up the ones below it.",
+  [WorkItemStatus.WorkQueue]: "Move a backlog item here to queue it.",
   [WorkItemStatus.Running]: "Ready items start here while the scheduler is running.",
   [WorkItemStatus.HumanFeedback]: "Runs that stop for a decision show up here.",
   [WorkItemStatus.WaitingForIld]: "Items wait here while ILD finishes something on its own.",
   [WorkItemStatus.Done]: "Finished items end up here.",
 };
+
+/** How the Work queue column's order is read: shown on it whether or not it has cards. */
+const QUEUE_ORDER_NOTE =
+  "Ild starts the top-most item that can start; a waiting item doesn't hold up the ones below it.";
 
 interface TaskboardColumnProps {
   // The status the column is named by; a card dropped in from another column moves to it.
@@ -72,6 +75,8 @@ export default function TaskboardColumn({
   schedulerPaused,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
+  const orderNoteId = useId();
+  const orderNote = status === WorkItemStatus.WorkQueue ? QUEUE_ORDER_NOTE : null;
   // Where a card dragged over the column would land: before the loaded card at
   // this index, or after the last one at the end.
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -194,7 +199,24 @@ export default function TaskboardColumn({
     >
       {!alone && (
         <div className="taskboard-column-header">
-          <h3 className="taskboard-column-title">{label}</h3>
+          <div className="taskboard-column-heading">
+            <h3 className="taskboard-column-title">{label}</h3>
+            {orderNote && (
+              <span
+                className="taskboard-column-info"
+                role="img"
+                tabIndex={0}
+                aria-label={`How Ild picks from ${label}`}
+                aria-describedby={orderNoteId}
+                title={orderNote}
+              >
+                <Icon name="info" size={14} />
+                <span id={orderNoteId} className="sr-only">
+                  {orderNote}
+                </span>
+              </span>
+            )}
+          </div>
           <div className="taskboard-column-header-end">
             <span className="taskboard-column-count">{total}</span>
             <button
@@ -210,6 +232,12 @@ export default function TaskboardColumn({
         </div>
       )}
       <div className="taskboard-column-body">
+        {alone && orderNote && (
+          <p className="taskboard-column-note">
+            <Icon name="info" size={14} />
+            {orderNote}
+          </p>
+        )}
         {empty && <p className="taskboard-column-empty">{EMPTY_HINT[columnOf(status)]}</p>}
         {workItems.map((item, i) => (
           <WorkItemCard
