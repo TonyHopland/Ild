@@ -339,7 +339,7 @@ function EndedRunNote({ run, workItemDone }: { run: LoopRun; workItemDone: boole
   if (run.retain)
     return (
       <p className="wiv2-run-ended-note">
-        Worktree removed. The run history is kept for as long as the run is pinned.
+        No worktree. The run history is kept for as long as the run is pinned.
       </p>
     );
   if (!run.historyKeptUntil) return null;

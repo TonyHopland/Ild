@@ -431,11 +431,8 @@ public class LoopRunsController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-        var run = await _loopRunStore.GetByIdAsync(guid);
-        if (run == null) return NotFound();
-        run.Retain = request.Retain;
-        await _loopRunStore.UpdateRunAsync(run);
-        return Ok(new { id = run.Id, retain = run.Retain });
+        if (!await _loopRunStore.SetRetainAsync(guid, request.Retain)) return NotFound();
+        return Ok(new { id = guid, retain = request.Retain });
     }
 
     [HttpGet("{id}/events")]

@@ -12,7 +12,7 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
 {
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<FinishedRunCleaner> _log;
-    private readonly ConcurrentDictionary<Guid, byte> _inFlight = new();
+    private readonly ConcurrentDictionary<Guid, InFlight> _inFlight = new();
 
     public FinishedRunCleaner(IServiceScopeFactory scopes, ILogger<FinishedRunCleaner> log)
     {
@@ -20,9 +20,53 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
         _log = log;
     }
 
+    /// <summary>
+    /// The removal running for one run, and whether a call arrived while it ran.
+    /// Such a call may know the run has ended, or been let go by the engine, after
+    /// the running one read it, so it is not dropped: the running one goes again
+    /// unless it already removed everything.
+    /// </summary>
+    private sealed class InFlight
+    {
+        public bool Again;
+        public bool AllowFailed;
+        public bool Done;
+    }
+
     public async Task<bool> RemoveLocalStateAsync(Guid runId, bool allowFailed = false)
     {
-        if (!_inFlight.TryAdd(runId, 0)) return false;
+        var mine = new InFlight { AllowFailed = allowFailed };
+        while (_inFlight.GetOrAdd(runId, mine) is var current && current != mine)
+        {
+            lock (current)
+            {
+                if (!current.Done)
+                {
+                    current.Again = true;
+                    current.AllowFailed |= allowFailed;
+                    return false;
+                }
+            }
+        }
+
+        while (true)
+        {
+            var removed = await RemoveOnceAsync(runId, mine.AllowFailed);
+            lock (mine)
+            {
+                if (removed || !mine.Again)
+                {
+                    mine.Done = true;
+                    _inFlight.TryRemove(new KeyValuePair<Guid, InFlight>(runId, mine));
+                    return removed;
+                }
+                mine.Again = false;
+            }
+        }
+    }
+
+    private async Task<bool> RemoveOnceAsync(Guid runId, bool allowFailed)
+    {
         try
         {
             using var scope = _scopes.CreateScope();
@@ -50,10 +94,6 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
         {
             _log.LogWarning(ex, "Removing the local state of ended run {RunId} failed; the retention sweeper retries", runId);
             return false;
-        }
-        finally
-        {
-            _inFlight.TryRemove(runId, out _);
         }
     }
 }

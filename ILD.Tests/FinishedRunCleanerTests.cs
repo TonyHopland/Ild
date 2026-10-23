@@ -67,6 +67,7 @@ public sealed class FinishedRunCleanerTests : IDisposable
     private readonly TestDb _db = new();
     private readonly Mock<IRunReclaimer> _reclaimer = new();
     private readonly HashSet<Guid> _owned = [];
+    private readonly Mock<ILoopEngine> _engine = new();
     private readonly IFinishedRunCleaner _cleaner;
     private readonly Guid _versionId;
 
@@ -80,13 +81,12 @@ public sealed class FinishedRunCleanerTests : IDisposable
         _versionId = version.Id;
 
         _reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(true);
-        var engine = new Mock<ILoopEngine>();
-        engine.Setup(e => e.GetActiveRunIdsAsync()).ReturnsAsync(() => _owned.ToArray());
+        _engine.Setup(e => e.GetActiveRunIdsAsync()).ReturnsAsync(() => _owned.ToArray());
 
         var services = new ServiceCollection();
         services.AddScopedRunStores(_db);
         services.AddSingleton(_reclaimer.Object);
-        services.AddSingleton(engine.Object);
+        services.AddSingleton(_engine.Object);
         services.AddRealFinishedRunCleaner();
         _cleaner = services.BuildServiceProvider().GetRequiredService<IFinishedRunCleaner>();
     }
@@ -197,6 +197,39 @@ public sealed class FinishedRunCleanerTests : IDisposable
         Assert.True(await first);
         _reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Once);
         Assert.Null(Read(runId)!.WorktreePath);
+    }
+
+    [Fact]
+    public async Task A_removal_asked_for_while_one_still_sees_the_run_owned_is_not_lost()
+    {
+        // The stop finds the loop still driving the run; the loop exits and asks too
+        // while the stop's attempt is still reading who owns the run.
+        var runId = await SeedRunAsync(LoopRunStatus.Cancelled);
+        _owned.Add(runId);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        _engine.Setup(e => e.GetActiveRunIdsAsync()).Returns(async () =>
+        {
+            var owned = _owned.ToArray();
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }
+            return (IEnumerable<Guid>)owned;
+        });
+
+        var stop = _cleaner.RemoveLocalStateAsync(runId);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        _owned.Remove(runId);
+        Assert.False(await _cleaner.RemoveLocalStateAsync(runId));
+
+        release.SetResult();
+        Assert.True(await stop);
+        Assert.Null(Read(runId)!.WorktreePath);
+        Assert.Equal(0, FinishedRunCleanerWiring.SnapshotCount(_db, runId));
+        _reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Once);
     }
 
     private async Task<Guid> SeedRunAsync(LoopRunStatus status, bool retain = false, bool withGitState = true)

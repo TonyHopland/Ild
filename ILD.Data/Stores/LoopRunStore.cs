@@ -479,6 +479,20 @@ public class LoopRunStore : ILoopRunStore
         }
     }
 
+    public async Task<bool> SetRetainAsync(Guid runId, bool retain)
+    {
+        var at = DateTime.UtcNow;
+        var set = await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Retain, retain).SetProperty(r => r.UpdatedAt, at));
+        if (_db.ChangeTracker.Entries<LoopRun>().FirstOrDefault(e => e.Entity.Id == runId) is { } tracked)
+        {
+            SetUnchanged(tracked.Property(r => r.Retain), retain);
+            SetUnchanged(tracked.Property(r => r.UpdatedAt), at);
+        }
+        return set > 0;
+    }
+
     public async Task<bool> ClearLocalGitStateAsync(Guid runId)
     {
         var at = DateTime.UtcNow;

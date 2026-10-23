@@ -14,7 +14,9 @@ public interface IFinishedRunCleaner
     /// and returns false, while the engine still drives the run, or when it is
     /// gone, pinned, or has not ended; a Failed run counts as ended only with
     /// <paramref name="allowFailed"/>. A second call while one is in flight for
-    /// the same run returns false at once. True when the run's local state was
+    /// the same run returns false at once, and the one in flight then tries again
+    /// unless it already removed everything, so a call made once the run ended
+    /// or was let go is never lost. True when the run's local state was
     /// removed; a failure is logged and leaves the run's pointers for a later
     /// attempt. Never throws.
     /// </summary>

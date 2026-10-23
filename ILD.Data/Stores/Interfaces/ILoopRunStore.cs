@@ -212,6 +212,14 @@ public interface ILoopRunStore
     Task MarkEndedAsync(Guid runId, LoopRunStatus status, DateTime completedAt, string? humanFeedbackReason);
 
     /// <summary>
+    /// Pin or unpin the run, touching only <c>Retain</c> (and UpdatedAt), so the
+    /// pointers an end-of-run cleanup cleared, or a status another writer set, are
+    /// not written back. A copy of the run this store already tracks is brought in
+    /// step. False when there is no such run.
+    /// </summary>
+    Task<bool> SetRetainAsync(Guid runId, bool retain);
+
+    /// <summary>
     /// Clear the run's <c>WorktreePath</c> and <c>BranchName</c> once the state
     /// they name is gone, touching only those columns (and UpdatedAt): a reclaim
     /// takes seconds, and a pin or status another writer committed meanwhile must
