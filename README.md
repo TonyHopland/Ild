@@ -2,18 +2,19 @@
 
 > ⚠️ **Heads up:** ILD is a vibecoded app, built to make experimenting with different AI workflows easy. There are no guarantees that it works, and things may break without warning. Use it at your own risk.
 
-ILD is a containerized development orchestration system built around shared work items, loop templates, per-run git worktrees, and adapter-driven AI execution. A local ILD instance owns loop execution, repository operations, previews, and the realtime UI; a standalone WorkItem Server owns the work-item source of truth so multiple ILD instances can coordinate safely.
+ILD runs coding agents on your work items, in loops you design. You put work on a taskboard; ILD picks it up, runs it through a loop template in its own git worktree, stops wherever the loop wants a human, and usually ends in a pull request. A standalone WorkItem Server holds the board, so several ILD instances can share one.
 
-Work flows through a taskboard and resolves via versioned, visual loop templates made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `PR`, and `Cleanup` nodes. AI nodes are adapter-based and run external agent CLIs — currently `opencode`, `pi`, `claude-code`, `copilot`, and `codex` — inside the worktree.
+A loop is a versioned, visual template made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `PR`, `Condition` and `Cleanup` nodes. AI nodes run an agent CLI — `opencode`, `pi`, `claude-code`, `copilot` or `codex` — inside the worktree.
 
 ## What ILD does
 
-- Shared work-item coordination through a standalone WorkItem Server with atomic `Running` claims, heartbeats, stale reclaim, dependencies, tags, and linked pull requests.
-- A taskboard UI covering `Backlog`, `WorkQueue`, `Ready`, `Running`, `HumanFeedback`, `WaitingForIld`, and `Done`.
-- Visual, versioned loop-template editing and execution with retries, `OnFailure` routing, pause/resume, crash recovery, and startup reconciliation.
-- Manual starts from the UI and automatic claiming via background polling.
-- Adapter-driven AI execution across the `opencode`, `pi`, `claude-code`, `copilot`, and `codex` provider types.
-- QA preview orchestration for active worktrees, and realtime updates over SignalR for run events, work-item changes, and node progress.
+- **A shared board.** Work items from Backlog to Done, with dependencies, tags and linked pull requests, on a WorkItem Server that lets several ILD instances claim work without stepping on each other.
+- **Loops you design.** Versioned templates with retries, failure routing, human gates and pull request handling, built by hand or with the AI chat. A run survives a crash or restart.
+- **The agents you choose.** Each AI node picks its provider by tag, so one loop can plan with one model and review with another.
+- **A worktree per run.** Every run gets its own branch against a GitHub, Forgejo or Azure DevOps repository, and a live preview of the project's own services to test before merging.
+- **An AI chat on every page**, which knows the work item you have open, plus scheduled chats for retros and recurring checks.
+- **Guardrails and numbers.** Agents reach the network through an allow/block list with a traffic log; analytics show what each provider, loop and chat costs.
+- **Hands off or hands on.** Items start themselves from the Work queue or by hand, the UI updates live, and it works on a phone.
 
 ## Quickstart
 
@@ -26,7 +27,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Compose refuses to start until `.env` supplies the five secrets it treats as required: `WORKITEM_API_KEYS`, `ILD_SESSION_TOKEN_PEPPER`, and the three database passwords. Generate each with `openssl rand -hex 32`. Set `ILD_PASSWORD` as well — compose does not enforce that one, but without it the first login has no account to create.
+Compose refuses to start until `.env` supplies the five secrets it treats as required: `WORKITEM_API_KEYS`, `ILD_SESSION_TOKEN_PEPPER`, and the three database passwords. Generate each with `openssl rand -hex 32`. Set `ILD_PASSWORD` as well — compose does not enforce that one, but without it the first login has no account to create. `ILD_SECRET_KEY` is optional but strongly recommended: without it, provider API keys and repository `.env` files are stored in the database in plain text.
 
 This starts `postgres` (compose network only), `workitem-server` (8081), and `ild` (8080). Open <http://localhost:8080> and log in with `admin` (or your `ILD_USERNAME`) and the `ILD_PASSWORD` you supplied.
 
@@ -40,7 +41,7 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ![Add an agent](docs/screenshots/AddAgent.png)
 
-**2. Add a repository** — **Repositories** groups repositories under the remote provider that hosts them (GitHub, Forgejo or Azure DevOps). A repository needs a name, a clone URL and a default branch; a custom `.env` is stored encrypted and handed to its previews without ever being written into the worktree.
+**2. Add a repository** — **Repositories** groups repositories under the remote provider that hosts them (GitHub, Forgejo or Azure DevOps). A repository needs a name, a clone URL and a default branch; a custom `.env` is handed to its previews without ever being written into the worktree, so secrets stay out of the repository.
 
 ![Add a repository](docs/screenshots/AddRepository.png)
 
