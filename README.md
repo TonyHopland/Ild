@@ -86,6 +86,14 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ![Run analytics](docs/screenshots/AnalyticsCost.png)
 
+**On your phone** — on a small screen the board shows one column at a time behind a row of status tabs, with a tab bar along the bottom. A work item's Action tab keeps the review thread and the answer buttons within reach, so a pull request can be merged from the sofa, and chats open full screen.
+
+<p>
+  <img src="docs/screenshots/MobileTaskboard.png" alt="Taskboard on a phone" width="260">
+  <img src="docs/screenshots/MobileAction.png" alt="Answering a pull request gate on a phone" width="260">
+  <img src="docs/screenshots/MobileChat.png" alt="AI chat on a phone" width="260">
+</p>
+
 ## Documentation
 
 | Doc                                        | Contents                                                    |
