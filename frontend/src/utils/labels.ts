@@ -3,7 +3,12 @@
  * server's names (HumanFeedback, WaitingHuman, CHANGES_REQUESTED); nothing on
  * screen shows those directly, it goes through these maps instead.
  */
-import { LoopRunNodeStatus, LoopRunStatus, WorkItemStatus } from "../types";
+import {
+  LoopRunNodeStatus,
+  LoopRunStatus,
+  type RepositoryParallelismHold,
+  WorkItemStatus,
+} from "../types";
 
 /** The tone a pill takes: the four status colours, the accent, or muted grey. */
 export type Tone = "attention" | "danger" | "info" | "success" | "accent" | "muted";
@@ -94,6 +99,11 @@ export function reviewStateLabel(state: string): string {
   if (!state) return state;
   const words = state.toLowerCase().replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Why a Ready item waits on its repository, on its card and in its dialog alike. */
+export function repositoryHoldLabel(hold: RepositoryParallelismHold): string {
+  return `Waiting: repository parallelism limit (${hold.inProgress}/${hold.limit} in progress)`;
 }
 
 /** The class a pill of that tone takes. */

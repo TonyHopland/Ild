@@ -8,6 +8,7 @@ import {
   feedbackReasonLabel,
   feedbackReasonTone,
   pillClass,
+  repositoryHoldLabel,
   workItemStatusLabel,
 } from "../utils/labels";
 
@@ -121,7 +122,7 @@ export default function WorkItemCard({
       )}
       {workItem.status === WorkItemStatus.Ready && workItem.repositoryParallelismHold && (
         <div className="work-item-repository-hold">
-          {`Waiting: repository parallelism limit (${workItem.repositoryParallelismHold.inProgress}/${workItem.repositoryParallelismHold.limit} in progress)`}
+          {repositoryHoldLabel(workItem.repositoryParallelismHold)}
         </div>
       )}
       {prBadges.length > 0 && (
