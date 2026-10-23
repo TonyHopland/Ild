@@ -603,7 +603,7 @@ public sealed class RepositoryParallelismTests : IDisposable
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, await StatusOfAsync(held));
         Assert.Equal(reason, (await _db.LoopRuns.GetWorkItemStatusReasonAsync(held))!.Text);
         var parked = (await _db.ServerClient.GetHistoryAsync(Opts, held, Ct))!
-            .Last(e => e.Field == "status");
+            .First(e => e.Field == "status");
         Assert.Equal(nameof(RemoteWorkItemStatus.HumanFeedback), parked.NewValue);
         Assert.Equal(reason, parked.Reason);
         _engine.Verify(e => e.StartRunAsync(held, It.IsAny<CancellationToken>()), Times.Exactly(runFailsToStart ? 1 : 0));
