@@ -152,5 +152,5 @@ The following items are still desired but not fully delivered in the current cod
 - Recovery is a first-class concern: the system must survive container restarts gracefully
 - The visual loop editor (React Flow) is a key UX surface — investing in good custom node rendering and edge UI is important
 - Tool access should be conservative by default — read-only unless explicitly granted
-- Worktree and branch are one per run, kept after the run finishes for inspection and reclaimed only when the run is deleted (retention sweep or manual delete) — each new run creates a fresh worktree
+- Worktree and branch are one per run, removed with the run's AI session data when the run ends (unless it is pinned); the run record is kept for the retention period (14 days by default) so its history can be reviewed — each new run creates a fresh worktree
 - Vite+ is alpha; keep frontend dependencies minimal and be prepared for potential breaking changes

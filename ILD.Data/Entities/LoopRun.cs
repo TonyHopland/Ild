@@ -125,9 +125,10 @@ public class LoopRun : IHasUpdatedAt
     public string? SteeringNote { get; set; }
 
     /// <summary>
-    /// When true the run is pinned: the worktree retention sweeper never
-    /// reclaims its worktree/branch nor deletes the run. Stays pinned until a
-    /// human clears the mark. See ADR-0008.
+    /// When true the run is pinned: its worktree, branch and session snapshots
+    /// are not removed when it ends, and the worktree retention sweeper never
+    /// reclaims them nor deletes the run. Stays pinned until a human clears the
+    /// mark. See ADR-0008.
     /// </summary>
     public bool Retain { get; set; }
 
