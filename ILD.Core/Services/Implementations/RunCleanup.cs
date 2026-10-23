@@ -14,10 +14,11 @@ public enum RunCleanupOutcome
 }
 
 /// <summary>
-/// Run Cleanup: reclaim a finished run's worktree and local branch while
-/// keeping the run row and its history — the non-destructive counterpart of
-/// deleting the run. Shared by the per-run cleanup on the Runs tab and the bulk
-/// cleanup on Settings &gt; Storage.
+/// Run Cleanup: reclaim a finished run's worktree, local branch and AI session
+/// snapshots while keeping the run row and its history — the non-destructive
+/// counterpart of deleting the run. Shared by the per-run cleanup on the Runs tab
+/// and the <see cref="FinishedRunCleaner"/>, which removes a run's local state
+/// when it ends and as the retention sweeper's backstop.
 /// </summary>
 public static class RunCleanup
 {
@@ -32,10 +33,15 @@ public static class RunCleanup
     public static bool IsFinished(LoopRun run)
         => run.Status is LoopRunStatus.Completed or LoopRunStatus.Failed or LoopRunStatus.Cancelled;
 
-    public static async Task<RunCleanupOutcome> CleanUpAsync(LoopRun run, IRunReclaimer reclaimer, ILoopRunStore runs)
+    public static async Task<RunCleanupOutcome> CleanUpAsync(
+        LoopRun run, IRunReclaimer reclaimer, ILoopRunStore runs, IAdapterSessionSnapshotStore snapshots)
     {
         if (!IsFinished(run))
             return RunCleanupOutcome.NotFinished;
+
+        // Nothing resumes a finished run's sessions, so they go whether or not the
+        // git state can be removed this time.
+        await snapshots.DeleteForRunAsync(run.Id);
 
         if (!await reclaimer.ReclaimLocalStateAsync(run))
             return RunCleanupOutcome.ReclaimFailed;

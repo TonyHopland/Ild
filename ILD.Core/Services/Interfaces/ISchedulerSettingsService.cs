@@ -12,13 +12,15 @@ public static class AppSettingKeys
     public const bool DefaultIsPaused = false;
 
     /// <summary>
-    /// The worktree retention sweeper reclaims a run's worktree/branch and
-    /// deletes the run once its work item is Done and the run finished more than
-    /// this many days ago. <c>0</c> reclaims it on the next sweep after its work
-    /// item is Done.
+    /// How long a finished run's record — node path, event log, feedback, PR
+    /// snapshot — is kept: the worktree retention sweeper deletes the run once
+    /// its work item is Done and the run finished more than this many days ago.
+    /// <c>0</c> deletes it at the next sweep. Its worktree, branch and session
+    /// snapshots go when it ends, whatever this says. 14 by default, so a run
+    /// lasts from one weekly retro to the next.
     /// </summary>
     public const string RunRetentionDays = "run.retentionDays";
-    public const int DefaultRunRetentionDays = 0;
+    public const int DefaultRunRetentionDays = 14;
 
     // WorkItem server connection settings (previously stored per RemoteProvider).
     public const string WorkItemServerUrl = "workItemServer.url";
@@ -153,7 +155,7 @@ public interface ISchedulerSettingsService
     Task<bool> GetIsPausedAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Run retention window in days: a run is reclaimed once its work item is Done and it finished more than this many days ago; <c>0</c> means the next sweep after Done.
+    /// Run retention window in days: a run is deleted once its work item is Done and it finished more than this many days ago; <c>0</c> means the next sweep.
     /// </summary>
     Task<int> GetRunRetentionDaysAsync(CancellationToken ct = default);
 

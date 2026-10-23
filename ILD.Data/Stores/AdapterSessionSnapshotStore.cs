@@ -290,6 +290,9 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
     private static SessionSnapshotPage Page(SessionSnapshotMetadata snapshot, IReadOnlyList<string> events, long fromOffset, bool truncated)
         => new(snapshot, events, fromOffset, fromOffset > 0 ? fromOffset : null, truncated);
 
+    public async Task<int> DeleteForRunAsync(Guid loopRunId, CancellationToken cancellationToken = default)
+        => await _db.AdapterSessionSnapshots.Where(s => s.LoopRunId == loopRunId).ExecuteDeleteAsync(cancellationToken);
+
     public async Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default)
     {
         if (source == destination) return await Snapshots(source).AnyAsync(cancellationToken);

@@ -34,6 +34,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IRemoteProvider? _remoteProvider;
     private readonly ILogger<WorkItemManager> _logger;
     private readonly RepositoryParallelismHolds _repositoryHolds;
+    private readonly IFinishedRunCleaner? _finishedRunCleaner;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -50,7 +51,8 @@ public class WorkItemManager : IWorkItemManager
         IRunReclaimer? runReclaimer = null,
         IRemoteProvider? remoteProvider = null,
         ILogger<WorkItemManager>? logger = null,
-        RepositoryParallelismHolds? repositoryHolds = null)
+        RepositoryParallelismHolds? repositoryHolds = null,
+        IFinishedRunCleaner? finishedRunCleaner = null)
     {
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -67,6 +69,7 @@ public class WorkItemManager : IWorkItemManager
         _remoteProvider = remoteProvider;
         _logger = logger ?? NullLogger<WorkItemManager>.Instance;
         _repositoryHolds = repositoryHolds ?? new RepositoryParallelismHolds();
+        _finishedRunCleaner = finishedRunCleaner;
     }
 
     /// <summary>
@@ -75,8 +78,8 @@ public class WorkItemManager : IWorkItemManager
     /// the work item out of the Active Work Item Set, so the scheduler stops
     /// heartbeating it and gives its concurrency slot back — a run left alive
     /// behind a finished item holds that slot for the lifetime of the process.
-    /// Does <b>not</b> touch the worktree or branch: local git state lives
-    /// exactly as long as the run row.
+    /// The run's worktree, local branch and session snapshots then go
+    /// (<see cref="IFinishedRunCleaner"/>); the row stays until retention.
     /// </summary>
     private async Task EndRunAsync(LoopRun run, string reason)
     {
@@ -86,13 +89,15 @@ public class WorkItemManager : IWorkItemManager
         // that failed: the row has to end terminal and timestamped, or the
         // retention sweeper never sees it and its work item keeps a slot.
         var endedHere = IsAlive(run.Status);
-        if (endedHere)
-            run.Status = LoopRunStatus.Cancelled;
-        run.CompletedAt ??= DateTime.UtcNow;
-        await _loopRunStore.UpdateRunAsync(run);
+        await _loopRunStore.MarkEndedAsync(run.Id, endedHere ? LoopRunStatus.Cancelled : run.Status,
+            run.CompletedAt ?? DateTime.UtcNow, run.HumanFeedbackReason);
         if (endedHere)
             await _eventLog.TryAppendAsync(run.Id, EventType.LoopRunCancelled, reason, _logger);
+        await RemoveLocalStateAsync(run.Id);
     }
+
+    private Task RemoveLocalStateAsync(Guid runId)
+        => _finishedRunCleaner?.RemoveLocalStateAsync(runId) ?? Task.CompletedTask;
 
 
     private static bool IsAlive(LoopRunStatus status)
@@ -100,9 +105,6 @@ public class WorkItemManager : IWorkItemManager
 
     /// <summary>
     /// Stop a still-active run, leaving its work item's status to the caller.
-    /// Does <b>not</b> touch the run's worktree or branch — local git state
-    /// lives exactly as long as the run row and is reclaimed only when the run
-    /// itself is deleted (manual delete or the retention sweeper).
     ///
     /// <see cref="ILoopEngine.StopRunAsync"/> and not <c>CancelRunAsync</c>:
     /// the latter parks the work item in HumanFeedback, and every caller here
@@ -1171,9 +1173,6 @@ public class WorkItemManager : IWorkItemManager
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
-        // The run stays inspectable until the row itself is deleted (manual
-        // delete or the retention sweeper), which reclaims its worktree and
-        // branch; the terminal timestamp is what makes it visible there.
         const string reason = "Work item cleaned up to Done";
         if (currentRun != null) await EndRunAsync(currentRun, reason);
 
@@ -1194,10 +1193,6 @@ public class WorkItemManager : IWorkItemManager
         const string reason = "Work item sent back to Backlog";
         var currentRun = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
 
-        // Stop a still-active run but keep its worktree and branch for
-        // inspection; the retention sweeper (or a manual run delete) reclaims
-        // them together with the row. The next run gets its own branch and
-        // worktree anyway (ADR-0008), so nothing here can leak into it.
         if (currentRun != null)
             await StopRunIfActiveAsync(currentRun, reason);
 
@@ -1215,15 +1210,13 @@ public class WorkItemManager : IWorkItemManager
         if (currentRun != null)
         {
             var endedHere = IsAlive(currentRun.Status);
-            currentRun.Status = LoopRunStatus.Completed;
             // Terminal timestamp keeps the row visible to the retention
-            // sweeper; without it the run is never reclaimed.
-            currentRun.CompletedAt ??= DateTime.UtcNow;
-            currentRun.HumanFeedbackReason = null;
-            currentRun.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(currentRun);
+            // sweeper; without it the run is never deleted.
+            await _loopRunStore.MarkEndedAsync(currentRun.Id, LoopRunStatus.Completed,
+                currentRun.CompletedAt ?? DateTime.UtcNow, humanFeedbackReason: null);
             if (endedHere)
                 await _eventLog.TryAppendAsync(currentRun.Id, EventType.LoopRunCompleted, reason, _logger);
+            await RemoveLocalStateAsync(currentRun.Id);
         }
 
         return true;

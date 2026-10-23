@@ -47,7 +47,7 @@ public class LoopRunsControllerTests
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(), Mock.Of<ISchedulerSettingsService>());
 
         var result = await controller.GetAll();
 
@@ -137,7 +137,8 @@ public class LoopRunsControllerTests
         => TestActors.SignedIn(new LoopRunsController(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
             snapshots ?? new Mock<IAdapterSessionSnapshotStore>().Object,
             new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
-            reclaimer.Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>()));
+            reclaimer.Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(),
+            Mock.Of<ISchedulerSettingsService>()));
 
     [Fact]
     public async Task GetEvents_includes_runNodeId_in_response()
@@ -181,7 +182,7 @@ public class LoopRunsControllerTests
             RunNodes = new List<LoopRunNode>(),
         });
 
-        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
+        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(), Mock.Of<ISchedulerSettingsService>());
 
         var result = await controller.GetEvents(runId.ToString());
 

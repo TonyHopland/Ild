@@ -29,6 +29,7 @@ public class LoopRunsController : ControllerBase
     private readonly IRunConversationService _conversation;
     private readonly ILoopTemplateStore _templates;
     private readonly IGlobalVariableStore _globals;
+    private readonly ISchedulerSettingsService _settings;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
@@ -41,7 +42,8 @@ public class LoopRunsController : ControllerBase
         IPackageFeedResolver packageFeeds,
         IRunConversationService conversation,
         ILoopTemplateStore templates,
-        IGlobalVariableStore globals)
+        IGlobalVariableStore globals,
+        ISchedulerSettingsService settings)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
@@ -54,6 +56,7 @@ public class LoopRunsController : ControllerBase
         _conversation = conversation;
         _templates = templates;
         _globals = globals;
+        _settings = settings;
     }
 
     /// <summary>
@@ -63,6 +66,19 @@ public class LoopRunsController : ControllerBase
     /// </summary>
     private static bool HasLocalGitState(ILD.Data.Entities.LoopRun run)
         => !string.IsNullOrEmpty(run.WorktreePath) || !string.IsNullOrEmpty(run.BranchName);
+
+    /// <summary>
+    /// Until when the run's history is kept: when it ended plus the retention days
+    /// in force now. None for a run that has not ended, or is pinned and so kept
+    /// until it is unpinned. The retention sweeper also waits for the work item
+    /// to be Done, which the run view says alongside.
+    /// </summary>
+    private async Task<DateTime?> HistoryKeptUntilAsync(ILD.Data.Entities.LoopRun run)
+    {
+        if (run.Retain || run.Status is not (LoopRunStatus.Completed or LoopRunStatus.Cancelled) || run.CompletedAt is not { } endedAt)
+            return null;
+        return endedAt.AddDays(await _settings.GetRunRetentionDaysAsync());
+    }
 
     /// <summary>
     /// The global variables still missing or empty, as they are now, for a run
@@ -154,6 +170,7 @@ public class LoopRunsController : ControllerBase
         var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
         var variables = await _loopRunStore.GetVariablesAsync(guid);
         var missingGlobals = await MissingGlobalVariablesAsync(run, new ParkReads(_templates, _globals));
+        var historyKeptUntil = await HistoryKeptUntilAsync(run);
         var currentSessionIds = sessionBindings
             .Select(b => $"{b.AdapterName}\n{b.SessionId}")
             .ToHashSet(StringComparer.Ordinal);
@@ -182,6 +199,7 @@ public class LoopRunsController : ControllerBase
             aiTraversalCount = run.AiTraversalCount,
             startedAt = run.StartedAt,
             completedAt = run.CompletedAt,
+            historyKeptUntil,
             prUrl = run.PrUrl,
             // Embedded as JSON (camelCase from the poller) so the feedback UI can
             // render the full PR view; null until the heartbeat poller's first pass.
@@ -352,10 +370,12 @@ public class LoopRunsController : ControllerBase
     }
 
     /// <summary>
-    /// Reclaim a finished run's worktree and local branch while keeping the run
-    /// row and its history — the non-destructive counterpart of <c>Delete</c>,
-    /// for freeing a branch name a later run wants to reuse. Unrelated to the
-    /// Cleanup <em>node</em>, which ends a run rather than reclaiming one.
+    /// Reclaim a finished run's worktree, local branch and AI session snapshots
+    /// while keeping the run row and its history — the non-destructive
+    /// counterpart of <c>Delete</c>. An ended run loses these on its own unless
+    /// it is pinned; this frees them now, pinned or not, and for a Failed run.
+    /// Unrelated to the Cleanup <em>node</em>, which ends a run rather than
+    /// reclaiming one.
     /// </summary>
     [HttpPost("{id}/cleanup")]
     public async Task<IActionResult> Cleanup(string id)
@@ -367,10 +387,10 @@ public class LoopRunsController : ControllerBase
         if (run == null) return NotFound();
 
         // Stricter than Delete, which only refuses a Running run (see RunCleanup).
-        return await RunCleanup.CleanUpAsync(run, _runReclaimer, _loopRunStore) switch
+        return await RunCleanup.CleanUpAsync(run, _runReclaimer, _loopRunStore, _sessionSnapshotStore) switch
         {
             RunCleanupOutcome.NotFinished => BadRequest(new { error = "Cannot clean up a run that has not finished. Let it finish, or cancel it first." }),
-            RunCleanupOutcome.ReclaimFailed => Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was left untouched. Retry, or check server logs." }),
+            RunCleanupOutcome.ReclaimFailed => Conflict(new { error = "Could not remove the run's worktree/branch. Retry, or check server logs." }),
             RunCleanupOutcome.RunGone => NotFound(),
             _ => NoContent(),
         };
@@ -401,9 +421,10 @@ public class LoopRunsController : ControllerBase
     }
 
     /// <summary>
-    /// Pin or unpin a run. A pinned run (<c>retain = true</c>) is never reclaimed
-    /// by the worktree retention sweeper — its worktree, branch, and history are
-    /// kept until the mark is cleared.
+    /// Pin or unpin a run. A pinned run (<c>retain = true</c>) keeps everything:
+    /// its worktree, branch and session snapshots are not removed when it ends,
+    /// and neither they nor its history are touched by the retention sweeper,
+    /// until the mark is cleared. The next sweep after that removes its leftovers.
     /// </summary>
     [HttpPut("{id}/retain")]
     public async Task<IActionResult> SetRetain(string id, [FromBody] RetainRequest request)
