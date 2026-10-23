@@ -953,6 +953,36 @@ public class WorkItemsController : ControllerBase
         return ok ? Ok() : BadRequest(new { error = "Transition not allowed" });
     }
 
+    /// <summary>
+    /// Start a Ready item now, the way the scheduler would, past its
+    /// repository's parallelism limit but not past this instance's concurrency
+    /// cap. The limit itself is left as it is.
+    /// </summary>
+    [HttpPost("{id}/start")]
+    public async Task<IActionResult> StartAnyway(
+        string id,
+        [FromServices] IRemoteWorkItemCoordinator coordinator,
+        [FromServices] ISchedulerSettingsService schedulerSettings,
+        [FromServices] IWorkItemServerOptionsResolver serverOptions,
+        [FromServices] IShutdownState shutdown,
+        CancellationToken cancellationToken)
+    {
+        if (SignedInUser is not { } user)
+            return Unauthorized();
+        if (shutdown.IsStopping)
+            return Conflict(new { error = "ILD is shutting down." });
+
+        var opts = await serverOptions.ResolveForWorkItemAsync(id, cancellationToken);
+        var maxConcurrent = await schedulerSettings.GetMaxConcurrentAsync(cancellationToken);
+        return await coordinator.StartIgnoringRepositoryLimitAsync(opts, id, maxConcurrent, user, cancellationToken) switch
+        {
+            HandStartResult.NotFound => NotFound(),
+            HandStartResult.NotReady => Conflict(new { error = "Only a Ready item can be started." }),
+            HandStartResult.AtConcurrencyLimit => Conflict(new { error = "ILD is already running as many work items as it is allowed to." }),
+            _ => await _workItemManager.GetWorkItemAsync(id) is { } started ? Ok(started) : NotFound(),
+        };
+    }
+
     [HttpGet("{id}/dependencies")]
     public async Task<IActionResult> GetDependencies(string id, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
