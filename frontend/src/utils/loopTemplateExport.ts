@@ -9,7 +9,7 @@ import type {
   LoopNodeEdge,
 } from "../types";
 import { RecoveryPolicy } from "../types";
-import { PLACEHOLDER, VARIABLE_NAME } from "./promptPlaceholder";
+import { placeholderKeys, VARIABLE_NAME } from "./promptPlaceholder";
 
 const EXPORT_SCHEMA = "ild-loop-template/v2" as const;
 
@@ -25,8 +25,7 @@ export function usedGlobalVariableNames(nodes: { config: unknown }[]): string[] 
   const seen = new Set<string>();
   const names: string[] = [];
   for (const node of nodes) {
-    for (const match of JSON.stringify(node.config).matchAll(PLACEHOLDER)) {
-      const key = match[1];
+    for (const key of placeholderKeys(JSON.stringify(node.config))) {
       if (!key.toLowerCase().startsWith(GLOBAL_PREFIX)) continue;
       const name = key.slice(GLOBAL_PREFIX.length);
       if (VARIABLE_NAME.test(name) && !seen.has(name.toLowerCase())) {

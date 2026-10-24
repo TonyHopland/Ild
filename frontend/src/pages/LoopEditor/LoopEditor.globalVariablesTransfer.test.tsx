@@ -368,7 +368,7 @@ describe("Loop Editor — importing global variables", () => {
     }));
   }
 
-  test("creates missing variables, leaves identical ones alone, and lists them after the loop line", async () => {
+  test("creates missing variables, leaves identical ones unwritten but reported, and lists them after the loop line", async () => {
     const server: Server = { globals: [stored("Same", "v")] };
     const calls = await startImport(server, [
       [
@@ -385,10 +385,12 @@ describe("Loop Editor — importing global variables", () => {
     expect(writes(calls).map((c) => [c.method, c.path, c.body])).toEqual([
       ["POST", "/global-variables", { name: "fresh", value: "new value" }],
     ]);
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(rows[0].text).toMatch(/Created/);
     expect(rows[1].status).toBe("success");
     expect(rows[1].text).toContain("fresh");
+    expect(rows[2].status).toBe("skipped");
+    expect(rows[2].text).toBe('Global variable "Same" already has this value.');
   });
 
   test("a differing variable shows a diff of current against imported and Overwrite writes the import, keeping the stored name", async () => {
