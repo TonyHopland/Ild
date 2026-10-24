@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, createEvent, fireEvent, waitFor } from "@testing-library/react";
-import { useState, type ComponentProps } from "react";
+import { Profiler, useState, type ComponentProps } from "react";
 import BoardColumn from "./TaskboardColumn";
 
 type ColumnProps = ComponentProps<typeof BoardColumn>;
@@ -21,7 +21,7 @@ function TaskboardColumn(
     />
   );
 }
-import WorkItemCard from "./WorkItemCard";
+import WorkItemCard, { WORK_ITEM_DRAG_TYPE } from "./WorkItemCard";
 import { WorkItem, WorkItemStatus } from "../types";
 import * as authServices from "../services/auth";
 
@@ -283,7 +283,12 @@ function card(id: string): HTMLElement {
 
 /** Drags the work item with `draggedId` over `target` and drops it at height `clientY`. */
 function dropAt(target: Element, draggedId: string, clientY: number) {
-  const dataTransfer = { getData: () => draggedId, setData: () => {}, dropEffect: "move" };
+  const dataTransfer = {
+    types: [WORK_ITEM_DRAG_TYPE, "text/plain"],
+    getData: () => draggedId,
+    setData: () => {},
+    dropEffect: "move",
+  };
   for (const fire of [createEvent.dragEnter, createEvent.dragOver, createEvent.drop]) {
     const event = fire(target, { dataTransfer });
     Object.defineProperty(event, "clientY", { value: clientY });
@@ -673,4 +678,452 @@ describe("TaskboardColumn folding and Needs you", () => {
     ]);
     expect(container.querySelector(".taskboard-column--needs")).not.toBeNull();
   });
+});
+
+const GAP = 8;
+const BODY_PADDING = 12;
+const SLOT = CARD_HEIGHT + GAP;
+const cardTop = (i: number) => BODY_PADDING + i * SLOT;
+
+/**
+ * Lays each column's cards out one under the other, CARD_HEIGHT tall with GAP
+ * between them and BODY_PADDING above the first (jsdom has no layout). A card
+ * and anything inside it measure as the card; anything else, such as the
+ * column, its header or body, spans 200 wide and room below the last card.
+ */
+function layOutWithGaps(...columns: string[][]) {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const id = this.closest("[data-work-item-id]")?.getAttribute("data-work-item-id");
+    const ids = columns.find((c) => id !== undefined && c.includes(id!));
+    const top = ids ? cardTop(ids.indexOf(id!)) : 0;
+    const height = ids ? CARD_HEIGHT : cardTop(Math.max(...columns.map((c) => c.length)) + 2);
+    return {
+      x: 0,
+      y: top,
+      top,
+      left: 0,
+      right: 200,
+      bottom: top + height,
+      width: 200,
+      height,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+}
+
+type DragEventName = "dragEnter" | "dragOver" | "dragLeave" | "drop" | "dragEnd";
+
+/**
+ * Fires a drag event as a browser would (jsdom has no DragEvent, so pointer
+ * position and relatedTarget are set on the event), and reports whether it
+ * was cancelled and the dropEffect it was given.
+ */
+function drag(
+  name: DragEventName,
+  target: Element,
+  {
+    clientY = 0,
+    clientX = 100,
+    relatedTarget = null,
+    draggedId = "",
+    types = [WORK_ITEM_DRAG_TYPE, "text/plain"],
+    dropEffect = "none",
+  }: {
+    clientY?: number;
+    clientX?: number;
+    relatedTarget?: Element | null;
+    draggedId?: string;
+    types?: string[];
+    dropEffect?: string;
+  } = {},
+) {
+  const dataTransfer = {
+    types,
+    getData: () => draggedId,
+    setData: () => {},
+    dropEffect,
+    effectAllowed: "move",
+  };
+  const event = createEvent[name](target, { dataTransfer });
+  Object.defineProperty(event, "clientX", { value: clientX });
+  Object.defineProperty(event, "clientY", { value: clientY });
+  Object.defineProperty(event, "pageY", { value: clientY });
+  Object.defineProperty(event, "relatedTarget", { value: relatedTarget });
+  const prevented = !fireEvent(target, event);
+  return { prevented, dropEffect: dataTransfer.dropEffect };
+}
+
+function columnOfStatus(status: WorkItemStatus): HTMLElement {
+  return document.querySelector(`.taskboard-column[data-status="${status}"]`) as HTMLElement;
+}
+
+/**
+ * The slot the column's drop line shows: i when it is above card i, the card
+ * count when it is below the last card, null when there is none. Fails on more
+ * than one line, or a line below a card other than the last.
+ */
+function lineIn(column: Element): number | null {
+  const cards = Array.from(column.querySelectorAll("[data-work-item-id]"));
+  const lines: number[] = [];
+  cards.forEach((c, i) => {
+    if (c.classList.contains("work-item-card--drop-above")) lines.push(i);
+    if (c.classList.contains("work-item-card--drop-below"))
+      lines.push(i === cards.length - 1 ? cards.length : -1);
+  });
+  expect(lines.length).toBeLessThanOrEqual(1);
+  expect(lines).not.toContain(-1);
+  return lines.length === 0 ? null : lines[0];
+}
+
+const titleOf = (id: string) => card(id).querySelector(".work-item-title")!;
+const bodyOf = (column: Element) => column.querySelector(".taskboard-column-body")!;
+
+describe("TaskboardColumn drop line", () => {
+  function renderOpen(status: WorkItemStatus, ids: string[]) {
+    render(
+      <TaskboardColumn
+        status={status}
+        label={status}
+        workItems={itemsIn(status, ids)}
+        total={ids.length}
+        onWorkItemUpdate={vi.fn()}
+        onError={vi.fn()}
+        foldChoice={false}
+      />,
+    );
+    return columnOfStatus(status);
+  }
+
+  /** Backlog [a, b, c] and Work queue [e, f], side by side as on the board. */
+  function renderTwo() {
+    render(
+      <>
+        <TaskboardColumn
+          status={WorkItemStatus.Backlog}
+          label="Backlog"
+          workItems={itemsIn(WorkItemStatus.Backlog, ["a", "b", "c"])}
+          total={3}
+          onWorkItemUpdate={vi.fn()}
+          onError={vi.fn()}
+          foldChoice={false}
+        />
+        <TaskboardColumn
+          status={WorkItemStatus.WorkQueue}
+          label="Work queue"
+          workItems={itemsIn(WorkItemStatus.WorkQueue, ["e", "f"])}
+          total={2}
+          onWorkItemUpdate={vi.fn()}
+          onError={vi.fn()}
+          foldChoice={false}
+        />
+      </>,
+    );
+    layOutWithGaps(["a", "b", "c"], ["e", "f"]);
+    return {
+      backlog: columnOfStatus(WorkItemStatus.Backlog),
+      queue: columnOfStatus(WorkItemStatus.WorkQueue),
+    };
+  }
+
+  test.each([
+    ["the body padding above the first card", 4, 0],
+    ["the upper half of the first card", cardTop(0) + 10, 0],
+    ["the gap between the first and second card", cardTop(0) + CARD_HEIGHT + GAP / 2, 1],
+    ["the gap between the second and third card", cardTop(1) + CARD_HEIGHT + GAP / 2, 2],
+    ["the space below the last card", cardTop(3) + 40, 3],
+  ])("a card dragged over %s (y %i) shows the line at slot %i", (_where, clientY, slot) => {
+    const column = renderOpen(WorkItemStatus.Backlog, ["a", "b", "c"]);
+    layOutWithGaps(["a", "b", "c"]);
+
+    drag("dragOver", bodyOf(column), { clientY });
+
+    expect(lineIn(column)).toBe(slot);
+  });
+
+  test("a card dragged over the header above the cards shows the line above the first card", () => {
+    const column = renderOpen(WorkItemStatus.Backlog, ["a", "b", "c"]);
+    layOutWithGaps(["a", "b", "c"]);
+
+    drag("dragOver", column.querySelector(".taskboard-column-title")!, { clientY: 2 });
+
+    expect(lineIn(column)).toBe(0);
+  });
+
+  test("dragging slowly from the top to the bottom of a column moves the line one slot at a time", () => {
+    const ids = ["a", "b", "c", "d"];
+    const column = renderOpen(WorkItemStatus.Backlog, ids);
+    layOutWithGaps(ids);
+
+    const shown: (number | null)[] = [];
+    for (let y = 0; y < cardTop(ids.length) + 40; y += 3) {
+      const over = ids.findIndex((_, i) => y >= cardTop(i) && y < cardTop(i) + CARD_HEIGHT);
+      const target = over >= 0 ? titleOf(ids[over]) : bodyOf(column);
+      drag("dragOver", target, { clientY: y });
+      const middleBelow = ids.findIndex((_, i) => y < cardTop(i) + CARD_HEIGHT / 2);
+      const expected = middleBelow >= 0 ? middleBelow : ids.length;
+      expect(lineIn(column), `pointer at ${y}`).toBe(expected);
+      if (shown[shown.length - 1] !== expected) shown.push(expected);
+    }
+
+    expect(shown).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  test("the line and highlight stay while the pointer moves between a card and its child elements", () => {
+    const column = renderOpen(WorkItemStatus.Backlog, ["a", "b", "c"]);
+    layOutWithGaps(["a", "b", "c"]);
+    const y = cardTop(1) + 20;
+
+    drag("dragEnter", card("b"), { clientY: y });
+    drag("dragOver", card("b"), { clientY: y });
+    expect(lineIn(column)).toBe(1);
+
+    drag("dragEnter", titleOf("b"), { clientY: y });
+    drag("dragLeave", card("b"), { clientY: y, relatedTarget: titleOf("b") });
+    expect(lineIn(column)).toBe(1);
+    expect(column.classList.contains("drag-over")).toBe(true);
+
+    drag("dragEnter", card("b"), { clientY: y });
+    drag("dragLeave", titleOf("b"), { clientY: y, relatedTarget: card("b") });
+    expect(lineIn(column)).toBe(1);
+
+    drag("dragLeave", card("b"), { clientY: y, relatedTarget: bodyOf(column) });
+    expect(lineIn(column)).toBe(1);
+
+    // Firefox may leave relatedTarget out; the pointer is still inside the column.
+    drag("dragLeave", card("b"), { clientY: y, clientX: 100, relatedTarget: null });
+    expect(lineIn(column)).toBe(1);
+    expect(column.classList.contains("drag-over")).toBe(true);
+  });
+
+  test.each([
+    [
+      "the pointer leaves the column",
+      ({ backlog }: { backlog: HTMLElement; queue: HTMLElement }) =>
+        drag("dragLeave", backlog, { clientY: 50, relatedTarget: document.body }),
+    ],
+    [
+      "the pointer leaves the column with no related target",
+      ({ backlog }: { backlog: HTMLElement; queue: HTMLElement }) =>
+        drag("dragLeave", backlog, { clientY: 50, clientX: 500, relatedTarget: null }),
+    ],
+    [
+      "the card is dropped in the column",
+      () => drag("drop", card("b"), { clientY: cardTop(1) + 20 }),
+    ],
+    [
+      "the card is dropped in another column",
+      ({ queue }: { backlog: HTMLElement; queue: HTMLElement }) =>
+        drag("drop", bodyOf(queue), { clientY: 50 }),
+    ],
+    [
+      "the drag ends or is cancelled on a card in another column",
+      () => drag("dragEnd", card("e"), { clientY: 50 }),
+    ],
+    [
+      "the mouse moves after a drag whose card a live update removed, so no dragend came",
+      () => fireEvent.mouseMove(document.body, { clientY: 50 }),
+    ],
+  ])("the line and highlight clear when %s", (_when, act) => {
+    const columns = renderTwo();
+    drag("dragEnter", card("b"), { clientY: cardTop(1) + 20 });
+    drag("dragOver", card("b"), { clientY: cardTop(1) + 20 });
+    expect(lineIn(columns.backlog)).toBe(1);
+    expect(columns.backlog.classList.contains("drag-over")).toBe(true);
+
+    act(columns);
+
+    expect(lineIn(columns.backlog)).toBeNull();
+    expect(columnOfStatus(WorkItemStatus.Backlog).classList.contains("drag-over")).toBe(false);
+  });
+
+  test("a drag that is not a card's, such as a file, is not taken and shows no line", () => {
+    const column = renderOpen(WorkItemStatus.Backlog, ["a", "b", "c"]);
+    layOutWithGaps(["a", "b", "c"]);
+    const y = cardTop(1) + 20;
+
+    const refused = { prevented: true, dropEffect: "none" };
+    expect(
+      drag("dragEnter", card("b"), { clientY: y, types: ["Files"], dropEffect: "copy" }),
+    ).toEqual(refused);
+    expect(
+      drag("dragOver", card("b"), { clientY: y, types: ["Files"], dropEffect: "copy" }),
+    ).toEqual(refused);
+    expect(
+      drag("dragOver", bodyOf(column), { clientY: y, types: ["text/plain"], dropEffect: "copy" }),
+    ).toEqual(refused);
+
+    expect(lineIn(column)).toBeNull();
+    expect(column.classList.contains("drag-over")).toBe(false);
+  });
+
+  test("a file dragged over a folded column's strip is refused and leaves it folded", () => {
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Done}
+        label="Done"
+        workItems={itemsIn(WorkItemStatus.Done, ["a"])}
+        total={1}
+        onWorkItemUpdate={vi.fn()}
+      />,
+    );
+    const strip = screen.getByRole("button", { name: "Done: 1 item. Show column" });
+
+    const refused = { prevented: true, dropEffect: "none" };
+    expect(drag("dragEnter", strip, { clientY: 30, types: ["Files"], dropEffect: "copy" })).toEqual(
+      refused,
+    );
+    expect(drag("dragOver", strip, { clientY: 30, types: ["Files"], dropEffect: "copy" })).toEqual(
+      refused,
+    );
+
+    expect(screen.getByRole("button", { name: "Done: 1 item. Show column" })).toBeTruthy();
+  });
+
+  test("a folded column opened by a drag stays open across child leaves and folds back on leaving", () => {
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Done}
+        label="Done"
+        workItems={itemsIn(WorkItemStatus.Done, ["a", "b"])}
+        total={2}
+        onWorkItemUpdate={vi.fn()}
+        onError={vi.fn()}
+      />,
+    );
+    layOutWithGaps(["a", "b"]);
+    const strip = screen.getByRole("button", { name: "Done: 2 items. Show column" });
+
+    drag("dragEnter", strip, { clientY: 30 });
+    drag("dragOver", strip, { clientY: 30 });
+    expect(screen.queryByRole("button", { name: /Show column/ })).toBeNull();
+
+    drag("dragEnter", card("a"), { clientY: 30 });
+    drag("dragOver", card("a"), { clientY: 30 });
+    drag("dragEnter", titleOf("a"), { clientY: 30 });
+    drag("dragLeave", card("a"), { clientY: 30, relatedTarget: titleOf("a") });
+    drag("dragEnter", card("a"), { clientY: 30 });
+    drag("dragLeave", titleOf("a"), { clientY: 30, relatedTarget: card("a") });
+    expect(screen.queryByRole("button", { name: /Show column/ })).toBeNull();
+    expect(lineIn(columnOfStatus(WorkItemStatus.Done))).toBe(0);
+
+    drag("dragLeave", columnOfStatus(WorkItemStatus.Done), {
+      clientY: 30,
+      relatedTarget: document.body,
+    });
+    expect(screen.getByRole("button", { name: "Done: 2 items. Show column" })).toBeTruthy();
+  });
+
+  const targets: [string, () => Element][] = [
+    [
+      "a card",
+      () => {
+        renderOpen(WorkItemStatus.Backlog, ["a", "b"]);
+        return card("a");
+      },
+    ],
+    ["the gap between cards", () => bodyOf(renderOpen(WorkItemStatus.Backlog, ["a", "b"]))],
+    [
+      "the header",
+      () =>
+        renderOpen(WorkItemStatus.Backlog, ["a", "b"]).querySelector(".taskboard-column-header")!,
+    ],
+    [
+      "a folded column's strip",
+      () => {
+        render(
+          <TaskboardColumn
+            status={WorkItemStatus.Done}
+            label="Done"
+            workItems={itemsIn(WorkItemStatus.Done, ["a"])}
+            total={1}
+            onWorkItemUpdate={vi.fn()}
+          />,
+        );
+        return screen.getByRole("button", { name: "Done: 1 item. Show column" });
+      },
+    ],
+  ];
+
+  test.each(
+    targets.flatMap(([where, setUp]) =>
+      (["dragEnter", "dragOver"] as const).map((name) => [name, where, setUp] as const),
+    ),
+  )("%s over %s is accepted as a move", (name, _where, setUp) => {
+    const target = setUp();
+    layOutWithGaps(["a", "b"]);
+
+    const { prevented, dropEffect } = drag(name, target, { clientY: cardTop(0) + CARD_HEIGHT + 4 });
+
+    expect(prevented).toBe(true);
+    expect(dropEffect).toBe("move");
+  });
+
+  test("while a card is over a column, the rest of the page still refuses drops", () => {
+    const column = renderOpen(WorkItemStatus.Backlog, ["a", "b"]);
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    layOutWithGaps(["a", "b"]);
+    drag("dragEnter", card("a"), { clientY: 20 });
+    drag("dragOver", card("a"), { clientY: 20 });
+    expect(lineIn(column)).toBe(0);
+
+    expect(drag("dragEnter", outside, { clientX: 500 }).prevented).toBe(false);
+    expect(drag("dragOver", outside, { clientX: 500 }).prevented).toBe(false);
+    outside.remove();
+  });
+
+  test("dragging on within the same slot does not re-render the column", () => {
+    const onRender = vi.fn();
+    render(
+      <Profiler id="column" onRender={onRender}>
+        <TaskboardColumn
+          status={WorkItemStatus.Backlog}
+          label="Backlog"
+          workItems={itemsIn(WorkItemStatus.Backlog, ["a", "b", "c"])}
+          total={3}
+          onWorkItemUpdate={vi.fn()}
+          foldChoice={false}
+        />
+      </Profiler>,
+    );
+    layOutWithGaps(["a", "b", "c"]);
+    drag("dragOver", card("b"), { clientY: cardTop(1) + 10 });
+    drag("dragOver", titleOf("b"), { clientY: cardTop(1) + 20 });
+    const renders = onRender.mock.calls.length;
+
+    for (let y = cardTop(1) + 22; y < cardTop(1) + CARD_HEIGHT / 2; y += 2)
+      drag("dragOver", titleOf("b"), { clientY: y });
+
+    expect(onRender.mock.calls.length).toBe(renders);
+  });
+
+  test.each([
+    ["within the column", ["a", "b", "c", "d"], "a", { aboveId: "c", belowId: "d" }],
+    [
+      "from another column",
+      ["a", "b", "c", "d"],
+      "x",
+      { aboveId: "c", belowId: "d", targetStatus: WorkItemStatus.Backlog },
+    ],
+  ])(
+    "a card dropped %s in a gap lands at the slot the line showed",
+    async (_how, ids, draggedId, request) => {
+      const reorder = vi
+        .spyOn(authServices.workItemService, "reorder")
+        .mockImplementation(async (id: string) =>
+          makeItem({ id, title: `Item ${id}`, status: WorkItemStatus.Backlog }),
+        );
+      const column = renderOpen(WorkItemStatus.Backlog, ids);
+      layOutWithGaps(ids);
+      const y = cardTop(2) + CARD_HEIGHT + GAP / 2;
+
+      drag("dragOver", bodyOf(column), { clientY: y, draggedId });
+      expect(lineIn(column)).toBe(3);
+      drag("drop", bodyOf(column), { clientY: y, draggedId });
+
+      await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+      expect(reorder.mock.calls[0][0]).toBe(draggedId);
+      expect(reorder.mock.calls[0][1]).toEqual(request);
+    },
+  );
 });

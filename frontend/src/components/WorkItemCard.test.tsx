@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, act } from "@testing-library/react";
+import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
 import WorkItemCard from "./WorkItemCard";
 import { WorkItem, WorkItemStatus } from "../types";
 
@@ -35,6 +35,17 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
 }
 
 describe("WorkItemCard", () => {
+  test("dragging a card offers it as a move, carrying its id", () => {
+    render(<WorkItemCard workItem={makeItem({ id: "42" })} />);
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "uninitialized" };
+
+    fireEvent.dragStart(screen.getByRole("button"), { dataTransfer });
+
+    expect(dataTransfer.effectAllowed).toBe("move");
+    expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "42");
+    expect(dataTransfer.setData).toHaveBeenCalledWith("application/x-ild-work-item", "42");
+  });
+
   test("shows the repository name beside the id", () => {
     render(<WorkItemCard workItem={makeItem({ id: "42" })} repositoryName="example-repo" />);
 

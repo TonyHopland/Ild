@@ -1,8 +1,8 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import { columnOf, type TaskboardColumnKey } from "../utils/taskboardColumns";
 import { workItemService } from "../services/auth";
-import WorkItemCard from "./WorkItemCard";
+import WorkItemCard, { WORK_ITEM_DRAG_TYPE } from "./WorkItemCard";
 import { errorMessage } from "../utils/errorMessage";
 import Icon from "./Icon";
 import "./TaskboardColumn.css";
@@ -92,28 +92,72 @@ export default function TaskboardColumn({
   const needsYou = status === WorkItemStatus.HumanFeedback && !empty;
   const hasMore = onLoadMore !== undefined && workItems.length < total;
 
-  // On a card's upper half the drop spot is above it, on its lower half below
-  // it; anywhere else in the column it is below the last loaded card.
-  const dropIndexAt = (e: React.DragEvent): number => {
-    const card = e.target instanceof Element ? e.target.closest("[data-work-item-id]") : null;
-    const index = card
-      ? workItems.findIndex((wi) => wi.id === card.getAttribute("data-work-item-id"))
-      : -1;
-    if (index < 0) return workItems.length;
-    const { top, height } = card!.getBoundingClientRect();
-    return e.clientY < top + height / 2 ? index : index + 1;
+  // The drop spot is above the first loaded card whose middle is below the
+  // pointer, or after the last one; read from the pointer's height alone, so a
+  // gap between cards, the padding or the header map to the nearest spot.
+  const dropIndexAt = (e: React.DragEvent<HTMLElement>): number => {
+    const cards = new Map(
+      Array.from(e.currentTarget.querySelectorAll("[data-work-item-id]"), (card) => [
+        card.getAttribute("data-work-item-id"),
+        card,
+      ]),
+    );
+    const index = workItems.findIndex((wi) => {
+      const rect = cards.get(wi.id)?.getBoundingClientRect();
+      return rect !== undefined && e.clientY < rect.top + rect.height / 2;
+    });
+    return index < 0 ? workItems.length : index;
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(true);
-    setDropIndex(dropIndexAt(e));
-  };
-
-  const handleDragLeave = () => {
+  const clearDrag = () => {
     setDragOver(false);
     setDropIndex(null);
   };
+
+  // Every part of the column takes a card's drag, as a move; cancelling
+  // dragenter as well as dragover is what keeps the cursor from showing "not
+  // allowed". Anything else, such as a file or a link, is refused here rather
+  // than left to the browser, which would open it in the tab when dropped.
+  const handleDragOver = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    if (!e.dataTransfer.types.includes(WORK_ITEM_DRAG_TYPE)) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    e.dataTransfer.dropEffect = "move";
+    const index = dropIndexAt(e);
+    if (!dragOver) setDragOver(true);
+    if (index !== dropIndex) setDropIndex(index);
+  };
+
+  // dragleave bubbles up from every card and child the pointer leaves, so only
+  // a move out of the column clears it. Browsers can leave relatedTarget out,
+  // Firefox at times and Chrome on Escape; then the pointer's position says
+  // whether it is still inside, and a drag that ended there is cleared below.
+  const handleDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    const to = e.relatedTarget;
+    if (to instanceof Node) {
+      if (e.currentTarget.contains(to)) return;
+    } else {
+      const { left, right, top, bottom } = e.currentTarget.getBoundingClientRect();
+      if (e.clientX > left && e.clientX < right && e.clientY > top && e.clientY < bottom) return;
+    }
+    clearDrag();
+  };
+
+  // A drag that ends anywhere, dropped in another column or cancelled with
+  // Escape, need not leave this column through dragleave. A dragged card that a
+  // live update removes ends its drag where no dragend reaches the window; but
+  // browsers send no mouse events during a drag, so the first mousemove after
+  // it says the drag is over.
+  useEffect(() => {
+    if (!dragOver) return;
+    const ends = ["dragend", "drop", "mousemove"];
+    for (const end of ends) window.addEventListener(end, clearDrag);
+    return () => {
+      for (const end of ends) window.removeEventListener(end, clearDrag);
+    };
+  }, [dragOver]);
 
   const report = (error: unknown, fallback: string) => {
     const msg = errorMessage(error, fallback);
@@ -121,11 +165,10 @@ export default function TaskboardColumn({
     else console.error(fallback, error);
   };
 
-  const handleDrop = async (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent<HTMLElement>) => {
     e.preventDefault();
     const index = dropIndexAt(e);
-    setDragOver(false);
-    setDropIndex(null);
+    clearDrag();
 
     const workItemId = e.dataTransfer.getData("text/plain");
     if (!workItemId) return;
@@ -169,6 +212,7 @@ export default function TaskboardColumn({
       <div
         className={`taskboard-column taskboard-column--collapsed${needsYou ? " taskboard-column--needs" : ""}`}
         data-status={status}
+        onDragEnter={handleDragOver}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -192,9 +236,9 @@ export default function TaskboardColumn({
     <div
       className={`taskboard-column ${dragOver ? "drag-over" : ""}${needsYou ? " taskboard-column--needs" : ""}${alone ? " taskboard-column--alone" : ""}`}
       data-status={status}
+      onDragEnter={handleDragOver}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
-      onDragEnd={handleDragLeave}
       onDrop={handleDrop}
     >
       {!alone && (

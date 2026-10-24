@@ -12,6 +12,9 @@ import {
   workItemStatusLabel,
 } from "../utils/labels";
 
+/** The drag data type a card carries its id under, so a column can tell a card's drag from a file's. */
+export const WORK_ITEM_DRAG_TYPE = "application/x-ild-work-item";
+
 interface WorkItemCardProps {
   workItem: WorkItem;
   onClick?: (workItem: WorkItem) => void;
@@ -36,6 +39,8 @@ export default function WorkItemCard({
 }: WorkItemCardProps) {
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(WORK_ITEM_DRAG_TYPE, workItem.id);
     e.dataTransfer.setData("text/plain", workItem.id);
   };
 
