@@ -48,7 +48,7 @@ interface Hubs {
   shared: FakeHub;
   chat: FakeHub;
   loopRun: FakeHub;
-  asked: (string | null | undefined)[];
+  asked: (string | null)[];
 }
 
 function hubs(sharedState: FakeHub["connection"]["connectionState"] = "connected"): Hubs {
@@ -64,9 +64,8 @@ function hubs(sharedState: FakeHub["connection"]["connectionState"] = "connected
   return { shared, chat, loopRun, asked };
 }
 
-/** Every work-item hub connection asked for: by its URL or by useSignalR's default. */
-const workItemAsks = (asked: Hubs["asked"]) =>
-  asked.filter((url) => url !== null && url !== "/hubs/chat" && url !== "/hubs/loop-run");
+/** Every work-item hub connection asked for. */
+const workItemAsks = (asked: Hubs["asked"]) => asked.filter((url) => url === "/hubs/work-item");
 
 /** The events among `events` that still have a handler on `hub`. */
 const attached = (hub: FakeHub, events: string[]) =>
