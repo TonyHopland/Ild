@@ -62,6 +62,8 @@ interface WorkItemModalV2Props {
   onDelete?: (id: string) => void;
   /** A global variable suggestion one of the item's runs made, to open the Action tab scrolled to. */
   revealGlobalProposalId?: string | null;
+  /** Whether the scheduler is paused; undefined until it has been read. */
+  schedulerPaused?: boolean;
 }
 
 /**
@@ -84,6 +86,7 @@ export default function WorkItemModalV2({
   onSave,
   onDelete,
   revealGlobalProposalId,
+  schedulerPaused,
 }: WorkItemModalV2Props) {
   const detail = useWorkItemDetail(workItem, onSave);
   // Chosen from the item's status, regardless of which tab was last viewed on a
@@ -102,7 +105,7 @@ export default function WorkItemModalV2({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
   // Backlog to Work queue without dragging the card, which a phone cannot do,
-  // and a Ready item its repository's limit holds back started anyway.
+  // and a Ready item its repository's limit or a paused scheduler holds back started anyway.
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   // A refusal was about the item as it was: once it has moved or changed state,
@@ -121,6 +124,8 @@ export default function WorkItemModalV2({
   };
   const repositoryHold =
     workItem?.status === WorkItemStatus.Ready ? (workItem.repositoryParallelismHold ?? null) : null;
+  const pausedStart =
+    workItem?.status === WorkItemStatus.Ready && !repositoryHold && schedulerPaused === true;
   const startAnyway = async () => {
     setMoving(true);
     setMoveError(null);
@@ -659,6 +664,16 @@ export default function WorkItemModalV2({
                     disabled={moving || detail.busy}
                   >
                     Start anyway (ignore repository limit)
+                  </button>
+                )}
+                {pausedStart && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void startAnyway()}
+                    disabled={moving || detail.busy}
+                  >
+                    Start now (scheduler paused)
                   </button>
                 )}
               </div>
