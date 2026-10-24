@@ -172,13 +172,16 @@ RUN git config --system --add safe.directory '*'
 # from a login shell, each with a throwaway HOME, and fails the build unless
 # both report NPM_VERSION.
 #
+# libatomic1 is a runtime dependency of the official Node 26 binaries; it is
+# installed explicitly so the autoremove below keeps it.
+#
 # pnpm comes only from corepack, which leaves each repository's packageManager
 # to decide the version. Node 25+ no longer ships corepack, so there the image
 # has no pnpm: no pin applies at image level, and a global pnpm would override
 # every repository's own.
 RUN if [ "$WITH_NODE" = "1" ]; then \
   apt-get update && \
-  apt-get install -y --no-install-recommends curl xz-utils && \
+  apt-get install -y --no-install-recommends curl xz-utils libatomic1 && \
   if [ "$NODE_RUNTIME_VERSION" = "latest" ]; then \
     NODE_RUNTIME_VERSION=$(curl -fsSL https://nodejs.org/dist/index.json | sed -n 's/.*"version":"\(v[^"]*\)".*/\1/p' | head -n1 | sed 's/^v//'); \
   fi && \
