@@ -189,7 +189,7 @@ public sealed class ChatLoopTemplateProposalFeedbackTests : IDisposable
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,
             new ChatLoopScratchpad(),
-            new ChatCloneCoordinator());
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
 
     private sealed class RecordingChatAdapter : IAgentAdapter
     {

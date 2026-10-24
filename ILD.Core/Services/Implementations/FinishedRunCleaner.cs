@@ -17,11 +17,11 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
 
     private readonly ClaudeProjectFolders _claudeProjects;
 
-    public FinishedRunCleaner(IServiceScopeFactory scopes, ILogger<FinishedRunCleaner> log, ClaudeProjectFolders? claudeProjects = null)
+    public FinishedRunCleaner(IServiceScopeFactory scopes, ILogger<FinishedRunCleaner> log, ClaudeProjectFolders claudeProjects)
     {
         _scopes = scopes;
         _log = log;
-        _claudeProjects = claudeProjects ?? ClaudeProjectFolders.ForProcess();
+        _claudeProjects = claudeProjects;
     }
 
     /// <summary>

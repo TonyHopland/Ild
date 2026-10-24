@@ -12,10 +12,13 @@ namespace ILD.Core.Services.Implementations;
 /// folders, preview scratch, probes in <c>/tmp</c>. Run cleanup and chat deletion
 /// remove their own; this catches what they never saw.
 ///
-/// A folder is kept while any directory its sessions started in exists, while a
-/// run row still names one as its worktree or a chat row as its folder, and while
+/// A folder is kept while any directory its sessions started in exists, and while
 /// anything in it was written in the last <see cref="Quiet"/> — a turn still
-/// running, or one whose transcript is not yet in the database.
+/// running, or one whose transcript is not yet in the database. A folder whose
+/// directory a chat row names is kept until the chat is deleted, and one a run row
+/// names as its worktree is kept until that run's cleanup succeeds and clears it,
+/// even when the worktree is already gone: the run's cleanup deletes the folder
+/// then, and nothing here second-guesses a row that still claims it.
 /// </summary>
 public sealed class ClaudeProjectFolderSweeper : BackgroundService
 {

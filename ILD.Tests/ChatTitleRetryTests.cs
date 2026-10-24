@@ -88,7 +88,7 @@ public sealed class ChatTitleRetryTests : IDisposable
     private ChatService NewChatService(IChatTitleScheduler titles)
         => new(_db.Context, _db.Providers, new Registry(this), Mock.Of<IChatNotifier>(),
             new ChatOptions { ScratchRoot = _scratchRoot }, _db.LoopRuns, new ChatLoopScratchpad(),
-            new ChatCloneCoordinator(), titles: titles);
+            new ChatCloneCoordinator(), titles: titles, claudeProjects: TestClaudeProjectFolders.Instance);
 
     private Task TurnAsync(ChatService chat, Guid id, string message)
         => chat.ExecuteTurnAsync(id, Guid.NewGuid(), message, CancellationToken.None);

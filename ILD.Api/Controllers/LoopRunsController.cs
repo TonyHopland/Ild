@@ -45,7 +45,7 @@ public class LoopRunsController : ControllerBase
         ILoopTemplateStore templates,
         IGlobalVariableStore globals,
         ISchedulerSettingsService settings,
-        ClaudeProjectFolders? claudeProjects = null)
+        ClaudeProjectFolders claudeProjects)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
@@ -59,7 +59,7 @@ public class LoopRunsController : ControllerBase
         _templates = templates;
         _globals = globals;
         _settings = settings;
-        _claudeProjects = claudeProjects ?? ClaudeProjectFolders.ForProcess();
+        _claudeProjects = claudeProjects;
     }
 
     /// <summary>

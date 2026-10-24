@@ -132,9 +132,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.RemoveForwardedHostedService<ILD.Core.Services.Implementations.ChatScheduleScheduler>();
             services.RemoveHostedService<ILD.Core.Services.Implementations.SessionSnapshotMigrationService>();
             services.RemoveHostedService<ILD.Core.Services.Implementations.ClaudeProjectFolderSweeper>();
-            services.ReplaceSingleton(new ILD.Core.Services.Implementations.ClaudeProjectFolders(
-                agentUser: null, agentHome: null, new TestProcessEnvironment { { "HOME", Path.Combine(_dataRoot, "home") } },
-                tempRoot: Path.Combine(_dataRoot, "tmp")));
+            services.ReplaceSingleton(TestClaudeProjectFolders.Under(_dataRoot));
             services.GuardExternalServices();
             services.ReplaceSingleton<IAgentAdapterRegistry>(new FixedAgentAdapterRegistry());
             services.ReplaceSingleton(BootstrapCredentials.FromEnvironment(_readVariable));

@@ -1,10 +1,14 @@
 using System.Text.Json;
+using ILD.Api.Controllers;
+using ILD.Api.Services;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -29,9 +33,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
 
     public ClaudeProjectFoldersTests()
     {
-        _folders = new ClaudeProjectFolders(
-            agentUser: null, agentHome: null, new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } },
-            tempRoot: Path.Combine(_root, "tmp"));
+        _folders = TestClaudeProjectFolders.Under(_root);
     }
 
     public async ValueTask InitializeAsync()
@@ -146,6 +148,25 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
         var outcome = await RunCleanup.CleanUpAsync(run, reclaimer.Object, _db.LoopRuns, new AdapterSessionSnapshotStore(_db.Context), _folders);
 
         Assert.Equal(RunCleanupOutcome.Cleaned, outcome);
+        Assert.False(Directory.Exists(ProjectFolder(worktree)));
+        Assert.False(Directory.Exists(TempFolder(worktree)));
+    }
+
+    [Fact]
+    public async Task Cleaning_up_a_failed_run_from_the_runs_tab_deletes_its_worktree_folders()
+    {
+        var worktree = Existing("wi-6-run-failed");
+        WriteTranscript(worktree, old: false);
+        var runId = await SeedRunAsync(LoopRunStatus.Failed, worktree);
+        var reclaimer = new Mock<IRunReclaimer>();
+        reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(true);
+        var controller = new LoopRunsController(Mock.Of<ILoopEngine>(), Mock.Of<IEventLogService>(), _db.LoopRuns,
+            new AdapterSessionSnapshotStore(_db.Context), new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
+            reclaimer.Object, Mock.Of<IWorkItemManager>(), NoPackageFeeds.Resolver, Mock.Of<IRunConversationService>(),
+            Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(), Mock.Of<ISchedulerSettingsService>(), _folders);
+
+        Assert.IsType<NoContentResult>(await controller.Cleanup(runId.ToString()));
+
         Assert.False(Directory.Exists(ProjectFolder(worktree)));
         Assert.False(Directory.Exists(TempFolder(worktree)));
     }

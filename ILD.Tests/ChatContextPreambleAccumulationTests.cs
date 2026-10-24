@@ -713,7 +713,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,
             _loopScratchpad,
-            new ChatCloneCoordinator());
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
 
     private sealed class NullChatNotifier : IChatNotifier
     {
