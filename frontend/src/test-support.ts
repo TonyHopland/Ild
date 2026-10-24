@@ -294,12 +294,12 @@ export function fakeHub(state: HubConnectionState = "connected"): FakeHub {
  * {@link fakeSignalRModule}.
  */
 export function routeHubs(
-  signalRModule: { useSignalR: (hubUrl?: string | null) => SignalRConnection },
+  signalRModule: { useSignalR: (hubUrl: string | null) => SignalRConnection },
   hubs: Record<string, FakeHub>,
-): (string | null | undefined)[] {
-  const asked: (string | null | undefined)[] = [];
+): (string | null)[] {
+  const asked: (string | null)[] = [];
   const unrouted = fakeHub("disconnected");
-  vi.spyOn(signalRModule, "useSignalR").mockImplementation((hubUrl?: string | null) => {
+  vi.spyOn(signalRModule, "useSignalR").mockImplementation((hubUrl: string | null) => {
     asked.push(hubUrl);
     return (hubUrl ? (hubs[hubUrl] ?? unrouted) : unrouted).connection;
   });

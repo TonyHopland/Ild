@@ -19,7 +19,7 @@ const reconnectPolicy: signalR.IRetryPolicy = {
 export type SignalRConnection = ReturnType<typeof useSignalR>;
 
 /** `hubUrl` null opens no connection, for a caller that listens on another one instead. */
-export function useSignalR(hubUrl: string | null = "/hubs/work-item") {
+export function useSignalR(hubUrl: string | null) {
   const [connectionState, setConnectionState] = useState<
     "disconnected" | "connecting" | "connected" | "reconnecting"
   >("disconnected");
