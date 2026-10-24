@@ -161,7 +161,7 @@ export default function TaskboardColumn({
   };
 
   // A drag that ends anywhere, dropped in another column or cancelled with
-  // Escape, never leaves this column through dragleave.
+  // Escape, need not leave this column through dragleave.
   useEffect(() => {
     if (!dragOver) return;
     window.addEventListener("dragend", clearDrag);
