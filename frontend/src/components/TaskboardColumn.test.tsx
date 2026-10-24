@@ -1,13 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import {
-  act,
-  render,
-  screen,
-  cleanup,
-  createEvent,
-  fireEvent,
-  waitFor,
-} from "@testing-library/react";
+import { render, screen, cleanup, createEvent, fireEvent, waitFor } from "@testing-library/react";
 import { Profiler, useState, type ComponentProps } from "react";
 import BoardColumn from "./TaskboardColumn";
 
@@ -29,7 +21,7 @@ function TaskboardColumn(
     />
   );
 }
-import WorkItemCard from "./WorkItemCard";
+import WorkItemCard, { WORK_ITEM_DRAG_TYPE } from "./WorkItemCard";
 import { WorkItem, WorkItemStatus } from "../types";
 import * as authServices from "../services/auth";
 
@@ -291,7 +283,12 @@ function card(id: string): HTMLElement {
 
 /** Drags the work item with `draggedId` over `target` and drops it at height `clientY`. */
 function dropAt(target: Element, draggedId: string, clientY: number) {
-  const dataTransfer = { getData: () => draggedId, setData: () => {}, dropEffect: "move" };
+  const dataTransfer = {
+    types: [WORK_ITEM_DRAG_TYPE, "text/plain"],
+    getData: () => draggedId,
+    setData: () => {},
+    dropEffect: "move",
+  };
   for (const fire of [createEvent.dragEnter, createEvent.dragOver, createEvent.drop]) {
     const event = fire(target, { dataTransfer });
     Object.defineProperty(event, "clientY", { value: clientY });
@@ -729,14 +726,17 @@ function drag(
     clientX = 100,
     relatedTarget = null,
     draggedId = "",
+    types = [WORK_ITEM_DRAG_TYPE, "text/plain"],
   }: {
     clientY?: number;
     clientX?: number;
     relatedTarget?: Element | null;
     draggedId?: string;
+    types?: string[];
   } = {},
 ) {
   const dataTransfer = {
+    types,
     getData: () => draggedId,
     setData: () => {},
     dropEffect: "none",
@@ -917,6 +917,10 @@ describe("TaskboardColumn drop line", () => {
       "the drag ends or is cancelled on a card in another column",
       () => drag("dragEnd", card("e"), { clientY: 50 }),
     ],
+    [
+      "the mouse moves after a drag whose card a live update removed, so no dragend came",
+      () => fireEvent.mouseMove(document.body, { clientY: 50 }),
+    ],
   ])("the line and highlight clear when %s", (_when, act) => {
     const columns = renderTwo();
     drag("dragEnter", card("b"), { clientY: cardTop(1) + 20 });
@@ -930,33 +934,19 @@ describe("TaskboardColumn drop line", () => {
     expect(columnOfStatus(WorkItemStatus.Backlog).classList.contains("drag-over")).toBe(false);
   });
 
-  test("a drag cancelled over the column with no dragend clears the line once no dragover follows", () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const advance = (ms: number) =>
-      act(() => {
-        vi.advanceTimersByTime(ms);
-      });
-    try {
-      const column = renderOpen(WorkItemStatus.Backlog, ["a", "b", "c"]);
-      layOutWithGaps(["a", "b", "c"]);
-      const y = cardTop(1) + 20;
-      drag("dragEnter", card("b"), { clientY: y });
-      drag("dragOver", card("b"), { clientY: y });
+  test("a drag that is not a card's, such as a file, is not taken and shows no line", () => {
+    const column = renderOpen(WorkItemStatus.Backlog, ["a", "b", "c"]);
+    layOutWithGaps(["a", "b", "c"]);
+    const y = cardTop(1) + 20;
 
-      drag("dragLeave", card("b"), { clientY: y, relatedTarget: null });
-      advance(300);
-      drag("dragOver", card("b"), { clientY: y });
-      advance(1000);
-      expect(lineIn(column)).toBe(1);
+    expect(drag("dragEnter", card("b"), { clientY: y, types: ["Files"] }).prevented).toBe(false);
+    expect(drag("dragOver", card("b"), { clientY: y, types: ["Files"] }).prevented).toBe(false);
+    expect(drag("dragOver", bodyOf(column), { clientY: y, types: ["text/plain"] }).prevented).toBe(
+      false,
+    );
 
-      // Chrome's dragleave on Escape: no relatedTarget, the pointer still over the column.
-      drag("dragLeave", card("b"), { clientY: y, relatedTarget: null });
-      advance(1000);
-      expect(lineIn(column)).toBeNull();
-      expect(column.classList.contains("drag-over")).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(lineIn(column)).toBeNull();
+    expect(column.classList.contains("drag-over")).toBe(false);
   });
 
   test("a folded column opened by a drag stays open across child leaves and folds back on leaving", () => {

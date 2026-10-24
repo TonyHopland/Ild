@@ -43,6 +43,7 @@ describe("WorkItemCard", () => {
 
     expect(dataTransfer.effectAllowed).toBe("move");
     expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "42");
+    expect(dataTransfer.setData).toHaveBeenCalledWith("application/x-ild-work-item", "42");
   });
 
   test("shows the repository name beside the id", () => {
