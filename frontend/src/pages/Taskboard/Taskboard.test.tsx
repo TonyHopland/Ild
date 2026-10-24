@@ -1978,6 +1978,40 @@ describe("Taskboard Work queue column", () => {
     await waitFor(() => expect(queuePills("startable")).toEqual(["Scheduler paused"]));
   });
 
+  test("an open Ready item's dialog offers Start now while paused and follows a live resume and pause", async () => {
+    const hub = mockHub();
+    mockModalServices();
+    mockBoard([boardItem("startable", 5, WorkItemStatus.Ready)]);
+    pausedReads(true);
+
+    renderTaskboard();
+    await waitFor(() => expect(queuePills("startable")).toEqual(["Scheduler paused"]));
+    expect(within(cardEl("startable")).queryByRole("button", { name: /start/i })).toBeNull();
+    fireEvent.click(cardEl("startable"));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Start now (scheduler paused)" }),
+      ).toBeTruthy(),
+    );
+
+    await hub.emit("SchedulerStateChanged", { isPaused: false });
+
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByRole("button", { name: "Start now (scheduler paused)" }),
+      ).toBeNull(),
+    );
+
+    await hub.emit("SchedulerStateChanged", { isPaused: true });
+
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Start now (scheduler paused)" }),
+      ).toBeTruthy(),
+    );
+  });
+
   test.each([
     [WorkItemStatus.Backlog, "ArrowRight", WorkItemStatus.WorkQueue, "Work queue"],
     [WorkItemStatus.WorkQueue, "ArrowRight", WorkItemStatus.Running, "Running"],
