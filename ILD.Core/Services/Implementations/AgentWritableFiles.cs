@@ -211,6 +211,78 @@ public static class AgentWritableFiles
     }
 
     /// <summary>
+    /// <see cref="DeleteAsync"/>, also answering how many bytes of disk the paths
+    /// that were removed took up. A path that is not there counts nothing.
+    /// </summary>
+    public static async Task<(bool AllGone, long BytesFreed)> DeleteMeasuredAsync(IEnumerable<string> paths, CancellationToken ct = default)
+    {
+        var arguments = paths.ToList();
+        if (arguments.Count == 0) return (true, 0);
+
+        var result = await RunAsync(
+            $$"""
+            status=0; total=0
+            for p; do
+              [ -e "$p" ] || [ -L "$p" ] || continue
+              k=$(du -sk -- "$p" 2>/dev/null | cut -f1)
+              if { {{Remove}}; }; then total=$((total + ${k:-0})); else status=1; fi
+            done
+            echo "$total"; exit $status
+            """,
+            arguments, stdin: null, ct);
+        long.TryParse(result.Stdout.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var kibibytes);
+        return (result.ExitCode == 0, kibibytes * 1024);
+    }
+
+    /// <summary>Whether the agent sees anything at <paramref name="path"/>; a link counts, dangling or not.</summary>
+    public static async Task<bool> EntryExistsAsAgentAsync(string path, CancellationToken ct = default)
+        => (await RunAsync("""[ -e "$1" ] || [ -L "$1" ]""", [path], stdin: null, ct)).ExitCode == 0;
+
+    /// <summary>The numeric uid the agent's commands run as.</summary>
+    public static async Task<string?> GetUidAsync(CancellationToken ct = default)
+    {
+        var result = await RunAsync("exec id -u", [], stdin: null, ct);
+        var uid = result.Stdout.Trim();
+        return result.ExitCode == 0 && uid.Length > 0 && uid.All(char.IsAsciiDigit) ? uid : null;
+    }
+
+    /// <summary>
+    /// For every directory directly below <paramref name="directory"/>, not a link,
+    /// with at least one <c>*.jsonl</c> file and nothing in it modified within the
+    /// last <paramref name="quietMinutes"/> minutes: its name and every distinct
+    /// <c>"cwd"</c> string those files record, still JSON-encoded.
+    /// </summary>
+    public static async Task<IReadOnlyList<(string Name, IReadOnlyList<string> Cwds)>> ListQuietTranscriptFoldersAsync(
+        string directory, int quietMinutes, CancellationToken ct = default)
+    {
+        const string script = """
+            root=$1; minutes=$2
+            for d in "$root"/*/; do
+              d=${d%/}
+              [ -d "$d" ] && [ ! -L "$d" ] || continue
+              [ -n "$(find "$d" -mmin "-$minutes" 2>/dev/null | head -n 1)" ] && continue
+              set -- "$d"/*.jsonl
+              [ -f "$1" ] || continue
+              printf 'D%s\0' "${d##*/}"
+              grep -ohE '"cwd": *"([^"\\]|\\.)*"' -- "$@" 2>/dev/null | sort -u | while IFS= read -r c; do printf 'C%s\0' "$c"; done
+            done
+            exit 0
+            """;
+        var result = await RunAsync(script, [directory, quietMinutes.ToString(CultureInfo.InvariantCulture)], stdin: null, ct);
+
+        var folders = new List<(string, IReadOnlyList<string>)>();
+        List<string>? cwds = null;
+        foreach (var record in result.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (record[0] == 'D')
+                folders.Add((record[1..], cwds = []));
+            else if (record[0] == 'C' && cwds is not null)
+                cwds.Add(record[1..]);
+        }
+        return folders;
+    }
+
+    /// <summary>
     /// Whether anything is at <paramref name="path"/>: a file, a directory, or a
     /// link, dangling or not. The entry is never followed, so a link the agent
     /// planted counts as something that is there, not as whatever it points at.

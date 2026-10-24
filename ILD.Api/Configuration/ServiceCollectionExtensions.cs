@@ -78,6 +78,8 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<ThrottledRunResumeSweeper>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();
         services.AddSingleton<IFinishedRunCleaner, FinishedRunCleaner>();
+        services.AddSingleton(sp => ClaudeProjectFolders.ForProcess(sp.GetRequiredService<ILogger<ClaudeProjectFolders>>()));
+        services.AddHostedService<ClaudeProjectFolderSweeper>();
         services.AddScoped<IStorageService, StorageService>();
         services.AddScoped<IBranchNameOverrideService, BranchNameOverrideService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();

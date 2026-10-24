@@ -30,6 +30,7 @@ public class LoopRunsController : ControllerBase
     private readonly ILoopTemplateStore _templates;
     private readonly IGlobalVariableStore _globals;
     private readonly ISchedulerSettingsService _settings;
+    private readonly ClaudeProjectFolders _claudeProjects;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
@@ -43,7 +44,8 @@ public class LoopRunsController : ControllerBase
         IRunConversationService conversation,
         ILoopTemplateStore templates,
         IGlobalVariableStore globals,
-        ISchedulerSettingsService settings)
+        ISchedulerSettingsService settings,
+        ClaudeProjectFolders? claudeProjects = null)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
@@ -57,6 +59,7 @@ public class LoopRunsController : ControllerBase
         _templates = templates;
         _globals = globals;
         _settings = settings;
+        _claudeProjects = claudeProjects ?? ClaudeProjectFolders.ForProcess();
     }
 
     /// <summary>
@@ -387,7 +390,7 @@ public class LoopRunsController : ControllerBase
         if (run == null) return NotFound();
 
         // Stricter than Delete, which only refuses a Running run (see RunCleanup).
-        return await RunCleanup.CleanUpAsync(run, _runReclaimer, _loopRunStore, _sessionSnapshotStore) switch
+        return await RunCleanup.CleanUpAsync(run, _runReclaimer, _loopRunStore, _sessionSnapshotStore, _claudeProjects) switch
         {
             RunCleanupOutcome.NotFinished => BadRequest(new { error = "Cannot clean up a run that has not finished. Let it finish, or cancel it first." }),
             RunCleanupOutcome.ReclaimFailed => Conflict(new { error = "Could not remove the run's worktree/branch. Retry, or check server logs." }),

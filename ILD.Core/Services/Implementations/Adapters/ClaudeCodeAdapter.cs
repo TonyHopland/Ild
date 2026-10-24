@@ -546,11 +546,18 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         string worktreePath, string sessionId, string? agentUser, string? agentHome, IProcessEnvironment environment)
     {
         if (string.IsNullOrEmpty(worktreePath) || string.IsNullOrEmpty(sessionId)) return null;
+        return GetProjectsRoot(agentUser, agentHome, environment) is { } projects
+            ? Path.Combine(projects, EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl")
+            : null;
+    }
+
+    /// <summary>The <c>.claude/projects</c> directory under the <c>HOME</c> Claude runs with.</summary>
+    internal static string? GetProjectsRoot(string? agentUser, string? agentHome, IProcessEnvironment environment)
+    {
         var home = AgentIsolation.ResolveChildHome(agentUser, agentHome) ?? environment.Get("HOME");
         if (string.IsNullOrEmpty(home))
             home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (string.IsNullOrEmpty(home)) return null;
-        return Path.Combine(home, ".claude", "projects", EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl");
+        return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".claude", "projects");
     }
 
     // Claude Code stores per-cwd session JSONL files under

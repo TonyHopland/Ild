@@ -48,6 +48,7 @@ public sealed class ChatService : IChatService
     private readonly ILogger<ChatService> _log;
     private readonly IChatTitleScheduler? _titles;
     private readonly IChatScheduleNotifier? _schedules;
+    private readonly ClaudeProjectFolders _claudeProjects;
 
     public ChatService(
         AppDbContext db,
@@ -61,7 +62,8 @@ public sealed class ChatService : IChatService
         IWorkItemManager? workItems = null,
         ILogger<ChatService>? log = null,
         IChatTitleScheduler? titles = null,
-        IChatScheduleNotifier? schedules = null)
+        IChatScheduleNotifier? schedules = null,
+        ClaudeProjectFolders? claudeProjects = null)
     {
         _db = db;
         _providers = providers;
@@ -75,6 +77,7 @@ public sealed class ChatService : IChatService
         _log = log ?? NullLogger<ChatService>.Instance;
         _titles = titles;
         _schedules = schedules;
+        _claudeProjects = claudeProjects ?? ClaudeProjectFolders.ForProcess();
     }
 
     public async Task<IReadOnlyList<ChatSessionSummaryView>> ListForUserAsync(string userId, CancellationToken ct = default)
@@ -776,6 +779,9 @@ public sealed class ChatService : IChatService
                 await AgentWritableFiles.DeleteAsync([session.ScratchPath], CancellationToken.None);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { }
+
+        // Claude Code's transcripts of the chat, whose copies went with the row.
+        await _claudeProjects.DeleteForAsync(session.ScratchPath, CancellationToken.None);
         return true;
     }
 

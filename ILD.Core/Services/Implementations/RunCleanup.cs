@@ -52,10 +52,13 @@ public static class RunCleanup
         => services.GetService<ILoopEngine>() is { } engine && (await engine.GetActiveRunIdsAsync()).Contains(runId);
 
     public static async Task<RunCleanupOutcome> CleanUpAsync(
-        LoopRun run, IRunReclaimer reclaimer, ILoopRunStore runs, IAdapterSessionSnapshotStore snapshots)
+        LoopRun run, IRunReclaimer reclaimer, ILoopRunStore runs, IAdapterSessionSnapshotStore snapshots,
+        ClaudeProjectFolders claudeProjects)
     {
         if (!IsFinished(run))
             return RunCleanupOutcome.NotFinished;
+
+        var worktreePath = run.WorktreePath;
 
         // Nothing resumes a finished run's sessions, so they go whether or not the
         // git state can be removed this time.
@@ -63,6 +66,9 @@ public static class RunCleanup
 
         if (!await reclaimer.ReclaimLocalStateAsync(run))
             return RunCleanupOutcome.ReclaimFailed;
+
+        // The transcripts were copied to the database at the end of every turn.
+        await claudeProjects.DeleteForAsync(worktreePath);
 
         // The row now outlives the git state it names, so the pointers go with
         // it: a surviving BranchName would keep claiming a branch that is free,
