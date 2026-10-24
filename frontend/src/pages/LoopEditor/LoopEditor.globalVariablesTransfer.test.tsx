@@ -596,6 +596,28 @@ describe("Loop Editor — importing global variables", () => {
     expect(writes(calls).map((c) => c.body.name ?? c.body.value)).toEqual(["big", "loud", "last"]);
   });
 
+  test("files picked while a variable diff is open are ignored and the running import finishes", async () => {
+    const server: Server = { globals: [stored("tone", "calm")] };
+    const calls = await startImport(server, [
+      ["a.json", importedLoop("Alpha", [{ name: "tone", value: "loud" }])],
+      ["b.json", importedLoop("Beta")],
+    ]);
+    const dialog = await screen.findByRole("dialog", { name: "Global variable conflict" });
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: { files: [new File([importedLoop("Gamma")], "c.json")] },
+    });
+    await act(async () => {});
+    expect(templateWrites(calls).map((c) => c.body.name)).toEqual(["Alpha"]);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Overwrite" }));
+    const rows = await results();
+
+    expect(templateWrites(calls).map((c) => c.body.name)).toEqual(["Alpha", "Beta"]);
+    expect(rows.map((r) => r.file)).toEqual(["a.json", "a.json", "b.json"]);
+  });
+
   test("a file without globalVariables makes no global-variable requests during the import", async () => {
     const calls = serve({ globals: [] });
     renderEditor("/loop-editor");

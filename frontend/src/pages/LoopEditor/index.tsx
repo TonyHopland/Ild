@@ -1158,6 +1158,15 @@ export default function LoopEditor() {
     [processSingleImportFile, loadTemplates],
   );
 
+  // A running import owns the queue and the dialogs; files picked meanwhile are ignored.
+  const startImport = useCallback(
+    (files: File[]) => {
+      if (importQueueRef.current) return;
+      void processImportFiles(files);
+    },
+    [processImportFiles],
+  );
+
   // Helper: after resolving a conflict, continue processing remaining files
   const continueImportAfterConflict = useCallback(
     async (extraFeedback: ImportFeedbackItem[]) => {
@@ -1172,6 +1181,7 @@ export default function LoopEditor() {
         await processImportFiles(queue.remainingFiles);
       } else {
         // Issue 2: preserve accumulated feedback even when queue is empty
+        importQueueRef.current = null;
         const allFeedback = queue ? [...queue.feedback, ...extraFeedback] : extraFeedback;
         setImportFeedback(allFeedback);
         setShowImportFeedback(true);
@@ -1233,7 +1243,7 @@ export default function LoopEditor() {
   const handleImportFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
-    void processImportFiles(Array.from(files));
+    startImport(Array.from(files));
     event.target.value = ""; // reset so same file can be re-selected
   };
 
@@ -1260,7 +1270,7 @@ export default function LoopEditor() {
       if (files && files.length > 0) {
         const jsonFiles = Array.from(files).filter((f) => f.name.endsWith(".json"));
         if (jsonFiles.length > 0) {
-          void processImportFiles(jsonFiles);
+          startImport(jsonFiles);
           return;
         }
       }
@@ -1305,7 +1315,7 @@ export default function LoopEditor() {
 
       setNodes((currentNodes) => currentNodes.concat(newNode));
     },
-    [setNodes, processImportFiles, fixedOutputs],
+    [setNodes, startImport, fixedOutputs],
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
