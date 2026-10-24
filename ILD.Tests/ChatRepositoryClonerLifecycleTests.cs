@@ -374,7 +374,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     {
         await using var db = _db.OnOwnConnection();
         var chats = new ChatService(db, new ProviderStore(db), Mock.Of<IAgentAdapterRegistry>(), Mock.Of<IChatNotifier>(),
-            new ChatOptions { ScratchRoot = _dir }, new LoopRunStore(db), new ChatLoopScratchpad(), _chatClones);
+            new ChatOptions { ScratchRoot = _dir }, new LoopRunStore(db), new ChatLoopScratchpad(), _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
 
         Assert.True(await chats.DeleteAsync("scheduler", chatId, Ct).WaitAsync(Ct));
         Assert.False(Directory.Exists(scratch));

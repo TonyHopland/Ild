@@ -154,7 +154,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
             _db.LoopRuns,
             new ChatLoopScratchpad(),
             new ChatCloneCoordinator(),
-            workItems: workItems);
+            workItems: workItems, claudeProjects: TestClaudeProjectFolders.Instance);
 
     private async Task<AiProvider> SeedProviderAsync()
     {

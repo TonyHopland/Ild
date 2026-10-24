@@ -116,7 +116,7 @@ public sealed class ChatInactivitySweeperTests : IDisposable
 
     private ChatService NewChatService(AppDbContext ctx)
         => new(ctx, new ProviderStore(ctx), Mock.Of<IAgentAdapterRegistry>(), _notifier.Object,
-            new ChatOptions { ScratchRoot = _scratchRoot }, new LoopRunStore(ctx), _loopScratchpad, _chatClones);
+            new ChatOptions { ScratchRoot = _scratchRoot }, new LoopRunStore(ctx), _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
 
     private ChatInactivitySweeper BuildSweeper(IChatTurnRunner? runner = null)
     {

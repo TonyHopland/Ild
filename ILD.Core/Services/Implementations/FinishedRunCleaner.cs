@@ -15,10 +15,13 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
     // Guarded by _gate.
     private readonly Dictionary<Guid, Request> _inFlight = new();
 
-    public FinishedRunCleaner(IServiceScopeFactory scopes, ILogger<FinishedRunCleaner> log)
+    private readonly ClaudeProjectFolders _claudeProjects;
+
+    public FinishedRunCleaner(IServiceScopeFactory scopes, ILogger<FinishedRunCleaner> log, ClaudeProjectFolders claudeProjects)
     {
         _scopes = scopes;
         _log = log;
+        _claudeProjects = claudeProjects;
     }
 
     /// <summary>
@@ -80,7 +83,7 @@ public sealed class FinishedRunCleaner : IFinishedRunCleaner
                 return false;
 
             var outcome = await RunCleanup.CleanUpAsync(
-                run, sp.GetRequiredService<IRunReclaimer>(), runs, sp.GetRequiredService<IAdapterSessionSnapshotStore>());
+                run, sp.GetRequiredService<IRunReclaimer>(), runs, sp.GetRequiredService<IAdapterSessionSnapshotStore>(), _claudeProjects);
             if (outcome == RunCleanupOutcome.ReclaimFailed)
                 _log.LogWarning("Run {RunId} ended but its worktree or branch could not be removed; the retention sweeper retries", runId);
             return outcome == RunCleanupOutcome.Cleaned;

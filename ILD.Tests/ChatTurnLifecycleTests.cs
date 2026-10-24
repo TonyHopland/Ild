@@ -274,7 +274,7 @@ public sealed class ChatTurnLifecycleTests
             new ChatOptions { ScratchRoot = Path.Combine(Path.GetTempPath(), "ild-chat-lifecycle-tests") },
             db.LoopRuns,
             new ChatLoopScratchpad(),
-            new ChatCloneCoordinator());
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
         var runner = NewRunner(chat, notifier);
 
         await runner.SubmitAsync(Guid.NewGuid(), "hello");

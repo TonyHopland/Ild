@@ -131,6 +131,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // Its passes would use the one shared connection beside every request.
             services.RemoveForwardedHostedService<ILD.Core.Services.Implementations.ChatScheduleScheduler>();
             services.RemoveHostedService<ILD.Core.Services.Implementations.SessionSnapshotMigrationService>();
+            services.RemoveHostedService<ILD.Core.Services.Implementations.ClaudeProjectFolderSweeper>();
+            services.ReplaceSingleton(TestClaudeProjectFolders.Under(_dataRoot));
             services.GuardExternalServices();
             services.ReplaceSingleton<IAgentAdapterRegistry>(new FixedAgentAdapterRegistry());
             services.ReplaceSingleton(BootstrapCredentials.FromEnvironment(_readVariable));

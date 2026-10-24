@@ -270,7 +270,7 @@ public sealed class ChatProposalDecisionBriefingTests : IDisposable
             new ChatLoopScratchpad(),
             new ChatCloneCoordinator(),
             workItems: new WorkItemManager(
-                Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, _db.ServerOptions, TestActors.Instance));
+                Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, _db.ServerOptions, TestActors.Instance), claudeProjects: TestClaudeProjectFolders.Instance);
 
     private sealed class RecordingChatAdapter : IAgentAdapter
     {

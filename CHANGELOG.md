@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Dragging a card on the Taskboard shows a steady drop line and a move cursor everywhere over a column, gaps and header included.**
+- **Claude Code transcripts of finished runs and deleted chats no longer pile up on the agent's disk until it is full.**
 
 ## [0.21.0] - 2026-10-23
 

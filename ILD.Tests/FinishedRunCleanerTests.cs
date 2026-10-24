@@ -23,6 +23,7 @@ internal static class FinishedRunCleanerWiring
     public static IServiceCollection AddRealFinishedRunCleaner(this IServiceCollection services)
     {
         services.TryAdd(ServiceDescriptor.Singleton(typeof(ILogger<>), typeof(NullLogger<>)));
+        services.TryAddSingleton(TestClaudeProjectFolders.Instance);
         services.AddSingleton<IFinishedRunCleaner>(sp => ActivatorUtilities.CreateInstance<FinishedRunCleaner>(sp));
         return services;
     }
