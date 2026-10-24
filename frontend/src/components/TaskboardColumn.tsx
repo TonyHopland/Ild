@@ -127,9 +127,9 @@ export default function TaskboardColumn({
   };
 
   // dragleave bubbles up from every card and child the pointer leaves, so only
-  // a move out of the column clears it. Firefox can leave relatedTarget out;
-  // then the pointer's position says whether it is still inside, and a drag
-  // cancelled there is cleared by its dragend.
+  // a move out of the column clears it. Browsers can leave relatedTarget out,
+  // Firefox at times and Chrome on Escape; then the pointer's position says
+  // whether it is still inside, and a drag that ended there is cleared below.
   const handleDragLeave = (e: React.DragEvent<HTMLElement>) => {
     const to = e.relatedTarget;
     if (to instanceof Node) {
