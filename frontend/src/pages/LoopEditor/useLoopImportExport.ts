@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ChangeEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import { globalVariableService, loopTemplateService } from "../../services/auth";
 import type {
   ExportedGlobalVariable,
@@ -74,6 +74,7 @@ export function useLoopImportExport({
   } | null>(null);
   const variableConflictResolverRef = useRef<((answer: "overwrite" | "keep") => void) | null>(null);
   const importFileInputRef = useRef<HTMLInputElement>(null);
+  const mountedRef = useRef(true);
 
   const handleExport = useCallback(async () => {
     const exportData = buildExportData();
@@ -111,15 +112,26 @@ export function useLoopImportExport({
   const cancelExport = useCallback(() => setExportChoice(null), []);
 
   // --- Import ---
-  // Issue #1: useRef instead of window for import queue
-  // Issue #2: templatesRef instead of templates to avoid stale closures
-  // Issue #3: LoopNode[]/LoopNodeEdge[] instead of unknown[]
-  // Issue #4: discriminated union from parseImportFile
-  // Issue #6: store original filename in conflict data
+  // The import reads templatesRef rather than state, so a queued file is checked
+  // against the list as refreshed after the previous file.
+
+  // A variable question still open when the editor goes away, and any asked
+  // after, is answered "keep", so the import waiting on it ends without writing.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      variableConflictResolverRef.current?.("keep");
+    };
+  }, []);
 
   const askVariableConflict = useCallback(
     (name: string, current: string, imported: string) =>
       new Promise<"overwrite" | "keep">((resolve) => {
+        if (!mountedRef.current) {
+          resolve("keep");
+          return;
+        }
         variableConflictResolverRef.current = resolve;
         setVariableConflict({ name, current, imported });
       }),
@@ -229,7 +241,7 @@ export function useLoopImportExport({
           // Conflict — store in state for dialog
           setImportConflictTemplate(existing);
           setImportConflictData({
-            filename: file.name, // Issue #6: store original filename
+            filename: file.name,
             name: parsed.name,
             description: parsed.description,
             recoveryPolicy: parsed.recoveryPolicy,
@@ -325,7 +337,7 @@ export function useLoopImportExport({
         await loadTemplates();
         await processImportFiles(queue.remainingFiles);
       } else {
-        // Issue 2: preserve accumulated feedback even when queue is empty
+        // Keep the feedback gathered so far even when no files remain
         importQueueRef.current = null;
         const allFeedback = queue ? [...queue.feedback, ...extraFeedback] : extraFeedback;
         setImportFeedback(allFeedback);
@@ -392,12 +404,17 @@ export function useLoopImportExport({
     importFileInputRef.current?.click();
   }, []);
 
-  const handleImportFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    startImport(Array.from(files));
-    event.target.value = ""; // reset so same file can be re-selected
-  };
+  const handleImportFileChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+      startImport(Array.from(files));
+      event.target.value = ""; // reset so same file can be re-selected
+    },
+    [startImport],
+  );
+
+  const dismissImportFeedback = useCallback(() => setShowImportFeedback(false), []);
 
   return {
     exportChoice,
@@ -411,7 +428,7 @@ export function useLoopImportExport({
     handleImportConflictSkip,
     handleImportConflictUpdate,
     importFeedback: showImportFeedback ? importFeedback : [],
-    dismissImportFeedback: () => setShowImportFeedback(false),
+    dismissImportFeedback,
     importFileInputRef,
     openImportFilePicker,
     handleImportFileChange,
