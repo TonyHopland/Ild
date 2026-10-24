@@ -5,6 +5,7 @@ import { useLoopTemplateProposals } from "./useLoopTemplateProposals";
 import { usePendingGlobalVariableProposalCount } from "./usePendingGlobalVariableProposalCount";
 import { usePendingLoopTemplateProposalCounts } from "./usePendingLoopTemplateProposalCounts";
 import * as signalRHook from "./useSignalR";
+import { WorkItemHubProvider } from "./useWorkItemHub";
 import { globalVariableService, loopTemplateProposalService } from "../services/auth";
 import {
   fakeHub,
@@ -101,7 +102,9 @@ describe.each(listKinds)("the list of $name", (kind) => {
     let onServer: Proposal[] = [kind.make("p-1")];
     const list = kind.spyList().mockImplementation(async () => onServer);
 
-    const { result, rerender } = renderHook(() => kind.use({ workItemId: "wi-1" }));
+    const { result, rerender } = renderHook(() => kind.use({ workItemId: "wi-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
     expect(list).not.toHaveBeenCalled();
 
     board.setState("connected");
@@ -138,7 +141,9 @@ describe.each(listKinds)("the list of $name", (kind) => {
     board.invoke.mockImplementation(() => Promise.reject(new Error("join refused")));
     const list = kind.spyList().mockResolvedValue([]);
 
-    const { result } = renderHook(() => kind.use({ workItemId: "wi-1" }));
+    const { result } = renderHook(() => kind.use({ workItemId: "wi-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
 
     await waitFor(() => expect(board.invoke).toHaveBeenCalledWith("SubscribeToWorkItems"));
     await act(async () => {});
@@ -156,7 +161,9 @@ describe.each(listKinds)("the list of $name", (kind) => {
     let onServer: Proposal[] = [kind.make("p-1")];
     const list = kind.spyList().mockImplementation(async () => onServer);
 
-    const { result, unmount } = renderHook(() => kind.use({ chatSessionId: "chat-1" }));
+    const { result, unmount } = renderHook(() => kind.use({ chatSessionId: "chat-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(chatHub.invoke).toHaveBeenCalledWith("SubscribeToChat", "chat-1"));
     expect(list).not.toHaveBeenCalled();
     await act(async () => join.resolve());
@@ -180,7 +187,9 @@ describe.each(listKinds)("the list of $name", (kind) => {
     const { reads, read } = heldReads<Proposal[]>();
     kind.spyList().mockImplementation(read);
 
-    const { result } = renderHook(() => kind.use({ workItemId: "wi-1" }));
+    const { result } = renderHook(() => kind.use({ workItemId: "wi-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(reads.length).toBe(1));
     emit(board, kind.itemHint, kind.itemPayload);
     await waitFor(() => expect(reads.length).toBe(2));
@@ -205,7 +214,7 @@ describe.each(listKinds)("the list of $name", (kind) => {
 
     const { result, rerender } = renderHook(
       ({ workItemId }: { workItemId: string }) => kind.use({ workItemId }),
-      { initialProps: { workItemId: "wi-1" } },
+      { initialProps: { workItemId: "wi-1" }, wrapper: WorkItemHubProvider },
     );
     rerender({ workItemId: "wi-2" });
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-2"]));
@@ -216,21 +225,21 @@ describe.each(listKinds)("the list of $name", (kind) => {
 });
 
 describe("the pending loop template proposals of one template", () => {
-  test("read on the hub the caller holds, opening none of its own, and re-read on that template's hints only", async () => {
-    const asked = routeHubs(signalRHook, { "/hubs/work-item": fakeHub("connected") });
+  test("listen on the provider's hub, asking for no connection of their own, and re-read on that template's hints only", async () => {
     const shared = fakeHub("connected");
+    const asked = routeHubs(signalRHook, { "/hubs/work-item": shared });
     let onServer = [lt("p-1")];
     const list = vi
       .spyOn(loopTemplateProposalService, "list")
       .mockImplementation(async () => onServer);
 
-    const { result } = renderHook(() =>
-      useLoopTemplateProposals({ templateId: "tpl-1" }, shared.connection),
-    );
+    const { result } = renderHook(() => useLoopTemplateProposals({ templateId: "tpl-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1"]));
     expect(list).toHaveBeenCalledWith({ templateId: "tpl-1", status: "Pending" });
     expect(shared.invoke).toHaveBeenCalledWith("SubscribeToWorkItems");
-    expect(asked.every((url) => url === null)).toBe(true);
+    expect(asked.filter((url) => url !== null)).toEqual(["/hubs/work-item"]);
 
     const readsBefore = list.mock.calls.length;
     onServer = [lt("p-1"), lt("p-2")];
@@ -286,7 +295,7 @@ function describePendingCount<T extends Count>(kind: CountKind<T>) {
       let onServer = kind.some;
       const read = kind.spyRead().mockImplementation(async () => onServer);
 
-      const { result, rerender } = renderHook(() => kind.use());
+      const { result, rerender } = renderHook(() => kind.use(), { wrapper: WorkItemHubProvider });
       expect(result.current).toEqual(kind.none);
       await waitFor(() => expect(board.invoke).toHaveBeenCalledWith("SubscribeToWorkItems"));
       expect(read).not.toHaveBeenCalled();
@@ -319,7 +328,7 @@ function describePendingCount<T extends Count>(kind: CountKind<T>) {
       const { reads, read } = heldReads<T>();
       kind.spyRead().mockImplementation(read);
 
-      const { result } = renderHook(() => kind.use());
+      const { result } = renderHook(() => kind.use(), { wrapper: WorkItemHubProvider });
       await waitFor(() => expect(reads.length).toBe(1));
       await act(async () => reads[0].resolve(kind.some));
       await waitFor(() => expect(result.current).toEqual(kind.some));
@@ -343,17 +352,19 @@ function describePendingCount<T extends Count>(kind: CountKind<T>) {
 describePendingCount(globalVariableCounts);
 describePendingCount(loopTemplateCounts);
 
-describe("the pending loop template proposal counts on a hub the caller holds", () => {
-  test("open no connection of their own and join and listen on the given one", async () => {
-    const asked = routeHubs(signalRHook, { "/hubs/work-item": fakeHub("connected") });
+describe("the pending loop template proposal counts", () => {
+  test("listen on the provider's hub, asking for no connection of their own, and re-read on its hints", async () => {
     const shared = fakeHub("connected");
+    const asked = routeHubs(signalRHook, { "/hubs/work-item": shared });
     let onServer: Record<string, number> = { "tpl-1": 1 };
     vi.spyOn(loopTemplateProposalService, "pendingCounts").mockImplementation(async () => onServer);
 
-    const { result } = renderHook(() => usePendingLoopTemplateProposalCounts(shared.connection));
+    const { result } = renderHook(() => usePendingLoopTemplateProposalCounts(), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(result.current).toEqual({ "tpl-1": 1 }));
     expect(shared.invoke).toHaveBeenCalledWith("SubscribeToWorkItems");
-    expect(asked.every((url) => url === null)).toBe(true);
+    expect(asked.filter((url) => url !== null)).toEqual(["/hubs/work-item"]);
 
     onServer = { "tpl-1": 3 };
     emit(shared, "LoopTemplateProposalsChanged", { templateId: "tpl-1" });

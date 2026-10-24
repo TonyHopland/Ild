@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, waitFor, cleanup } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 
 // Every hub connection the page opens, by URL. The stand-in connects at once,
@@ -111,9 +112,11 @@ describe("the Loop Editor's hub connections", () => {
             logout: vi.fn(),
           }}
         >
-          <Routes>
-            <Route path="/loop-editor/:templateId" element={<LoopEditor />} />
-          </Routes>
+          <WorkItemHubProvider>
+            <Routes>
+              <Route path="/loop-editor/:templateId" element={<LoopEditor />} />
+            </Routes>
+          </WorkItemHubProvider>
         </AuthContext.Provider>
       </MemoryRouter>,
     );

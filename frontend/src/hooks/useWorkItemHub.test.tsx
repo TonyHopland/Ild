@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, renderHook } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import * as signalRHook from "./useSignalR";
-import { WorkItemHubProvider } from "./useWorkItemHub";
+import { useSharedWorkItemHub, WorkItemHubProvider } from "./useWorkItemHub";
 import { fakeHub, reply, stubFetch } from "../test-support";
 import { AuthContext } from "./useAuth";
 import SchedulerChip from "../components/SchedulerChip";
@@ -52,5 +52,10 @@ describe("the shared work-item hub", () => {
     expect(Object.keys(unused.handlers)).toEqual([]);
     // Only the provider asked for the hub by URL, once: no hook opened its own.
     expect(useSignalR.mock.calls.filter(([url]) => url !== null)).toEqual([["/hubs/work-item"]]);
+  });
+
+  test("asking for it outside the provider is an error that names the provider", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => renderHook(() => useSharedWorkItemHub())).toThrow(/WorkItemHubProvider/);
   });
 });
