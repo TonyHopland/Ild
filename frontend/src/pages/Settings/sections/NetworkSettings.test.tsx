@@ -9,6 +9,7 @@ import type {
   NetworkPolicyEntry,
   NetworkStatus,
 } from "../../../types";
+import { WorkItemHubProvider } from "../../../hooks/useWorkItemHub";
 
 type Handler = (message: { type: string; payload: unknown; timestamp: string }) => void;
 const handlers = new Map<string, Set<Handler>>();
@@ -112,7 +113,7 @@ afterEach(() => {
 describe("Network settings", () => {
   test("shows both lists in one rule table with their scope", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const rules = within(await screen.findByLabelText("Network rules"));
     const allow = rules.getByText(".github.com").closest("tr")!;
@@ -128,7 +129,7 @@ describe("Network settings", () => {
 
   test("marks the rules the current mode ignores", async () => {
     mockServices(enforced, "whitelist");
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const rules = within(await screen.findByLabelText("Network rules"));
     await waitFor(() => expect(modeButton("Whitelist").getAttribute("aria-pressed")).toBe("true"));
@@ -141,7 +142,7 @@ describe("Network settings", () => {
 
   test("shows a banner when enforcement is advisory", async () => {
     mockServices(advisory);
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const banner = await screen.findByRole("status");
     expect(banner.textContent).toMatch(/advisory mode/i);
@@ -157,7 +158,7 @@ describe("Network settings", () => {
         status: 400,
         message: "network.mode must be off, whitelist or blacklist",
       });
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(modeButton("Off").getAttribute("aria-pressed")).toBe("true"));
 
@@ -182,7 +183,7 @@ describe("Network settings", () => {
       createdAt: "2026-09-02T12:00:00Z",
     };
     const add = vi.spyOn(services.networkService, "addEntry").mockResolvedValue(created);
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const input = await screen.findByLabelText("Host pattern");
     fireEvent.change(input, { target: { value: "api.anthropic.com" } });
@@ -203,7 +204,7 @@ describe("Network settings", () => {
 
   test("spells out what the pattern being typed will match", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.change(await screen.findByLabelText("Host pattern"), {
       target: { value: ".example.com" },
@@ -217,7 +218,7 @@ describe("Network settings", () => {
       status: 400,
       message: "Enter a host name, not a URL",
     });
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.change(await screen.findByLabelText("Host pattern"), {
       target: { value: "https://evil.example" },
@@ -229,7 +230,7 @@ describe("Network settings", () => {
 
   test("filters the rules", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     await screen.findByText("evil.example");
     fireEvent.change(screen.getByLabelText("Filter rules"), { target: { value: "github" } });
@@ -241,7 +242,7 @@ describe("Network settings", () => {
 
   test("filters the rules down to one kind", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText("evil.example");
 
     const kinds = within(screen.getByRole("group", { name: "Rule kind filter" }));
@@ -266,7 +267,7 @@ describe("Network settings", () => {
 
   test("says a filter matched nothing rather than that there are no rules", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText("evil.example");
 
     fireEvent.change(screen.getByLabelText("Filter rules"), { target: { value: "nothing" } });
@@ -278,7 +279,7 @@ describe("Network settings", () => {
   test("removes an entry", async () => {
     mockServices();
     const remove = vi.spyOn(services.networkService, "deleteEntry").mockResolvedValue(undefined);
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Remove .github.com from the whitelist" }),
@@ -300,7 +301,7 @@ describe("Network settings", () => {
     const promote = vi
       .spyOn(services.networkService, "addLogEntryToList")
       .mockResolvedValue(promoted);
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Add registry.npmjs.org to whitelist" }),
@@ -318,7 +319,7 @@ describe("Network settings", () => {
   test("loads a host from the log into the rule form instead of committing it", async () => {
     mockServices();
     const add = vi.spyOn(services.networkService, "addEntry");
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Write a rule for registry.npmjs.org" }),
@@ -338,7 +339,7 @@ describe("Network settings", () => {
       aiProviderId: null,
       createdAt: "2026-09-02T12:00:00Z",
     });
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Write a rule for registry.npmjs.org" }),
@@ -357,7 +358,7 @@ describe("Network settings", () => {
 
   test("shows a forward's destination, its loopback address and that it is listening", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const row = await forwardRow("postgres");
     expect(row.getByText(":5432")).toBeTruthy();
@@ -370,7 +371,7 @@ describe("Network settings", () => {
     mockServices(enforced, "off", [
       { ...postgres, listenError: "Local port 15432 is already in use by something else" },
     ]);
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const row = await forwardRow("postgres");
     expect(row.getByText("Local port unavailable")).toBeTruthy();
@@ -390,7 +391,7 @@ describe("Network settings", () => {
       .spyOn(services.networkService, "getForwards")
       .mockResolvedValueOnce([{ ...postgres, decision: "Blocked" }])
       .mockResolvedValue([postgres]);
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const row = await forwardRow("postgres");
     expect(row.getByText("Host not allowed by current mode")).toBeTruthy();
@@ -416,7 +417,7 @@ describe("Network settings", () => {
         message: "A forward needs one destination, not a pattern: drop the leading dot or *",
       })
       .mockResolvedValue({ ...postgres, id: "f2", name: "redis", host: "cache", port: 6379 });
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await forwardRow("postgres");
 
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "redis" } });
@@ -446,7 +447,7 @@ describe("Network settings", () => {
   test("will not send a forward whose ports are blank or not numbers", async () => {
     mockServices();
     const add = vi.spyOn(services.networkService, "addForward");
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await forwardRow("postgres");
 
     const addButton = () =>
@@ -471,7 +472,7 @@ describe("Network settings", () => {
     "refuses %s as a port rather than coercing it",
     async (typed) => {
       mockServices();
-      render(<NetworkSettings />);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
       await forwardRow("postgres");
 
       fireEvent.change(screen.getByLabelText("Name"), { target: { value: "redis" } });
@@ -494,7 +495,7 @@ describe("Network settings", () => {
       .mockImplementation(
         () => new Promise((resolve) => (inFlight = () => resolve({ ...postgres, id: "f2" }))),
       );
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await forwardRow("postgres");
 
     // Enter reaches add() past the disabled button, so the form must guard itself.
@@ -524,7 +525,7 @@ describe("Network settings", () => {
   test("removes a forward", async () => {
     mockServices();
     const remove = vi.spyOn(services.networkService, "deleteForward").mockResolvedValue(undefined);
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.click(await screen.findByRole("button", { name: "Remove the postgres forward" }));
 
@@ -534,7 +535,7 @@ describe("Network settings", () => {
 
   test("re-reads the forwards when the policy changes", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await forwardRow("postgres");
 
     vi.spyOn(services.networkService, "getForwards").mockResolvedValue([
@@ -551,7 +552,7 @@ describe("Network settings", () => {
   test("clears the log", async () => {
     mockServices();
     const clear = vi.spyOn(services.networkService, "clearLog").mockResolvedValue({ removed: 1 });
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.click(await screen.findByRole("button", { name: /clear log/i }));
 
@@ -567,7 +568,7 @@ describe("Network settings", () => {
     const put = vi
       .spyOn(services.settingsService, "put")
       .mockResolvedValue({ key: services.NetworkSettingKeys.LogRetentionDays, value: "7" });
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const input = (await screen.findByLabelText("Delete log entries after")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("30"));
@@ -583,7 +584,7 @@ describe("Network settings", () => {
   test("refuses a log retention window outside the allowed range without calling the server", async () => {
     mockServices();
     const put = vi.spyOn(services.settingsService, "put");
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const input = (await screen.findByLabelText("Delete log entries after")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("30"));
@@ -597,7 +598,7 @@ describe("Network settings", () => {
 
   test("a retention sweep re-reads the log rather than emptying the view", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText("registry.npmjs.org");
 
     const survivor: NetworkLogEntry = {
@@ -617,7 +618,7 @@ describe("Network settings", () => {
 
   test("a decision that arrives as a number still renders as its name", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText("registry.npmjs.org");
 
     emit("NetworkLogAppended", {
@@ -635,7 +636,7 @@ describe("Network settings", () => {
 
   test("collapses a run of identical destinations into one counted row", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText("registry.npmjs.org");
 
     for (const id of ["l2", "l3"]) {
@@ -675,7 +676,7 @@ describe("Network settings", () => {
 
   test("filters the log by host and by decision", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText("registry.npmjs.org");
 
     emit("NetworkLogAppended", {
@@ -706,7 +707,7 @@ describe("Network settings", () => {
     vi.spyOn(services.networkService, "getEntries")
       .mockRejectedValueOnce({ status: 500, message: "database unavailable" })
       .mockResolvedValue([github]);
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     expect(await screen.findByText("database unavailable")).toBeTruthy();
 
@@ -717,7 +718,7 @@ describe("Network settings", () => {
 
   test("live-updates the log and the lists from the hub", async () => {
     mockServices();
-    render(<NetworkSettings />);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText("registry.npmjs.org");
 
     emit("NetworkLogAppended", {

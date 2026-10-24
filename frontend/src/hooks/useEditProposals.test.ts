@@ -4,6 +4,7 @@ import { useEditProposals } from "./useEditProposals";
 import * as signalRHook from "./useSignalR";
 import * as authServices from "../services/auth";
 import type { WorkItemEditProposal } from "../types";
+import { WorkItemHubProvider } from "./useWorkItemHub";
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
 type Handler = (msg: { payload: unknown }) => void;
@@ -100,7 +101,9 @@ describe("useEditProposals for a work item", () => {
       .spyOn(authServices.workItemService, "listEditProposals")
       .mockImplementation(async () => onServer);
 
-    const { result } = renderHook(() => useEditProposals({ workItemId: "wi-1" }));
+    const { result } = renderHook(() => useEditProposals({ workItemId: "wi-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
 
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1"]));
     expect(list).toHaveBeenCalledWith("wi-1");
@@ -124,7 +127,9 @@ describe("useEditProposals for a work item", () => {
       return read.promise;
     });
 
-    const { result } = renderHook(() => useEditProposals({ workItemId: "wi-1" }));
+    const { result } = renderHook(() => useEditProposals({ workItemId: "wi-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(reads.length).toBeGreaterThan(0));
     const olderReads = reads.length;
     emit(hub, "WorkItemEditProposalsChanged", { workItemId: "wi-1" });
@@ -152,7 +157,7 @@ describe("useEditProposals for a work item", () => {
 
     const { result, rerender } = renderHook(
       ({ workItemId }: { workItemId: string }) => useEditProposals({ workItemId }),
-      { initialProps: { workItemId: "wi-1" } },
+      { wrapper: WorkItemHubProvider, initialProps: { workItemId: "wi-1" } },
     );
     rerender({ workItemId: "wi-2" });
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-2"]));
@@ -171,7 +176,9 @@ describe("useEditProposals for a work item", () => {
       async () => onServer,
     );
 
-    const { result, rerender } = renderHook(() => useEditProposals({ workItemId: "wi-1" }));
+    const { result, rerender } = renderHook(() => useEditProposals({ workItemId: "wi-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1"]));
 
     hub.state = "reconnecting";
@@ -197,8 +204,9 @@ describe("useEditProposals for a chat", () => {
       .spyOn(authServices.workItemService, "listEditProposalsFor")
       .mockResolvedValue([proposal("p-1", { createdByChatSessionId: "chat-1" })]);
 
-    const { result, rerender, unmount } = renderHook(() =>
-      useEditProposals({ chatSessionId: "chat-1" }),
+    const { result, rerender, unmount } = renderHook(
+      () => useEditProposals({ chatSessionId: "chat-1" }),
+      { wrapper: WorkItemHubProvider },
     );
     expect(list).not.toHaveBeenCalled();
 
@@ -243,7 +251,9 @@ describe("useEditProposals for a chat", () => {
       .spyOn(authServices.workItemService, "listEditProposalsFor")
       .mockImplementation(async () => onServer);
 
-    const { result } = renderHook(() => useEditProposals({ chatSessionId: "chat-1" }));
+    const { result } = renderHook(() => useEditProposals({ chatSessionId: "chat-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1"]));
     const readsBefore = list.mock.calls.length;
 
@@ -269,7 +279,9 @@ describe("useEditProposals for a requesting work item", () => {
       .spyOn(authServices.workItemService, "listEditProposals")
       .mockResolvedValue([]);
 
-    const { result } = renderHook(() => useEditProposals({ requestedByWorkItemId: "wi-1" }));
+    const { result } = renderHook(() => useEditProposals({ requestedByWorkItemId: "wi-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
 
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1"]));
     expect(list).toHaveBeenCalledWith("wi-1");

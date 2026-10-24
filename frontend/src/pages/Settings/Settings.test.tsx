@@ -5,6 +5,7 @@ import Settings from "./index";
 import * as useAuthHook from "../../hooks/useAuth";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as services from "../../services/auth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 function renderAt(path: string) {
   vi.spyOn(useAuthHook, "useAuth").mockReturnValue({
@@ -29,6 +30,7 @@ function renderAt(path: string) {
         <Route path="/settings/:section" element={<Settings />} />
       </Routes>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

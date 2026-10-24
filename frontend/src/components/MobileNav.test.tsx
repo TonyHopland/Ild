@@ -5,6 +5,7 @@ import { AuthContext } from "../hooks/useAuth";
 import * as signalRHook from "../hooks/useSignalR";
 import MobileTabBar from "./MobileNav";
 import { fakeHub, reply, stubFetch } from "../test-support";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -44,6 +45,7 @@ function renderTabBar(path = "/taskboard") {
         <MobileTabBar />
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
   return { logout };
 }

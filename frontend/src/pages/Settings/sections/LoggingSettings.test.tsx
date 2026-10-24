@@ -4,6 +4,7 @@ import LoggingSettings from "./LoggingSettings";
 import * as signalRHook from "../../../hooks/useSignalR";
 import * as authServices from "../../../services/auth";
 import type { LogEntry } from "../../../types";
+import { WorkItemHubProvider } from "../../../hooks/useWorkItemHub";
 
 type Handler = (message: { type: string; payload: unknown; timestamp: string }) => void;
 const handlers = new Map<string, Set<Handler>>();
@@ -92,7 +93,7 @@ afterEach(() => {
 describe("Logging settings level", () => {
   test("shows the level the backend reports it is running at", async () => {
     mockLevel("Warning", "Warning");
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(levelButton("Warning").getAttribute("aria-pressed")).toBe("true"));
     const group = within(screen.getByRole("group", { name: "Log level override" }));
@@ -110,7 +111,7 @@ describe("Logging settings level", () => {
     // Serilog has six levels and the page shows four. A backend at Verbose is
     // at a real level, so the control has to say so rather than press nothing.
     mockLevel("Verbose", "Verbose");
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(levelButton("Debug").getAttribute("aria-pressed")).toBe("true"));
     expect(screen.getByText(/following/i)).toBeTruthy();
@@ -119,7 +120,7 @@ describe("Logging settings level", () => {
 
   test("Fatal presses Error", async () => {
     mockLevel("Fatal", "Fatal");
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(levelButton("Error").getAttribute("aria-pressed")).toBe("true"));
   });
@@ -132,7 +133,7 @@ describe("Logging settings level", () => {
       .spyOn(authServices.loggingService, "setLevel")
       .mockResolvedValue(status("Verbose", "Verbose"));
 
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     expect(await screen.findByText(/overriding/i)).toBeTruthy();
     expect(screen.getAllByText("Verbose").length).toBeGreaterThan(0);
@@ -143,7 +144,7 @@ describe("Logging settings level", () => {
 
   test("presses nothing for a level it cannot place at all", async () => {
     mockLevel("Chatty", "Information");
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     // Waiting for the override text proves the read landed, so pressing nothing
     // is a decision about this level rather than a control still loading — and
@@ -156,7 +157,7 @@ describe("Logging settings level", () => {
     const getLevel = vi
       .spyOn(authServices.loggingService, "getLevel")
       .mockRejectedValue(new Error("down"));
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(getLevel).toHaveBeenCalled());
     await act(async () => {});
@@ -166,7 +167,7 @@ describe("Logging settings level", () => {
 
   test("reports a level that differs from the startup one as an override", async () => {
     mockLevel("Debug", "Information");
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(levelButton("Debug").getAttribute("aria-pressed")).toBe("true"));
     expect(screen.getByText(/overriding/i)).toBeTruthy();
@@ -179,7 +180,7 @@ describe("Logging settings level", () => {
       .spyOn(authServices.loggingService, "setLevel")
       .mockResolvedValue(status("Information", "Information"));
 
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     fireEvent.click(await screen.findByRole("button", { name: "Reset" }));
 
     await waitFor(() => expect(setLevel).toHaveBeenCalledWith("Information"));
@@ -197,7 +198,7 @@ describe("Logging settings level", () => {
       status("Debug", "Information"),
     );
 
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     fireEvent.click(levelButton("Debug"));
     resolveRead(status("Information", "Information"));
 
@@ -210,7 +211,7 @@ describe("Logging settings level", () => {
       .spyOn(authServices.loggingService, "setLevel")
       .mockResolvedValue(status("Debug", "Information"));
 
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     fireEvent.click(levelButton("Debug"));
 
     await waitFor(() => expect(setLevel).toHaveBeenCalledWith("Debug"));
@@ -221,7 +222,7 @@ describe("Logging settings level", () => {
     mockLevel("Warning", "Warning");
     vi.spyOn(authServices.loggingService, "setLevel").mockRejectedValue(new Error("network error"));
 
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await waitFor(() => expect(levelButton("Warning").getAttribute("aria-pressed")).toBe("true"));
     fireEvent.click(levelButton("Debug"));
 
@@ -234,7 +235,7 @@ describe("Logging settings level", () => {
 describe("Logging settings log view", () => {
   test("shows what the backend has written", async () => {
     const getEntries = mockEntries([failure, warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     expect(await screen.findByText(/provider returned 529/)).toBeTruthy();
     expect(screen.getByText(/GitHub rate limit/)).toBeTruthy();
@@ -245,18 +246,18 @@ describe("Logging settings log view", () => {
   });
 
   test("says so when the backend has written nothing, and when it cannot be read", async () => {
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     expect(await screen.findByText(/nothing written yet/i)).toBeTruthy();
 
     cleanup();
     vi.spyOn(authServices.loggingService, "getEntries").mockRejectedValue(new Error("denied"));
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     expect(await screen.findByText(/failed to read the log/i)).toBeTruthy();
   });
 
   test("a line arriving over the hub lands at the top of the log", async () => {
     mockEntries([warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/GitHub rate limit/);
 
     emit("LogEntryAppended", entry({ id: 9, message: "Reclaimed 3 worktrees" }));
@@ -270,7 +271,7 @@ describe("Logging settings log view", () => {
 
   test("the minimum level is a query the backend answers, not a filter on what is held", async () => {
     const getEntries = mockEntries([failure, warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/GitHub rate limit/);
 
     fireEvent.click(
@@ -288,7 +289,7 @@ describe("Logging settings log view", () => {
 
   test("asking for Debug asks the backend for Verbose too", async () => {
     const getEntries = mockEntries([]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/nothing written yet/i);
 
     fireEvent.click(
@@ -304,7 +305,7 @@ describe("Logging settings log view", () => {
 
   test("the text filter searches the whole log, not the lines already on screen", async () => {
     const getEntries = mockEntries([failure, warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/GitHub rate limit/);
 
     fireEvent.change(screen.getByLabelText("Filter the log"), { target: { value: "rate limit" } });
@@ -318,7 +319,7 @@ describe("Logging settings log view", () => {
 
   test("resuming Follow live re-reads what was written while it was off", async () => {
     const getEntries = mockEntries([warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/GitHub rate limit/);
     expect(getEntries).toHaveBeenCalledTimes(1);
 
@@ -335,7 +336,7 @@ describe("Logging settings log view", () => {
 
   test("filtering while Follow live is off still asks the backend", async () => {
     const getEntries = mockEntries([failure, warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/GitHub rate limit/);
     fireEvent.click(screen.getByLabelText("Follow the log live"));
 
@@ -354,7 +355,7 @@ describe("Logging settings log view", () => {
 
   test("searching while Follow live is off reaches past the lines on screen", async () => {
     const getEntries = mockEntries([warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/GitHub rate limit/);
     fireEvent.click(screen.getByLabelText("Follow the log live"));
 
@@ -365,7 +366,7 @@ describe("Logging settings log view", () => {
   });
 
   test("stops appending live lines when Follow live is switched off", async () => {
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/nothing written yet/i);
 
     fireEvent.click(screen.getByLabelText("Follow the log live"));
@@ -376,7 +377,7 @@ describe("Logging settings log view", () => {
 
   test("a level Serilog has and the page does not still reads as a line", async () => {
     mockEntries([entry({ id: 4, level: "Fatal", message: "The host is going down" })]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     const line = (await screen.findByText(/The host is going down/)).closest("li")!;
     expect(within(line).getByText("ERR")).toBeTruthy();
@@ -384,7 +385,7 @@ describe("Logging settings log view", () => {
 
   test("filters by minimum level", async () => {
     mockEntries([failure, warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/GitHub rate limit/);
 
     fireEvent.click(
@@ -399,7 +400,7 @@ describe("Logging settings log view", () => {
 
   test("filters by text and reports when nothing matches", async () => {
     mockEntries([failure, warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
     await screen.findByText(/GitHub rate limit/);
 
     fireEvent.change(screen.getByLabelText("Filter the log"), { target: { value: "PrStatus" } });
@@ -412,7 +413,7 @@ describe("Logging settings log view", () => {
 
   test("expands a line that carries a stack trace", async () => {
     mockEntries([failure]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     const line = (await screen.findByText(/provider returned 529/)).closest("button")!;
     expect(screen.queryByText(/HttpRequestException/)).toBeNull();
@@ -423,7 +424,7 @@ describe("Logging settings log view", () => {
 
   test("opens the details of a line that carries no stack trace", async () => {
     mockEntries([warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     const line = (await screen.findByText(/GitHub rate limit/)).closest("button")!;
     expect(screen.queryByText("Source")).toBeNull();
@@ -436,7 +437,7 @@ describe("Logging settings log view", () => {
 
   test("a second click closes the details again", async () => {
     mockEntries([warning]);
-    render(<LoggingSettings />);
+    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
     const line = (await screen.findByText(/GitHub rate limit/)).closest("button")!;
     fireEvent.click(line);

@@ -60,6 +60,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn(
 
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 const CHAT = "s1";
 
@@ -332,6 +333,7 @@ describe("ChatBubble turn state machine", () => {
           <ChatBubble />
         </ChatInboxProvider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
     fireEvent.click(await screen.findByLabelText("Open chat"));
     await openChatFromList("Past chat");

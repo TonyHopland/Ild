@@ -55,6 +55,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
 import { openChatFromList, openChatList, showChatActions, startNewChat } from "../test-support";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 // A stand-in for the server: what GET /chat/history answers right now. A rename
 // that succeeds changes it there, as PUT /chat/{id}/name does.
@@ -185,7 +186,7 @@ describe("chat titles", () => {
   test("a title saved on the server replaces the open chat's header and the list row without a reload", async () => {
     server = [summary("a", "Could this be solved better by")];
     sessions.a = chat("a", "Could this be solved better by");
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await resume("Could this be solved better by");
 
@@ -205,7 +206,7 @@ describe("chat titles", () => {
 
   test("a row is renamed inline: Enter saves, Cancel and Escape discard, and an empty name cannot be saved", async () => {
     server = [summary("a", "Alpha"), summary("b", "Beta")];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await openChatList();
     await screen.findByText("Alpha");
@@ -244,7 +245,7 @@ describe("chat titles", () => {
   test("a failed rename shows an error and keeps the old title", async () => {
     server = [summary("a", "Alpha")];
     chatService.rename.mockRejectedValue(new Error("Name is taken"));
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await openChatList();
     await screen.findByText("Alpha");
@@ -264,7 +265,7 @@ describe("chat titles", () => {
     server = [summary("a", "Alpha"), summary("b", "Beta")];
     sessions.a = chat("a", "Alpha");
     sessions.b = chat("b", "Beta");
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await resume("Alpha");
     await back();

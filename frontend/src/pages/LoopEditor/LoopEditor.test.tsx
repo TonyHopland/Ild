@@ -5,6 +5,7 @@ import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 import LoopEditor from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -49,6 +50,7 @@ function renderPage(mockFetchFn: ReturnType<typeof mockFetch>, initialPath = "/l
         <LocationProbe />
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 
@@ -398,6 +400,7 @@ describe("Loop Editor template clone", () => {
           <LoopEditor />
         </AuthContext.Provider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
@@ -485,6 +488,7 @@ describe("Loop Editor version history", () => {
           <LoopEditor />
         </AuthContext.Provider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
@@ -561,6 +565,7 @@ describe("Loop Editor version history", () => {
           <LoopEditor />
         </AuthContext.Provider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
@@ -645,6 +650,7 @@ describe("Loop Editor read-only version inspection", () => {
           <LoopEditor />
         </AuthContext.Provider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
@@ -730,6 +736,7 @@ describe("Loop Editor read-only version inspection", () => {
           <LoopEditor />
         </AuthContext.Provider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());

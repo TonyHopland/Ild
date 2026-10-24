@@ -28,6 +28,7 @@ vi.mock("../../hooks/useSignalR", () => ({
 }));
 
 import LoopEditor from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const RESERVED = [
   "on_rejected",
@@ -125,6 +126,7 @@ function renderEditor(path: string) {
         </Routes>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

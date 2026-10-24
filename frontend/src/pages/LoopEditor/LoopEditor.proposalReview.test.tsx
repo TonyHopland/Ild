@@ -23,6 +23,7 @@ import {
   type Call,
 } from "../../test-support";
 import type { LoopTemplateProposal } from "../../types";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const devLoop = {
   id: "tpl-1",
@@ -207,6 +208,7 @@ function renderEditor(path: string) {
         </Routes>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

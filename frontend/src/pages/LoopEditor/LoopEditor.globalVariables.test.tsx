@@ -35,6 +35,7 @@ vi.mock("../../services/auth", () => ({
 }));
 
 import LoopEditor from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const template = {
   id: "tpl-1",
@@ -84,6 +85,7 @@ async function typeInAiPrompt(text: string) {
         </Routes>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 
   await waitFor(() => expect(screen.getByText("Reviewer")).toBeTruthy());

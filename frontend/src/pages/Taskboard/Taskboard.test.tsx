@@ -15,6 +15,7 @@ import { NodeType, WorkItemStatus, WorkItem, Repository, LoopTemplate } from "..
 import { stageParkedNode } from "../../test-support.parkedNode";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -46,6 +47,7 @@ function renderTaskboard(initialPath = "/taskboard") {
       </Routes>
       <LocationDisplay />
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 
@@ -663,7 +665,7 @@ describe("Taskboard reconnect", () => {
       value: "false",
     });
 
-    const { rerender } = render(taskboardTree());
+    const { rerender } = render(taskboardTree(), { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
     fireEvent.click(within(columnEl("Backlog")).getByRole("button", { name: "Load more" }));
@@ -713,7 +715,7 @@ describe("Taskboard reconnect", () => {
       value: "false",
     });
 
-    const { rerender } = render(taskboardTree());
+    const { rerender } = render(taskboardTree(), { wrapper: WorkItemHubProvider });
 
     await waitFor(() => {
       expect(screen.getByText("Test Item")).toBeTruthy();
@@ -776,7 +778,7 @@ describe("Taskboard reconnect with a work item open", () => {
     );
     const feedbackBox = () => document.querySelector(".wiv2-feedback");
 
-    const { rerender } = render(tree());
+    const { rerender } = render(tree(), { wrapper: WorkItemHubProvider });
     await waitFor(() => expect(feedbackBox()?.textContent).toContain("PR feedback"));
 
     // The phone sleeps; the hub drops, and the run moves on meanwhile.

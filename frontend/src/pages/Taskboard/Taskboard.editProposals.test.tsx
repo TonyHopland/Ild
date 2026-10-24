@@ -6,6 +6,7 @@ import { WorkItem, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { mockTaskboardServer } from "../../test-support";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -46,6 +47,7 @@ function renderTaskboard() {
         <Route path="/taskboard/:workItemId" element={<Taskboard />} />
       </Routes>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

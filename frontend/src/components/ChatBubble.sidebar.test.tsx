@@ -64,6 +64,7 @@ import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
 import { showChatActions } from "../test-support";
 import { setPreference, getPreference, seedPreferences } from "../utils/userPreferences";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -299,7 +300,7 @@ describe("chat sidebar layout", () => {
     widePanel();
     server = [summary("a", "Alpha"), summary("b", "Beta")];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
 
     // Open by default on a wide panel, beside the start form.
@@ -342,7 +343,7 @@ describe("chat sidebar layout", () => {
   test("narrow: the open list fills the panel; a row or New chat closes it and shows that chat or the start form", async () => {
     server = [summary("a", "Alpha"), summary("b", "Beta")];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
 
     // Closed by default on a narrow panel: the start form is shown, no list.
@@ -376,7 +377,7 @@ describe("chat sidebar layout", () => {
   });
 
   test("pressing and dragging the toggle does not move the panel", async () => {
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     const panel = screen.getByRole("dialog", { name: "AI chat" });
     const left = panel.style.left;
@@ -414,7 +415,7 @@ describe("chat sidebar layout", () => {
     if (wide) widePanel();
     stored();
     server = [summary("a", "Alpha")];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     expect(toggle().getAttribute("aria-expanded")).toBe(String(open));
     expect(querySidebar() !== null).toBe(open);
@@ -424,13 +425,13 @@ describe("chat sidebar layout", () => {
     widePanel();
     server = [summary("a", "Alpha")];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     fireEvent.click(toggle());
     expect(querySidebar()).toBeNull();
 
     cleanup();
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
     expect(querySidebar()).toBeNull();
@@ -440,14 +441,14 @@ describe("chat sidebar layout", () => {
     // Back to the default (narrow) panel size.
     seedPreferences();
     saveSidebarOpen(true);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     expect(querySidebar()).not.toBeNull();
     await pick("Alpha");
     expect(querySidebar()).toBeNull();
 
     cleanup();
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
@@ -456,7 +457,7 @@ describe("chat sidebar layout", () => {
     widePanel();
     server = [summary("a", "Alpha"), summary("b", "Beta")];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await pick("Alpha");
     // The open reads the chat, and its join reads it again; neither is a reload.
@@ -498,7 +499,7 @@ describe("chat sidebar list", () => {
     ];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
     sessions.b = chat("b", "Beta", [msg("b", 0, "user")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
 
     const names = ["Alpha", "Beta", "Untitled chat", "Delta"];
@@ -537,7 +538,7 @@ describe("chat sidebar list", () => {
     widePanel();
     server = [summary("a", "Alpha"), summary("b", "Beta"), summary("c", "Gamma")];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await pick("Alpha");
 
@@ -575,7 +576,7 @@ describe("chat favourites", () => {
       summary("b", "Beta"),
       summary("c", "Gamma", { isFavorite: true }),
     ];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     const names = ["Alpha", "Beta", "Gamma"];
     expect(rowOrder(names)).toEqual(["Gamma", "Alpha", "Beta"]);
@@ -648,7 +649,7 @@ describe("chat search", () => {
       summary("c", null),
       summary("d", "Release notes", { isFavorite: true }),
     ];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     const names = ["Deploy pipeline", "Bug triage", "Untitled chat", "Release notes"];
     const box = within(sidebar()).getByLabelText("Search chats");
@@ -747,7 +748,7 @@ describe("chat sidebar unread", () => {
       summary("b", "Beta", { needsYou: true }),
       summary("c", "Gamma"),
     ];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     expect(within(row("Alpha")).queryByRole("img", { name: "New messages" })).not.toBeNull();
     expect(within(row("Alpha")).queryByRole("img", { name: "Needs you" })).toBeNull();
@@ -759,7 +760,7 @@ describe("chat sidebar unread", () => {
   test("narrow: a chat hidden behind the open list is not marked read until the list closes or the panel widens", async () => {
     server = [summary("a", "Alpha")];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     fireEvent.click(toggle());
     await pick("Alpha");
@@ -787,7 +788,7 @@ describe("chat sidebar unread", () => {
     widePanel();
     server = [summary("a", "Alpha"), summary("b", "Beta")];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await pick("Alpha");
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 0));
@@ -805,7 +806,7 @@ describe("chat sidebar unread", () => {
 
   test("the toggle shows how many chats are unread only while the list is hidden", async () => {
     server = [summary("a", "Alpha"), summary("b", "Beta")];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     expect(within(header()).queryByText(/^\d+$/)).toBeNull();
 

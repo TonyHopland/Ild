@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { Link } from "react-router";
 import { AiProviderTagField } from "../../components/AiProviderTagField";
 import { useSignalR } from "../../hooks/useSignalR";
+import { useSharedWorkItemHub } from "../../hooks/useWorkItemHub";
 import { aiProviderService, chatScheduleService, repositoryService } from "../../services/auth";
 import type {
   AiProvider,
@@ -575,7 +576,7 @@ export default function Schedules({ onShowList }: { onShowList?: () => void } = 
   }, [chatHub.connectionState, chatHub.invoke, reload]);
 
   // The global pause is part of the list, so pausing or resuming re-reads it.
-  const workItemHub = useSignalR();
+  const workItemHub = useSharedWorkItemHub();
   useEffect(() => {
     const onSchedulerStateChanged = () => void reload();
     workItemHub.on("SchedulerStateChanged", onSchedulerStateChanged);

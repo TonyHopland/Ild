@@ -39,6 +39,7 @@ vi.mock("../../services/auth", () => ({
 }));
 
 import Schedules from "./Schedules";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const schedule = (enabled: boolean): ChatSchedule => ({
   id: "s1",
@@ -74,6 +75,7 @@ describe("The schedules list's reads", () => {
       <MemoryRouter>
         <Schedules />
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
     await waitFor(() => expect(reads).toHaveLength(1));
     act(() => reads[0].resolve(page(true)));

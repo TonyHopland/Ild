@@ -29,6 +29,7 @@ vi.mock("../../services/auth", () => ({
 }));
 
 import Schedules from "./Schedules";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const schedule: ChatSchedule = {
   id: "s1",
@@ -55,6 +56,7 @@ async function renderList() {
     <MemoryRouter>
       <Schedules />
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
   return (await screen.findByText("Weekly retro")).closest("article") as HTMLElement;
 }

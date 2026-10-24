@@ -14,6 +14,7 @@ vi.mock("../../hooks/useSignalR", async () =>
 
 import LoopEditor from "./index";
 import { makeLoopTemplateProposal, reply, signalRHub, stubFetch } from "../../test-support";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const node = (id: string, type: NodeType, label: string) => ({ id, type, label, config: {} });
 const edge = (id: string, sourceNodeId: string, targetNodeId: string) => ({
@@ -188,6 +189,7 @@ async function openReview() {
         </Routes>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
   await waitFor(() => expect(onCanvas("Run Linter")).toBe(true));
   await waitFor(() => expect(discardButton()).not.toBeNull());

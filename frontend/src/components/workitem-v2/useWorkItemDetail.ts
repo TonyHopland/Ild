@@ -19,6 +19,7 @@ import {
   aiProviderService,
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
+import { useSharedWorkItemHub } from "../../hooks/useWorkItemHub";
 import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
 import { useRunActionLock } from "./useRunActionLock";
 import {
@@ -567,11 +568,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // the preview through the agent API. Human start/stop from this dialog already
   // updates `preview` from the HTTP response; this keeps the open Preview tab in
   // sync when the change originates anywhere else.
-  const {
-    on: wiOn,
-    off: wiOff,
-    connectionState: wiConnectionState,
-  } = useSignalR("/hubs/work-item");
+  const { on: wiOn, off: wiOff, connectionState: wiConnectionState } = useSharedWorkItemHub();
 
   useEffect(() => {
     if (!workItem?.id || wiConnectionState !== "connected") return;

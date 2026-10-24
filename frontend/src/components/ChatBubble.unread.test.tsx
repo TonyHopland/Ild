@@ -61,6 +61,7 @@ import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
 import { setChatEnabled } from "../hooks/useChatEnabled";
 import { openChatFromList, openChatList, showChatActions, startNewChat } from "../test-support";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -244,7 +245,7 @@ describe("unread chat indicator", () => {
   test("after a reload the closed button and each unread row carry the dot, read rows none", async () => {
     server = [summary("a", "Alpha", true), summary("b", "Beta", false)];
 
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(fabDot()).not.toBeNull());
     // The dot adds to the button without renaming it.
@@ -262,7 +263,7 @@ describe("unread chat indicator", () => {
   test("send, close: the reply lights the button live, and reopening reads it and clears the dot", async () => {
     server = [summary("a", "Alpha", false)];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await resume("Alpha");
 
@@ -292,7 +293,7 @@ describe("unread chat indicator", () => {
   test("a reply seen in the open chat is marked read, and a history read taken before that settled cannot bring the dot back", async () => {
     server = [summary("a", "Alpha", false)];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await resume("Alpha");
     await settle();
@@ -328,7 +329,7 @@ describe("unread chat indicator", () => {
     server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
     sessions.b = chat("b", "Beta", [msg("b", 0, "user"), msg("b", 1, "assistant")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await resume("Alpha");
     await send("question for A");
@@ -366,7 +367,7 @@ describe("unread chat indicator", () => {
       msg("a", 3, "assistant"),
     ]);
     sessions.b = chat("b", "Beta", [msg("b", 4, "user"), msg("b", 5, "assistant")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await openChatList();
     await screen.findByText("Beta");
@@ -396,7 +397,7 @@ describe("unread chat indicator", () => {
     sessions.b = chat("b", "Beta", [msg("b", 0, "user"), msg("b", 1, "assistant")]);
     const markingA = deferred<void>();
     chatService.markRead.mockImplementationOnce(() => markingA.promise);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
 
     await resume("Alpha");
@@ -430,7 +431,7 @@ describe("unread chat indicator", () => {
   test("a reply that lands while chat is hidden in settings is read only once the chat is shown again", async () => {
     server = [summary("a", "Alpha", false)];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await resume("Alpha");
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 0));
@@ -448,7 +449,7 @@ describe("unread chat indicator", () => {
     server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
     sessions.b = chat("b", "Beta", [msg("b", 1, "user")]);
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await resume("Alpha");
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 0));
@@ -472,7 +473,7 @@ describe("unread chat indicator", () => {
 
   test("while the list is hidden, screen readers hear the unread count as the list button's description", async () => {
     server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     const listButton = () => screen.getByRole("button", { name: "Chat list" });
     await waitFor(() => expect(listButton()).toBeTruthy());
@@ -491,7 +492,7 @@ describe("unread chat indicator", () => {
 
   test("every (re)connect rejoins the inbox and re-reads history, recovering a hint lost while away", async () => {
     server = [summary("a", "Alpha", false)];
-    const view = render(bubble());
+    const view = render(bubble(), { wrapper: WorkItemHubProvider });
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("SubscribeToChatInbox"));
     await settle();
     expect(fabDot()).toBeNull();
@@ -513,7 +514,7 @@ describe("unread chat indicator", () => {
 
   test("a history read in flight when a chat's delete settles never brings the chat or its dot back", async () => {
     server = [summary("a", "Alpha", true), summary("b", "Beta", false)];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await openChatList();
     await screen.findByText("Alpha");
@@ -538,7 +539,7 @@ describe("unread chat indicator", () => {
 
   test("a history read in flight when delete all settles never brings any chat or dot back", async () => {
     server = [summary("a", "Alpha", true), summary("b", "Beta", true)];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await openChatList();
     await screen.findByText("Alpha");
@@ -565,7 +566,7 @@ describe("unread chat indicator", () => {
 
   test("a hint about another chat in flight when a delete settles still lights that chat", async () => {
     server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
-    render(bubble());
+    render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
     await openChatList();
     await screen.findByText("Alpha");

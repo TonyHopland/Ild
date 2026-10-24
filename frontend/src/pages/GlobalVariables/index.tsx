@@ -6,7 +6,8 @@ import {
   globalVariableService,
   settingsService,
 } from "../../services/auth";
-import { useSignalR } from "../../hooks/useSignalR";
+import { useJoinThenRefresh } from "../../hooks/useJoinThenRefresh";
+import { useSharedWorkItemHub } from "../../hooks/useWorkItemHub";
 import GlobalVariableProposalCard from "../../components/GlobalVariableProposalCard";
 import { ROUTES } from "../../utils/constants";
 import VariableDialog from "./VariableDialog";
@@ -84,23 +85,9 @@ export default function GlobalVariables() {
   // A suggestion made or decided anywhere, or a variable written that made some
   // stale, is a hint to read both lists again. Read once more after every
   // (re)connect, since a hint sent while away is lost.
-  const { connectionState, on, off, invoke } = useSignalR("/hubs/work-item");
-  useEffect(() => {
-    if (connectionState !== "connected") return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await invoke("SubscribeToWorkItems");
-      } catch (err) {
-        console.error(err);
-        return;
-      }
-      if (!cancelled) void load();
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [connectionState, invoke, load]);
+  const hub = useSharedWorkItemHub();
+  const { on, off } = hub;
+  useJoinThenRefresh(hub, null, load);
 
   useEffect(() => {
     const onChanged = () => void load();

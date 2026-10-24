@@ -13,6 +13,7 @@ import {
 import * as signalRHook from "../../hooks/useSignalR";
 import { proposalCardAround } from "../../test-support";
 import * as authServices from "../../services/auth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -176,7 +177,7 @@ function dialog(workItem: WorkItem, onSave = vi.fn()) {
 
 async function renderDialog(workItem: WorkItem) {
   const onSave = vi.fn();
-  const view = render(dialog(workItem, onSave));
+  const view = render(dialog(workItem, onSave), { wrapper: WorkItemHubProvider });
   await act(async () => {
     await Promise.resolve();
   });

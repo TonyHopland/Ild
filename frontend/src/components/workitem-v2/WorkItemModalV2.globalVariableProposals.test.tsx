@@ -19,6 +19,7 @@ import {
   reply,
   stubFetch,
 } from "../../test-support";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -214,7 +215,7 @@ describe("global variable suggestions in the Action tab", () => {
         : [],
     );
 
-    render(dialog(makeWorkItem({ latestLoopRunId: "run-1" })));
+    render(dialog(makeWorkItem({ latestLoopRunId: "run-1" })), { wrapper: WorkItemHubProvider });
 
     await waitFor(() => expect(action().textContent).toContain("Loose suggestion"));
     await waitFor(() => expect(action().textContent).toContain("Coded it."));
@@ -237,7 +238,7 @@ describe("global variable suggestions in the Action tab", () => {
     const hint = mockServices();
     let served: unknown[] = [];
     stubSuggestions(() => served);
-    render(dialog(makeWorkItem()));
+    render(dialog(makeWorkItem()), { wrapper: WorkItemHubProvider });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -259,7 +260,7 @@ describe("global variable suggestions in the Action tab", () => {
           })
         : [suggestion("Second item's suggestion", null, "2026-09-26T10:00:00Z", "wi-2")],
     );
-    const view = render(dialog(makeWorkItem()));
+    const view = render(dialog(makeWorkItem()), { wrapper: WorkItemHubProvider });
     await waitFor(() => expect(asked).toContain("wi-1"));
 
     view.rerender(dialog(makeWorkItem({ id: "wi-2" })));

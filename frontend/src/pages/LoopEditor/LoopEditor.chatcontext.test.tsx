@@ -44,6 +44,7 @@ vi.mock("../../services/auth", () => ({
 }));
 
 import LoopEditor from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const sampleTemplate = {
   id: "tpl-1",
@@ -109,6 +110,7 @@ function renderEditorWithOpenTemplate() {
         </Routes>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

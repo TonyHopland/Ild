@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSignalR } from "../../../hooks/useSignalR";
+import { useSharedWorkItemHub } from "../../../hooks/useWorkItemHub";
 import { loggingService } from "../../../services/auth";
 import type { LogEntry } from "../../../types";
 import { Segmented, SettingRow, Switch } from "../controls";
@@ -78,7 +78,7 @@ function toLine(entry: LogEntry): LogLine {
 
 /** The backend's log level, and a view of what it has been writing. */
 export default function LoggingSettings() {
-  const { on, off } = useSignalR();
+  const { on, off } = useSharedWorkItemHub();
   // Read rather than assumed, and kept as read: the level lives in a switch the
   // API can report, and the switch has levels this page has no button for.
   const [level, setLevel] = useState<string | null>(null);

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import IldSettings from "./IldSettings";
 import * as authServices from "../../../services/auth";
+import { WorkItemHubProvider } from "../../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -18,7 +19,7 @@ describe("Delete inactive chats", () => {
       .spyOn(authServices.settingsService, "put")
       .mockImplementation(async (key: string, value: string) => ({ key, value }));
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const toggle = (await screen.findByRole("checkbox", {
       name: /delete inactive chats/i,

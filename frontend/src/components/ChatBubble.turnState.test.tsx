@@ -61,6 +61,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn(
 
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 function chatSession(partial: Partial<ChatSession> = {}): ChatSession {
   return {
@@ -107,6 +108,7 @@ function openList(...chats: ChatSessionSummary[]) {
         <ChatBubble />
       </ChatInboxProvider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

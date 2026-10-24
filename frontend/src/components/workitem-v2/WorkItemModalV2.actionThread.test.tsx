@@ -19,6 +19,7 @@ import {
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { stageParkedNode, parkedRun } from "../../test-support.parkedNode";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -266,7 +267,7 @@ let rerenderDialog: (workItem: WorkItem) => Promise<void> = async () => {};
 
 async function openActionTab(workItem: WorkItem) {
   await act(async () => {
-    const view = render(dialog(workItem));
+    const view = render(dialog(workItem), { wrapper: WorkItemHubProvider });
     rerenderDialog = async (next: WorkItem) => {
       await act(async () => {
         view.rerender(dialog(next));
@@ -1094,7 +1095,7 @@ describe("reading the shown run's detail", () => {
 
   async function openHostedActionTab(workItem: WorkItem) {
     await act(async () => {
-      render(<Hosted initial={workItem} />);
+      render(<Hosted initial={workItem} />, { wrapper: WorkItemHubProvider });
       await Promise.resolve();
     });
     await act(async () => {

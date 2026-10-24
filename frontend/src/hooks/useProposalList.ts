@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useJoinThenRefresh } from "./useJoinThenRefresh";
 import { useLatest } from "./useLatest";
 import { useSignalR, type SignalRConnection } from "./useSignalR";
+import { useSharedWorkItemHub } from "./useWorkItemHub";
 import type { SignalREventName, SignalREventPayloads, TypedSignalRMessage } from "../types/signalr";
 
 /**
@@ -75,21 +76,21 @@ interface Target {
 /**
  * The proposals of one kind for one target, kept current by snapshot reads: on
  * every (re)connect once the hub group is joined, on a hint for this target, and
- * on `refresh`. Only the latest read for the current target is shown. `hub` is a
- * connection to the hub the target is hinted on that the caller already holds;
- * without it the hook opens its own.
+ * on `refresh`. Only the latest read for the current target is shown. A board
+ * hint is heard on the app's shared work-item hub; a chat hint on a chat hub
+ * connection of the list's own.
  */
 export function useProposalList<M extends string, T>(
   kind: ProposalListKind<M, T>,
   mode: M,
   id: string,
-  hub?: SignalRConnection,
 ) {
   const targetKey = `${kind.key}:${mode}:${id}`;
   const kindRef = useLatest(kind);
   const { chatSessionId } = kind.hint(mode, id);
-  const own = useSignalR(hub ? null : chatSessionId !== null ? "/hubs/chat" : "/hubs/work-item");
-  const connection = hub ?? own;
+  const shared = useSharedWorkItemHub();
+  const chat = useSignalR(chatSessionId !== null ? "/hubs/chat" : null);
+  const connection = chatSessionId !== null ? chat : shared;
   const { on, off } = connection;
 
   const [view, setView] = useState<ProposalsView<T> | null>(null);

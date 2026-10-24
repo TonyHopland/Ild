@@ -7,6 +7,7 @@ import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { mockTaskboardServer } from "../../test-support";
 import { stageParkedNode } from "../../test-support.parkedNode";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -99,6 +100,7 @@ function renderBoard(openItemId: string) {
         <Route path="/taskboard/:workItemId" element={<Taskboard />} />
       </Routes>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 
@@ -312,7 +314,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
     );
     const feedbackBox = () => dialog().querySelector<HTMLElement>(".wiv2-feedback");
 
-    const { rerender } = render(tree());
+    const { rerender } = render(tree(), { wrapper: WorkItemHubProvider });
     await dialogSettled("Item A");
     const feedback = await waitForNode(feedbackBox);
 

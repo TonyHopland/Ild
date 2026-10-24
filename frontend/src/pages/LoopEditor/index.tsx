@@ -24,6 +24,7 @@ import ConfirmModal from "../../components/ConfirmModal";
 import ErrorBanner from "../../components/ErrorBanner";
 import { loopTemplateService, aiProviderService, globalVariableService } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
+import { useSharedWorkItemHub } from "../../hooks/useWorkItemHub";
 import { usePendingLoopTemplateProposalCounts } from "../../hooks/usePendingLoopTemplateProposalCounts";
 import { setOpenLoopProvider } from "../../utils/openLoopDocument";
 import { getCurrentChatSessionId, subscribeChatSessionId } from "../../services/chatSessionStore";
@@ -316,10 +317,8 @@ export default function LoopEditor() {
     /** The proposal under review when Save was clicked; the server decides whether it applies. */
     fromProposalId: string | null;
   } | null>(null);
-  // The page's one work-item hub connection: the proposal counts, the open
-  // template's proposal list and the review all listen on it.
-  const board = useSignalR("/hubs/work-item");
-  const pendingProposalCounts = usePendingLoopTemplateProposalCounts(board);
+  const board = useSharedWorkItemHub();
+  const pendingProposalCounts = usePendingLoopTemplateProposalCounts();
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
@@ -1743,7 +1742,6 @@ export default function LoopEditor() {
             templates={templates}
             selectedTemplateId={selectedTemplate?.id ?? null}
             pendingProposalCounts={pendingProposalCounts}
-            board={board}
             reviewedProposalId={shownReview?.proposal.id ?? null}
             onListedProposalDecided={(templateId) => void handleListedProposalDecided(templateId)}
             cloningTemplateId={cloningTemplateId}

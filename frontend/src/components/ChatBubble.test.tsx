@@ -72,6 +72,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
 import { setPreference, getPreference, PreferenceKeys } from "../utils/userPreferences";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 // The bubble reads the open work item from the route (useMatch), so every render
 // must sit inside a Router. `initialPath` lets a test simulate having a work item
@@ -83,6 +84,7 @@ function renderBubble(initialPath = "/") {
         <ChatBubble />
       </ChatInboxProvider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

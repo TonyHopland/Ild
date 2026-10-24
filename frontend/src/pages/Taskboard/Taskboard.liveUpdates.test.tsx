@@ -98,6 +98,7 @@ function renderTaskboard() {
         <Route path="/taskboard/:workItemId" element={<Taskboard />} />
       </Routes>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 
