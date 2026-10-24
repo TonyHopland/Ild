@@ -656,24 +656,16 @@ export default function WorkItemModalV2({
                     Move to Work queue
                   </button>
                 )}
-                {repositoryHold && (
+                {(repositoryHold || pausedStart) && (
                   <button
                     type="button"
                     className="btn btn-primary"
                     onClick={() => void startAnyway()}
                     disabled={moving || detail.busy}
                   >
-                    Start anyway (ignore repository limit)
-                  </button>
-                )}
-                {pausedStart && (
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => void startAnyway()}
-                    disabled={moving || detail.busy}
-                  >
-                    Start now (scheduler paused)
+                    {repositoryHold
+                      ? "Start anyway (ignore repository limit)"
+                      : "Start now (scheduler paused)"}
                   </button>
                 )}
               </div>
