@@ -10,7 +10,11 @@
           },
           {
             "cwd": "frontend",
-            "command": "[ -d node_modules ] || vp install"
+            "command": "vp install"
+          },
+          {
+            "cwd": ".",
+            "command": "dotnet restore ILD.sln"
           }
         ],
         "services": [
