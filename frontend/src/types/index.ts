@@ -521,6 +521,11 @@ export type LoopTemplateExportNode = LoopNode;
 
 export type LoopTemplateExportEdge = LoopNodeEdge;
 
+export interface ExportedGlobalVariable {
+  name: string;
+  value: string;
+}
+
 export interface LoopTemplateExport {
   $schema: "ild-loop-template/v2";
   name: string;
@@ -528,6 +533,8 @@ export interface LoopTemplateExport {
   recoveryPolicy: RecoveryPolicy;
   nodes: LoopTemplateExportNode[];
   edges: LoopTemplateExportEdge[];
+  /** Present only when the exporter chose to ship the globals the loop uses. */
+  globalVariables?: ExportedGlobalVariable[];
 }
 
 export enum LoopRunStatus {

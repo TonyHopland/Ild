@@ -40,6 +40,8 @@ import {
   parseImportFile,
   exportNodesToLoopNodes,
   exportEdgesToLoopNodeEdges,
+  usedGlobalVariableNames,
+  pickGlobalVariables,
 } from "../../utils/loopTemplateExport";
 import {
   checkEdgeConstraints,
@@ -79,6 +81,8 @@ import {
   type AiToolDefinition,
   type AiProvider,
   type ConditionCase,
+  type ExportedGlobalVariable,
+  type GlobalVariable,
   type LoopNode,
   type LoopNodeEdge,
   type LoopTemplate,
@@ -94,6 +98,8 @@ import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
 import ProposalReviewBanner from "./components/ProposalReviewBanner";
 import SaveDiffModal from "./components/SaveDiffModal";
+import ExportGlobalVariablesModal from "./components/ExportGlobalVariablesModal";
+import GlobalVariableConflictModal from "./components/GlobalVariableConflictModal";
 import { useProposalReview, type SavedFrom } from "./useProposalReview";
 import type {
   ImportFeedbackItem,
@@ -335,6 +341,16 @@ export default function LoopEditor() {
     recoveryPolicy: RecoveryPolicy;
     nodes: LoopNode[];
     edges: LoopNodeEdge[];
+    globalVariables: ExportedGlobalVariable[];
+  } | null>(null);
+  const [variableConflict, setVariableConflict] = useState<{
+    name: string;
+    current: string;
+    imported: string;
+  } | null>(null);
+  const [exportChoice, setExportChoice] = useState<{
+    data: LoopTemplateExport;
+    variables: ExportedGlobalVariable[];
   } | null>(null);
 
   // Refs for import queue — avoids window pollution and stale closures
@@ -342,6 +358,7 @@ export default function LoopEditor() {
     remainingFiles: File[];
     feedback: ImportFeedbackItem[];
   } | null>(null);
+  const variableConflictResolverRef = useRef<((answer: "overwrite" | "keep") => void) | null>(null);
   const templatesRef = useRef<LoopTemplate[]>([]);
 
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
@@ -803,10 +820,40 @@ export default function LoopEditor() {
     return serializeForExport(exportTemplate);
   }, []);
 
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
     const exportData = buildExportData();
-    downloadExport(exportData, exportData.name);
+    const used = usedGlobalVariableNames(exportData.nodes);
+    if (used.length === 0) {
+      downloadExport(exportData, exportData.name);
+      return;
+    }
+
+    let variables: ExportedGlobalVariable[];
+    try {
+      variables = pickGlobalVariables(used, await globalVariableService.getAll());
+    } catch (err) {
+      setErrorText(loadErrorMessage(err, "Failed to load global variables."));
+      return;
+    }
+
+    if (variables.length === 0) {
+      downloadExport(exportData, exportData.name);
+      return;
+    }
+    setExportChoice({ data: exportData, variables });
   }, [buildExportData]);
+
+  const finishExport = useCallback(
+    (includeVariables: boolean) => {
+      if (!exportChoice) return;
+      const { data, variables } = exportChoice;
+      setExportChoice(null);
+      downloadExport(includeVariables ? { ...data, globalVariables: variables } : data, data.name);
+    },
+    [exportChoice],
+  );
+
+  const cancelExport = useCallback(() => setExportChoice(null), []);
 
   // --- Loop editor context (ADR-0011) ---
   // While a loop is open, expose its live document to the chat bubble (which sends
@@ -927,6 +974,67 @@ export default function LoopEditor() {
   // Issue #4: discriminated union from parseImportFile
   // Issue #6: store original filename in conflict data
 
+  const askVariableConflict = useCallback(
+    (name: string, current: string, imported: string) =>
+      new Promise<"overwrite" | "keep">((resolve) => {
+        variableConflictResolverRef.current = resolve;
+        setVariableConflict({ name, current, imported });
+      }),
+    [],
+  );
+
+  const answerVariableConflict = useCallback((answer: "overwrite" | "keep") => {
+    const resolve = variableConflictResolverRef.current;
+    variableConflictResolverRef.current = null;
+    setVariableConflict(null);
+    resolve?.(answer);
+  }, []);
+
+  const importGlobalVariables = useCallback(
+    async (
+      filename: string,
+      variables: ExportedGlobalVariable[],
+    ): Promise<ImportFeedbackItem[]> => {
+      const lines: ImportFeedbackItem[] = [];
+      const report = (status: ImportFeedbackItem["status"], message: string) =>
+        lines.push({ filename, status, message });
+
+      let existing: GlobalVariable[];
+      try {
+        existing = await globalVariableService.getAll();
+      } catch (err) {
+        report("error", loadErrorMessage(err, "Failed to load global variables."));
+        return lines;
+      }
+      const byName = new Map(existing.map((g) => [g.name.toLowerCase(), g]));
+
+      for (const variable of variables) {
+        const current = byName.get(variable.name.toLowerCase());
+        try {
+          if (!current) {
+            await globalVariableService.create(variable);
+            report("success", `Created global variable "${variable.name}".`);
+          } else if (current.value !== variable.value) {
+            const answer = await askVariableConflict(variable.name, current.value, variable.value);
+            if (answer === "keep") {
+              report("skipped", `Kept the current value of global variable "${current.name}".`);
+            } else {
+              await globalVariableService.update(current.id, variable.value);
+              report("success", `Overwrote global variable "${current.name}".`);
+            }
+          }
+        } catch (err) {
+          report(
+            "error",
+            `Global variable "${variable.name}": ${loadErrorMessage(err, "Failed to write.")}`,
+          );
+        }
+      }
+      return lines;
+    },
+    [askVariableConflict],
+  );
+
   const processSingleImportFile = useCallback(
     async (
       file: File,
@@ -982,6 +1090,7 @@ export default function LoopEditor() {
             recoveryPolicy: parsed.recoveryPolicy,
             nodes: loopNodes,
             edges: loopEdges,
+            globalVariables: parsed.globalVariables ?? [],
           });
           return { feedback: accumulatedFeedback, haltedForConflict: true };
         }
@@ -1000,6 +1109,11 @@ export default function LoopEditor() {
           status: "success",
           message: `Created "${parsed.name}" successfully.`,
         });
+        if (parsed.globalVariables?.length) {
+          accumulatedFeedback.push(
+            ...(await importGlobalVariables(file.name, parsed.globalVariables)),
+          );
+        }
       } catch (err) {
         accumulatedFeedback.push({
           filename: file.name,
@@ -1010,7 +1124,7 @@ export default function LoopEditor() {
 
       return { feedback: accumulatedFeedback, haltedForConflict: false };
     },
-    [],
+    [importGlobalVariables],
   );
 
   const processImportFiles = useCallback(
@@ -1046,19 +1160,19 @@ export default function LoopEditor() {
 
   // Helper: after resolving a conflict, continue processing remaining files
   const continueImportAfterConflict = useCallback(
-    async (extraFeedback: ImportFeedbackItem) => {
+    async (extraFeedback: ImportFeedbackItem[]) => {
       setImportConflictTemplate(null);
       setImportConflictData(null);
 
       const queue = importQueueRef.current;
       if (queue && queue.remainingFiles.length > 0) {
-        queue.feedback.push(extraFeedback);
+        queue.feedback.push(...extraFeedback);
         // Refresh templates before continuing so next conflict check is accurate
         await loadTemplates();
         await processImportFiles(queue.remainingFiles);
       } else {
         // Issue 2: preserve accumulated feedback even when queue is empty
-        const allFeedback = queue ? [...queue.feedback, extraFeedback] : [extraFeedback];
+        const allFeedback = queue ? [...queue.feedback, ...extraFeedback] : extraFeedback;
         setImportFeedback(allFeedback);
         setShowImportFeedback(true);
         await loadTemplates();
@@ -1069,38 +1183,47 @@ export default function LoopEditor() {
 
   const handleImportConflictUpdate = useCallback(async () => {
     if (!importConflictTemplate || !importConflictData) return;
+    const { filename, name, globalVariables, ...document } = importConflictData;
 
+    // The template dialog goes away before any variable is asked about, so it
+    // can never be answered again while a variable diff is open.
+    setImportConflictTemplate(null);
+    setImportConflictData(null);
+
+    let lines: ImportFeedbackItem[];
     try {
-      await loopTemplateService.update(importConflictTemplate.id, {
-        name: importConflictData.name,
-        description: importConflictData.description,
-        recoveryPolicy: importConflictData.recoveryPolicy,
-        nodes: importConflictData.nodes,
-        edges: importConflictData.edges,
-      });
-
-      await continueImportAfterConflict({
-        filename: importConflictData.filename,
-        status: "success",
-        message: `Updated "${importConflictData.name}" successfully.`,
-      });
+      await loopTemplateService.update(importConflictTemplate.id, { name, ...document });
+      lines = [
+        { filename, status: "success", message: `Updated "${name}" successfully.` },
+        ...(await importGlobalVariables(filename, globalVariables)),
+      ];
     } catch (err) {
-      await continueImportAfterConflict({
-        filename: importConflictData.filename,
-        status: "error",
-        message: loadErrorMessage(err, "Failed to update template."),
-      });
+      lines = [
+        {
+          filename,
+          status: "error",
+          message: loadErrorMessage(err, "Failed to update template."),
+        },
+      ];
     }
-  }, [importConflictTemplate, importConflictData, continueImportAfterConflict]);
+    await continueImportAfterConflict(lines);
+  }, [
+    importConflictTemplate,
+    importConflictData,
+    importGlobalVariables,
+    continueImportAfterConflict,
+  ]);
 
   const handleImportConflictSkip = useCallback(async () => {
     if (!importConflictData) return;
 
-    await continueImportAfterConflict({
-      filename: importConflictData.filename,
-      status: "skipped",
-      message: `Skipped "${importConflictData.name}" (already exists).`,
-    });
+    await continueImportAfterConflict([
+      {
+        filename: importConflictData.filename,
+        status: "skipped",
+        message: `Skipped "${importConflictData.name}" (already exists).`,
+      },
+    ]);
   }, [importConflictData, continueImportAfterConflict]);
 
   const triggerImportFilePicker = () => {
@@ -1676,6 +1799,25 @@ export default function LoopEditor() {
         onCancel={cancelSave}
       />
 
+      {exportChoice && (
+        <ExportGlobalVariablesModal
+          names={exportChoice.variables.map((v) => v.name)}
+          onInclude={() => finishExport(true)}
+          onExcludeVariables={() => finishExport(false)}
+          onCancel={cancelExport}
+        />
+      )}
+
+      {variableConflict && (
+        <GlobalVariableConflictModal
+          name={variableConflict.name}
+          current={variableConflict.current}
+          imported={variableConflict.imported}
+          onOverwrite={() => answerVariableConflict("overwrite")}
+          onKeepCurrent={() => answerVariableConflict("keep")}
+        />
+      )}
+
       {/* Import conflict dialog */}
       {importConflictTemplate && importConflictData && (
         <div className="modal-overlay" onMouseDown={handleImportConflictSkip}>
@@ -1751,7 +1893,7 @@ export default function LoopEditor() {
             onToggleSidebar={() => setSidebarVisible(false)}
             onNewTemplateNameChange={setNewTemplateName}
             onSave={handleSave}
-            onExport={handleExport}
+            onExport={() => void handleExport()}
             onCreateTemplate={handleNewTemplate}
             onImport={triggerImportFilePicker}
             onShowArchivedChange={setShowArchived}

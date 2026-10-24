@@ -1,9 +1,9 @@
 /**
  * Diffing primitives for the two viewers in this app, at two different levels.
  *
- * {@link computeLineDiff} is the line level and has one consumer: the Loop
- * Editor's save-time review modal (ADR-0011), which has no diff to render until
- * something computes one — the repo carries no diff library, so it diffs the
+ * {@link computeLineDiff} is the line level and serves the Loop Editor's
+ * save-time review modal (ADR-0011) and its imported-global-variable conflict
+ * modal, which have no diff to render until something computes one — the repo carries no diff library, so it diffs the
  * last-saved against the currently-edited loop JSON here.
  *
  * {@link computeWordDiff} is the word level and serves both viewers. The files
