@@ -696,7 +696,7 @@ version, lets you trigger an install or update manually, and reports failures
 Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`,
 `NODE_RUNTIME_VERSION` and `NPM_VERSION`. With `WITH_NODE=1` the image installs
 Node `NODE_RUNTIME_VERSION` (24.22.1 by default) and then npm `NPM_VERSION`
-(12.2.0 by default) in place of the npm that Node ships, so repositories that
+(12.2.1 by default) in place of the npm that Node ships, so repositories that
 require a newer npm in `devEngines` can run npm and npx.
 
 `NPM_VERSION` takes an exact version, not a range or `latest`: the build checks
