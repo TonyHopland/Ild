@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, createEvent, fireEvent, waitFor } from "@testing-library/react";
+import {
+  act,
+  render,
+  screen,
+  cleanup,
+  createEvent,
+  fireEvent,
+  waitFor,
+} from "@testing-library/react";
 import { Profiler, useState, type ComponentProps } from "react";
 import BoardColumn from "./TaskboardColumn";
 
@@ -920,6 +928,35 @@ describe("TaskboardColumn drop line", () => {
 
     expect(lineIn(columns.backlog)).toBeNull();
     expect(columnOfStatus(WorkItemStatus.Backlog).classList.contains("drag-over")).toBe(false);
+  });
+
+  test("a drag cancelled over the column with no dragend clears the line once no dragover follows", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const advance = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    try {
+      const column = renderOpen(WorkItemStatus.Backlog, ["a", "b", "c"]);
+      layOutWithGaps(["a", "b", "c"]);
+      const y = cardTop(1) + 20;
+      drag("dragEnter", card("b"), { clientY: y });
+      drag("dragOver", card("b"), { clientY: y });
+
+      drag("dragLeave", card("b"), { clientY: y, relatedTarget: null });
+      advance(300);
+      drag("dragOver", card("b"), { clientY: y });
+      advance(1000);
+      expect(lineIn(column)).toBe(1);
+
+      // Chrome's dragleave on Escape: no relatedTarget, the pointer still over the column.
+      drag("dragLeave", card("b"), { clientY: y, relatedTarget: null });
+      advance(1000);
+      expect(lineIn(column)).toBeNull();
+      expect(column.classList.contains("drag-over")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("a folded column opened by a drag stays open across child leaves and folds back on leaving", () => {

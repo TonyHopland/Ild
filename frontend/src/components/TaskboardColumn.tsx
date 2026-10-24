@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import { columnOf, type TaskboardColumnKey } from "../utils/taskboardColumns";
 import { workItemService } from "../services/auth";
@@ -16,6 +16,13 @@ const EMPTY_HINT: Record<TaskboardColumnKey, string> = {
   [WorkItemStatus.WaitingForIld]: "Items wait here while ILD finishes something on its own.",
   [WorkItemStatus.Done]: "Finished items end up here.",
 };
+
+/**
+ * How long a dragleave with no relatedTarget waits for a dragover to say the
+ * pointer is still over the column: browsers repeat dragover at least every
+ * 350 ms (±200) while a drag is over an element.
+ */
+const UNCONFIRMED_LEAVE_MS = 600;
 
 /** How the Work queue column's order is read: shown on it whether or not it has cards. */
 const QUEUE_ORDER_NOTE =
@@ -80,6 +87,7 @@ export default function TaskboardColumn({
   // Where a card dragged over the column would land: before the loaded card at
   // this index, or after the last one at the end.
   const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const unconfirmedLeave = useRef<number | undefined>(undefined);
   // Any column folds to a strip and opens again from it. Until the user
   // chooses, Done and the empty columns other than Running start folded, so the
   // busy ones get the room. A folded column opens while a card is dragged over it.
@@ -109,7 +117,13 @@ export default function TaskboardColumn({
     return index < 0 ? workItems.length : index;
   };
 
+  const cancelUnconfirmedLeave = () => {
+    window.clearTimeout(unconfirmedLeave.current);
+    unconfirmedLeave.current = undefined;
+  };
+
   const clearDrag = () => {
+    cancelUnconfirmedLeave();
     setDragOver(false);
     setDropIndex(null);
   };
@@ -119,21 +133,29 @@ export default function TaskboardColumn({
   const handleDragOver = (e: React.DragEvent<HTMLElement>) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    cancelUnconfirmedLeave();
     const index = dropIndexAt(e);
     if (!dragOver) setDragOver(true);
     if (index !== dropIndex) setDropIndex(index);
   };
 
   // dragleave bubbles up from every card and child the pointer leaves, so only
-  // a move out of the column clears it. Firefox can leave relatedTarget out;
-  // then the pointer's position says whether it is still inside.
+  // a move out of the column clears it. Without a relatedTarget, a pointer
+  // inside the column is either a browser that leaves it out on every leave or
+  // a drag cancelled with Escape over the column, which no dragend may follow
+  // (a file from outside, or a card a live update removed): only the next
+  // dragover tells them apart.
   const handleDragLeave = (e: React.DragEvent<HTMLElement>) => {
     const to = e.relatedTarget;
     if (to instanceof Node) {
       if (e.currentTarget.contains(to)) return;
     } else {
       const { left, right, top, bottom } = e.currentTarget.getBoundingClientRect();
-      if (e.clientX > left && e.clientX < right && e.clientY > top && e.clientY < bottom) return;
+      if (e.clientX > left && e.clientX < right && e.clientY > top && e.clientY < bottom) {
+        if (unconfirmedLeave.current === undefined)
+          unconfirmedLeave.current = window.setTimeout(clearDrag, UNCONFIRMED_LEAVE_MS);
+        return;
+      }
     }
     clearDrag();
   };
@@ -147,6 +169,7 @@ export default function TaskboardColumn({
     return () => {
       window.removeEventListener("dragend", clearDrag);
       window.removeEventListener("drop", clearDrag);
+      cancelUnconfirmedLeave();
     };
   }, [dragOver]);
 
