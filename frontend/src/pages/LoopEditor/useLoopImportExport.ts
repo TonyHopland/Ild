@@ -115,8 +115,9 @@ export function useLoopImportExport({
   // The import reads templatesRef rather than state, so a queued file is checked
   // against the list as refreshed after the previous file.
 
-  // A variable question still open when the editor goes away, and any asked
-  // after, is answered "keep", so the import waiting on it ends without writing.
+  // Leaving the editor abandons a running import: every step checks mountedRef
+  // before it writes, and a variable question still open (or asked later) is
+  // answered "keep" so the import waiting on it ends instead of hanging.
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -164,6 +165,7 @@ export function useLoopImportExport({
       const byName = new Map(existing.map((g) => [g.name.toLowerCase(), g]));
 
       for (const variable of variables) {
+        if (!mountedRef.current) break;
         const current = byName.get(variable.name.toLowerCase());
         try {
           if (!current) {
@@ -252,6 +254,8 @@ export function useLoopImportExport({
           return { feedback: accumulatedFeedback, haltedForConflict: true };
         }
 
+        if (!mountedRef.current) return { feedback: accumulatedFeedback, haltedForConflict: false };
+
         // No conflict — create new template
         await loopTemplateService.create({
           name: parsed.name,
@@ -294,6 +298,7 @@ export function useLoopImportExport({
       importQueueRef.current = { remainingFiles: files, feedback };
 
       for (const file of files) {
+        if (!mountedRef.current) return;
         const { haltedForConflict } = await processSingleImportFile(file, feedback);
         if (haltedForConflict) {
           // Update queue with remaining files
