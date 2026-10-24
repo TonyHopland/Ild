@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **While the scheduler is paused, Start now in a Ready item's dialog starts that one item; the scheduler stays paused.**
+
 ### Fixed
 
 - **Dragging a card on the Taskboard shows a steady drop line and a move cursor everywhere over a column, gaps and header included.**

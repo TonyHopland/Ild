@@ -178,11 +178,15 @@ async function renderDialog(
   return result;
 }
 
-async function rerenderDialog(rerender: ReturnType<typeof render>["rerender"], workItem: WorkItem) {
+async function rerenderDialog(
+  rerender: ReturnType<typeof render>["rerender"],
+  workItem: WorkItem,
+  props: Partial<React.ComponentProps<typeof WorkItemModalV2>> = {},
+) {
   await act(async () => {
     rerender(
       <MemoryRouter>
-        <WorkItemModalV2 workItem={workItem} onClose={vi.fn()} onSave={vi.fn()} />
+        <WorkItemModalV2 workItem={workItem} onClose={vi.fn()} onSave={vi.fn()} {...props} />
       </MemoryRouter>,
     );
     await Promise.resolve();
@@ -1667,6 +1671,97 @@ describe("WorkItemModalV2", () => {
       expect(
         screen.queryByRole("button", { name: "Start anyway (ignore repository limit)" }),
       ).toBeNull();
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("while the scheduler is paused a Ready item starts now from the footer", async () => {
+    mockServices();
+    const started = makeWorkItem({ status: WorkItemStatus.Running });
+    const startAnyway = vi
+      .spyOn(authServices.workItemService, "startAnyway")
+      .mockResolvedValue(started);
+    const onSave = vi.fn();
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Ready }), {
+      schedulerPaused: true,
+      onSave,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start now (scheduler paused)" }));
+      await Promise.resolve();
+    });
+
+    expect(startAnyway).toHaveBeenCalledTimes(1);
+    expect(startAnyway).toHaveBeenCalledWith("wi-1");
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(started));
+  });
+
+  test("Start now is disabled and the dialog stays open while it is on its way, and a refusal shows until the item changes", async () => {
+    mockServices();
+    let refuse!: () => void;
+    const startAnyway = vi.spyOn(authServices.workItemService, "startAnyway").mockReturnValue(
+      new Promise<WorkItem>(
+        (_, reject) =>
+          (refuse = () =>
+            reject({
+              status: 409,
+              message: "ILD is at its concurrency limit.",
+            } satisfies ApiError)),
+      ),
+    );
+    const onClose = vi.fn();
+    const item = makeWorkItem({ status: WorkItemStatus.Ready });
+    const { rerender } = await renderDialog(item, { onClose, schedulerPaused: true });
+    const button = screen.getByRole("button", { name: "Start now (scheduler paused)" });
+
+    await act(async () => {
+      fireEvent.click(button);
+      await Promise.resolve();
+    });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(startAnyway).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => refuse());
+    expect((await screen.findByRole("alert")).textContent).toBe("ILD is at its concurrency limit.");
+    expect(
+      (screen.getByRole("button", { name: "Start now (scheduler paused)" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+
+    await rerenderDialog(
+      rerender,
+      { ...item, status: WorkItemStatus.Running },
+      { schedulerPaused: true },
+    );
+    expect(screen.queryByText("ILD is at its concurrency limit.")).toBeNull();
+  });
+
+  test("Start now shows only for a Ready item the repository limit is not holding while the scheduler is known to be paused", async () => {
+    const hold = { inProgress: 1, limit: 1 };
+    const cases: [Partial<WorkItem>, boolean | undefined][] = [
+      [{ status: WorkItemStatus.Ready }, false],
+      [{ status: WorkItemStatus.Ready }, undefined],
+      [{ status: WorkItemStatus.Backlog }, true],
+      [{ status: WorkItemStatus.WorkQueue }, true],
+      [{ status: WorkItemStatus.Running }, true],
+      [{ status: WorkItemStatus.HumanFeedback }, true],
+      [{ status: WorkItemStatus.Done }, true],
+      [{ status: WorkItemStatus.Ready, repositoryParallelismHold: hold }, true],
+      [{ status: WorkItemStatus.Ready, repositoryParallelismHold: hold }, false],
+    ];
+    for (const [overrides, schedulerPaused] of cases) {
+      mockServices();
+      await renderDialog(makeWorkItem(overrides), { schedulerPaused });
+
+      expect(screen.queryByRole("button", { name: "Start now (scheduler paused)" })).toBeNull();
+      expect(
+        screen.queryAllByRole("button", { name: "Start anyway (ignore repository limit)" }),
+      ).toHaveLength(overrides.repositoryParallelismHold ? 1 : 0);
       cleanup();
       vi.restoreAllMocks();
     }

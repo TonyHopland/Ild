@@ -74,8 +74,9 @@ export default function Taskboard() {
     requestCountsRefresh,
   } = useTaskboardColumns({ ...filter, search: appliedSearch }, setErrorText);
   const { on, off, connectionState } = useSharedWorkItemHub();
-  // Only a pause the server has reported shows on the cards.
+  // Only a pause the server has reported shows on the cards and in the dialog.
   const { running: schedulerRunning } = useSchedulerState();
+  const schedulerPaused = schedulerRunning === null ? undefined : !schedulerRunning;
   // Highest getById request ordinal issued per work item. A newly created item
   // receives a burst of hub events (create → claim → run-progressed → human),
   // each firing a getById; an early fetch the server answered with an older
@@ -544,7 +545,7 @@ export default function Taskboard() {
                 alone={isMobile}
                 foldChoice={foldedColumns.choices[key] ?? null}
                 onFoldChange={(folded) => foldedColumns.setFolded(key, folded)}
-                schedulerPaused={schedulerRunning === null ? undefined : !schedulerRunning}
+                schedulerPaused={schedulerPaused}
               />
             );
           },
@@ -578,6 +579,7 @@ export default function Taskboard() {
           onSave={handleWorkItemUpdate}
           onDelete={handleDeleted}
           revealGlobalProposalId={searchParams.get("globalProposal")}
+          schedulerPaused={schedulerPaused}
         />
       )}
       {createModalOpen && (
