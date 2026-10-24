@@ -65,7 +65,7 @@ jobs:
       # The preview-service and MCP-bridge tests spawn node themselves.
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "26"
 
       - name: Backend restore
         run: dotnet restore

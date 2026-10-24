@@ -695,7 +695,7 @@ version, lets you trigger an install or update manually, and reports failures
 
 Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`,
 `NODE_RUNTIME_VERSION` and `NPM_VERSION`. With `WITH_NODE=1` the image installs
-Node `NODE_RUNTIME_VERSION` (24.22.1 by default) and then npm `NPM_VERSION`
+Node `NODE_RUNTIME_VERSION` (26.12.1 by default) and then npm `NPM_VERSION`
 (12.2.1 by default) in place of the npm that Node ships, so repositories that
 require a newer npm in `devEngines` can run npm and npx.
 
@@ -709,8 +709,8 @@ dependency that needs its postinstall fails later.
 
 pnpm in the image comes only from Node's corepack, so each repository's
 `packageManager` picks its version. Node 25 and later no longer ship
-corepack, so an image built with such a `NODE_RUNTIME_VERSION` (including
-`latest`) has no pnpm.
+corepack, so the default image (Node 26) and any image built with a later
+`NODE_RUNTIME_VERSION` (including `latest`) have no pnpm.
 
 With `WITH_DOTNET_SDK=1` the image is based on `mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION`,
 so the SDK available to agents tracks `DOTNET_VERSION` rather than a separate

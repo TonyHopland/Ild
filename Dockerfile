@@ -1,4 +1,4 @@
-ARG NODE_VERSION=24-alpine
+ARG NODE_VERSION=26-alpine
 ARG DOTNET_VERSION=10.0
 # Selects the final stage's base image (see the final-base-* stages below).
 # Declared here, before the first FROM, so it can be used in a FROM line.
@@ -76,7 +76,7 @@ FROM final-base-${WITH_DOTNET_SDK} AS final
 WORKDIR /app
 
 ARG WITH_NODE=0
-ARG NODE_RUNTIME_VERSION=24.22.1
+ARG NODE_RUNTIME_VERSION=26.12.1
 ARG NPM_VERSION=12.2.1
 ARG WITH_CHROME=0
 ARG WITH_CERTS=0
