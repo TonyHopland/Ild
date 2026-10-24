@@ -3,6 +3,7 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-li
 import IldSettings from "./IldSettings";
 import * as authServices from "../../../services/auth";
 import type { AiProvider } from "../../../types";
+import { WorkItemHubProvider } from "../../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -18,7 +19,7 @@ describe("Ild settings", () => {
     });
     const put = vi.spyOn(authServices.settingsService, "put");
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     // 0 is the floor for run retention but below the scheduler's minimum of 1.
     const concurrent = (await screen.findByLabelText(/max concurrent/i)) as HTMLInputElement;
@@ -39,7 +40,7 @@ describe("Ild settings", () => {
   test("run retention shows 14 when unread and no longer names 0 as when done", async () => {
     vi.spyOn(authServices.settingsService, "get").mockRejectedValue(new Error("offline"));
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const retention = (await screen.findByLabelText(/keep finished runs for/i)) as HTMLInputElement;
     expect(retention.value).toBe("14");
@@ -53,7 +54,7 @@ describe("Ild settings", () => {
   test("saves the AI step cap", async () => {
     const put = vi.spyOn(authServices.settingsService, "put");
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const steps = (await screen.findByLabelText(/max ai steps/i)) as HTMLInputElement;
     fireEvent.change(steps, { target: { value: "0" } });
@@ -73,7 +74,7 @@ describe("Ild settings", () => {
       .spyOn(authServices.settingsService, "put")
       .mockResolvedValue({ key: "globalVariables.maxLength", value: "2000" });
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const limit = (await screen.findByLabelText(/global variable/i)) as HTMLInputElement;
     expect(limit.value).toBe("4000");
@@ -99,7 +100,7 @@ describe("Ild settings", () => {
       .spyOn(authServices.settingsService, "put")
       .mockResolvedValue({ key: authServices.SchedulerSettingKeys.IsPaused, value: "false" });
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const toggle = screen.getByRole("checkbox", { name: "Scheduler running" });
     // Paused on the server, so the switch is off once it has been read.
@@ -121,7 +122,7 @@ describe("Ild settings", () => {
       value: key === authServices.SchedulerSettingKeys.ThrottleAutoResume ? "True" : "5",
     }));
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const toggle = screen.getByRole("checkbox", { name: /resume throttled runs automatically/i });
     await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
@@ -137,7 +138,7 @@ describe("Ild settings", () => {
       value: "true",
     });
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /resume throttled runs automatically/i }));
 
@@ -152,7 +153,7 @@ describe("Ild settings", () => {
   test("saves the wait between attempts and the attempt count", async () => {
     const put = vi.spyOn(authServices.settingsService, "put");
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const wait = (await screen.findByLabelText(/wait between attempts/i)) as HTMLInputElement;
     fireEvent.change(wait, { target: { value: "90" } });
@@ -183,7 +184,7 @@ describe("Ild settings", () => {
     });
     vi.spyOn(authServices.settingsService, "put").mockRejectedValue(new Error("database down"));
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const toggle = screen.getByRole("checkbox", { name: "Scheduler running" });
     await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
@@ -222,7 +223,7 @@ describe("Chat titles", () => {
       .spyOn(authServices.settingsService, "put")
       .mockImplementation(async (key: string, value: string) => ({ key, value }));
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const toggle = within(card()).getByRole("checkbox", {
       name: /smart session titles/i,
@@ -258,7 +259,7 @@ describe("Chat titles", () => {
       async (key: string, value: string) => ({ key, value }),
     );
 
-    render(<IldSettings />);
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
     const toggle = within(card()).getByRole("checkbox", {
       name: /smart session titles/i,

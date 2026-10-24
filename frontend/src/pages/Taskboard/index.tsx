@@ -11,7 +11,6 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import { useFoldedColumns } from "../../hooks/useFoldedColumns";
 import { PreferenceKeys, getPreference } from "../../utils/userPreferences";
 import ErrorBanner from "../../components/ErrorBanner";
-import { useSignalR } from "../../hooks/useSignalR";
 import { useSharedWorkItemHub } from "../../hooks/useWorkItemHub";
 import { useSchedulerState } from "../../hooks/useSchedulerState";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
@@ -74,9 +73,7 @@ export default function Taskboard() {
     findItem,
     requestCountsRefresh,
   } = useTaskboardColumns({ ...filter, search: appliedSearch }, setErrorText);
-  const sharedHub = useSharedWorkItemHub();
-  const ownHub = useSignalR(sharedHub ? null : "/hubs/work-item");
-  const { on, off, connectionState } = sharedHub ?? ownHub;
+  const { on, off, connectionState } = useSharedWorkItemHub();
   // Only a pause the server has reported shows on the cards.
   const { running: schedulerRunning } = useSchedulerState();
   // Highest getById request ordinal issued per work item. A newly created item

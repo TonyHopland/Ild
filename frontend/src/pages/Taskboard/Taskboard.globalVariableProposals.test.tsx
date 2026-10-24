@@ -12,6 +12,7 @@ import {
   reply,
   stubFetch,
 } from "../../test-support";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -104,6 +105,7 @@ describe("a link to a suggestion made by a work item's run", () => {
             <Route path="/taskboard/:workItemId" element={<Taskboard />} />
           </Routes>
         </MemoryRouter>,
+        { wrapper: WorkItemHubProvider },
       );
 
       await waitFor(() =>

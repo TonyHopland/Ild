@@ -52,6 +52,7 @@ import {
   signalRHub,
   stubFetch,
 } from "../../test-support";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const user: User = { id: "1", username: "test", createdAt: "" };
 
@@ -165,6 +166,7 @@ function renderChat(path: string) {
         </ChatInboxProvider>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

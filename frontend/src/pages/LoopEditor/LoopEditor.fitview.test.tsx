@@ -4,6 +4,7 @@ import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType } from "../../types";
 import LoopEditor from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 // Counts how many times the canvas performs an initial fit. Must be prefixed
 // with `mock` so vitest allows referencing it inside the hoisted vi.mock
@@ -142,6 +143,7 @@ function renderEditor() {
         </Routes>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

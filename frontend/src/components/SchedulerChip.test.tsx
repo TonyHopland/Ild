@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import SchedulerChip from "./SchedulerChip";
 import * as authServices from "../services/auth";
 import * as signalRHook from "../hooks/useSignalR";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -37,7 +38,7 @@ describe("SchedulerChip", () => {
   test("says nothing until the server has said whether the scheduler runs", () => {
     mockHub();
     vi.spyOn(authServices.settingsService, "get").mockReturnValue(new Promise(() => {}));
-    render(<SchedulerChip />);
+    render(<SchedulerChip />, { wrapper: WorkItemHubProvider });
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
@@ -50,7 +51,7 @@ describe("SchedulerChip", () => {
     const put = vi
       .spyOn(authServices.settingsService, "put")
       .mockResolvedValue({ key: authServices.SchedulerSettingKeys.IsPaused, value: "true" });
-    render(<SchedulerChip />);
+    render(<SchedulerChip />, { wrapper: WorkItemHubProvider });
 
     const chip = await screen.findByRole("switch", { name: "Scheduler running" });
     expect(chip.getAttribute("aria-checked")).toBe("true");
@@ -70,7 +71,7 @@ describe("SchedulerChip", () => {
       key: authServices.SchedulerSettingKeys.IsPaused,
       value: "false",
     });
-    render(<SchedulerChip />);
+    render(<SchedulerChip />, { wrapper: WorkItemHubProvider });
     const chip = await screen.findByRole("switch", { name: "Scheduler running" });
 
     act(() => announce(true));
@@ -85,7 +86,7 @@ describe("SchedulerChip", () => {
       value: "false",
     });
     vi.spyOn(authServices.settingsService, "put").mockRejectedValue(new Error("database down"));
-    render(<SchedulerChip />);
+    render(<SchedulerChip />, { wrapper: WorkItemHubProvider });
     const chip = await screen.findByRole("switch", { name: "Scheduler running" });
 
     fireEvent.click(chip);
@@ -101,7 +102,7 @@ describe("SchedulerChip", () => {
       value: "false",
     });
     vi.spyOn(authServices.settingsService, "put").mockRejectedValue(new Error("database down"));
-    render(<SchedulerChip />);
+    render(<SchedulerChip />, { wrapper: WorkItemHubProvider });
     fireEvent.click(await screen.findByRole("switch", { name: "Scheduler running" }));
 
     const dismiss = within(await screen.findByRole("alert")).getByRole("button", {

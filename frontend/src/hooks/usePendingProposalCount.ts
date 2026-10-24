@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useJoinThenRefresh } from "./useJoinThenRefresh";
 import { useLatest } from "./useLatest";
-import { useSignalR, type SignalRConnection } from "./useSignalR";
 import { useSharedWorkItemHub } from "./useWorkItemHub";
 import type { SignalREventName } from "../types/signalr";
 
@@ -32,17 +31,13 @@ interface Reader {
 /**
  * How many proposals of one kind wait for a human, read on every (re)connect
  * once the board is joined and on every hint. Only the latest read counts; one
- * that fails shows the kind's empty value rather than an old count. `hub` is a
- * work-item hub connection the caller already holds; without it the hook uses
- * the app's shared one, and opens its own only where there is none.
+ * that fails shows the kind's empty value rather than an old count. It listens
+ * on the app's shared work-item hub.
  */
-export function usePendingProposalCount<T>(kind: ProposalCountKind<T>, hub?: SignalRConnection): T {
+export function usePendingProposalCount<T>(kind: ProposalCountKind<T>): T {
   const { key, hint } = kind;
   const kindRef = useLatest(kind);
-  const shared = useSharedWorkItemHub();
-  const given = hub ?? shared;
-  const own = useSignalR(given ? null : "/hubs/work-item");
-  const connection = given ?? own;
+  const connection = useSharedWorkItemHub();
   const { on, off } = connection;
   const [view, setView] = useState<CountView<T> | null>(null);
   const seqRef = useRef(0);

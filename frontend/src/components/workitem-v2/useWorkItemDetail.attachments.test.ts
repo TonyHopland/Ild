@@ -10,6 +10,7 @@ import {
   aiProviderService,
   settingsService,
 } from "../../services/auth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -80,6 +81,7 @@ function stubServices(
 
 function renderDetail(workItem: WorkItem) {
   return renderHook(({ wi }: { wi: WorkItem | null }) => useWorkItemDetail(wi, vi.fn()), {
+    wrapper: WorkItemHubProvider,
     initialProps: { wi: workItem as WorkItem | null },
   });
 }

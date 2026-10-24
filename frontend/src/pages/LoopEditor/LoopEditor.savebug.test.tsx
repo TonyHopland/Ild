@@ -4,6 +4,7 @@ import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType } from "../../types";
 import LoopEditor from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -105,6 +106,7 @@ describe("Loop Editor save existing template (regression)", () => {
           </Routes>
         </AuthContext.Provider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
@@ -216,6 +218,7 @@ describe("Loop Editor save existing template (regression)", () => {
           </Routes>
         </AuthContext.Provider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
@@ -362,6 +365,7 @@ describe("Loop Editor save existing template (regression)", () => {
           </Routes>
         </AuthContext.Provider>
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());

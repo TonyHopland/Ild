@@ -5,6 +5,7 @@ import { AuthContext } from "../hooks/useAuth";
 import * as signalRHook from "../hooks/useSignalR";
 import Header from "./Header";
 import { fakeHub, reply, stubFetch } from "../test-support";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -42,6 +43,7 @@ function renderHeader() {
         <Header />
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

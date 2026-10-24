@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSignalR } from "./useSignalR";
+import { useSharedWorkItemHub } from "./useWorkItemHub";
 import { workItemService } from "../services/auth";
 import type { WorkItemEditProposal } from "../types";
 import type { TypedSignalRMessage } from "../types/signalr";
@@ -31,14 +32,16 @@ function read(mode: "item" | "requester" | "chat", id: string) {
  * The edit proposals for one work item, those its loop runs requested on any
  * item, or those made by one chat, kept current by snapshot reads: on every
  * (re)connect once the hub group is joined, on a hint for this target, and on
- * {@link refresh}. A requesting item is hinted as a work item.
+ * {@link refresh}. A requesting item is hinted as a work item. Work items are
+ * heard on the app's shared work-item hub; a chat on a chat hub connection of
+ * its own.
  */
 export function useEditProposals(target: EditProposalsTarget) {
   const [mode, id] = modeOf(target);
   const targetKey = `${mode}:${id}`;
-  const { connectionState, on, off, invoke } = useSignalR(
-    mode === "chat" ? "/hubs/chat" : "/hubs/work-item",
-  );
+  const shared = useSharedWorkItemHub();
+  const chat = useSignalR(mode === "chat" ? "/hubs/chat" : null);
+  const { connectionState, on, off, invoke } = mode === "chat" ? chat : shared;
 
   const [view, setView] = useState<ProposalsView | null>(null);
   const generationRef = useRef(0);

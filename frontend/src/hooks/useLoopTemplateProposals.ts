@@ -1,4 +1,3 @@
-import type { SignalRConnection } from "./useSignalR";
 import { boardHint, chatHint, useProposalList, type ProposalListKind } from "./useProposalList";
 import { loopTemplateProposalService } from "../services/auth";
 import type { LoopTemplateProposal } from "../types";
@@ -37,13 +36,9 @@ const loopTemplateProposals: ProposalListKind<Mode, LoopTemplateProposal> = {
  * made, or those pending for one template, kept current by snapshot reads: on
  * every (re)connect once the hub group is joined, on a hint for this target, and
  * on `refresh`. Any proposal hint reaches a work item, since it does not say
- * which run made it. `hub` is a connection to the hub the target is hinted on
- * that the caller already holds; without it the hook opens its own.
+ * which run made it.
  */
-export function useLoopTemplateProposals(
-  target: LoopTemplateProposalsTarget,
-  hub?: SignalRConnection,
-) {
+export function useLoopTemplateProposals(target: LoopTemplateProposalsTarget) {
   const [mode, id] = modeOf(target);
-  return useProposalList(loopTemplateProposals, mode, id, hub);
+  return useProposalList(loopTemplateProposals, mode, id);
 }

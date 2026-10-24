@@ -7,6 +7,7 @@ import { WorkItem, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { stageParkedNode } from "../../test-support.parkedNode";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -81,6 +82,7 @@ async function renderDialog(workItem: WorkItem, onClose = vi.fn()) {
     <MemoryRouter>
       <WorkItemModalV2 workItem={workItem} onClose={onClose} onSave={vi.fn()} />
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
   await act(async () => {
     await Promise.resolve();

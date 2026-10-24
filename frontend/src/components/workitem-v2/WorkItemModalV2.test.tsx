@@ -17,6 +17,7 @@ import {
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { stageParkedNode } from "../../test-support.parkedNode";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 // The real terminal spins up an xterm instance and a WebSocket, neither of which
 // jsdom provides. Stub it with a marker that echoes the props the modal passes so
@@ -170,6 +171,7 @@ async function renderDialog(
       <MemoryRouter>
         <WorkItemModalV2 workItem={workItem} onClose={vi.fn()} onSave={vi.fn()} {...props} />
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
     await Promise.resolve();
   });
@@ -2046,6 +2048,7 @@ async function renderCreateDialog(
       <MemoryRouter>
         <WorkItemModalV2 workItem={null} onClose={vi.fn()} onSave={vi.fn()} {...props} />
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
     await Promise.resolve();
   });

@@ -4,6 +4,7 @@ import { useEditProposals } from "./useEditProposals";
 import * as signalRHook from "./useSignalR";
 import * as authServices from "../services/auth";
 import type { WorkItemEditProposal } from "../types";
+import { WorkItemHubProvider } from "./useWorkItemHub";
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
 
@@ -76,7 +77,7 @@ describe("useEditProposals races", () => {
 
     const { result, rerender } = renderHook(
       ({ chatSessionId }: { chatSessionId: string }) => useEditProposals({ chatSessionId }),
-      { initialProps: { chatSessionId: "chat-1" } },
+      { wrapper: WorkItemHubProvider, initialProps: { chatSessionId: "chat-1" } },
     );
     rerender({ chatSessionId: "chat-2" });
     await waitFor(() => expect(list).toHaveBeenCalledWith({ chatSessionId: "chat-2" }));
@@ -102,7 +103,9 @@ describe("useEditProposals races", () => {
       .spyOn(authServices.workItemService, "listEditProposalsFor")
       .mockResolvedValue([proposal("p-1", "chat-1")]);
 
-    const { result, rerender } = renderHook(() => useEditProposals({ chatSessionId: "chat-1" }));
+    const { result, rerender } = renderHook(() => useEditProposals({ chatSessionId: "chat-1" }), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(hub.invoke).toHaveBeenCalledWith("SubscribeToChat", "chat-1"));
     await act(async () => {});
     expect(list).not.toHaveBeenCalled();

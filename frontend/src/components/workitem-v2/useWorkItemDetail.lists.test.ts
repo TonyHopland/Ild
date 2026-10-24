@@ -3,6 +3,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { useWorkItemDetail } from "./useWorkItemDetail";
 import * as authServices from "../../services/auth";
 import { LoopTemplate, Repository, WorkItem, WorkItemStatus } from "../../types";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -50,7 +51,9 @@ describe("the work item dialog's pickers", () => {
     vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
     vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
 
-    const { result } = renderHook(() => useWorkItemDetail(items[0], () => {}));
+    const { result } = renderHook(() => useWorkItemDetail(items[0], () => {}), {
+      wrapper: WorkItemHubProvider,
+    });
 
     await waitFor(() => expect(result.current.allWorkItems).toHaveLength(501));
     await waitFor(() => expect(result.current.repositories).toHaveLength(501));

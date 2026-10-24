@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-li
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import GlobalVariables from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -97,6 +98,7 @@ function renderPage() {
         <GlobalVariables />
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

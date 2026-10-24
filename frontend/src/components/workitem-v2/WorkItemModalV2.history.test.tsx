@@ -6,6 +6,7 @@ import { WorkItem, WorkItemStatus } from "../../types";
 import type { WorkItemHistoryEntry } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -91,7 +92,7 @@ function dialog(workItem: WorkItem) {
 async function renderDialog(workItem: WorkItem) {
   let result!: ReturnType<typeof render>;
   await act(async () => {
-    result = render(dialog(workItem));
+    result = render(dialog(workItem), { wrapper: WorkItemHubProvider });
     await Promise.resolve();
   });
   return result;

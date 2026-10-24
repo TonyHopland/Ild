@@ -10,6 +10,7 @@ import {
   aiProviderService,
   settingsService,
 } from "../../services/auth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -69,7 +70,9 @@ describe("answering a parked run", () => {
     const answer = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
 
     const workItem = makeParkedWorkItem();
-    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
       result.current.setReplyInput("run-1", "Looks good");
@@ -94,7 +97,9 @@ describe("answering a parked run", () => {
     const answer = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
 
     const workItem = makeParkedWorkItem();
-    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
     await act(async () => await result.current.handleApprove("run-1"));
@@ -111,7 +116,9 @@ describe("answering a parked run", () => {
       .mockRejectedValue({ status: 400, message: "Input is too long." });
 
     const workItem = makeParkedWorkItem();
-    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
     await act(async () => await result.current.handleApprove("run-1"));
@@ -155,7 +162,9 @@ describe("an answer sent after the run has moved on", () => {
       const onSave = vi.fn();
 
       const workItem = makeParkedWorkItem();
-      const { result } = renderHook(() => useWorkItemDetail(workItem, onSave));
+      const { result } = renderHook(() => useWorkItemDetail(workItem, onSave), {
+        wrapper: WorkItemHubProvider,
+      });
       await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
       await act(async () => {
         result.current.setReplyInput("run-1", "Please also fix the flaky test");
@@ -183,7 +192,9 @@ describe("an answer sent after the run has moved on", () => {
 
     const workItem = makeParkedWorkItem();
     const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(workItem, onSave));
+    const { result } = renderHook(() => useWorkItemDetail(workItem, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
       result.current.setReplyInput("run-1", "Looks good");
@@ -211,7 +222,9 @@ describe("an answer sent after the run has moved on", () => {
 
     // The board keys the dialog by item, so switching items unmounts this
     // instance and builds a fresh one for the other item.
-    const { result, unmount } = renderHook(() => useWorkItemDetail(first, onSave));
+    const { result, unmount } = renderHook(() => useWorkItemDetail(first, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
       result.current.setReplyInput("run-1", "Meant for wi-1");
@@ -222,7 +235,9 @@ describe("an answer sent after the run has moved on", () => {
     });
 
     unmount();
-    const { result: switched } = renderHook(() => useWorkItemDetail(other, onSave));
+    const { result: switched } = renderHook(() => useWorkItemDetail(other, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(switched.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
       refuseAnswer(MOVED_ON);
@@ -240,7 +255,9 @@ describe("a refused answer whose re-read fails", () => {
     vi.spyOn(workItemService, "getById").mockRejectedValue({ message: "Failed to fetch" });
 
     const workItem = makeParkedWorkItem();
-    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()), {
+      wrapper: WorkItemHubProvider,
+    });
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
       result.current.setReplyInput("run-1", "Please also fix the flaky test");

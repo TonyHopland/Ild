@@ -12,6 +12,7 @@ import {
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { fakeHub, makeGlobalVariableProposal } from "../../test-support";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -124,6 +125,7 @@ describe("a link to a suggestion in the Action tab", () => {
             revealGlobalProposalId="gp-7"
           />
         </MemoryRouter>,
+        { wrapper: WorkItemHubProvider },
       );
       const rationale = await screen.findByText("The linked suggestion");
       await act(async () => {

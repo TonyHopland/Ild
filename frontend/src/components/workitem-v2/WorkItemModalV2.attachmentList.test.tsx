@@ -7,6 +7,7 @@ import { WorkItem, WorkItemAttachment, WorkItemStatus } from "../../types";
 import { formatBytes } from "../../utils/attachments";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -88,7 +89,7 @@ function Harness({ initial }: { initial: WorkItem }) {
 }
 
 async function renderDialog(workItem: WorkItem) {
-  render(<Harness initial={workItem} />);
+  render(<Harness initial={workItem} />, { wrapper: WorkItemHubProvider });
   await act(async () => {
     await Promise.resolve();
   });

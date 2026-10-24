@@ -12,6 +12,7 @@ import {
   type Call,
 } from "../../test-support";
 import type { GlobalVariableProposal } from "../../types";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -113,6 +114,7 @@ function renderPage() {
         <GlobalVariables />
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

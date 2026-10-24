@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { boardHint, useProposalList } from "./useProposalList";
 import { usePendingProposalCount, type ProposalCountKind } from "./usePendingProposalCount";
-import { fakeHub, makeLoopTemplateProposal } from "../test-support";
+import * as signalRHook from "./useSignalR";
+import { WorkItemHubProvider } from "./useWorkItemHub";
+import { fakeHub, makeLoopTemplateProposal, routeHubs, type FakeHub } from "../test-support";
 
 // The generic proposal hooks take their description of the kind by value. A
 // caller that writes it inline makes a new one every render, and that must not
@@ -14,25 +16,31 @@ const settle = () =>
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
 
+/** The hub the shared work-item connection is, for hooks rendered under the provider. */
+function sharedHub(): FakeHub {
+  const hub = fakeHub();
+  routeHubs(signalRHook, { "/hubs/work-item": hub });
+  return hub;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("passed inline, every render", () => {
   test("the pending count's kind joins and reads once", async () => {
-    const hub = fakeHub();
+    const hub = sharedHub();
     const read = vi.fn(async (): Promise<Record<string, number>> => ({ "tpl-1": 2 }));
 
-    const { result, rerender } = renderHook(() =>
-      usePendingProposalCount(
-        {
+    const { result, rerender } = renderHook(
+      () =>
+        usePendingProposalCount({
           key: "loop-template",
           read: () => read(),
           empty: {},
           hint: "LoopTemplateProposalsChanged",
-        },
-        hub.connection,
-      ),
+        }),
+      { wrapper: WorkItemHubProvider },
     );
     await waitFor(() => expect(result.current).toEqual({ "tpl-1": 2 }));
     const listening = [...(hub.handlers.LoopTemplateProposalsChanged ?? [])];
@@ -51,20 +59,21 @@ describe("passed inline, every render", () => {
   });
 
   test("the proposal list's kind joins and reads once", async () => {
-    const hub = fakeHub();
+    const hub = sharedHub();
     const read = vi.fn(async () => [makeLoopTemplateProposal({ id: "p-1" })]);
 
-    const { result, rerender } = renderHook(() =>
-      useProposalList(
-        {
-          key: "loop-template",
-          read: () => read(),
-          hint: () => boardHint("LoopTemplateProposalsChanged"),
-        },
-        "template",
-        "tpl-1",
-        hub.connection,
-      ),
+    const { result, rerender } = renderHook(
+      () =>
+        useProposalList(
+          {
+            key: "loop-template",
+            read: () => read(),
+            hint: () => boardHint("LoopTemplateProposalsChanged"),
+          },
+          "template",
+          "tpl-1",
+        ),
+      { wrapper: WorkItemHubProvider },
     );
     await waitFor(() => expect(result.current.proposals?.map((p) => p.id)).toEqual(["p-1"]));
     const listening = [...(hub.handlers.LoopTemplateProposalsChanged ?? [])];
@@ -85,7 +94,7 @@ describe("passed inline, every render", () => {
 
 describe("another kind for the same target", () => {
   test("the pending count drops the old kind's hint, listens for the new one's and reads it", async () => {
-    const hub = fakeHub();
+    const hub = sharedHub();
     const readTemplates = vi.fn(async (): Promise<number> => 2);
     const readVariables = vi.fn(async (): Promise<number> => 5);
     const templates: ProposalCountKind<number> = {
@@ -101,10 +110,10 @@ describe("another kind for the same target", () => {
       hint: "GlobalVariableProposalsChanged",
     };
 
-    const { result, rerender } = renderHook(
-      ({ kind }) => usePendingProposalCount(kind, hub.connection),
-      { initialProps: { kind: templates } },
-    );
+    const { result, rerender } = renderHook(({ kind }) => usePendingProposalCount(kind), {
+      wrapper: WorkItemHubProvider,
+      initialProps: { kind: templates },
+    });
     await waitFor(() => expect(result.current).toBe(2));
     expect(hub.handlers.LoopTemplateProposalsChanged?.size).toBe(1);
 
@@ -123,7 +132,7 @@ describe("another kind for the same target", () => {
   });
 
   test("the proposal list drops the old kind's hint, listens for the new one's and reads it", async () => {
-    const hub = fakeHub();
+    const hub = sharedHub();
     const readTemplates = vi.fn(async () => [makeLoopTemplateProposal({ id: "lt-1" })]);
     const readOthers = vi.fn(async () => [makeLoopTemplateProposal({ id: "other-1" })]);
     const templates = {
@@ -137,10 +146,10 @@ describe("another kind for the same target", () => {
       hint: () => boardHint("GlobalVariableProposalsChanged"),
     };
 
-    const { result, rerender } = renderHook(
-      ({ kind }) => useProposalList(kind, "item", "wi-1", hub.connection),
-      { initialProps: { kind: templates } },
-    );
+    const { result, rerender } = renderHook(({ kind }) => useProposalList(kind, "item", "wi-1"), {
+      wrapper: WorkItemHubProvider,
+      initialProps: { kind: templates },
+    });
     await waitFor(() => expect(result.current.proposals?.map((p) => p.id)).toEqual(["lt-1"]));
     expect(hub.handlers.LoopTemplateProposalsChanged?.size).toBe(1);
 
@@ -159,7 +168,7 @@ describe("another kind for the same target", () => {
   });
 
   test("the pending count shows the new kind's empty value, and never the old kind's late answer", async () => {
-    const hub = fakeHub();
+    sharedHub();
     let answerTemplates: (count: number) => void = () => {};
     let answerVariables: (count: number) => void = () => {};
     const readTemplates = vi.fn(
@@ -181,10 +190,10 @@ describe("another kind for the same target", () => {
       hint: "GlobalVariableProposalsChanged",
     };
 
-    const { result, rerender } = renderHook(
-      ({ kind }) => usePendingProposalCount(kind, hub.connection),
-      { initialProps: { kind: templates } },
-    );
+    const { result, rerender } = renderHook(({ kind }) => usePendingProposalCount(kind), {
+      wrapper: WorkItemHubProvider,
+      initialProps: { kind: templates },
+    });
     await waitFor(() => expect(readTemplates).toHaveBeenCalledTimes(1));
     rerender({ kind: variables });
     await waitFor(() => expect(readVariables).toHaveBeenCalledTimes(1));
@@ -199,7 +208,7 @@ describe("another kind for the same target", () => {
   });
 
   test("the pending count keeps the new kind's count when the old kind's read answers after it", async () => {
-    const hub = fakeHub();
+    sharedHub();
     let answerTemplates: (count: number) => void = () => {};
     let answerVariables: (count: number) => void = () => {};
     const readTemplates = vi.fn(
@@ -221,10 +230,10 @@ describe("another kind for the same target", () => {
       hint: "GlobalVariableProposalsChanged",
     };
 
-    const { result, rerender } = renderHook(
-      ({ kind }) => usePendingProposalCount(kind, hub.connection),
-      { initialProps: { kind: templates } },
-    );
+    const { result, rerender } = renderHook(({ kind }) => usePendingProposalCount(kind), {
+      wrapper: WorkItemHubProvider,
+      initialProps: { kind: templates },
+    });
     await waitFor(() => expect(readTemplates).toHaveBeenCalledTimes(1));
     rerender({ kind: variables });
     await waitFor(() => expect(readVariables).toHaveBeenCalledTimes(1));

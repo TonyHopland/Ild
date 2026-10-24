@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import * as authServices from "../../services/auth";
 import type { GlobalVariableProposal } from "../../types";
 import GlobalVariables from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -35,6 +36,7 @@ describe("Global Variables page, refused writes", () => {
       <MemoryRouter>
         <GlobalVariables />
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     const row = await screen.findByRole("region", { name: "review_rules" });
@@ -87,6 +89,7 @@ describe("Global Variables page, refused suggestion decisions", () => {
       <MemoryRouter>
         <GlobalVariables />
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
@@ -118,6 +121,7 @@ describe("Global Variables page, refused suggestion decisions", () => {
       <MemoryRouter>
         <GlobalVariables />
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
 
     const fresh = await screen.findByRole("region", { name: "New variables" });

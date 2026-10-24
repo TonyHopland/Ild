@@ -10,6 +10,7 @@ import {
   aiProviderService,
   loopRunService,
 } from "../../services/auth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -93,7 +94,9 @@ describe("useWorkItemDetail live handoff", () => {
     // effect deps and defeat the test.
     const wi = makeWorkItem();
     const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(wi, onSave));
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
 
     // Let mount effects and the SubscribeToRun promise settle.
     await act(async () => {
@@ -121,7 +124,9 @@ describe("useWorkItemDetail live handoff", () => {
 
     const wi = makeWorkItem();
     const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(wi, onSave));
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
     await act(async () => {
       await Promise.resolve();
     });
@@ -146,7 +151,9 @@ describe("useWorkItemDetail live handoff", () => {
 
     const wi = makeWorkItem();
     const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(wi, onSave));
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -182,7 +189,9 @@ describe("useWorkItemDetail preview live update", () => {
 
     const wi = makeWorkItem({ worktreePath: "/tmp/wt" });
     const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(wi, onSave));
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
 
     // Let the mount refreshPreview settle.
     await act(async () => {
@@ -211,7 +220,7 @@ describe("useWorkItemDetail preview live update", () => {
 
     const wi = makeWorkItem({ worktreePath: "/tmp/wt" });
     const onSave = vi.fn();
-    renderHook(() => useWorkItemDetail(wi, onSave));
+    renderHook(() => useWorkItemDetail(wi, onSave), { wrapper: WorkItemHubProvider });
 
     await act(async () => {
       await Promise.resolve();
@@ -240,7 +249,9 @@ describe("useWorkItemDetail run cleanup", () => {
     const getRuns = vi.spyOn(workItemService, "getRuns").mockResolvedValue([]);
 
     const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(makeWorkItem(), onSave));
+    const { result } = renderHook(() => useWorkItemDetail(makeWorkItem(), onSave), {
+      wrapper: WorkItemHubProvider,
+    });
     await act(async () => {
       await Promise.resolve();
     });
@@ -265,7 +276,9 @@ describe("useWorkItemDetail run cleanup", () => {
     );
     const getById = vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
 
-    const { result } = renderHook(() => useWorkItemDetail(makeWorkItem(), vi.fn()));
+    const { result } = renderHook(() => useWorkItemDetail(makeWorkItem(), vi.fn()), {
+      wrapper: WorkItemHubProvider,
+    });
     await act(async () => {
       await Promise.resolve();
     });
@@ -289,7 +302,9 @@ describe("the queued pull-request writes a round intends to send", () => {
       .mockResolvedValue({ id: "run-1", prQueuedWrites: [] } as never);
 
     const wi = makeWorkItem({ status: WorkItemStatus.Running, humanFeedbackReason: null });
-    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()));
+    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
+      wrapper: WorkItemHubProvider,
+    });
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -320,7 +335,7 @@ describe("the queued pull-request writes a round intends to send", () => {
       .mockResolvedValue({ id: "run-1", prQueuedWrites: [] } as never);
 
     const wi = makeWorkItem();
-    renderHook(() => useWorkItemDetail(wi, vi.fn()));
+    renderHook(() => useWorkItemDetail(wi, vi.fn()), { wrapper: WorkItemHubProvider });
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -344,7 +359,9 @@ describe("the queued pull-request writes a round intends to send", () => {
     vi.spyOn(loopRunService, "getById").mockRejectedValue(new Error("network"));
 
     const wi = makeWorkItem();
-    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()));
+    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
+      wrapper: WorkItemHubProvider,
+    });
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();

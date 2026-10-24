@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { AuthContext } from "../hooks/useAuth";
 import { NAV_ITEMS } from "../utils/constants";
 import Header from "./Header";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 afterEach(cleanup);
 
@@ -23,6 +24,7 @@ function renderHeader() {
         <Header />
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 

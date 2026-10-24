@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { useSignalR } from "../../../hooks/useSignalR";
+import { useSharedWorkItemHub } from "../../../hooks/useWorkItemHub";
 import {
   aiProviderService,
   networkService,
@@ -520,7 +520,7 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
  * here is judged by the next connection and shows up as such without a refresh.
  */
 export default function NetworkSettings() {
-  const { on, off } = useSignalR();
+  const { on, off } = useSharedWorkItemHub();
   const [status, setStatus] = useState<NetworkStatus | null>(null);
   const [mode, setMode] = useState<NetworkMode>("off");
   const [modeError, setModeError] = useState<string | null>(null);

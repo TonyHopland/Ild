@@ -75,6 +75,7 @@ import Header from "../../components/Header";
 import { AuthContext } from "../../hooks/useAuth";
 import { setChatEnabled } from "../../hooks/useChatEnabled";
 import ChatPage from ".";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 // The page does not explain that it sends no context: a reviewer asked for the line to go.
 const NO_CONTEXT = "No work item or loop open: the agent only sees this conversation";
@@ -257,6 +258,7 @@ function renderShell(initialPath: string) {
         </ChatInboxProvider>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 }
 
@@ -368,7 +370,7 @@ describe("Chat tab in the main navigation", () => {
     async (path, shown) => {
       if (path === "/chat/s1") seedTwoChats();
       window.history.replaceState(null, "", path);
-      render(<App />);
+      render(<App />, { wrapper: WorkItemHubProvider });
 
       expect(await screen.findByText(shown)).toBeTruthy();
       expect(screen.queryByText(NO_CONTEXT)).toBeNull();
@@ -603,6 +605,7 @@ describe("The page's chat list and conversation", () => {
         favoritesInFlight={new Set()}
         extras={<a href="/chat/schedules">Schedules</a>}
       />,
+      { wrapper: WorkItemHubProvider },
     );
 
     expect(

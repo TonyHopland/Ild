@@ -8,6 +8,7 @@ import { WorkItem, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { stageParkedNode } from "../../test-support.parkedNode";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
   cleanup();
@@ -105,6 +106,7 @@ async function renderDialog(props: Partial<React.ComponentProps<typeof WorkItemM
         {...props}
       />
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
   await act(async () => {
     await Promise.resolve();
@@ -441,6 +443,7 @@ describe("an answer sent after the run has moved on", () => {
       <MemoryRouter>
         <Host />
       </MemoryRouter>,
+      { wrapper: WorkItemHubProvider },
     );
     await act(async () => {
       await Promise.resolve();

@@ -45,6 +45,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn(
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
 import { openChatFromList, proposalCardAround } from "../test-support";
+import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 function session(): ChatSession {
   return {
@@ -143,6 +144,7 @@ async function openResumed(view: ChatSession = session()) {
         <ChatBubble />
       </ChatInboxProvider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
   fireEvent.click(await screen.findByLabelText("Open chat"));
   await openChatFromList("Tidy the backlog");

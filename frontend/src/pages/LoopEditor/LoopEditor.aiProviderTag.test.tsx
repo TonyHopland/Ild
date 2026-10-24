@@ -34,6 +34,7 @@ vi.mock("../../services/auth", () => ({
 }));
 
 import LoopEditor from "./index";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const alpha: AiProvider = {
   id: "p-alpha",
@@ -122,6 +123,7 @@ async function openAiNode(aiConfig: Record<string, unknown>, providers: AiProvid
         </Routes>
       </AuthContext.Provider>
     </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
   );
 
   await waitFor(() => expect(screen.getByText("Reviewer")).toBeTruthy());

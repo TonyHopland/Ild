@@ -16,6 +16,7 @@ import {
   stageParkedNode,
   type ParkedNode,
 } from "../../test-support.parkedNode";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 // The feedback pane offers an output as a button only when the node the run is
 // parked on shows that output to the user. It learns that from the run's pinned
@@ -118,7 +119,7 @@ async function settled() {
 }
 
 async function renderDialog(workItem: WorkItem) {
-  const result = render(dialogFor(workItem));
+  const result = render(dialogFor(workItem), { wrapper: WorkItemHubProvider });
   await settled();
   return result;
 }
@@ -749,6 +750,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
             onSave={vi.fn()}
           />
         </MemoryRouter>,
+        { wrapper: WorkItemHubProvider },
       );
       await settled();
       if (text) await type(text);
