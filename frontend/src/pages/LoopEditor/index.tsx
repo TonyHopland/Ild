@@ -1012,7 +1012,7 @@ export default function LoopEditor() {
         const current = byName.get(variable.name.toLowerCase());
         try {
           if (!current) {
-            await globalVariableService.create(variable);
+            await globalVariableService.create({ name: variable.name, value: variable.value });
             report("success", `Created global variable "${variable.name}".`);
           } else if (current.value !== variable.value) {
             const answer = await askVariableConflict(variable.name, current.value, variable.value);

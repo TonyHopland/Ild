@@ -9,15 +9,12 @@ import type {
   LoopNodeEdge,
 } from "../types";
 import { RecoveryPolicy } from "../types";
+import { PLACEHOLDER, VARIABLE_NAME } from "./promptPlaceholder";
 
 const EXPORT_SCHEMA = "ild-loop-template/v2" as const;
 
-/** Mirrors `PromptPlaceholderRegistry.Pattern`. */
-const PLACEHOLDER = /\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}/g;
-
-/** Mirrors `PromptPlaceholderRegistry.GlobalPrefix` + `VariableNamePattern`. */
+/** Mirrors `PromptPlaceholderRegistry.GlobalPrefix`. */
 const GLOBAL_PREFIX = "global.";
-const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,127}$/;
 
 /**
  * The global variables the nodes interpolate, distinct ignoring case, in order

@@ -3,8 +3,8 @@
  *
  * {@link computeLineDiff} is the line level and serves the Loop Editor's
  * save-time review modal (ADR-0011) and its imported-global-variable conflict
- * modal, which have no diff to render until something computes one — the repo carries no diff library, so it diffs the
- * last-saved against the currently-edited loop JSON here.
+ * modal, which have no diff to render until something computes one — the repo
+ * carries no diff library, so it computes them here.
  *
  * {@link computeWordDiff} is the word level and serves both viewers. The files
  * tab needs nothing at the line level (the server hands it a ready-made unified

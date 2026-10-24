@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import LineDiffView from "../../../components/LineDiffView";
 import { computeLineDiff } from "../../../utils/jsonDiff";
 
 export interface SaveDiffModalProps {
@@ -62,27 +63,7 @@ export default function SaveDiffModal({
         </div>
         <div className="modal-body">
           {changed ? (
-            <div className="save-diff-view" data-testid="save-diff-view">
-              {diff.map((line, idx) => (
-                <div key={idx} className={`save-diff-line save-diff-${line.type}`}>
-                  <span className="save-diff-gutter">
-                    {line.type === "add" ? "+" : line.type === "del" ? "-" : " "}
-                  </span>
-                  <span className="save-diff-text">
-                    {line.segments
-                      ? line.segments.map((segment, segIdx) => (
-                          <span
-                            key={segIdx}
-                            className={segment.changed ? `save-diff-seg-${line.type}` : undefined}
-                          >
-                            {segment.text}
-                          </span>
-                        ))
-                      : line.text}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <LineDiffView diff={diff} testId="save-diff-view" />
           ) : (
             <p data-testid="save-diff-empty">
               No changes to save — the loop matches the last saved version.

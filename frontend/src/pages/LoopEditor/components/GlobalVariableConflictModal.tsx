@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import LineDiffView from "../../../components/LineDiffView";
 import { computeLineDiff } from "../../../utils/jsonDiff";
 
 export interface GlobalVariableConflictModalProps {
@@ -43,16 +44,7 @@ export default function GlobalVariableConflictModal({
         </div>
         <div className="modal-body">
           <p>The imported value differs from the current one. Overwrite it?</p>
-          <div className="save-diff-view" data-testid="global-variable-diff">
-            {diff.map((line, idx) => (
-              <div key={idx} className={`save-diff-line save-diff-${line.type}`}>
-                <span className="save-diff-gutter">
-                  {line.type === "add" ? "+" : line.type === "del" ? "-" : " "}
-                </span>
-                <span className="save-diff-text">{line.text}</span>
-              </div>
-            ))}
-          </div>
+          <LineDiffView diff={diff} testId="global-variable-diff" />
         </div>
         <div className="modal-footer">
           <button type="button" className="btn btn-secondary" onClick={onKeepCurrent}>

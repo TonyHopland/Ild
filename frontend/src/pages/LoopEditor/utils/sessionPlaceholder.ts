@@ -9,12 +9,10 @@
  * over-long result). Pure, so it unit-tests directly.
  */
 
-/** Mirrors `PromptPlaceholderRegistry.Pattern`. */
-const PLACEHOLDER = /\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}/g;
+import { PLACEHOLDER, VARIABLE_NAME } from "../../../utils/promptPlaceholder";
 
-/** Mirrors `PromptPlaceholderRegistry.VariablePrefix` + `VariableNamePattern`. */
+/** Mirrors `PromptPlaceholderRegistry.VariablePrefix`. */
 const VARIABLE_PREFIX = "Var.";
-const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,127}$/;
 
 function placeholderNames(value: string): string[] {
   return Array.from(value.matchAll(PLACEHOLDER), (match) => match[1]);
