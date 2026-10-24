@@ -116,10 +116,14 @@ export default function TaskboardColumn({
 
   // Every part of the column takes a card's drag, as a move; cancelling
   // dragenter as well as dragover is what keeps the cursor from showing "not
-  // allowed". Anything else, such as a file, is left to the browser to refuse.
+  // allowed". Anything else, such as a file or a link, is refused here rather
+  // than left to the browser, which would open it in the tab when dropped.
   const handleDragOver = (e: React.DragEvent<HTMLElement>) => {
-    if (!e.dataTransfer.types.includes(WORK_ITEM_DRAG_TYPE)) return;
     e.preventDefault();
+    if (!e.dataTransfer.types.includes(WORK_ITEM_DRAG_TYPE)) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
     e.dataTransfer.dropEffect = "move";
     const index = dropIndexAt(e);
     if (!dragOver) setDragOver(true);

@@ -727,19 +727,21 @@ function drag(
     relatedTarget = null,
     draggedId = "",
     types = [WORK_ITEM_DRAG_TYPE, "text/plain"],
+    dropEffect = "none",
   }: {
     clientY?: number;
     clientX?: number;
     relatedTarget?: Element | null;
     draggedId?: string;
     types?: string[];
+    dropEffect?: string;
   } = {},
 ) {
   const dataTransfer = {
     types,
     getData: () => draggedId,
     setData: () => {},
-    dropEffect: "none",
+    dropEffect,
     effectAllowed: "move",
   };
   const event = createEvent[name](target, { dataTransfer });
@@ -939,14 +941,42 @@ describe("TaskboardColumn drop line", () => {
     layOutWithGaps(["a", "b", "c"]);
     const y = cardTop(1) + 20;
 
-    expect(drag("dragEnter", card("b"), { clientY: y, types: ["Files"] }).prevented).toBe(false);
-    expect(drag("dragOver", card("b"), { clientY: y, types: ["Files"] }).prevented).toBe(false);
-    expect(drag("dragOver", bodyOf(column), { clientY: y, types: ["text/plain"] }).prevented).toBe(
-      false,
-    );
+    const refused = { prevented: true, dropEffect: "none" };
+    expect(
+      drag("dragEnter", card("b"), { clientY: y, types: ["Files"], dropEffect: "copy" }),
+    ).toEqual(refused);
+    expect(
+      drag("dragOver", card("b"), { clientY: y, types: ["Files"], dropEffect: "copy" }),
+    ).toEqual(refused);
+    expect(
+      drag("dragOver", bodyOf(column), { clientY: y, types: ["text/plain"], dropEffect: "copy" }),
+    ).toEqual(refused);
 
     expect(lineIn(column)).toBeNull();
     expect(column.classList.contains("drag-over")).toBe(false);
+  });
+
+  test("a file dragged over a folded column's strip is refused and leaves it folded", () => {
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Done}
+        label="Done"
+        workItems={itemsIn(WorkItemStatus.Done, ["a"])}
+        total={1}
+        onWorkItemUpdate={vi.fn()}
+      />,
+    );
+    const strip = screen.getByRole("button", { name: "Done: 1 item. Show column" });
+
+    const refused = { prevented: true, dropEffect: "none" };
+    expect(drag("dragEnter", strip, { clientY: 30, types: ["Files"], dropEffect: "copy" })).toEqual(
+      refused,
+    );
+    expect(drag("dragOver", strip, { clientY: 30, types: ["Files"], dropEffect: "copy" })).toEqual(
+      refused,
+    );
+
+    expect(screen.getByRole("button", { name: "Done: 1 item. Show column" })).toBeTruthy();
   });
 
   test("a folded column opened by a drag stays open across child leaves and folds back on leaving", () => {
