@@ -15,6 +15,7 @@ var initialLogLevel = Enum.TryParse<LogEventLevel>(
         ? parsedLevel
         : LogEventLevel.Information;
 var loggingLevelSwitch = new LoggingLevelSwitch(initialLogLevel);
+Serilog.ILogger? hostLogger = null;
 
 try
 {
@@ -130,6 +131,10 @@ try
     });
 
     var app = builder.Build();
+
+    // The logger this process installed, resolved now so the static one is this host's.
+    _ = app.Services.GetRequiredService<ILoggerFactory>();
+    hostLogger = Log.Logger;
 
     _ = app.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>();
 
@@ -364,7 +369,10 @@ try
 }
 finally
 {
-    Log.CloseAndFlush();
+    // Only this host's own logger. A test host that stops lets this run after the next host has
+    // installed its logger, and closing the static one then silences that host.
+    if (hostLogger is null || ReferenceEquals(Log.Logger, hostLogger))
+        Log.CloseAndFlush();
 }
 
 // Required for WebApplicationFactory<Program> in integration tests.

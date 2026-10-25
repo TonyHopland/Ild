@@ -83,6 +83,7 @@ public class BackupController(
                 switch (HeaderUtilities.RemoveQuotes(disposition.Name).Value)
                 {
                     case "file":
+                        if (hasFile) throw new BackupException(BackupFailure.Invalid, "Send one backup file.");
                         await section.Body.CopyToAsync(spool.Stream, ct);
                         hasFile = true;
                         break;

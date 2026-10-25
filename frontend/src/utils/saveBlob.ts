@@ -7,5 +7,6 @@ export function saveBlob(blob: Blob, fileName: string) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  // Some browsers start the save after the click returns, and would find the bytes gone.
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }

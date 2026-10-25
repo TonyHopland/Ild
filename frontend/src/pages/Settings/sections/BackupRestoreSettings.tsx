@@ -231,7 +231,7 @@ function DatabaseBackup({
       {preRestore && (
         <div className="backup-form">
           <p className="settings-card-note">
-            The last restore first stored the data it replaced
+            Before the last restore, ILD stored the data it was about to replace
             {` (${new Date(preRestore.createdAt).toLocaleString()}, ${formatBytes(preRestore.bytes)})`}
             . It is protected by the passphrase of that restore.
           </p>

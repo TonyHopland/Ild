@@ -15,11 +15,13 @@ public class WorkItemServerBypassWriteGuardTests
     // Each of these has been checked: the WorkItems writes among them (the Running
     // claim and the PR record in WorkItemService, the applied edit proposal in
     // WorkItemEditProposalService) write their history explicitly; the board
-    // renumber in WorkItemService writes only the priority, which history does not
-    // track; WorkItemRows' claim is a row lock that changes nothing; the rest touch
+    // renumber in WorkItemService writes only the priority, and the heartbeat
+    // refresh after a backup import only LastHeartbeatAt, neither of which history
+    // tracks; WorkItemRows' claim is a row lock that changes nothing; the rest touch
     // other tables.
     private static readonly Dictionary<string, int> Pinned = new(StringComparer.Ordinal)
     {
+        ["Controllers/MaintenanceBackupController.cs"] = 1,
         ["Services/WorkItemAttachmentService.cs"] = 1,
         ["Services/WorkItemEditProposalService.cs"] = 4,
         ["Services/WorkItemRows.cs"] = 1,

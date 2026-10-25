@@ -72,6 +72,9 @@ public sealed class PostgresDatabaseArchive<TContext>(TContext context, string d
 
         await using var connection = await OpenAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
+        // The DROP and TRUNCATE below wait for every other session using these tables; a session that
+        // never lets go would otherwise hold the restore, and with it the instance, indefinitely.
+        await ExecuteAsync(connection, "SET LOCAL lock_timeout = '60s'", ct);
 
         var owned = (await ReadSchemaAsync(connection, ct)).Keys;
         if (owned.Count > 0)
@@ -94,10 +97,20 @@ public sealed class PostgresDatabaseArchive<TContext>(TContext context, string d
         {
             using var reader = new StreamReader(new FramedReadStream(input), new UTF8Encoding(false), false, leaveOpen: true);
             await using var writer = await connection.BeginTextImportAsync(CopySql(table, "FROM STDIN"), ct);
-            var buffer = new char[16 * 1024];
-            int read;
-            while ((read = await reader.ReadAsync(buffer, ct)) > 0)
-                await writer.WriteAsync(buffer.AsMemory(0, read), ct);
+            try
+            {
+                var buffer = new char[16 * 1024];
+                int read;
+                while ((read = await reader.ReadAsync(buffer, ct)) > 0)
+                    await writer.WriteAsync(buffer.AsMemory(0, read), ct);
+            }
+            catch
+            {
+                // Disposing a writer completes the COPY; a damaged archive must surface as itself and not
+                // as the server's complaint about the half of a row it was just handed.
+                writer.Cancel();
+                throw;
+            }
         }
         await Framing.RequireEndMarkerAsync(input, ct);
 

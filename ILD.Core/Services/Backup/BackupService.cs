@@ -169,16 +169,18 @@ public sealed class BackupService(
                     await partial.MoveToAsync(directory.PreRestorePath(database));
                 }
 
+                // From here the restore is not given up when the caller hangs up: the import is atomic, but
+                // a commit that races a cancellation would leave nobody knowing which way it went.
                 upload.Position = 0;
-                await using var archive = await OpenAsync(upload, passphrase, database, ct);
+                await using var archive = await OpenAsync(upload, passphrase, database, CancellationToken.None);
                 if (database == Core)
                 {
-                    await core!.ImportAsync(archive, ct);
+                    await core!.ImportAsync(archive, CancellationToken.None);
                     restarting = true;
                 }
                 else
                 {
-                    await workItemServer.ImportAsync(await ServerOptionsAsync(ct), WorkItemActor.Human(username), archive, ct);
+                    await workItemServer.ImportAsync(await ServerOptionsAsync(ct), WorkItemActor.Human(username), archive, CancellationToken.None);
                 }
             }
             finally
@@ -196,8 +198,8 @@ public sealed class BackupService(
     }
 
     /// <summary>
-    /// The database's archive, encrypted into the stream <paramref name="openOutput"/> returns. That is asked
-    /// for only once the archive's source answers, so a failure before then leaves the caller free to report it.
+    /// The database's archive, encrypted into the stream <paramref name="openOutput"/> returns. For the WorkItem Server
+    /// that is asked for only once the server has answered, so a failure before then leaves the caller free to report it.
     /// </summary>
     private async Task WriteEncryptedAsync(string database, string passphrase, string username, Func<Stream> openOutput, CancellationToken ct)
     {

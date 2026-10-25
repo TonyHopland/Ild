@@ -57,15 +57,21 @@ public sealed class MaintenanceBackupController(
 
         // The data is replaced, and what follows is not abandoned if the caller hangs up: the import was
         // the part that could be rolled back.
-        await db.Database.MigrateAsync(CancellationToken.None);
-
-        // Heartbeats in the archive date from when it was made. Left alone, the reclaimer
-        // would hand every claimed item back to Ready as soon as the gate opens, which is
-        // before the ILD instance has had its chance to heartbeat them again.
-        var now = clock.GetUtcNow().UtcDateTime;
-        await db.WorkItems
-            .Where(w => (w.Status == WorkItemStatus.Running || w.Status == WorkItemStatus.WaitingForIld) && w.LastHeartbeatAt != null)
-            .ExecuteUpdateAsync(set => set.SetProperty(w => w.LastHeartbeatAt, now), CancellationToken.None);
+        try
+        {
+            await db.Database.MigrateAsync(CancellationToken.None);
+        }
+        finally
+        {
+            // Heartbeats in the archive date from when it was made. Left alone, the reclaimer
+            // would hand every claimed item back to Ready as soon as the gate opens, which is
+            // before the ILD instance has had its chance to heartbeat them again; so this
+            // happens even when the forward migration fails.
+            var now = clock.GetUtcNow().UtcDateTime;
+            await db.WorkItems
+                .Where(w => (w.Status == WorkItemStatus.Running || w.Status == WorkItemStatus.WaitingForIld) && w.LastHeartbeatAt != null)
+                .ExecuteUpdateAsync(set => set.SetProperty(w => w.LastHeartbeatAt, now), CancellationToken.None);
+        }
 
         logger.LogInformation("Work item data imported by {Username}", Actor());
         return Ok();
