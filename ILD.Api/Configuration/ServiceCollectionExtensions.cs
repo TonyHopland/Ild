@@ -87,6 +87,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMaintenanceState>(sp => sp.GetRequiredService<MaintenanceState>());
         services.AddSingleton<BackupOperationLock>();
         services.AddSingleton<BackupDirectory>();
+        services.AddSingleton<DatabaseCatalog>();
         services.AddScoped<BackupService>();
         // Exports and imports run as long as the data is large, so this client has no timeout of its own.
         services.AddHttpClient<IWorkItemServerBackupClient, WorkItemServerBackupClient>(c => c.Timeout = Timeout.InfiniteTimeSpan);

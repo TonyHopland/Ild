@@ -43,22 +43,20 @@ public sealed record ArchiveManifest(
             var head = new byte[4];
             await input.ReadExactlyAsync(head, ct);
             var length = BinaryPrimitives.ReadInt32BigEndian(head);
-            if (length is <= 0 or > MaxManifestBytes) throw new BackupRefusedException(NotABackup);
+            if (length is <= 0 or > MaxManifestBytes) throw BackupRefusedException.NotABackup();
             var body = new byte[length];
             await input.ReadExactlyAsync(body, ct);
             var manifest = JsonSerializer.Deserialize<ArchiveManifest>(body, Json);
             if (manifest is null || manifest.Format != CurrentFormat || manifest.Migrations is null
                 || manifest.Tables is null || manifest.Database is null || manifest.AppVersion is null)
-                throw new BackupRefusedException(NotABackup);
+                throw BackupRefusedException.NotABackup();
             return manifest;
         }
         catch (Exception ex) when (ex is EndOfStreamException or JsonException)
         {
-            throw new BackupRefusedException(NotABackup);
+            throw BackupRefusedException.NotABackup();
         }
     }
-
-    private const string NotABackup = "This is not an ILD backup, or it is damaged.";
 
     /// <summary>
     /// Refuses an archive of another database, one made by a newer build, and one whose migrations

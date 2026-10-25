@@ -6,6 +6,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Security;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -24,15 +25,16 @@ public sealed class BackupServiceCoreTests : IDisposable
     private readonly string _dataRoot = Directory.CreateTempSubdirectory("ild-backup-core-").FullName;
     private readonly FakeArchive _archive;
     private readonly object _archiveObject;
+    private readonly Type _archiveType;
     private readonly MaintenanceState _maintenance = new(TimeSpan.Zero);
     private readonly BackupDirectory _directory;
 
     public BackupServiceCoreTests()
     {
-        var archiveType = typeof(BackupService).GetConstructors().Single().GetParameters().Last().ParameterType;
+        _archiveType = typeof(BackupService).GetConstructors().Single().GetParameters().Last().ParameterType;
         _archiveObject = typeof(DispatchProxy).GetMethods()
             .Single(m => m.Name == nameof(DispatchProxy.Create) && m.GetGenericArguments().Length == 2)
-            .MakeGenericMethod(archiveType, typeof(FakeArchive)).Invoke(null, null)!;
+            .MakeGenericMethod(_archiveType, typeof(FakeArchive)).Invoke(null, null)!;
         _archive = (FakeArchive)_archiveObject;
         _directory = new BackupDirectory(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataRoot }).Build());
@@ -85,9 +87,17 @@ public sealed class BackupServiceCoreTests : IDisposable
     {
         var engine = new Mock<ILoopEngine>();
         engine.Setup(e => e.GetActiveRunIdsAsync()).ReturnsAsync(Array.Empty<Guid>());
+        var client = Mock.Of<IWorkItemServerBackupClient>();
+        var resolver = Mock.Of<IWorkItemServerOptionsResolver>();
+        var services = new ServiceCollection();
+        services.AddSingleton(client);
+        services.AddSingleton(resolver);
+        services.AddScoped(_archiveType, _ => _archiveObject);
+        var catalog = new DatabaseCatalog(
+            services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(), NullLogger<DatabaseCatalog>.Instance);
         return (BackupService)typeof(BackupService).GetConstructors().Single().Invoke([
-            Mock.Of<IWorkItemServerBackupClient>(), Mock.Of<IWorkItemServerOptionsResolver>(), _directory, _maintenance,
-            new BackupOperationLock(), engine.Object, Mock.Of<IWorktreePreviewService>(), Mock.Of<IChatTurnRunner>(),
+            client, resolver, _directory, _maintenance,
+            new BackupOperationLock(), catalog, engine.Object, Mock.Of<IWorktreePreviewService>(), Mock.Of<IChatTurnRunner>(),
             NullLogger<BackupService>.Instance, _archiveObject]);
     }
 

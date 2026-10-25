@@ -33,8 +33,6 @@ public sealed class BackupException(BackupFailure failure, string message, Excep
     public BackupFailure Failure => failure;
 }
 
-public sealed record DatabaseState(bool Available, string? Reason, ArchiveInfo? Info);
-
 public sealed record PreRestoreBackup(DateTime CreatedAt, long Bytes);
 
 public sealed record DatabaseBackupStatus(bool Available, string? Reason, PreRestoreBackup? PreRestoreBackup);
@@ -75,14 +73,15 @@ public sealed class BackupService(
     BackupDirectory directory,
     MaintenanceState maintenance,
     BackupOperationLock operations,
+    DatabaseCatalog catalog,
     ILoopEngine engine,
     IWorktreePreviewService previews,
     IChatTurnRunner chats,
     ILogger<BackupService> log,
     IDatabaseArchive? core = null)
 {
-    public const string Core = "core";
-    public const string WorkItems = "workitems";
+    public const string Core = ArchiveDatabase.Core;
+    public const string WorkItems = ArchiveDatabase.WorkItems;
     public static readonly IReadOnlyList<string> Databases = [Core, WorkItems];
 
     /// <summary>What the key check in a core backup decrypts to.</summary>
@@ -90,16 +89,9 @@ public sealed class BackupService(
 
     public const string RestoreConfirmation = "RESTORE";
 
-    public async Task<IReadOnlyDictionary<string, DatabaseState>> DescribeDatabasesAsync(CancellationToken ct)
-        => new Dictionary<string, DatabaseState>
-        {
-            [Core] = await DescribeCoreAsync(ct),
-            [WorkItems] = await DescribeWorkItemsAsync(ct),
-        };
-
     public async Task<BackupStatus> GetStatusAsync(CancellationToken ct)
         => new(
-            (await DescribeDatabasesAsync(ct)).ToDictionary(
+            (await catalog.DescribeAllAsync(ct)).ToDictionary(
                 database => database.Key,
                 database => new DatabaseBackupStatus(
                     database.Value.Available,
@@ -122,7 +114,7 @@ public sealed class BackupService(
                 throw new BackupException(BackupFailure.Invalid, $"The passphrase must be at least {PassphrasePolicy.MinLength} characters.");
 
             using var operation = operations.TryEnter() ?? throw Busy();
-            var state = await DescribeAsync(database, ct);
+            var state = await catalog.DescribeAsync(database, ct);
             if (!state.Available) throw new BackupException(BackupFailure.Unavailable, state.Reason!);
 
             await WriteEncryptedAsync(database, passphrase, username, () => openOutput(FileName(database)), ct);
@@ -140,7 +132,7 @@ public sealed class BackupService(
                 throw new BackupException(BackupFailure.Invalid, "Enter the passphrase the backup was made with.");
 
             using var operation = operations.TryEnter() ?? throw Busy();
-            var state = await DescribeAsync(database, ct);
+            var state = await catalog.DescribeAsync(database, ct);
             if (!state.Available) throw new BackupException(BackupFailure.Unavailable, state.Reason!);
 
             // Read the whole file before anything is touched: a file that fails here fails with
@@ -264,49 +256,6 @@ public sealed class BackupService(
         }
     }
 
-    private async Task<DatabaseState> DescribeAsync(string database, CancellationToken ct)
-        => database == Core ? await DescribeCoreAsync(ct) : await DescribeWorkItemsAsync(ct);
-
-    private async Task<DatabaseState> DescribeCoreAsync(CancellationToken ct)
-    {
-        if (core is null)
-            return new DatabaseState(false, "Backing up ILD's own data needs PostgreSQL, and this instance uses another database.", null);
-        try
-        {
-            return new DatabaseState(true, null, await core.DescribeAsync(ct));
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            log.LogWarning(ex, "Could not read the ILD database for a backup");
-            return new DatabaseState(false, $"The ILD database could not be read: {ex.Message}", null);
-        }
-    }
-
-    private async Task<DatabaseState> DescribeWorkItemsAsync(CancellationToken ct)
-    {
-        WorkItemServerOptions options;
-        try
-        {
-            options = await ServerOptionsAsync(ct);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return new DatabaseState(false, ex.Message, null);
-        }
-
-        try
-        {
-            return await workItemServer.GetInfoAsync(options, ct) is { } info
-                ? new DatabaseState(true, null, info)
-                : new DatabaseState(false, "This tracker does not support backup.", null);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or NotSupportedException)
-        {
-            // NotSupported and Json: it answered, with something that is not backup info.
-            return new DatabaseState(false, $"The WorkItem Server could not be asked about backup: {ex.Message}", null);
-        }
-    }
-
     private Task<WorkItemServerOptions> ServerOptionsAsync(CancellationToken ct)
         => serverOptions.ResolveForRepositoryAsync(null, ct);
 
@@ -316,24 +265,26 @@ public sealed class BackupService(
     /// <summary>Runs one operation and logs how it ended with the acting username. The passphrase is never in a message.</summary>
     private async Task Audited(string database, string action, string username, Func<Task> operation)
     {
+        void Record(string outcome) => log.LogInformation("Backup {Database} {Action} {Outcome} by {Username}", database, action, outcome, username);
+
         try
         {
             await operation();
-            log.LogInformation("Backup {Database} {Action} {Outcome} by {Username}", database, action, "succeeded", username);
+            Record("succeeded");
         }
         catch (BackupException ex)
         {
-            log.LogInformation("Backup {Database} {Action} {Outcome} by {Username}", database, action, "refused: " + ex.Message, username);
+            Record("refused: " + ex.Message);
             throw;
         }
         catch (BackupRefusedException ex)
         {
-            log.LogInformation("Backup {Database} {Action} {Outcome} by {Username}", database, action, "refused: " + ex.Message, username);
+            Record("refused: " + ex.Message);
             throw new BackupException(BackupFailure.Refused, ex.Message);
         }
         catch (OperationCanceledException)
         {
-            log.LogInformation("Backup {Database} {Action} {Outcome} by {Username}", database, action, "cancelled", username);
+            Record("cancelled");
             throw;
         }
         catch (Exception ex)

@@ -1,5 +1,12 @@
 namespace ILD.Data.Backup;
 
+/// <summary>The names a database goes by in a backup: in its manifest and header, and in the API.</summary>
+public static class ArchiveDatabase
+{
+    public const string Core = "core";
+    public const string WorkItems = "workitems";
+}
+
 /// <summary>What a database says about itself, for deciding whether an archive may be restored into it.</summary>
 /// <param name="Version">The running build's version.</param>
 /// <param name="Migrations">Every migration this build knows, applied or not.</param>

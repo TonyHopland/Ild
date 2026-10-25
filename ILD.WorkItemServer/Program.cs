@@ -59,7 +59,7 @@ public sealed class WorkItemServerProgram
                 opt.UseNpgsql(pooledConnectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public")));
             // The backup endpoints are served whenever an archive is registered.
             builder.Services.AddScoped<IDatabaseArchive>(sp =>
-                new PostgresDatabaseArchive<WorkItemServerDbContext>(sp.GetRequiredService<WorkItemServerDbContext>(), "workitems"));
+                new PostgresDatabaseArchive<WorkItemServerDbContext>(sp.GetRequiredService<WorkItemServerDbContext>(), ArchiveDatabase.WorkItems));
         }
         // When no connection string is set (e.g. integration tests), skip registration
         // so no Npgsql internal services are registered. The test factory substitutes

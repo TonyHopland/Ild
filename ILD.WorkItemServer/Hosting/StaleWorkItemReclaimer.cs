@@ -22,11 +22,11 @@ public sealed class StaleWorkItemReclaimer : BackgroundService
         IServiceScopeFactory scopes,
         IConfiguration config,
         ILogger<StaleWorkItemReclaimer> logger,
-        ImportGate? importGate = null)
+        ImportGate importGate)
     {
         _scopes = scopes;
         _logger = logger;
-        _importGate = importGate ?? new ImportGate();
+        _importGate = importGate;
         var timeoutMinutes = config.GetValue<int?>("WorkItemServer:StaleTimeoutMinutes") ?? 15;
         var intervalSeconds = config.GetValue<int?>("WorkItemServer:StaleScanIntervalSeconds") ?? 30;
         _timeout = TimeSpan.FromMinutes(timeoutMinutes);

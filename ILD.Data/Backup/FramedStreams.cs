@@ -33,7 +33,7 @@ internal static class Framing
         => new("The backup is incomplete or damaged: it does not end where it should.");
 }
 
-internal sealed class FramedWriteStream(Stream inner) : Stream
+internal sealed class FramedWriteStream(Stream inner) : ForwardOnlyStream(canRead: false, canWrite: true)
 {
     private readonly byte[] _buffer = new byte[64 * 1024];
     private int _filled;
@@ -72,21 +72,9 @@ internal sealed class FramedWriteStream(Stream inner) : Stream
         await inner.WriteAsync(frame, ct);
     }
 
-    public override void Write(byte[] buffer, int offset, int count)
-        => WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
-
-    public override void Flush() { }
-    public override bool CanRead => false;
-    public override bool CanSeek => false;
-    public override bool CanWrite => true;
-    public override long Length => throw new NotSupportedException();
-    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-    public override void SetLength(long value) => throw new NotSupportedException();
 }
 
-internal sealed class FramedReadStream(Stream inner) : Stream
+internal sealed class FramedReadStream(Stream inner) : ForwardOnlyStream(canRead: true, canWrite: false)
 {
     private int _remaining;
     private bool _ended;
@@ -114,16 +102,4 @@ internal sealed class FramedReadStream(Stream inner) : Stream
         return read;
     }
 
-    public override int Read(byte[] buffer, int offset, int count)
-        => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
-
-    public override void Flush() { }
-    public override bool CanRead => true;
-    public override bool CanSeek => false;
-    public override bool CanWrite => false;
-    public override long Length => throw new NotSupportedException();
-    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-    public override void SetLength(long value) => throw new NotSupportedException();
-    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

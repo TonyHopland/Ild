@@ -173,7 +173,7 @@ describe("the overview's attachment list", () => {
     expect(clicks[0].download).toBe("shot.png");
     expect(clicks[0].href.startsWith("blob:")).toBe(true);
     expect(clicks[0].href).toBe(objectUrl);
-    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
     expect(open).not.toHaveBeenCalled();
   });
 

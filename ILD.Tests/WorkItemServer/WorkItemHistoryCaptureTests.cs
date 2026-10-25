@@ -603,7 +603,7 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         var config = new ConfigurationBuilder().Build();
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
         BackgroundService hosted = service == nameof(StaleWorkItemReclaimer)
-            ? new StaleWorkItemReclaimer(scopes, config, NullLogger<StaleWorkItemReclaimer>.Instance)
+            ? new StaleWorkItemReclaimer(scopes, config, NullLogger<StaleWorkItemReclaimer>.Instance, new ImportGate())
             : new WorkQueueReconciler(scopes, config, NullLogger<WorkQueueReconciler>.Instance);
 
         await hosted.StartAsync(stopping.Token);

@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import { RecoveryPolicy } from "../types";
 import { placeholderKeys, VARIABLE_NAME } from "./promptPlaceholder";
+import { saveBlob } from "./saveBlob";
 
 const EXPORT_SCHEMA = "ild-loop-template/v2" as const;
 
@@ -82,14 +83,7 @@ export function downloadExport(exportData: LoopTemplateExport, filename: string)
   const blob = new Blob([JSON.stringify(exportData, null, 2)], {
     type: "application/json",
   });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename.endsWith(".json") ? filename : `${filename}.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  saveBlob(blob, filename.endsWith(".json") ? filename : `${filename}.json`);
 }
 
 /** Result of parsing an import file — discriminated union */

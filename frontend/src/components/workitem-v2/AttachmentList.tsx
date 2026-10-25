@@ -2,6 +2,7 @@ import { useState } from "react";
 import { WorkItem, WorkItemAttachment } from "../../types";
 import { workItemService } from "../../services/auth";
 import { formatBytes } from "../../utils/attachments";
+import { saveBlob } from "../../utils/saveBlob";
 
 interface AttachmentListProps {
   workItem: WorkItem;
@@ -61,14 +62,7 @@ export default function AttachmentList({ workItem, onRemoved }: AttachmentListPr
   const download = (attachment: WorkItemAttachment) =>
     act(attachment, `Failed to download ${attachment.fileName}.`, async () => {
       const blob = await workItemService.downloadAttachment(workItem.id, attachment.id);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = attachment.fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      saveBlob(blob, attachment.fileName);
     });
 
   const remove = (attachment: WorkItemAttachment) =>

@@ -10,6 +10,9 @@ import type {
 import { formatBytes } from "../../../utils/attachments";
 import { saveBlob } from "../../../utils/saveBlob";
 
+/** The word the server requires before it replaces a database. */
+const RESTORE_CONFIRMATION = "RESTORE";
+
 const failure = (error: unknown, fallback: string) =>
   (error as ApiError | Error | undefined)?.message || fallback;
 
@@ -70,7 +73,7 @@ function DatabaseBackup({
     createPassphrase.length >= minPassphraseLength &&
     (!needsAcknowledgement || acknowledged);
   const canRestore =
-    !busy && file !== null && restorePassphrase.length > 0 && confirmation === "RESTORE";
+    !busy && file !== null && restorePassphrase.length > 0 && confirmation === RESTORE_CONFIRMATION;
 
   const create = async () => {
     setBusy(true);
@@ -203,7 +206,7 @@ function DatabaseBackup({
           value={restorePassphrase}
           onChange={(event) => setRestorePassphrase(event.target.value)}
         />
-        <label htmlFor={`${ids}-confirm`}>Type RESTORE to confirm</label>
+        <label htmlFor={`${ids}-confirm`}>Type {RESTORE_CONFIRMATION} to confirm</label>
         <input
           id={`${ids}-confirm`}
           type="text"

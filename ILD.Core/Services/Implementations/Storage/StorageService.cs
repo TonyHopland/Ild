@@ -15,19 +15,19 @@ public sealed class StorageService : IStorageService
     private readonly string _dataRoot;
     private readonly string _worktreesRoot;
     private readonly string _chatRoot;
-    private readonly BackupService _backups;
+    private readonly DatabaseCatalog _databases;
 
     public StorageService(
         ILoopRunStore runs,
         IProviderStore providers,
         IConfiguration config,
         ChatOptions chatOptions,
-        BackupService backups)
+        DatabaseCatalog databases)
     {
         _runs = runs;
         _providers = providers;
         _config = config;
-        _backups = backups;
+        _databases = databases;
         _dataRoot = Path.GetFullPath(HostPath(config, "App:DataPath"));
         _worktreesRoot = Path.GetFullPath(HostPath(config, "App:WorktreesPath"));
         _chatRoot = Path.GetFullPath(chatOptions.ScratchRoot);
@@ -35,6 +35,8 @@ public sealed class StorageService : IStorageService
 
     public async Task<StorageOverview> GetOverviewAsync(CancellationToken cancellationToken)
     {
+        // Alongside the disk walk, which is the slow part.
+        var databasesLookup = _databases.DescribeAllAsync(cancellationToken);
         var repositories = (await _providers.GetAllRepositoriesAsync()).ToDictionary(r => r.Id);
         var runs = await _runs.GetRunsWithWorktreeAsync();
 
@@ -91,7 +93,7 @@ public sealed class StorageService : IStorageService
         var measured = FileStatus.IsSupported;
         if (measured)
             scan.Run(cancellationToken);
-        var databases = await _backups.DescribeDatabasesAsync(cancellationToken);
+        var databases = await databasesLookup;
         return new StorageOverview(
             new[] { worktrees, clones, previewData, chats, agents, temp, backups, other }.Select(c => c.ToCategory(measured)).ToList(),
             [

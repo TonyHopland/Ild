@@ -24,6 +24,7 @@ import {
 } from "../../utils/diffSelection";
 import { parseUnifiedDiff } from "../../utils/unifiedDiff";
 import { highlightLines } from "../../utils/syntaxHighlight";
+import { saveBlob } from "../../utils/saveBlob";
 import MarkdownRenderer from "../MarkdownRenderer";
 import Icon from "../Icon";
 import { useIsMobile } from "../../hooks/useIsMobile";
@@ -376,14 +377,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     setDownloadError(null);
     try {
       const blob = await workItemService.downloadFile(workItem.id, path);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = path.slice(path.lastIndexOf("/") + 1);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      saveBlob(blob, path.slice(path.lastIndexOf("/") + 1));
     } catch (e) {
       if (selectedPathRef.current !== path) return;
       setDownloadError((e as { message?: string })?.message ?? "Failed to download file.");

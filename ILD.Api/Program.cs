@@ -64,7 +64,7 @@ try
             options.UseNpgsql(pooledConnectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public"));
         });
         builder.Services.AddScoped<ILD.Data.Backup.IDatabaseArchive>(sp =>
-            new ILD.Data.Backup.PostgresDatabaseArchive<AppDbContext>(sp.GetRequiredService<AppDbContext>(), "core"));
+            new ILD.Data.Backup.PostgresDatabaseArchive<AppDbContext>(sp.GetRequiredService<AppDbContext>(), ILD.Data.Backup.ArchiveDatabase.Core));
     }
     // When no connection string is set (e.g. integration tests), skip AddDataLayer
     // so no Npgsql internal services are registered. The test factory substitutes
@@ -132,7 +132,8 @@ try
 
     var app = builder.Build();
 
-    // The logger this process installed, resolved now so the static one is this host's.
+    // Resolving the logger factory is what installs this host's logger as the static Log.Logger, which
+    // is kept to close only that one on the way out (see the finally below).
     _ = app.Services.GetRequiredService<ILoggerFactory>();
     hostLogger = Log.Logger;
 

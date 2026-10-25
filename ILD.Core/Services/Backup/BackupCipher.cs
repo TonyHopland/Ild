@@ -71,22 +71,22 @@ public static class BackupCipher
         try
         {
             await encrypted.ReadExactlyAsync(magic, ct);
-            if (Encoding.ASCII.GetString(magic) != Magic) throw NotABackup();
+            if (Encoding.ASCII.GetString(magic) != Magic) throw BackupRefusedException.NotABackup();
             await encrypted.ReadExactlyAsync(lengthBytes, ct);
             var length = BinaryPrimitives.ReadInt32BigEndian(lengthBytes);
-            if (length is <= 0 or > MaxHeaderBytes) throw NotABackup();
+            if (length is <= 0 or > MaxHeaderBytes) throw BackupRefusedException.NotABackup();
             headerBytes = new byte[length];
             await encrypted.ReadExactlyAsync(headerBytes, ct);
-            header = JsonSerializer.Deserialize<Header>(headerBytes, Json) ?? throw NotABackup();
+            header = JsonSerializer.Deserialize<Header>(headerBytes, Json) ?? throw BackupRefusedException.NotABackup();
         }
         catch (Exception ex) when (ex is EndOfStreamException or JsonException)
         {
-            throw NotABackup();
+            throw BackupRefusedException.NotABackup();
         }
 
         if (header.Kdf != Kdf || header.Iterations is < 1 or > MaxIterations || header.Salt?.Length != SaltBytes
             || header.NoncePrefix?.Length != PrefixBytes || header.ChunkSize is < 1 or > ChunkSize || header.Database is null)
-            throw NotABackup();
+            throw BackupRefusedException.NotABackup();
         if (header.Database != database)
             throw new BackupRefusedException($"This is a backup of the '{header.Database}' database, not of '{database}'.");
 
@@ -102,8 +102,6 @@ public static class BackupCipher
     private static Task<byte[]> DeriveKeyAsync(string passphrase, Header header)
         => Task.Run(() => Rfc2898DeriveBytes.Pbkdf2(
             Encoding.UTF8.GetBytes(passphrase), header.Salt, header.Iterations, HashAlgorithmName.SHA256, 32));
-
-    private static BackupRefusedException NotABackup() => new("This is not an ILD backup, or it is damaged.");
 
     private static byte[] Nonce(Sealed seal, uint counter)
     {
@@ -122,7 +120,7 @@ public static class BackupCipher
         return data;
     }
 
-    public sealed class EncryptingStream : Stream
+    public sealed class EncryptingStream : ForwardOnlyStream
     {
         private readonly Stream _output;
         private readonly Sealed _seal;
@@ -131,7 +129,7 @@ public static class BackupCipher
         private uint _counter;
         private bool _completed;
 
-        internal EncryptingStream(Stream output, Sealed seal)
+        internal EncryptingStream(Stream output, Sealed seal) : base(canRead: false, canWrite: true)
         {
             _output = output;
             _seal = seal;
@@ -172,21 +170,9 @@ public static class BackupCipher
             _counter++;
         }
 
-        public override void Write(byte[] buffer, int offset, int count)
-            => WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
-
-        public override void Flush() { }
-        public override bool CanRead => false;
-        public override bool CanSeek => false;
-        public override bool CanWrite => true;
-        public override long Length => throw new NotSupportedException();
-        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
     }
 
-    private sealed class DecryptingStream(Stream input, Sealed seal) : Stream
+    private sealed class DecryptingStream(Stream input, Sealed seal) : ForwardOnlyStream(canRead: true, canWrite: false)
     {
         private byte[] _chunk = [];
         private int _position;
@@ -259,17 +245,5 @@ public static class BackupCipher
         private static BackupRefusedException Damaged()
             => new("The backup file is damaged, cut short or has been altered.");
 
-        public override int Read(byte[] buffer, int offset, int count)
-            => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
-
-        public override void Flush() { }
-        public override bool CanRead => true;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => throw new NotSupportedException();
-        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }
