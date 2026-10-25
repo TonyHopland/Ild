@@ -34,8 +34,10 @@ public sealed class MaintenanceState : IMaintenanceState
 
     public bool IsActive => Volatile.Read(ref _active) == 1;
 
-    /// <summary>How long a restore waits for work already under way before giving up.</summary>
-    public TimeSpan DrainTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    private readonly TimeSpan _drainTimeout;
+
+    /// <param name="drainTimeout">How long a restore waits for work already under way before giving up; 30 seconds by default.</param>
+    public MaintenanceState(TimeSpan? drainTimeout = null) => _drainTimeout = drainTimeout ?? TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Counted before the flag is read, and the flag is raised before the count is read by
@@ -51,17 +53,22 @@ public sealed class MaintenanceState : IMaintenanceState
         return null;
     }
 
-    /// <summary>Raises the flag until the returned lease is disposed, or null when it is already raised.</summary>
-    public IDisposable? TryEnter()
-        => Interlocked.CompareExchange(ref _active, 1, 0) == 0 ? new Lease(this) : null;
+    /// <summary>
+    /// Raises the flag until the returned lease is disposed. Only one restore at a time may do so, which the
+    /// caller guarantees; a second is a bug and throws.
+    /// </summary>
+    public IDisposable Enter()
+        => Interlocked.CompareExchange(ref _active, 1, 0) == 0
+            ? new Lease(this)
+            : throw new InvalidOperationException("The instance is already in maintenance.");
 
     /// <summary>
     /// Waits until no more than <paramref name="allowed"/> leases are held (the request that asks is
-    /// itself one) and says whether that happened within <see cref="DrainTimeout"/>.
+    /// itself one) and says whether that happened within the drain timeout.
     /// </summary>
     public async Task<bool> WaitForWorkAsync(int allowed, CancellationToken ct)
     {
-        using var timeout = new CancellationTokenSource(DrainTimeout);
+        using var timeout = new CancellationTokenSource(_drainTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try
         {

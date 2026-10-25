@@ -17,6 +17,14 @@ public sealed class MaintenanceMiddleware(RequestDelegate next, IMaintenanceStat
             return;
         }
 
+        // A WebSocket (a terminal) lasts as long as someone keeps it open and touches no data of the
+        // restore's: it is refused once the restore has begun, never waited for.
+        if (context.WebSockets.IsWebSocketRequest && !maintenance.IsActive)
+        {
+            await next(context);
+            return;
+        }
+
         // Held for the whole request, so a restore that begins meanwhile waits for it.
         using var work = maintenance.TryBeginWork();
         if (work is not null)

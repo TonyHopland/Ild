@@ -24,7 +24,7 @@ public sealed class BackupServiceCoreTests : IDisposable
     private readonly string _dataRoot = Directory.CreateTempSubdirectory("ild-backup-core-").FullName;
     private readonly FakeArchive _archive;
     private readonly object _archiveObject;
-    private readonly MaintenanceState _maintenance = new();
+    private readonly MaintenanceState _maintenance = new(TimeSpan.Zero);
     private readonly BackupDirectory _directory;
 
     public BackupServiceCoreTests()
@@ -142,7 +142,6 @@ public sealed class BackupServiceCoreTests : IDisposable
     public async Task A_restore_waits_for_work_already_under_way_and_is_refused_when_it_does_not_finish()
     {
         var backup = await BackupAsync(null);
-        _maintenance.DrainTimeout = TimeSpan.Zero;
         var inFlight = _maintenance.TryBeginWork();
 
         // One lease is the request that carries the restore; the second is a pass or another request.
@@ -163,7 +162,7 @@ public sealed class BackupServiceCoreTests : IDisposable
     {
         var work = _maintenance.TryBeginWork();
         Assert.NotNull(work);
-        using (_maintenance.TryEnter())
+        using (_maintenance.Enter())
             Assert.Null(_maintenance.TryBeginWork());
         work.Dispose();
 

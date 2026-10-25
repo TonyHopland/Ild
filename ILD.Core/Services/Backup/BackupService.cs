@@ -156,7 +156,7 @@ public sealed class BackupService(
 
             // From here the instance is its own maintenance window. A core restore keeps it for good
             // (the process restarts); every other way out of this method lets it go.
-            var lease = maintenance.TryEnter() ?? throw Busy();
+            var lease = maintenance.Enter();
             var restarting = false;
             try
             {
