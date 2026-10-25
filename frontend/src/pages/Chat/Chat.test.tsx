@@ -29,7 +29,7 @@ const {
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
-    deleteAll: vi.fn(),
+    deleteMany: vi.fn(),
     searchChats: vi.fn(() => Promise.resolve([] as string[])),
     markRead: vi.fn(),
     rename: vi.fn(() => Promise.resolve()),
@@ -179,8 +179,8 @@ beforeEach(() => {
     delete sessions[id];
     return Promise.resolve();
   });
-  chatService.deleteAll.mockImplementation(() => {
-    server = [];
+  chatService.deleteMany.mockImplementation((ids: string[]) => {
+    server = server.filter((c) => !ids.includes(c.id));
     return Promise.resolve();
   });
   chatService.sendMessage.mockResolvedValue("t-sent");
@@ -598,7 +598,7 @@ describe("The page's chat list and conversation", () => {
         onOpen={() => {}}
         onNewChat={() => {}}
         onDelete={() => {}}
-        onDeleteAll={() => {}}
+        onDeleteMany={() => {}}
         renameChat={() => Promise.resolve(true)}
         renamesInFlight={new Set()}
         onFavorite={() => {}}

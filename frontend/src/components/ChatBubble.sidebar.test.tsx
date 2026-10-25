@@ -31,7 +31,7 @@ const {
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
-    deleteAll: vi.fn(),
+    deleteMany: vi.fn(),
     markRead: vi.fn(),
     rename: vi.fn(),
     setFavorite: vi.fn(),
@@ -157,8 +157,8 @@ beforeEach(() => {
     server = server.filter((c) => c.id !== id);
     return Promise.resolve();
   });
-  chatService.deleteAll.mockImplementation(() => {
-    server = [];
+  chatService.deleteMany.mockImplementation((ids: string[]) => {
+    server = server.filter((c) => !ids.includes(c.id));
     return Promise.resolve();
   });
   chatService.rename.mockImplementation((id: string, name: string) => {
@@ -373,7 +373,7 @@ describe("chat sidebar layout", () => {
     expect(setCurrentChatSessionId).toHaveBeenLastCalledWith(null);
     expect(invoke).toHaveBeenCalledWith("UnsubscribeFromChat", "a");
     expect(chatService.deleteOne).not.toHaveBeenCalled();
-    expect(chatService.deleteAll).not.toHaveBeenCalled();
+    expect(chatService.deleteMany).not.toHaveBeenCalled();
   });
 
   test("pressing and dragging the toggle does not move the panel", async () => {
@@ -534,7 +534,7 @@ describe("chat sidebar list", () => {
     expect(row("Beta").contains(current[0])).toBe(true);
   });
 
-  test("rename, delete and delete all work from the list while a chat is open; deleting the open chat leaves it", async () => {
+  test("rename, delete and bulk delete work from the list while a chat is open; deleting the open chat leaves it", async () => {
     widePanel();
     server = [summary("a", "Alpha"), summary("b", "Beta"), summary("c", "Gamma")];
     sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
@@ -559,12 +559,15 @@ describe("chat sidebar list", () => {
     expect(chatService.deleteOne).toHaveBeenCalledWith("a");
     expect(setCurrentChatSessionId).toHaveBeenLastCalledWith(null);
 
-    fireEvent.click(within(sidebar()).getByRole("button", { name: "Delete all" }));
+    fireEvent.click(within(sidebar()).getByRole("button", { name: "Select" }));
+    fireEvent.click(within(sidebar()).getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(within(sidebar()).getByRole("button", { name: "Delete (2)" }));
     fireEvent.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete all" }),
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
     );
     await waitFor(() => expect(within(sidebar()).queryAllByRole("listitem")).toHaveLength(0));
-    expect(chatService.deleteAll).toHaveBeenCalledTimes(1);
+    expect(chatService.deleteMany).toHaveBeenCalledTimes(1);
+    expect(chatService.deleteMany.mock.calls[0][0].toSorted()).toEqual(["b", "c"]);
   });
 });
 
@@ -825,5 +828,252 @@ describe("chat sidebar unread", () => {
 
     fireEvent.click(toggle());
     expect(badge(2)).not.toBeNull();
+  });
+});
+
+describe("bulk delete mode", () => {
+  const boxOf = (name: string) =>
+    within(sidebar()).getByRole("checkbox", { name: `Select chat ${name}` }) as HTMLInputElement;
+  const selectAll = () =>
+    within(sidebar()).getByRole("checkbox", { name: "Select all" }) as HTMLInputElement;
+  const enterSelecting = () =>
+    fireEvent.click(within(sidebar()).getByRole("button", { name: "Select" }));
+  const deleteButton = (count: number) =>
+    within(sidebar()).getByRole("button", { name: `Delete (${count})` }) as HTMLButtonElement;
+
+  async function openWithThree() {
+    widePanel();
+    server = [summary("a", "Alpha"), summary("b", "Beta"), summary("c", null)];
+    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
+    sessions.b = chat("b", "Beta", [msg("b", 0, "user")]);
+    render(bubble(), { wrapper: WorkItemHubProvider });
+    await openPanel();
+  }
+
+  test("the list has no Delete all, and outside selection mode has no checkboxes and a row still opens its chat", async () => {
+    await openWithThree();
+
+    expect(within(sidebar()).queryByRole("button", { name: "Delete all" })).toBeNull();
+    expect(within(sidebar()).queryAllByRole("checkbox")).toHaveLength(0);
+    await pick("Alpha");
+    expect(chatService.getById).toHaveBeenCalledWith("a");
+  });
+
+  test("Select shows a checkbox at the end of every row, hides the row menus, and toggling never opens a chat", async () => {
+    await openWithThree();
+    showChatActions("Beta");
+    enterSelecting();
+
+    expect(within(sidebar()).queryAllByRole("checkbox", { name: /^Select chat / })).toHaveLength(3);
+    for (const name of ["Alpha", "Beta", "Untitled chat"]) {
+      expect(boxOf(name).checked).toBe(false);
+      const li = row(name);
+      expect(li.contains(boxOf(name))).toBe(true);
+      expect(li.querySelector("input[type=checkbox]")).toBe(boxOf(name));
+    }
+    expect(within(sidebar()).queryByRole("button", { name: /^Actions for chat/ })).toBeNull();
+    expect(within(sidebar()).queryByRole("button", { name: /^Favorite chat/ })).toBeNull();
+    expect(within(sidebar()).queryByRole("button", { name: /^Delete chat/ })).toBeNull();
+    expect(within(sidebar()).queryByRole("button", { name: "Select" })).toBeNull();
+    expect(deleteButton(0).disabled).toBe(true);
+    expect(within(sidebar()).getByRole("button", { name: "Cancel" })).toBeTruthy();
+
+    fireEvent.click(within(sidebar()).getByText("Alpha"));
+    expect(boxOf("Alpha").checked).toBe(true);
+    fireEvent.click(boxOf("Alpha"));
+    expect(boxOf("Alpha").checked).toBe(false);
+    fireEvent.click(boxOf("Beta"));
+    await settle();
+
+    expect(boxOf("Beta").checked).toBe(true);
+    expect(chatService.getById).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Chat message")).toBeNull();
+    expect(deleteButton(1).disabled).toBe(false);
+  });
+
+  test("a row click in selection mode leaves the open chat open", async () => {
+    await openWithThree();
+    await pick("Alpha");
+    chatService.getById.mockClear();
+    enterSelecting();
+
+    fireEvent.click(within(sidebar()).getByText("Beta"));
+    await settle();
+
+    expect(boxOf("Beta").checked).toBe(true);
+    expect(chatService.getById).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Chat message")).toBeTruthy();
+  });
+
+  test("Select all checks every row, goes indeterminate when one is unchecked, and follows manual checks", async () => {
+    await openWithThree();
+    enterSelecting();
+
+    fireEvent.click(selectAll());
+    for (const n of ["Alpha", "Beta", "Untitled chat"]) expect(boxOf(n).checked).toBe(true);
+    expect(selectAll().checked).toBe(true);
+    expect(selectAll().indeterminate).toBe(false);
+    expect(deleteButton(3)).toBeTruthy();
+
+    fireEvent.click(boxOf("Beta"));
+    expect(selectAll().checked).toBe(false);
+    expect(selectAll().indeterminate).toBe(true);
+    expect(deleteButton(2)).toBeTruthy();
+
+    fireEvent.click(boxOf("Beta"));
+    expect(selectAll().checked).toBe(true);
+    expect(selectAll().indeterminate).toBe(false);
+
+    fireEvent.click(selectAll());
+    for (const n of ["Alpha", "Beta", "Untitled chat"]) expect(boxOf(n).checked).toBe(false);
+    expect(selectAll().indeterminate).toBe(false);
+    expect(deleteButton(0).disabled).toBe(true);
+
+    fireEvent.click(boxOf("Alpha"));
+    fireEvent.click(selectAll());
+    for (const n of ["Alpha", "Beta", "Untitled chat"]) expect(boxOf(n).checked).toBe(true);
+  });
+
+  test("Select all and the count only cover the rows the search leaves listed", async () => {
+    await openWithThree();
+    enterSelecting();
+
+    fireEvent.change(within(sidebar()).getByLabelText("Search chats"), {
+      target: { value: "alp" },
+    });
+    fireEvent.click(selectAll());
+    expect(deleteButton(1)).toBeTruthy();
+    fireEvent.click(deleteButton(1));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog", { name: "Delete 1 chat?" })).getByRole(
+        "button",
+        {
+          name: "Delete",
+        },
+      ),
+    );
+
+    await waitFor(() => expect(chatService.deleteMany).toHaveBeenCalledTimes(1));
+    expect(chatService.deleteMany).toHaveBeenCalledWith(["a"]);
+  });
+
+  test("Delete asks first, its Cancel keeps the checks, and nothing is requested until it is confirmed", async () => {
+    await openWithThree();
+    enterSelecting();
+    fireEvent.click(boxOf("Alpha"));
+    fireEvent.click(boxOf("Beta"));
+
+    fireEvent.click(deleteButton(2));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete 2 chats?" });
+    expect(within(dialog).getByText("Delete 2 chats? This can't be undone.")).toBeTruthy();
+    expect(chatService.deleteMany).not.toHaveBeenCalled();
+    expect(chatService.deleteOne).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(boxOf("Alpha").checked).toBe(true);
+    expect(boxOf("Beta").checked).toBe(true);
+    expect(boxOf("Untitled chat").checked).toBe(false);
+    expect(chatService.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test("the selection-mode Cancel leaves without a request and the next Select starts unchecked", async () => {
+    await openWithThree();
+    enterSelecting();
+    fireEvent.click(selectAll());
+
+    fireEvent.click(within(sidebar()).getByRole("button", { name: "Cancel" }));
+    expect(within(sidebar()).queryAllByRole("checkbox")).toHaveLength(0);
+    expect(within(sidebar()).getByRole("button", { name: "Select" })).toBeTruthy();
+
+    enterSelecting();
+    for (const n of ["Alpha", "Beta", "Untitled chat"]) expect(boxOf(n).checked).toBe(false);
+    expect(selectAll().checked).toBe(false);
+    expect(chatService.deleteMany).not.toHaveBeenCalled();
+    expect(chatService.deleteOne).not.toHaveBeenCalled();
+  });
+
+  test("confirming sends one batch of only the checked ids, ends selection mode and keeps the other chats", async () => {
+    await openWithThree();
+    enterSelecting();
+    fireEvent.click(boxOf("Alpha"));
+    fireEvent.click(boxOf("Untitled chat"));
+    fireEvent.click(deleteButton(2));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    await waitFor(() => expect(within(sidebar()).queryByText("Alpha")).toBeNull());
+    expect(chatService.deleteMany).toHaveBeenCalledTimes(1);
+    expect(chatService.deleteMany.mock.calls[0][0].toSorted()).toEqual(["a", "c"]);
+    expect(chatService.deleteOne).not.toHaveBeenCalled();
+    expect(within(sidebar()).getByText("Beta")).toBeTruthy();
+    expect(within(sidebar()).queryByText("Untitled chat")).toBeNull();
+    expect(within(sidebar()).queryAllByRole("checkbox")).toHaveLength(0);
+    expect(within(sidebar()).getByRole("button", { name: "Select" })).toBeTruthy();
+  });
+
+  test("deleting the open chat in a batch leaves it for the start form; deleting others does not", async () => {
+    await openWithThree();
+    await pick("Alpha");
+    enterSelecting();
+    fireEvent.click(boxOf("Beta"));
+    fireEvent.click(deleteButton(1));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+    );
+    await waitFor(() => expect(within(sidebar()).queryByText("Beta")).toBeNull());
+    expect(screen.getByLabelText("Chat message")).toBeTruthy();
+    expect(setCurrentChatSessionId).not.toHaveBeenLastCalledWith(null);
+
+    enterSelecting();
+    fireEvent.click(boxOf("Alpha"));
+    fireEvent.click(boxOf("Untitled chat"));
+    fireEvent.click(deleteButton(2));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(await screen.findByText("Start chat")).toBeTruthy();
+    expect(screen.queryByLabelText("Chat message")).toBeNull();
+    expect(setCurrentChatSessionId).toHaveBeenLastCalledWith(null);
+    expect(chatService.deleteMany).toHaveBeenCalledTimes(2);
+  });
+
+  test("a failed batch is logged and the list is re-read, so chats the server kept come back", async () => {
+    await openWithThree();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    chatService.deleteMany.mockImplementationOnce((ids: string[]) => {
+      server = server.filter((c) => c.id !== ids[0]);
+      return Promise.reject(new Error("boom"));
+    });
+    enterSelecting();
+    fireEvent.click(selectAll());
+    fireEvent.click(deleteButton(3));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    await waitFor(() => expect(logged).toHaveBeenCalled());
+    await waitFor(() => expect(within(sidebar()).queryAllByRole("listitem")).toHaveLength(2));
+    expect(chatService.deleteMany).toHaveBeenCalledTimes(1);
+    logged.mockRestore();
+  });
+
+  test("selection mode ends when the last chat goes", async () => {
+    await openWithThree();
+    enterSelecting();
+    fireEvent.click(boxOf("Alpha"));
+
+    server = [];
+    emitUnreadChanged("a");
+    await waitFor(() => expect(within(sidebar()).queryAllByRole("listitem")).toHaveLength(0));
+    expect(within(sidebar()).queryByRole("checkbox", { name: "Select all" })).toBeNull();
+
+    server = [summary("z", "Zulu")];
+    emitUnreadChanged("a");
+    await within(sidebar()).findByText("Zulu");
+    expect(within(sidebar()).queryAllByRole("checkbox")).toHaveLength(0);
+    expect(within(sidebar()).getByRole("button", { name: "Select" })).toBeTruthy();
   });
 });
