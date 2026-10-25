@@ -272,6 +272,12 @@ public class RepositoryManager : IRepositoryManager
         return code == 0 && int.TryParse(stdout.Trim(), out var count) ? count : 0;
     }
 
+    public async Task<string?> GetHeadCommitAsync(string worktreePath)
+    {
+        var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "HEAD");
+        return code == 0 && stdout.Trim() is { Length: > 0 } sha ? sha : null;
+    }
+
     public async Task<int> GetCommitsBehindCountAsync(string worktreePath, string upstreamRef)
     {
         var (code, stdout, _) = await RunAsync(worktreePath, "rev-list", "--count", $"HEAD..{upstreamRef}");

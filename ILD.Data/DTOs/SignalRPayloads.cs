@@ -24,6 +24,8 @@ public record PreviewStateChangedPayload(string WorkItemId);
 
 public record WorkItemRunProgressedPayload(string WorkItemId);
 
+public record WorkItemPrStatusChangedPayload(string WorkItemId);
+
 /// <summary>Dropping <paramref name="WorkItemId"/> renumbered every item of the board, in the same order.</summary>
 public record WorkItemBoardReorderedPayload(string WorkItemId);
 

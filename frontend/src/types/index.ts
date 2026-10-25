@@ -1285,6 +1285,10 @@ export interface WorkItemRunProgressedPayload {
   workItemId: string;
 }
 
+export interface WorkItemPrStatusChangedPayload {
+  workItemId: string;
+}
+
 /** Dropping `workItemId` renumbered every item of the board, in the same order. */
 export interface WorkItemBoardReorderedPayload {
   workItemId: string;

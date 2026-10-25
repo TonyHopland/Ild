@@ -88,6 +88,7 @@ public class PrStatusPollServiceOnCommentTests
             };
 
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
+            Runs.AcceptPollWrites(Run);
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
                 .ReturnsAsync(wiredEdges.Select(name => CustomEdge(loopNodeId, name)).ToArray());
@@ -237,7 +238,7 @@ public class PrStatusPollServiceOnCommentTests
 
         h.Remote.Verify(r => r.GetPullRequestReviewLedgerAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         h.Runs.Verify(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
-        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
+        h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.Is<string?>(x => x != null), It.IsAny<string?>()), Times.Once);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(h.Run.Id), Times.Once);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
@@ -292,7 +293,7 @@ public class PrStatusPollServiceOnCommentTests
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
-        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
+        h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.Is<string?>(x => x != null), It.IsAny<string?>()), Times.Once);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(h.Run.Id), Times.Once);
     }
 }

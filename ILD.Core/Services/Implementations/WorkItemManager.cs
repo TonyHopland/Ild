@@ -652,18 +652,7 @@ public class WorkItemManager : IWorkItemManager
     /// a corrupt blob degrades to null rather than failing the whole view.
     /// </summary>
     private static WorkItemPrStatus? ResolvePrStatus(string? prSnapshot)
-    {
-        var snapshot = PrSnapshotJson.TryParse(prSnapshot);
-        if (snapshot is null) return null;
-        return new WorkItemPrStatus(
-            snapshot.State,
-            snapshot.Merged,
-            snapshot.Mergeable,
-            snapshot.MergeableState,
-            snapshot.Ci,
-            snapshot.Approved,
-            snapshot.ChangesRequested);
-    }
+        => WorkItemPrStatus.From(PrSnapshotJson.TryParse(prSnapshot));
 
     /// <summary>
     /// Resolves the label of the node the run is currently on. Matches the run's

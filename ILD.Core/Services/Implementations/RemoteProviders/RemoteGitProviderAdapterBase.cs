@@ -184,6 +184,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         {
             Draft = pr.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True,
             MergeBlocked = IsMergeBlocked(pr),
+            HeadSha = headSha,
         };
     }
 
@@ -981,7 +982,27 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     public virtual bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)
         => VerifyHmacSha256(body, GetHeader(headers, SignatureHeaderName), secret);
 
-    public abstract Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
+    public abstract Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string? expectedHeadSha = null);
+
+    /// <summary>The commit the pull request's head is at right now, or null if it cannot be read.</summary>
+    protected virtual async Task<string?> ReadHeadShaAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        var pr = await GetObjectAsync(http, $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}");
+        return pr is { } p && p.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
+    }
+
+    /// <summary>
+    /// After a refused merge that named <paramref name="expected"/>: throws if the head has moved on,
+    /// so the refusal is not mistaken for a merge the forge could not do.
+    /// </summary>
+    protected async Task ThrowIfHeadMovedAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string? expected)
+    {
+        if (expected is null)
+            return;
+        var current = await ReadHeadShaAsync(http, repo, prNumber);
+        if (current is not null && !string.Equals(current, expected, StringComparison.OrdinalIgnoreCase))
+            throw new RemoteHeadMovedException(expected, current);
+    }
 
     /// <summary>
     /// Turn on auto-merge for a pull request so the provider merges it once its

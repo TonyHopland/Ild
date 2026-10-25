@@ -57,9 +57,7 @@ public class PrSyncService : IPrSyncService
             // owns the PR — tagging whatever run is "current" instead could
             // mark the wrong run merged and flip the item to Done while another
             // run is mid-flight.
-            run.IsPrMerged = true;
-            run.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(run);
+            await _loopRunStore.SetPrMergedAsync(run.Id);
 
             // Merged is the one PR fact worth keeping forever, so it goes onto
             // the work item's own record and not just the run's.

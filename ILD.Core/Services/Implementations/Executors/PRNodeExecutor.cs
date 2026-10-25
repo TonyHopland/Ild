@@ -107,6 +107,8 @@ public sealed class PRNodeExecutor : INodeExecutor
         if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath))
         {
             string? prepError = null;
+            var pushed = false;
+            var prExisted = !string.IsNullOrEmpty(ctx.Run.PrUrl);
             try
             {
                 var diff = await repoManager.GetDiffAsync(ctx.Run.WorktreePath);
@@ -120,6 +122,8 @@ public sealed class PRNodeExecutor : INodeExecutor
                     var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath, branch, ctx.CancellationToken, gitAuth);
                     if (!pushResult.Success)
                         prepError = $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}";
+                    else
+                        pushed = true;
                 }
                 if (prepError is null && string.IsNullOrEmpty(ctx.Run.PrUrl))
                 {
@@ -130,6 +134,9 @@ public sealed class PRNodeExecutor : INodeExecutor
                 }
             }
             catch (Exception ex) { prepError = ex.Message; }
+            // The stored result belongs to the previous commit; the pushed one has none yet.
+            if (pushed && prExisted)
+                await RecordPrPushAsync(ctx, sp, repoManager);
             if (prepError is not null)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, prepError);
@@ -337,6 +344,32 @@ public sealed class PRNodeExecutor : INodeExecutor
             sp.GetService<ILogger<PRNodeExecutor>>()?.LogWarning(
                 ex, "Could not record the PR write claim for run {RunId}", ctx.Run.Id);
         }
+    }
+
+    /// <summary>
+    /// Drops the previous commit's stored result and records the commit just pushed, so the
+    /// heartbeat stores nothing until the forge reports that commit as the pull request's
+    /// head. The detail dialog is told; the board card shows no PR badges outside the PR node.
+    /// </summary>
+    private static async Task RecordPrPushAsync(NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager)
+    {
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
+            return;
+        var log = sp.GetService<ILogger<PRNodeExecutor>>();
+        string? head = null;
+        try { head = await repoManager.GetHeadCommitAsync(ctx.Run.WorktreePath!); }
+        catch (Exception ex)
+        {
+            log?.LogWarning(ex, "Could not read HEAD of {Worktree} after pushing run {RunId}", ctx.Run.WorktreePath, ctx.Run.Id);
+        }
+        if (head is null)
+            log?.LogWarning(
+                "No pushed commit recorded for run {RunId}: the heartbeat cannot tell the old head from the new one",
+                ctx.Run.Id);
+        ctx.Run.PrSnapshot = null;
+        await runs.RecordPrPushAsync(ctx.Run.Id, head);
+        if (sp.GetService<IRunNotifier>() is { } runNotifier)
+            await runNotifier.PrSnapshotChangedAsync(ctx.Run.Id);
     }
 
     /// <summary>

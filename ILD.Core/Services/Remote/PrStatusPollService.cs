@@ -43,6 +43,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
     private readonly ILogger<PrStatusPollService> _log;
     private readonly IWorkItemManager? _workItems;
     private readonly IEventLogService? _eventLog;
+    private readonly IWorkItemNotifier? _boardNotifier;
 
     public PrStatusPollService(
         ILoopRunStore runs,
@@ -51,7 +52,8 @@ public sealed class PrStatusPollService : IPrStatusPollService
         IRunNotifier notifier,
         ILogger<PrStatusPollService> log,
         IWorkItemManager? workItems = null,
-        IEventLogService? eventLog = null)
+        IEventLogService? eventLog = null,
+        IWorkItemNotifier? boardNotifier = null)
     {
         _runs = runs;
         _remote = remote;
@@ -60,6 +62,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         _log = log;
         _workItems = workItems;
         _eventLog = eventLog;
+        _boardNotifier = boardNotifier;
     }
 
     public async Task PollOnceAsync(CancellationToken ct = default)
@@ -90,6 +93,19 @@ public sealed class PrStatusPollService : IPrStatusPollService
         if (snapshot is null)
             return;
 
+        // A push by the PR node cleared the stored result and recorded the commit it
+        // pushed. Until the forge reports that commit as the head, this read may still
+        // describe the previous one, so the whole tick waits: nothing stored, no edge,
+        // no merge, no event. There is no timeout; a head that never matches (a force
+        // push over that commit) leaves the card blank until a person steps in.
+        if (run.PrPushedCommit is { } pushed)
+        {
+            if (!string.Equals(snapshot.HeadSha, pushed, StringComparison.OrdinalIgnoreCase))
+                return;
+            await _runs.ClearPrPushedCommitAsync(run.Id, pushed);
+            run.PrPushedCommit = null;
+        }
+
         var runNode = await ResolveRunNodeAsync(run);
         if (runNode is null)
             return;
@@ -114,16 +130,25 @@ public sealed class PrStatusPollService : IPrStatusPollService
             : null;
 
         // Persist snapshot + new baseline and push the GUI update regardless of
-        // whether any edge fires. This write carries the whole row, but never the
-        // ledger or the queue: the model ignores both on any update, because this
-        // instance was loaded before the forge fetch above and stays tracked for
-        // the whole pass — so writing its copy back, here or on any later save in
-        // this scope, would revert whatever was recorded meanwhile.
-        run.PrSnapshot = PrSnapshotJson.Serialize(snapshot);
-        run.PrPolledEdgeStates = string.Join(",", newStates);
-        run.UpdatedAt = DateTime.UtcNow;
-        await _runs.UpdateRunAsync(run);
+        // whether any edge fires. This instance was loaded before the forge fetch above,
+        // which takes seconds, and a person may have answered the parked node in that
+        // window. So the write is targeted: the three columns this pass owns, and only
+        // while the run is still parked at this PR node. The instance is never saved as
+        // a whole row, here or later in the pass; that would put its stale position back
+        // over the engine's and leave the run waiting on a node nobody can answer. If
+        // nothing was written the run has moved on, and the pass ends without touching it.
+        var badgesBefore = WorkItemPrStatus.From(PrSnapshotJson.TryParse(run.PrSnapshot));
+        var baselineBefore = run.PrPolledEdgeStates;
+        var storedSnapshot = PrSnapshotJson.Serialize(snapshot);
+        var storedStates = string.Join(",", newStates);
+        if (!await _runs.TryRecordPrPollAsync(run.Id, runNode.LoopNodeId, storedSnapshot, storedStates))
+            return;
+        // Later code in this pass reads these; the store has already written them.
+        run.PrSnapshot = storedSnapshot;
+        run.PrPolledEdgeStates = storedStates;
         await _notifier.PrSnapshotChangedAsync(run.Id);
+        if (_boardNotifier is not null && badgesBefore != WorkItemPrStatus.From(snapshot))
+            await _boardNotifier.PrStatusChangedAsync(run.WorkItemId);
 
         // A run with no ledger yet records what is already on the pull request
         // and fires nothing this tick, whichever edge wins below.
@@ -135,8 +160,25 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // run off the PR node before ILD has merged. This snapshot still shows
         // the PR open, so a merge fires nothing now: the next tick reads it
         // merged and fires on_merged like any other merge.
-        if (await TryAutoMergeAsync(run, snapshot, repoUrl, prNumber))
-            return;
+        switch (await TryAutoMergeAsync(run, snapshot, repoUrl, prNumber))
+        {
+            case AutoMergeOutcome.Merged:
+                return;
+            case AutoMergeOutcome.HeadMoved:
+                // This snapshot, and the edge states worked out from it, belong to a commit that is
+                // no longer the head. Take them back out: the stored result is cleared rather than
+                // restored (what it replaces described an older commit too, and the card shows
+                // nothing rather than a guess), and the baseline is put back so the new head's
+                // first poll still sees its states as newly true. No edge fires on this tick.
+                if (!await _runs.TryRecordPrPollAsync(run.Id, runNode.LoopNodeId, null, baselineBefore))
+                    return;
+                run.PrSnapshot = null;
+                run.PrPolledEdgeStates = baselineBefore;
+                await _notifier.PrSnapshotChangedAsync(run.Id);
+                if (_boardNotifier is not null)
+                    await _boardNotifier.PrStatusChangedAsync(run.WorkItemId);
+                return;
+        }
 
         var candidates = newlyTrue.Where(connected.Contains).ToHashSet(StringComparer.Ordinal);
         if (review is { Seeding: false } && review.Decision.Items.Count > 0)
@@ -186,21 +228,29 @@ public sealed class PrStatusPollService : IPrStatusPollService
             NodeSignal.Custom(edge, PrNodeEdges.Describe(edge, snapshot, detail, run.WorkItemId)));
     }
 
+    /// <summary>What <see cref="TryAutoMergeAsync"/> did: merged, found the head moved on, or did not merge.</summary>
+    private enum AutoMergeOutcome { NotMerged, Merged, HeadMoved }
+
     /// <summary>
     /// ILD's one merge attempt on an AutoMerge pull request the provider will
     /// not merge by itself (<see cref="PrAutoMerge.IldPending"/>), made once the
     /// pull request may be merged and its work item still carries the tag.
-    /// Reports whether it merged.
+    /// Reports whether it merged, or that the head moved on before it could.
     ///
     /// The attempt is claimed on the row before the provider is called, so it
     /// happens at most once whatever else runs or restarts. A failed attempt is
     /// never repeated: the run stays parked where it is, and a human is asked to
     /// merge by hand — which the heartbeat then sees as it sees any merge.
     /// </summary>
-    private async Task<bool> TryAutoMergeAsync(LoopRun run, RemotePrSnapshot snapshot, string repoUrl, string prNumber)
+    private async Task<AutoMergeOutcome> TryAutoMergeAsync(LoopRun run, RemotePrSnapshot snapshot, string repoUrl, string prNumber)
     {
         if (run.PrAutoMerge != PrAutoMerge.IldPending || !MayMerge(snapshot) || _workItems is null)
-            return false;
+            return AutoMergeOutcome.NotMerged;
+
+        // The merge names the commit whose CI this snapshot read, so a forge that did not say which
+        // commit that was leaves nothing to name: wait for a snapshot that does.
+        if (snapshot.HeadSha is not { Length: > 0 } checkedHead)
+            return AutoMergeOutcome.NotMerged;
 
         WorkItemView? workItem;
         try
@@ -211,20 +261,30 @@ public sealed class PrStatusPollService : IPrStatusPollService
         {
             _log.LogWarning(ex, "AutoMerge: could not read work item {WorkItemId} for run {RunId}; trying again next tick",
                 run.WorkItemId, run.Id);
-            return false;
+            return AutoMergeOutcome.NotMerged;
         }
         if (workItem is null
             || !workItem.Tags.Any(t => string.Equals(t, PRNodeExecutor.AutoMergeTag, StringComparison.OrdinalIgnoreCase)))
-            return false;
+            return AutoMergeOutcome.NotMerged;
 
         if (!await _runs.TrySetPrAutoMergeAsync(run.Id, PrAutoMerge.IldPending, PrAutoMerge.IldMerging))
-            return false;
+            return AutoMergeOutcome.NotMerged;
 
         string? failure = null;
         try
         {
-            if (!await _remote.MergePullRequestAsync(repoUrl, prNumber))
+            if (!await _remote.MergePullRequestAsync(repoUrl, prNumber, checkedHead))
                 failure = "the provider refused or could not complete the merge";
+        }
+        catch (RemoteHeadMovedException moved)
+        {
+            // Nothing was merged and the commit that was checked is no longer the head: not a failed
+            // attempt. Hand it back so a later tick checks the new head's CI.
+            _log.LogInformation(
+                "AutoMerge: head of {PrUrl} moved from {Expected} to {Current} before the merge; waiting for CI on the new head",
+                run.PrUrl, moved.Expected, moved.Current ?? "an unknown commit");
+            await TrySetAutoMergeAsync(run.Id, PrAutoMerge.IldPending, null);
+            return AutoMergeOutcome.HeadMoved;
         }
         catch (Exception ex)
         {
@@ -237,7 +297,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
             await _eventLog.TryAppendAsync(run.Id, EventType.PrMergeFailed,
                 $"AutoMerge: ILD could not merge this PR ({failure}). Please merge it manually.", _log);
             await _notifier.PrSnapshotChangedAsync(run.Id);
-            return false;
+            return AutoMergeOutcome.NotMerged;
         }
 
         await TrySetAutoMergeAsync(run.Id, PrAutoMerge.IldMerged, null);
@@ -246,7 +306,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
 
         var branch = run.BranchName ?? workItem.BranchName ?? RunWorktreeNaming.BranchFor(workItem.Id, run.Id);
         await MergedBranch.TryDeleteAsync(_remote, _eventLog, _log, run.Id, repoUrl, branch);
-        return true;
+        return AutoMergeOutcome.Merged;
     }
 
     /// <summary>

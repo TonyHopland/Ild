@@ -67,6 +67,7 @@ public class PrStatusPollServiceReviewFailureTests
             };
 
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
+            Runs.AcceptPollWrites(Run);
             // Compare-and-set, as every writer of this column now is.
             Runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => Run.PrCommentLedger);
             Runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
@@ -116,7 +117,7 @@ public class PrStatusPollServiceReviewFailureTests
 
         await h.PollAsync();
 
-        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
+        h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.Is<string?>(x => x != null), It.IsAny<string?>()), Times.Once);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(h.Run.Id), Times.Once);
     }
 

@@ -18,11 +18,18 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
     protected override bool HostMatches(Uri providerUri, Uri repoUri)
         => NormalizeGitHubHost(providerUri.Host).Equals(NormalizeGitHubHost(repoUri.Host), StringComparison.OrdinalIgnoreCase);
 
-    public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string? expectedHeadSha = null)
     {
         ApplyHeaders(http, repo.Provider);
-        using var resp = await http.PutAsJsonAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/merge", new { });
-        return resp.IsSuccessStatusCode;
+        // `sha` makes GitHub refuse the merge, with 409, if the head is any other commit.
+        object body = expectedHeadSha is null ? new { } : new { sha = expectedHeadSha };
+        using var resp = await http.PutAsJsonAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/merge", body);
+        if (resp.IsSuccessStatusCode)
+            return true;
+        if (expectedHeadSha is not null && resp.StatusCode == System.Net.HttpStatusCode.Conflict)
+            throw new RemoteHeadMovedException(expectedHeadSha, null);
+        await ThrowIfHeadMovedAsync(http, repo, prNumber, expectedHeadSha);
+        return false;
     }
 
     public override async Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)

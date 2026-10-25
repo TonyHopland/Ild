@@ -10,7 +10,7 @@ public interface IRemoteGitProviderAdapter
     string WebhookRouteSegment { get; }
     ResolvedRemoteRepository? TryResolve(RemoteProvider provider, Uri repoUri);
     Task<RemotePrResult> CreatePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch, string title, string body);
-    Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
+    Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string? expectedHeadSha = null);
     Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
     Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);
     Task UnregisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);

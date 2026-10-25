@@ -92,6 +92,7 @@ public class PrPollHandoverTests
             };
 
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
+            Runs.AcceptPollWrites(Run);
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
                 .ReturnsAsync((wiredEdges.Length == 0 ? new[] { LoopOutputs.OnComment } : wiredEdges)

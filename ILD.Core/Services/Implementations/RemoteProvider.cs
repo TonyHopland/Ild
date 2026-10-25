@@ -43,11 +43,12 @@ public class RemoteProviderService : IRemoteProvider
         }
     }
 
-    public async Task<bool> MergePullRequestAsync(string repoUrl, string prNumber)
+    public async Task<bool> MergePullRequestAsync(string repoUrl, string prNumber, string? expectedHeadSha = null)
     {
         var resolved = await ResolveAsync(repoUrl);
         if (resolved == null) return false;
-        try { return await resolved.Adapter.MergePullRequestAsync(_http, resolved, prNumber); }
+        try { return await resolved.Adapter.MergePullRequestAsync(_http, resolved, prNumber, expectedHeadSha); }
+        catch (RemoteHeadMovedException) { throw; }
         catch { return false; }
     }
 

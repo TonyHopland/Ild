@@ -48,13 +48,19 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
     // the refusal itself.
     protected override bool IsMergeBlocked(JsonElement pr) => false;
 
-    public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string? expectedHeadSha = null)
     {
         ApplyHeaders(http, repo.Provider);
+        // `head_commit_id` makes Forgejo refuse the merge if the head is any other commit. Its 409 is
+        // shared with a real merge conflict, so a refusal is checked against the head itself.
+        object body = expectedHeadSha is null ? new { Do = "merge" } : new { Do = "merge", head_commit_id = expectedHeadSha };
         using var resp = await http.PostAsJsonAsync(
             $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/merge",
-            new { Do = "merge" });
-        return resp.IsSuccessStatusCode;
+            body);
+        if (resp.IsSuccessStatusCode)
+            return true;
+        await ThrowIfHeadMovedAsync(http, repo, prNumber, expectedHeadSha);
+        return false;
     }
 
     public override async Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)

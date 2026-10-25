@@ -79,6 +79,9 @@ public interface IRepositoryManager
 
     Task<int> GetCommitsAheadCountAsync(string worktreePath, string targetBranch);
 
+    /// <summary>The commit the worktree's HEAD is at, or null if it cannot be read.</summary>
+    Task<string?> GetHeadCommitAsync(string worktreePath);
+
     /// <summary>
     /// How many commits <paramref name="upstreamRef"/> holds that <c>HEAD</c> does
     /// not — i.e. what a rebase onto it would replay. Zero means <c>HEAD</c> already
