@@ -54,7 +54,7 @@ public class PrSyncServiceTests
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
 
-        loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
+        loopRuns.Verify(s => s.SetPrMergedAsync(run.Id), Times.Once);
         engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id,
             It.Is<NodeSignal>(signal => signal.EdgeName == LoopOutputs.OnMerged)), Times.Once);
     }
@@ -91,7 +91,7 @@ public class PrSyncServiceTests
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
 
-        loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
+        loopRuns.Verify(s => s.SetPrMergedAsync(run.Id), Times.Once);
         engine.Verify(s => s.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
 
@@ -120,8 +120,8 @@ public class PrSyncServiceTests
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", staleRun.PrUrl, null, "merged"));
 
-        loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.Id == staleRun.Id && r.IsPrMerged)), Times.Once);
-        loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.Id == currentRun.Id)), Times.Never);
+        loopRuns.Verify(s => s.SetPrMergedAsync(staleRun.Id), Times.Once);
+        loopRuns.Verify(s => s.SetPrMergedAsync(currentRun.Id), Times.Never);
         workItems.Verify(s => s.TransitionAsync(It.IsAny<WorkItemActor>(), It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
         Assert.False(currentRun.IsPrMerged);
@@ -150,7 +150,7 @@ public class PrSyncServiceTests
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
 
-        loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
+        loopRuns.Verify(s => s.SetPrMergedAsync(run.Id), Times.Once);
         workItems.Verify(s => s.TransitionAsync(It.IsAny<WorkItemActor>(), "wi-1", RemoteWorkItemStatus.Done,
             It.IsAny<string?>(), It.IsAny<string?>(), run.Id, It.IsAny<string?>()), Times.Once);
     }

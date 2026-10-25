@@ -302,6 +302,23 @@ public interface ILoopRunStore
     Task RecordPrPushAsync(Guid runId, string? pushedCommit);
 
     /// <summary>
+    /// The PR heartbeat's write: sets <c>PrSnapshot</c>, <c>PrPolledEdgeStates</c> and
+    /// <c>UpdatedAt</c> and nothing else, and only while the run is still parked at the
+    /// pull-request node (<paramref name="prNodeId"/>) awaiting the merge. The heartbeat
+    /// works on a row it loaded before a slow forge fetch; writing that whole row back
+    /// would undo a person answering the node meanwhile. Reports whether a row was
+    /// written; false means the run has moved on and the pass must stop.
+    /// </summary>
+    Task<bool> TryRecordPrPollAsync(Guid runId, Guid prNodeId, string? prSnapshot, string? prPolledEdgeStates);
+
+    /// <summary>
+    /// Marks the run's pull request merged (<c>IsPrMerged</c>, <c>UpdatedAt</c>) without
+    /// touching any other column, so a webhook holding a row loaded earlier cannot revert
+    /// the engine's position.
+    /// </summary>
+    Task SetPrMergedAsync(Guid runId);
+
+    /// <summary>
     /// Forgets the recorded pushed commit once the heartbeat has read it as the
     /// head. Only if the column still holds <paramref name="expected"/>, so a newer
     /// push's record is never cleared by an older poll.

@@ -133,6 +133,7 @@ public class PRNodeExecutorPrCommentTests
 
         var runs = new Mock<ILoopRunStore>();
         runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { run });
+        runs.AcceptPollWrites(run);
         runs.Setup(s => s.GetRunNodeAsync(run.Id, loopNodeId)).ReturnsAsync(runNode);
         runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>())).ReturnsAsync(new[]
         {

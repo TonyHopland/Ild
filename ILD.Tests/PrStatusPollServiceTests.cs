@@ -68,6 +68,7 @@ public class PrStatusPollServiceTests
             };
 
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
+            Runs.AcceptPollWrites(Run);
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>())).ReturnsAsync(edges);
             Remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7"))
@@ -90,7 +91,7 @@ public class PrStatusPollServiceTests
         var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
-        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
+        h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.Is<string?>(x => x != null), It.IsAny<string?>()), Times.Once);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(h.Run.Id), Times.Once);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
@@ -121,7 +122,7 @@ public class PrStatusPollServiceTests
 
         Assert.Null(h.Run.PrSnapshot);
         Assert.Null(h.Run.PrPolledEdgeStates);
-        h.Runs.Verify(s => s.UpdateRunAsync(It.IsAny<LoopRun>()), Times.Never);
+        h.Runs.Verify(s => s.TryRecordPrPollAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
         h.Runs.Verify(s => s.ClearPrPushedCommitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(It.IsAny<Guid>()), Times.Never);
         h.Board.Verify(n => n.PrStatusChangedAsync(It.IsAny<string>()), Times.Never);
@@ -280,7 +281,7 @@ public class PrStatusPollServiceTests
         var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
-        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrPolledEdgeStates!.Contains(LoopOutputs.OnCiFailed))), Times.Once);
+        h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.IsAny<string?>(), It.Is<string?>(x => x!.Contains(LoopOutputs.OnCiFailed))), Times.Once);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
 
@@ -382,7 +383,7 @@ public class PrStatusPollServiceTests
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
         Assert.Equal(PrAutoMerge.IldMerged, h.Run.PrAutoMerge);
         // The tick still records what it saw.
-        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.AtLeastOnce);
+        h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.Is<string?>(x => x != null), It.IsAny<string?>()), Times.AtLeastOnce);
         h.EventLog.Verify(e => e.AppendAsync(h.Run.Id, EventType.PrMerged, It.IsAny<string>(),
             It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
         // The same branch the manual merge would delete.
@@ -484,7 +485,7 @@ public class PrStatusPollServiceTests
         VerifyMergeCalls(h, Times.Never());
         Assert.Equal(PrAutoMerge.IldPending, h.Run.PrAutoMerge);
         // The rest of the tick is untouched.
-        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
+        h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.Is<string?>(x => x != null), It.IsAny<string?>()), Times.Once);
 
         if (why == "tag removed")
             return;
@@ -722,6 +723,7 @@ public class PrStatusPollServiceTests
             PrAutoMerge = PrAutoMerge.IldPending,
         };
         h.Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { h.Run, other });
+        h.Runs.AcceptPollWrites(other);
         h.Runs.Setup(s => s.GetRunNodeAsync(other.Id, otherNodeId)).ReturnsAsync(new LoopRunNode
         {
             Id = Guid.NewGuid(), LoopRunId = other.Id, LoopNodeId = otherNodeId, Status = LoopRunNodeStatus.WaitingHuman,

@@ -597,6 +597,61 @@ public class LoopRunStore : ILoopRunStore
                 .SetProperty(r => r.PrSnapshot, (string?)null)
                 .SetProperty(r => r.PrPushedCommit, pushedCommit));
 
+    public async Task<bool> TryRecordPrPollAsync(Guid runId, Guid prNodeId, string? prSnapshot, string? prPolledEdgeStates)
+    {
+        var now = DateTime.UtcNow;
+        var rows = await _db.LoopRuns
+            .Where(r => r.Id == runId
+                && r.Status == LoopRunStatus.WaitingHuman
+                && r.HumanFeedbackReason == HumanFeedbackReasons.PrAwaitingMerge
+                && r.CurrentNodeId == prNodeId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.PrSnapshot, prSnapshot)
+                .SetProperty(r => r.PrPolledEdgeStates, prPolledEdgeStates)
+                .SetProperty(r => r.UpdatedAt, now));
+        if (rows == 0)
+            return false;
+        KeepTrackedInStep(runId, e =>
+        {
+            Settle(e.Property(r => r.PrSnapshot), prSnapshot);
+            Settle(e.Property(r => r.PrPolledEdgeStates), prPolledEdgeStates);
+            Settle(e.Property(r => r.UpdatedAt), now);
+        });
+        return true;
+    }
+
+    public async Task SetPrMergedAsync(Guid runId)
+    {
+        var now = DateTime.UtcNow;
+        await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.IsPrMerged, true)
+                .SetProperty(r => r.UpdatedAt, now));
+        KeepTrackedInStep(runId, e =>
+        {
+            Settle(e.Property(r => r.IsPrMerged), true);
+            Settle(e.Property(r => r.UpdatedAt), now);
+        });
+    }
+
+    // A targeted update bypasses the change tracker. If this scope holds the run tracked, bring it in
+    // line with what was written and mark the values clean, so a later SaveChanges has nothing stale
+    // to write for these columns.
+    private void KeepTrackedInStep(Guid runId, Action<Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<LoopRun>> settle)
+    {
+        var entry = _db.ChangeTracker.Entries<LoopRun>().FirstOrDefault(e => e.Entity.Id == runId);
+        if (entry is not null)
+            settle(entry);
+    }
+
+    private static void Settle<T>(Microsoft.EntityFrameworkCore.ChangeTracking.PropertyEntry<LoopRun, T> property, T value)
+    {
+        property.CurrentValue = value;
+        property.OriginalValue = value;
+        property.IsModified = false;
+    }
+
     public async Task ClearPrPushedCommitAsync(Guid runId, string expected)
         => await _db.LoopRuns
             .Where(r => r.Id == runId && r.PrPushedCommit == expected)

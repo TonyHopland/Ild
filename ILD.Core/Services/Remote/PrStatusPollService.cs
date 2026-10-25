@@ -130,17 +130,22 @@ public sealed class PrStatusPollService : IPrStatusPollService
             : null;
 
         // Persist snapshot + new baseline and push the GUI update regardless of
-        // whether any edge fires. This write carries the whole row, but never the
-        // ledger or the queue: the model ignores both on any update, because this
-        // instance was loaded before the forge fetch above and stays tracked for
-        // the whole pass — so writing its copy back, here or on any later save in
-        // this scope, would revert whatever was recorded meanwhile.
+        // whether any edge fires. This instance was loaded before the forge fetch above,
+        // which takes seconds, and a person may have answered the parked node in that
+        // window. So the write is targeted: the three columns this pass owns, and only
+        // while the run is still parked at this PR node. The instance is never saved as
+        // a whole row, here or later in the pass; that would put its stale position back
+        // over the engine's and leave the run waiting on a node nobody can answer. If
+        // nothing was written the run has moved on, and the pass ends without touching it.
         var badgesBefore = WorkItemPrStatus.From(PrSnapshotJson.TryParse(run.PrSnapshot));
         var baselineBefore = run.PrPolledEdgeStates;
-        run.PrSnapshot = PrSnapshotJson.Serialize(snapshot);
-        run.PrPolledEdgeStates = string.Join(",", newStates);
-        run.UpdatedAt = DateTime.UtcNow;
-        await _runs.UpdateRunAsync(run);
+        var storedSnapshot = PrSnapshotJson.Serialize(snapshot);
+        var storedStates = string.Join(",", newStates);
+        if (!await _runs.TryRecordPrPollAsync(run.Id, runNode.LoopNodeId, storedSnapshot, storedStates))
+            return;
+        // Later code in this pass reads these; the store has already written them.
+        run.PrSnapshot = storedSnapshot;
+        run.PrPolledEdgeStates = storedStates;
         await _notifier.PrSnapshotChangedAsync(run.Id);
         if (_boardNotifier is not null && badgesBefore != WorkItemPrStatus.From(snapshot))
             await _boardNotifier.PrStatusChangedAsync(run.WorkItemId);
@@ -165,10 +170,10 @@ public sealed class PrStatusPollService : IPrStatusPollService
                 // restored (what it replaces described an older commit too, and the card shows
                 // nothing rather than a guess), and the baseline is put back so the new head's
                 // first poll still sees its states as newly true. No edge fires on this tick.
+                if (!await _runs.TryRecordPrPollAsync(run.Id, runNode.LoopNodeId, null, baselineBefore))
+                    return;
                 run.PrSnapshot = null;
                 run.PrPolledEdgeStates = baselineBefore;
-                run.UpdatedAt = DateTime.UtcNow;
-                await _runs.UpdateRunAsync(run);
                 await _notifier.PrSnapshotChangedAsync(run.Id);
                 if (_boardNotifier is not null)
                     await _boardNotifier.PrStatusChangedAsync(run.WorkItemId);
