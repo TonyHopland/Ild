@@ -22,6 +22,7 @@ import type {
   PrQueueChangedPayload,
   PreviewStateChangedPayload,
   WorkItemRunProgressedPayload,
+  WorkItemPrStatusChangedPayload,
   WorkItemBoardReorderedPayload,
   SchedulerStateChangedPayload,
   ChatMessageAppendedPayload,
@@ -60,6 +61,7 @@ export interface SignalREventPayloads {
   PrQueueChanged: PrQueueChangedPayload;
   PreviewStateChanged: PreviewStateChangedPayload;
   WorkItemRunProgressed: WorkItemRunProgressedPayload;
+  WorkItemPrStatusChanged: WorkItemPrStatusChangedPayload;
   WorkItemBoardReordered: WorkItemBoardReorderedPayload;
   SchedulerStateChanged: SchedulerStateChangedPayload;
   ChatMessageAppended: ChatMessageAppendedPayload;

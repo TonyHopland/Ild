@@ -194,6 +194,11 @@ export default function Taskboard() {
       syncWorkItem(message.payload.workItemId, { itemChanged: false });
     };
 
+    // A poll moved a parked item's PR badges, or a push cleared them.
+    const onPrStatusChanged = (message: TypedSignalRMessage<"WorkItemPrStatusChanged">) => {
+      syncWorkItem(message.payload.workItemId, { itemChanged: false });
+    };
+
     // A renumber changed every item's order value at once, keeping the order:
     // re-read the columns as loaded rather than one card at a time.
     const onBoardReordered = () => {
@@ -210,6 +215,7 @@ export default function Taskboard() {
     on("WorkItemStateChanged", onWorkItemStateChanged);
     on("PreviewStateChanged", onPreviewStateChanged);
     on("WorkItemRunProgressed", onRunProgressed);
+    on("WorkItemPrStatusChanged", onPrStatusChanged);
     on("WorkItemBoardReordered", onBoardReordered);
     on("WorkItemEditProposalsChanged", onEditProposalsChanged);
 
@@ -218,6 +224,7 @@ export default function Taskboard() {
       off("WorkItemStateChanged", onWorkItemStateChanged);
       off("PreviewStateChanged", onPreviewStateChanged);
       off("WorkItemRunProgressed", onRunProgressed);
+      off("WorkItemPrStatusChanged", onPrStatusChanged);
       off("WorkItemBoardReordered", onBoardReordered);
       off("WorkItemEditProposalsChanged", onEditProposalsChanged);
       for (const t of delayedTimers) clearTimeout(t);

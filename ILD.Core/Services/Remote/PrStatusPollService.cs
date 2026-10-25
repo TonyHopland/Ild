@@ -43,6 +43,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
     private readonly ILogger<PrStatusPollService> _log;
     private readonly IWorkItemManager? _workItems;
     private readonly IEventLogService? _eventLog;
+    private readonly IWorkItemNotifier? _boardNotifier;
 
     public PrStatusPollService(
         ILoopRunStore runs,
@@ -51,7 +52,8 @@ public sealed class PrStatusPollService : IPrStatusPollService
         IRunNotifier notifier,
         ILogger<PrStatusPollService> log,
         IWorkItemManager? workItems = null,
-        IEventLogService? eventLog = null)
+        IEventLogService? eventLog = null,
+        IWorkItemNotifier? boardNotifier = null)
     {
         _runs = runs;
         _remote = remote;
@@ -60,6 +62,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         _log = log;
         _workItems = workItems;
         _eventLog = eventLog;
+        _boardNotifier = boardNotifier;
     }
 
     public async Task PollOnceAsync(CancellationToken ct = default)
@@ -78,6 +81,10 @@ public sealed class PrStatusPollService : IPrStatusPollService
             }
         }
     }
+
+    /// <summary>The fields a board card shows; null when there is no snapshot.</summary>
+    private static (string, bool, bool?, string?, RemotePrCiStatus, bool, bool)? BadgesOf(RemotePrSnapshot? s)
+        => s is null ? null : (s.State, s.Merged, s.Mergeable, s.MergeableState, s.Ci, s.Approved, s.ChangesRequested);
 
     private async Task PollRunAsync(LoopRun run, CancellationToken ct)
     {
@@ -119,11 +126,14 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // instance was loaded before the forge fetch above and stays tracked for
         // the whole pass — so writing its copy back, here or on any later save in
         // this scope, would revert whatever was recorded meanwhile.
+        var badgesBefore = BadgesOf(PrSnapshotJson.TryParse(run.PrSnapshot));
         run.PrSnapshot = PrSnapshotJson.Serialize(snapshot);
         run.PrPolledEdgeStates = string.Join(",", newStates);
         run.UpdatedAt = DateTime.UtcNow;
         await _runs.UpdateRunAsync(run);
         await _notifier.PrSnapshotChangedAsync(run.Id);
+        if (_boardNotifier is not null && badgesBefore != BadgesOf(snapshot))
+            await _boardNotifier.PrStatusChangedAsync(run.WorkItemId);
 
         // A run with no ledger yet records what is already on the pull request
         // and fires nothing this tick, whichever edge wins below.

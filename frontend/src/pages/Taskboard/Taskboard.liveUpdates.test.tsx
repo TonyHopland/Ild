@@ -242,6 +242,33 @@ describe("Taskboard live updates", () => {
     expect(server.getCounts.mock.calls.length).toBe(countsBefore);
   });
 
+  test("a PR status event re-syncs a parked card and updates its CI badge", async () => {
+    const parked = {
+      ...makeItem("a", []),
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "PR Awaiting Merge",
+      prStatus: {
+        state: "open",
+        merged: false,
+        mergeable: true,
+        mergeableState: null,
+        ci: "Failed" as const,
+        approved: false,
+        changesRequested: false,
+      },
+    };
+    const { server, emit } = mockBoard([parked]);
+
+    renderTaskboard();
+    await waitFor(() => expect(screen.getByText("CI failed")).toBeTruthy());
+
+    server.items[0] = { ...parked, prStatus: { ...parked.prStatus, ci: "Pending" } };
+    await emit("WorkItemPrStatusChanged", { workItemId: "a" });
+
+    await waitFor(() => expect(screen.getByText("CI running")).toBeTruthy());
+    expect(screen.queryByText("CI failed")).toBeNull();
+  });
+
   test("an edit still reconciles totals and tags when a run event's fetch supersedes its own", async () => {
     const { server, emit } = mockBoard([makeItem("a", ["one", "gone"])]);
 

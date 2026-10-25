@@ -107,6 +107,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath))
         {
             string? prepError = null;
+            var pushed = false;
             try
             {
                 var diff = await repoManager.GetDiffAsync(ctx.Run.WorktreePath);
@@ -120,6 +121,8 @@ public sealed class PRNodeExecutor : INodeExecutor
                     var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath, branch, ctx.CancellationToken, gitAuth);
                     if (!pushResult.Success)
                         prepError = $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}";
+                    else
+                        pushed = true;
                 }
                 if (prepError is null && string.IsNullOrEmpty(ctx.Run.PrUrl))
                 {
@@ -130,6 +133,10 @@ public sealed class PRNodeExecutor : INodeExecutor
                 }
             }
             catch (Exception ex) { prepError = ex.Message; }
+            // The pushed commit has no result yet; drop the previous commit's so the
+            // board card stops showing it until the next heartbeat stores the forge's answer.
+            if (pushed)
+                await ClearPrSnapshotAsync(ctx, sp);
             if (prepError is not null)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, prepError);
@@ -337,6 +344,18 @@ public sealed class PRNodeExecutor : INodeExecutor
             sp.GetService<ILogger<PRNodeExecutor>>()?.LogWarning(
                 ex, "Could not record the PR write claim for run {RunId}", ctx.Run.Id);
         }
+    }
+
+    private static async Task ClearPrSnapshotAsync(NodeExecutionContext ctx, IServiceProvider sp)
+    {
+        if (ctx.Run.PrSnapshot is null || sp.GetService<ILoopRunStore>() is not { } runs)
+            return;
+        ctx.Run.PrSnapshot = null;
+        await runs.UpdateRunAsync(ctx.Run);
+        if (sp.GetService<IRunNotifier>() is { } runNotifier)
+            await runNotifier.PrSnapshotChangedAsync(ctx.Run.Id);
+        if (sp.GetService<IWorkItemNotifier>() is { } board)
+            await board.PrStatusChangedAsync(ctx.Run.WorkItemId);
     }
 
     /// <summary>

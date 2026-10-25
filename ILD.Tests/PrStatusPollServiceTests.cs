@@ -44,6 +44,7 @@ public class PrStatusPollServiceTests
         public Mock<IRunNotifier> Notifier { get; } = new();
         public Mock<IWorkItemManager> WorkItems { get; } = new();
         public Mock<IEventLogService> EventLog { get; } = new();
+        public Mock<IWorkItemNotifier> Board { get; } = new();
 
         public Harness(RemotePrSnapshot snapshot, string? baseline, params LoopNodeEdge[] edges)
         {
@@ -79,7 +80,7 @@ public class PrStatusPollServiceTests
 
         public PrStatusPollService Build() => new(
             Runs.Object, Remote.Object, Engine.Object, Notifier.Object,
-            NullLogger<PrStatusPollService>.Instance, WorkItems.Object, EventLog.Object);
+            NullLogger<PrStatusPollService>.Instance, WorkItems.Object, EventLog.Object, Board.Object);
     }
 
     [Fact]
@@ -91,6 +92,39 @@ public class PrStatusPollServiceTests
         h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(h.Run.Id), Times.Once);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(RemotePrCiStatus.Failed)]
+    [InlineData(RemotePrCiStatus.Passed)]
+    public async Task A_terminal_ci_moving_back_to_pending_is_stored_and_notifies_the_board_once(RemotePrCiStatus before)
+    {
+        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
+        h.Run.PrSnapshot = PrSnapshotJson.Serialize(Snapshot(ci: before));
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(RemotePrCiStatus.Pending, PrSnapshotJson.TryParse(h.Run.PrSnapshot)!.Ci);
+        h.Board.Verify(n => n.PrStatusChangedAsync("wi-1"), Times.Once);
+    }
+
+    [Fact]
+    public async Task An_unchanged_badge_does_not_notify_the_board()
+    {
+        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
+        h.Run.PrSnapshot = PrSnapshotJson.Serialize(Snapshot(ci: RemotePrCiStatus.Pending));
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        h.Board.Verify(n => n.PrStatusChangedAsync(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task The_first_snapshot_after_a_clear_notifies_the_board()
+    {
+        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
+        h.Run.PrSnapshot = null;
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        h.Board.Verify(n => n.PrStatusChangedAsync("wi-1"), Times.Once);
     }
 
     [Fact]
