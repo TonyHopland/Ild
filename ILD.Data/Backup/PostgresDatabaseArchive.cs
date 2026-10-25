@@ -1,7 +1,6 @@
 using System.Data;
 using System.Reflection;
 using System.Text;
-using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -20,7 +19,7 @@ namespace ILD.Data.Backup;
 /// of the archive, which is also what lets an archive from an older build, or from an older
 /// PostgreSQL major version, restore into a newer one.</para>
 /// </summary>
-public sealed partial class PostgresDatabaseArchive<TContext>(TContext context, string database) : IDatabaseArchive
+public sealed class PostgresDatabaseArchive<TContext>(TContext context, string database) : IDatabaseArchive
     where TContext : DbContext
 {
     private const string MigrationsTable = "__EFMigrationsHistory";
@@ -123,19 +122,12 @@ public sealed partial class PostgresDatabaseArchive<TContext>(TContext context, 
     /// migrator itself: it checks for the database with commands whose failure it expects and handles, and a
     /// failed command aborts the transaction the restore needs to stay in.
     ///
-    /// <para>A migration's own SQL (<c>migrationBuilder.Sql</c>) comes out of a script without a terminator,
-    /// and the history row EF writes after it then runs into it. The terminator is put back before every
-    /// history row. A migration with several raw statements in a row still has to end each with a semicolon,
-    /// which a test over the scripts checks.</para>
+    /// <para>The script is run as one text, so every statement in it has to end with a semicolon. EF adds them
+    /// to what it generates but not to a migration's own SQL (<c>migrationBuilder.Sql</c>), which has to carry
+    /// its own; a test over the scripts checks that every migration does.</para>
     /// </summary>
     internal static string BuildSchemaScript(TContext context, string target)
-    {
-        var script = context.GetService<IMigrator>().GenerateScript(null, target, MigrationsSqlGenerationOptions.NoTransactions);
-        return UnterminatedBeforeHistoryRow().Replace(script, ";\n\n");
-    }
-
-    [GeneratedRegex("""(?<=[^;\s])[ \t]*\r?\n\r?\n(?=INSERT INTO public\."__EFMigrationsHistory")""")]
-    private static partial Regex UnterminatedBeforeHistoryRow();
+        => context.GetService<IMigrator>().GenerateScript(null, target, MigrationsSqlGenerationOptions.NoTransactions);
 
     /// <summary>Every owned table with its columns that hold data (generated ones are computed again).</summary>
     private static async Task<Dictionary<string, List<string>>> ReadSchemaAsync(NpgsqlConnection connection, CancellationToken ct)

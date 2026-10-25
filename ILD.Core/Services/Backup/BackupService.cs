@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Backup;
@@ -80,9 +79,7 @@ public sealed class BackupService(
     ILogger<BackupService> log,
     IDatabaseArchive? core = null)
 {
-    public const string Core = ArchiveDatabase.Core;
-    public const string WorkItems = ArchiveDatabase.WorkItems;
-    public static readonly IReadOnlyList<string> Databases = [Core, WorkItems];
+    public static readonly IReadOnlyList<string> Databases = [ArchiveDatabase.Core, ArchiveDatabase.WorkItems];
 
     /// <summary>What the key check in a core backup decrypts to.</summary>
     public const string KeyCheckValue = "ild-backup-key-check-v1";
@@ -142,7 +139,7 @@ public sealed class BackupService(
             {
                 var manifest = await ArchiveManifest.ReadAsync(verify, ct);
                 manifest.RequireRestorableInto(database, state.Info!);
-                if (database == Core) RequireSameSecretKey(manifest.KeyCheck);
+                if (database == ArchiveDatabase.Core) RequireSameSecretKey(manifest.KeyCheck);
                 await verify.CopyToAsync(Stream.Null, ct);
             }
 
@@ -169,7 +166,7 @@ public sealed class BackupService(
                 // a commit that races a cancellation would leave nobody knowing which way it went.
                 upload.Position = 0;
                 await using var archive = await OpenAsync(upload, passphrase, database, CancellationToken.None);
-                if (database == Core)
+                if (database == ArchiveDatabase.Core)
                 {
                     await core!.ImportAsync(archive, CancellationToken.None);
                     restarting = true;
@@ -206,7 +203,7 @@ public sealed class BackupService(
             await encrypted.CompleteAsync(ct);
         }
 
-        if (database == Core)
+        if (database == ArchiveDatabase.Core)
             await EncryptAsync(encrypted => core!.ExportAsync(encrypted, SecretProtector.IsEnabled ? SecretProtector.Protect(KeyCheckValue) : null, ct));
         else
             await workItemServer.ExportAsync(await ServerOptionsAsync(ct), WorkItemActor.Human(username),

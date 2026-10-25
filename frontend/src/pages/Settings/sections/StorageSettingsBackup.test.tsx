@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import StorageSettings from "./StorageSettings";
+import { REVOKE_DELAY_MS } from "../../../utils/saveBlob";
 
 const MB = 1024 * 1024;
 const REASON = "this tracker does not support backup";
@@ -33,6 +34,7 @@ const overview = (extra: Record<string, unknown> = {}) => ({
 type Call = { url: string; method: string; body: unknown };
 let calls: Call[];
 const createObjectURL = vi.fn(() => "blob:backup");
+const revokeObjectURL = vi.fn();
 
 function serve(options: { status?: Status; overview?: unknown } = {}) {
   calls = [];
@@ -84,14 +86,16 @@ beforeEach(() => {
     configurable: true,
     writable: true,
   });
+  revokeObjectURL.mockClear();
   Object.defineProperty(URL, "revokeObjectURL", {
-    value: vi.fn(),
+    value: revokeObjectURL,
     configurable: true,
     writable: true,
   });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -140,14 +144,23 @@ describe("Storage settings: Backup and restore", () => {
     expect(posts()).toHaveLength(0);
 
     fireEvent.click(screen.getByRole("checkbox"));
+    // The saved file's URL is kept alive for a while after the click: only that timer is faked, and only
+    // from here, since the testing library's own waiting needs real ones.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     fireEvent.click(createButtons()[0]);
 
-    await waitFor(() => expect(posts()).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(posts()).toHaveLength(1);
     expect(posts()[0].url).toMatch(/\/storage\/backups\/core$/);
     expect(JSON.parse(posts()[0].body as string)).toEqual({
       passphrase: "a long enough passphrase",
     });
-    await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createObjectURL).toHaveBeenCalled();
+    // The saved file's URL outlives the click; only its timer is faked.
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(REVOKE_DELAY_MS);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:backup");
   });
 
   test("with a secret key configured there is no plaintext warning and no acknowledgement to give", async () => {

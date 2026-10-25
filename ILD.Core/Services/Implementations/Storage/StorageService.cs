@@ -1,3 +1,4 @@
+using ILD.Data.Backup;
 using ILD.Core.Services.Backup;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
@@ -97,8 +98,8 @@ public sealed class StorageService : IStorageService
         return new StorageOverview(
             new[] { worktrees, clones, previewData, chats, agents, temp, backups, other }.Select(c => c.ToCategory(measured)).ToList(),
             [
-                new StorageDatabase(BackupService.Core, "ILD data", databases[BackupService.Core].Info?.DatabaseBytes),
-                new StorageDatabase(BackupService.WorkItems, "Work item data", databases[BackupService.WorkItems].Info?.DatabaseBytes),
+                new StorageDatabase(ArchiveDatabase.Core, "ILD data", databases[ArchiveDatabase.Core].Info?.DatabaseBytes),
+                new StorageDatabase(ArchiveDatabase.WorkItems, "Work item data", databases[ArchiveDatabase.WorkItems].Info?.DatabaseBytes),
             ]);
     }
 

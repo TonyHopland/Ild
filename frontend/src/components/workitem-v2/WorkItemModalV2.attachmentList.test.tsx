@@ -5,11 +5,13 @@ import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import { WorkItem, WorkItemAttachment, WorkItemStatus } from "../../types";
 import { formatBytes } from "../../utils/attachments";
+import { REVOKE_DELAY_MS } from "../../utils/saveBlob";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
@@ -163,9 +165,13 @@ describe("the overview's attachment list", () => {
     });
     await renderDialog(makeWorkItem());
 
+    // The saved file's URL is kept alive for a while after the click: only that timer is faked, and only
+    // from here, since the testing library's own waiting needs real ones.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await click(screen.getByRole("button", { name: "Download shot.png" }));
 
-    await waitFor(() => expect(clicks).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clicks).toHaveLength(1);
     // Fetched through the API client — which carries the token in a header —
     // and then saved, never opened in a tab.
     expect(download).toHaveBeenCalledWith("wi-1", "att-1");
@@ -173,7 +179,10 @@ describe("the overview's attachment list", () => {
     expect(clicks[0].download).toBe("shot.png");
     expect(clicks[0].href.startsWith("blob:")).toBe(true);
     expect(clicks[0].href).toBe(objectUrl);
-    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(REVOKE_DELAY_MS);
+    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+    vi.useRealTimers();
     expect(open).not.toHaveBeenCalled();
   });
 

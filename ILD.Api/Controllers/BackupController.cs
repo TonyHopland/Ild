@@ -1,4 +1,5 @@
 using ILD.Api.Filters;
+using ILD.Data.Backup;
 using ILD.Core.Services.Backup;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
@@ -109,7 +110,7 @@ public class BackupController(
 
         // ILD's own data was replaced: it starts again, which migrates an older backup forward and
         // runs the data migrators. The restart is after this response, which says so.
-        var restarting = database == BackupService.Core;
+        var restarting = database == ArchiveDatabase.Core;
         if (restarting)
             Response.OnCompleted(() =>
             {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, act, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
 import FilesPanel, { workItemKey } from "./FilesPanel";
 import {
   WorkItem,
@@ -11,6 +11,7 @@ import {
   WorktreeFiles,
 } from "../../types";
 import * as authServices from "../../services/auth";
+import { REVOKE_DELAY_MS } from "../../utils/saveBlob";
 
 // Every panel asks for the commit list it offers ranges from; one with no
 // commits of its own leaves the rest of the panel exactly as it was.
@@ -22,6 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.restoreAllMocks();
 });
@@ -1617,17 +1619,26 @@ describe("FilesPanel download", () => {
     }
     await open("b.png");
     await clickButton("Diff");
+    // The saved file's URL is kept alive for a while after the click: only that timer is faked, and only
+    // from here, since the testing library's own waiting needs real ones.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await clickButton("Download");
 
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith("wi-1", "src/a/b.png");
     const blob = new Blob([new Uint8Array([0x89, 0x50, 0x00, 0xff])]);
-    await settle(() => held[0].resolve(blob));
+    await act(async () => {
+      held[0].resolve(blob);
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
     // The very bytes the server answered with, under the path's last segment.
     expect(createObjectURL).toHaveBeenCalledWith(blob);
     expect(clicks).toEqual([{ download: "b.png", href: objectUrl }]);
-    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(REVOKE_DELAY_MS);
+    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+    vi.useRealTimers();
 
     // Saving a copy is not a navigation: same file, same mode, same pane.
     expect(screen.getByRole("button", { name: "Diff" }).getAttribute("aria-pressed")).toBe("true");

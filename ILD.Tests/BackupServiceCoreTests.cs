@@ -105,14 +105,14 @@ public sealed class BackupServiceCoreTests : IDisposable
     {
         SecretProtector.Configure(key);
         var file = new MemoryStream();
-        await Service().CreateAsync(BackupService.Core, Pass, "admin", _ => file, TestContext.Current.CancellationToken);
+        await Service().CreateAsync("core", Pass, "admin", _ => file, TestContext.Current.CancellationToken);
         return file.ToArray();
     }
 
     private async Task RestoreAsync(byte[] backup, string? key)
     {
         SecretProtector.Configure(key);
-        await Service().RestoreAsync(BackupService.Core, new MemoryStream(backup), Pass, BackupService.RestoreConfirmation,
+        await Service().RestoreAsync("core", new MemoryStream(backup), Pass, BackupService.RestoreConfirmation,
             "admin", TestContext.Current.CancellationToken);
     }
 
@@ -127,7 +127,7 @@ public sealed class BackupServiceCoreTests : IDisposable
         await RestoreAsync(backup, restoredWith);
 
         Assert.Equal(1, _archive.Imports);
-        Assert.NotNull(_directory.PreRestoreInfo(BackupService.Core));
+        Assert.NotNull(_directory.PreRestoreInfo("core"));
         // ILD restarts after a core restore, so the instance never reopens for business.
         Assert.True(_maintenance.IsActive);
     }
@@ -144,7 +144,7 @@ public sealed class BackupServiceCoreTests : IDisposable
         Assert.Equal(BackupFailure.Refused, refused.Failure);
         Assert.Contains("ILD_SECRET_KEY", refused.Message);
         Assert.Equal(0, _archive.Imports);
-        Assert.Null(_directory.PreRestoreInfo(BackupService.Core));
+        Assert.Null(_directory.PreRestoreInfo("core"));
         Assert.False(_maintenance.IsActive);
     }
 
