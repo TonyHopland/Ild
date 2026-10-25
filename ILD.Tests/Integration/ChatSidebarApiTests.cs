@@ -146,4 +146,34 @@ public class ChatSidebarApiTests
         using (var anonymous = await factory.CreateClient().GetAsync("/api/v1/chat/search?q=deploy", TestContext.Current.CancellationToken))
             Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
     }
+
+    [Fact]
+    public async Task Batch_delete_over_HTTP_removes_the_callers_listed_chats_and_leaves_everything_else()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var kept = Guid.NewGuid();
+        var bobs = Guid.NewGuid();
+        await SeedChatAsync(factory, first, factory.AdminUsername);
+        await SeedChatAsync(factory, second, factory.AdminUsername);
+        await SeedChatAsync(factory, kept, factory.AdminUsername);
+        await SeedChatAsync(factory, bobs, "bob");
+
+        using (var response = await client.PostAsJsonAsync("/api/v1/chat/delete", new { ids = new[] { first, second, bobs } }, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var left = await db.ChatSessions.AsNoTracking().Select(c => c.Id).ToListAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(new[] { kept, bobs }.Order(), left.Order());
+        }
+
+        using var empty = new StringContent("{}", Encoding.UTF8, "application/json");
+        using (var response = await client.PostAsync("/api/v1/chat/delete", empty, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using (var response = await factory.CreateClient().PostAsJsonAsync("/api/v1/chat/delete", new { ids = new[] { kept } }, TestContext.Current.CancellationToken))
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

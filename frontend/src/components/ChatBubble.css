@@ -557,6 +557,33 @@
   }
 }
 
+.chat-history-row .chat-history-open.chat-history-select {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.chat-history-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.chat-history-select input {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.chat-history-select-all {
+  display: flex;
+  align-items: center;
+  /* The rows' own right padding, so its box sits over theirs. */
+  padding-right: 0.5rem;
+}
+
 .chat-history-title {
   display: flex;
   align-items: center;

@@ -35,7 +35,7 @@ const {
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
-    deleteAll: vi.fn(),
+    deleteMany: vi.fn(),
   },
   aiProviderService: { getAll: vi.fn() },
   workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },

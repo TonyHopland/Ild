@@ -51,7 +51,7 @@
           {
             "name": "app",
             "cwd": "frontend",
-            "command": "vp dev --host ${HOST} --port ${PORT}",
+            "command": "../node_modules/.bin/vp dev --host ${HOST} --port ${PORT}",
             "port": "frontend",
             "suggestedPort": 3100,
             "env": {

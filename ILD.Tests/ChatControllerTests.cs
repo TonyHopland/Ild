@@ -342,7 +342,7 @@ public class ChatControllerTests
     }
 
     [Fact]
-    public async Task DeleteAll_removes_every_chat_the_caller_owns_and_no_others()
+    public async Task DeleteMany_removes_only_the_listed_chats_the_caller_owns()
     {
         using var db = new TestDb();
         var scratchRoot = Path.Combine(Path.GetTempPath(), "ild-chat-controller-tests", Guid.NewGuid().ToString("N"));
@@ -367,7 +367,8 @@ public class ChatControllerTests
                 ctx.SaveChanges();
                 return id;
             }
-            var mine = new[] { Seed("tony"), Seed("tony") };
+            var listed = new[] { Seed("tony"), Seed("tony") };
+            var unlisted = Seed("tony");
             var others = Seed("alice");
 
             var notifier = Mock.Of<IChatNotifier>();
@@ -381,17 +382,50 @@ public class ChatControllerTests
             };
             var controller = new ChatController(chat, runner) { ControllerContext = new ControllerContext { HttpContext = http } };
 
-            var result = await controller.DeleteAll(TestContext.Current.CancellationToken);
+            var result = await controller.DeleteMany(
+                new DeleteChatsRequest { Ids = [listed[0], listed[1], listed[0], others, Guid.NewGuid()] },
+                TestContext.Current.CancellationToken);
 
             Assert.Equal(StatusCodes.Status204NoContent, StatusOf(result));
             using var after = db.Fresh();
-            Assert.Equal([others], after.ChatSessions.AsNoTracking().Select(c => c.Id).ToList());
-            Assert.All(mine, id => Assert.False(Directory.Exists(Path.Combine(scratchRoot, id.ToString("N"))), "scratch directories should be removed"));
+            Assert.Equal(new[] { unlisted, others }.Order(), after.ChatSessions.AsNoTracking().Select(c => c.Id).ToList().Order());
+            Assert.All(listed, id => Assert.False(Directory.Exists(Path.Combine(scratchRoot, id.ToString("N"))), "scratch directories should be removed"));
+            Assert.True(Directory.Exists(Path.Combine(scratchRoot, unlisted.ToString("N"))));
             Assert.True(Directory.Exists(Path.Combine(scratchRoot, others.ToString("N"))));
         }
         finally
         {
             try { if (Directory.Exists(scratchRoot)) Directory.Delete(scratchRoot, true); } catch { }
         }
+    }
+
+    public static TheoryData<Guid[]?> NoIds => new() { null, Array.Empty<Guid>() };
+
+    [Theory]
+    [MemberData(nameof(NoIds))]
+    public async Task DeleteMany_without_ids_is_BadRequest_and_deletes_nothing(Guid[]? ids)
+    {
+        var result = await CreateController().DeleteMany(new DeleteChatsRequest { Ids = ids }, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, StatusOf(result));
+        _chat.Verify(c => c.DeleteAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        _runner.Verify(r => r.DeleteAsync(It.IsAny<Guid>(), It.IsAny<Func<Task>>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteMany_without_a_body_is_BadRequest()
+    {
+        var result = await CreateController().DeleteMany(null, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, StatusOf(result));
+    }
+
+    [Fact]
+    public async Task DeleteMany_without_a_signed_in_user_is_Unauthorized()
+    {
+        var result = await CreateController(username: null).DeleteMany(new DeleteChatsRequest { Ids = [Guid.NewGuid()] }, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, StatusOf(result));
+        _chat.Verify(c => c.DeleteAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

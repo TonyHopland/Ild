@@ -11,7 +11,7 @@ const { chatService, aiProviderService, workItemService, authService } = vi.hois
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
-    deleteAll: vi.fn(),
+    deleteMany: vi.fn(),
     searchChats: vi.fn(() => Promise.resolve<string[]>([])),
     markRead: vi.fn(() => Promise.resolve()),
     rename: vi.fn(() => Promise.resolve()),

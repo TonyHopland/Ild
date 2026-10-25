@@ -31,7 +31,7 @@ const {
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
-    deleteAll: vi.fn(),
+    deleteMany: vi.fn(),
     markRead: vi.fn(),
   },
   aiProviderService: { getAll: vi.fn(() => Promise.resolve([])) },
@@ -150,8 +150,8 @@ beforeEach(() => {
     server = server.filter((c) => c.id !== id);
     return Promise.resolve();
   });
-  chatService.deleteAll.mockImplementation(() => {
-    server = [];
+  chatService.deleteMany.mockImplementation((ids: string[]) => {
+    server = server.filter((c) => !ids.includes(c.id));
     return Promise.resolve();
   });
   chatService.sendMessage.mockResolvedValue("t1");
@@ -537,7 +537,7 @@ describe("unread chat indicator", () => {
     expect(fabDot()).toBeNull();
   });
 
-  test("a history read in flight when delete all settles never brings any chat or dot back", async () => {
+  test("a history read in flight when a bulk delete settles never brings any chat or dot back", async () => {
     server = [summary("a", "Alpha", true), summary("b", "Beta", true)];
     render(bubble(), { wrapper: WorkItemHubProvider });
     await openPanel();
@@ -547,9 +547,11 @@ describe("unread chat indicator", () => {
     holdHistoryReads(1);
     emitUnreadChanged({ chatSessionId: "b" });
     await waitFor(() => expect(heldReads).toHaveLength(1));
-    fireEvent.click(screen.getByText("Delete all"));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete (2)" }));
     fireEvent.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete all" }),
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
     );
     await waitFor(() => expect(screen.queryByText("Alpha")).toBeNull());
 

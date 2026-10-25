@@ -822,17 +822,23 @@ export default function ChatWorkspace({
   // Deleting the chat this view is showing, or the one it is opening with nothing
   // else installed, leaves it for the start form. Deleting one it is opening over
   // another chat only calls the open off, and the installed chat stays.
-  const deleteChat = (id: string) => {
-    const opening =
-      openingRef.current?.chatSessionId === id && openingRef.current.visit === visitRef.current;
-    if (sessionIdRef.current === id || (opening && sessionIdRef.current === null)) leaveChat();
+  const leaveOrCallOff = (ids: ReadonlySet<string>) => {
+    const openingId =
+      openingRef.current?.visit === visitRef.current ? openingRef.current.chatSessionId : null;
+    const opening = openingId !== null && ids.has(openingId);
+    const open = sessionIdRef.current;
+    if ((open !== null && ids.has(open)) || (opening && open === null)) leaveChat();
     else if (opening) beginVisit();
+  };
+
+  const deleteChat = (id: string) => {
+    leaveOrCallOff(new Set([id]));
     return inbox.deleteChat(id);
   };
 
-  const deleteAllChats = () => {
-    leaveChat();
-    return inbox.deleteAllChats();
+  const deleteChats = (ids: string[]) => {
+    leaveOrCallOff(new Set(ids));
+    return inbox.deleteChats(ids);
   };
 
   const renameInbox = inbox.renameChat;
@@ -864,7 +870,7 @@ export default function ChatWorkspace({
       }
       onNewChat={newChat}
       onDelete={(id) => void deleteChat(id)}
-      onDeleteAll={() => void deleteAllChats()}
+      onDeleteMany={(ids) => void deleteChats(ids)}
       renameChat={renameChat}
       renamesInFlight={inbox.renamesInFlight}
       onFavorite={(id, favorite) => void inbox.setFavorite(id, favorite)}

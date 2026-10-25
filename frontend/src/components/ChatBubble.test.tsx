@@ -41,7 +41,7 @@ const {
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
-    deleteAll: vi.fn(),
+    deleteMany: vi.fn(),
     searchChats: vi.fn(),
   },
   aiProviderService: {
@@ -497,12 +497,12 @@ describe("ChatBubble", () => {
     expect(screen.getByText("Keep me")).toBeTruthy();
   });
 
-  test("delete all wipes every chat only after the confirmation", async () => {
+  test("bulk delete removes the checked chats only after the confirmation", async () => {
     chatService.listHistory.mockResolvedValue([
       summary({ id: "s1", name: "One" }),
       summary({ id: "s2", name: "Two" }),
     ]);
-    chatService.deleteAll.mockResolvedValue(undefined);
+    chatService.deleteMany.mockResolvedValue(undefined);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
     renderBubble();
@@ -510,14 +510,17 @@ describe("ChatBubble", () => {
     await openChatList();
     await screen.findByText("One");
 
-    // First click only arms the confirmation — nothing is deleted yet.
-    fireEvent.click(screen.getByText("Delete all"));
-    expect(await screen.findByRole("alertdialog", { name: "Delete all chats?" })).toBeTruthy();
-    expect(chatService.deleteAll).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete (2)" }));
+    expect(await screen.findByRole("alertdialog", { name: "Delete 2 chats?" })).toBeTruthy();
+    expect(chatService.deleteMany).not.toHaveBeenCalled();
 
-    // Confirming wipes the list.
-    fireEvent.click(screen.getByRole("alertdialog").querySelector("button")!);
-    await waitFor(() => expect(chatService.deleteAll).toHaveBeenCalled());
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+    );
+    await waitFor(() => expect(chatService.deleteMany).toHaveBeenCalledTimes(1));
+    expect(chatService.deleteMany.mock.calls[0][0].toSorted()).toEqual(["s1", "s2"]);
     await waitFor(() => expect(screen.queryByText("One")).toBeNull());
   });
 
@@ -530,7 +533,7 @@ describe("ChatBubble", () => {
     expect(await screen.findByText("Start chat")).toBeTruthy();
     expect(screen.queryByLabelText("Chat message")).toBeNull();
     expect(chatService.deleteOne).not.toHaveBeenCalled();
-    expect(chatService.deleteAll).not.toHaveBeenCalled();
+    expect(chatService.deleteMany).not.toHaveBeenCalled();
   });
 
   test("an unsent draft stays with its chat: another chat and New chat start empty", async () => {
