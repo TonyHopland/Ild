@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Delete several chats at once: Select in the chat list lets you check the ones to delete, replacing Delete all.**
 - **The image ships Node 26.12.1, which no longer includes corepack, so the image has no pnpm.**
 
 ### Added

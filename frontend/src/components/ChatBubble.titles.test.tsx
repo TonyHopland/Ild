@@ -25,7 +25,7 @@ const {
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
-    deleteAll: vi.fn(),
+    deleteMany: vi.fn(),
     markRead: vi.fn(),
     rename: vi.fn(),
   },

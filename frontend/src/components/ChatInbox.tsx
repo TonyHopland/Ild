@@ -44,7 +44,7 @@ export interface ChatInbox {
   /** Reports the chat read up to `newest`, once per sequence. */
   markChatRead: (chatSessionId: string, newest: number) => void;
   deleteChat: (chatSessionId: string) => Promise<void>;
-  deleteAllChats: () => Promise<void>;
+  deleteChats: (chatSessionIds: string[]) => Promise<void>;
   renameChat: RenameChat;
   renamesInFlight: ReadonlySet<string>;
   setFavorite: (chatSessionId: string, favorite: boolean) => Promise<void>;
@@ -66,7 +66,7 @@ const ChatInboxContext = createContext<ChatInbox>({
   refreshHistory: () => Promise.resolve(),
   markChatRead: () => {},
   deleteChat: () => Promise.resolve(),
-  deleteAllChats: () => Promise.resolve(),
+  deleteChats: () => Promise.resolve(),
   renameChat: () => Promise.resolve(false),
   renamesInFlight: noClaims,
   setFavorite: () => Promise.resolve(),
@@ -208,16 +208,25 @@ export function ChatInboxProvider({ children }: { children: React.ReactNode }) {
     setHistory((prev) => prev.filter((c) => c.id !== id));
   }, []);
 
-  const deleteAllChats = useCallback(async () => {
-    setActiveChatId(null);
-    try {
-      await chatService.deleteAll();
-    } catch {
-      /* even on error, clear the list — the chats are gone or never existed */
-    }
-    historyEpochRef.current += 1;
-    setHistory([]);
-  }, []);
+  // One request for the lot. A failure may have deleted only some of them, so the
+  // list is re-read rather than guessed.
+  const deleteChats = useCallback(
+    async (ids: string[]) => {
+      const gone = new Set(ids);
+      setActiveChatId((active) => (active !== null && gone.has(active) ? null : active));
+      let failed = false;
+      try {
+        await chatService.deleteMany(ids);
+      } catch (err) {
+        console.error(err);
+        failed = true;
+      }
+      historyEpochRef.current += 1;
+      setHistory((prev) => prev.filter((c) => !gone.has(c.id)));
+      if (failed) void refreshHistory().catch((err) => console.error(err));
+    },
+    [refreshHistory],
+  );
 
   // A rename the server took is shown at once, like a delete; the re-read that
   // follows only reconciles, so one that fails or stalls cannot hold the form open
@@ -270,7 +279,7 @@ export function ChatInboxProvider({ children }: { children: React.ReactNode }) {
       refreshHistory,
       markChatRead,
       deleteChat,
-      deleteAllChats,
+      deleteChats,
       renameChat,
       renamesInFlight,
       setFavorite,
@@ -285,7 +294,7 @@ export function ChatInboxProvider({ children }: { children: React.ReactNode }) {
       refreshHistory,
       markChatRead,
       deleteChat,
-      deleteAllChats,
+      deleteChats,
       renameChat,
       renamesInFlight,
       setFavorite,

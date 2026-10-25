@@ -1018,9 +1018,9 @@ export const chatService = {
     await api.delete<void>(`/chat/${id}`);
   },
 
-  /** Hard-delete every retained chat the user owns. */
-  deleteAll: async (): Promise<void> => {
-    await api.delete<void>("/chat");
+  /** Hard-delete the given chats in one request; ids the user does not own are ignored. */
+  deleteMany: async (ids: string[]): Promise<void> => {
+    await api.post<void>("/chat/delete", { ids });
   },
 };
 

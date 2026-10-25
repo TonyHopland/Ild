@@ -25,6 +25,9 @@ function ChatSessionRow({
   onFavorite,
   starring,
   scheduleMark,
+  selecting,
+  checked,
+  onToggle,
 }: {
   chat: ChatSessionSummary;
   current: boolean;
@@ -42,6 +45,10 @@ function ChatSessionRow({
   starring: boolean;
   /** Mark it when a chat schedule started it. */
   scheduleMark: boolean;
+  /** Selection mode: the row is a checkbox at its end, with no actions menu. */
+  selecting: boolean;
+  checked: boolean;
+  onToggle: () => void;
 }) {
   const { editing, begin, closer } = useTitleEdit();
   const actionsRef = useRef<HTMLDivElement | null>(null);
@@ -70,6 +77,61 @@ function ChatSessionRow({
     action();
   };
 
+  const content = (
+    <>
+      <span className="chat-history-title">
+        {chat.isFavorite && (
+          <span className="chat-starred" role="img" aria-label="Starred">
+            ★
+          </span>
+        )}
+        <span className="chat-history-name">{name}</span>
+        {scheduleMark && chat.scheduleName && (
+          <span
+            className="chat-scheduled"
+            role="img"
+            aria-label={`Started by the schedule ${chat.scheduleName}`}
+            title={`Started by the schedule ${chat.scheduleName}`}
+          >
+            <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M8 4.5V8l2.5 1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+          </span>
+        )}
+        {chat.hasUnread && <UnreadDot />}
+        {chat.isBusy && (!current || full) && (
+          <span className="chat-busy" role="img" aria-label="Working" />
+        )}
+        {chat.needsYou && <span className="chat-needs-you" role="img" aria-label="Needs you" />}
+      </span>
+      <span className="chat-history-date" title={new Date(lastActivity).toLocaleString()}>
+        {formatRelativeTime(lastActivity, now)}
+      </span>
+    </>
+  );
+
+  const openClass = `chat-history-open${chat.hasUnread ? " chat-history-unread" : ""}`;
+
+  if (selecting) {
+    return (
+      <li className="chat-history-row">
+        <label
+          className={`${openClass} chat-history-select`}
+          aria-current={current ? "true" : undefined}
+        >
+          <span className="chat-history-text">{content}</span>
+          <input
+            type="checkbox"
+            aria-label={`Select chat ${name}`}
+            checked={checked}
+            onChange={onToggle}
+          />
+        </label>
+      </li>
+    );
+  }
+
   return (
     <li className="chat-history-row">
       {editing !== null ? (
@@ -85,53 +147,11 @@ function ChatSessionRow({
         <>
           <button
             type="button"
-            className={`chat-history-open${chat.hasUnread ? " chat-history-unread" : ""}`}
+            className={openClass}
             aria-current={current ? "true" : undefined}
             onClick={onOpen}
           >
-            <span className="chat-history-title">
-              {chat.isFavorite && (
-                <span className="chat-starred" role="img" aria-label="Starred">
-                  ★
-                </span>
-              )}
-              <span className="chat-history-name">{name}</span>
-              {scheduleMark && chat.scheduleName && (
-                <span
-                  className="chat-scheduled"
-                  role="img"
-                  aria-label={`Started by the schedule ${chat.scheduleName}`}
-                  title={`Started by the schedule ${chat.scheduleName}`}
-                >
-                  <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
-                    <circle
-                      cx="8"
-                      cy="8"
-                      r="6.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                    />
-                    <path
-                      d="M8 4.5V8l2.5 1.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                    />
-                  </svg>
-                </span>
-              )}
-              {chat.hasUnread && <UnreadDot />}
-              {chat.isBusy && (!current || full) && (
-                <span className="chat-busy" role="img" aria-label="Working" />
-              )}
-              {chat.needsYou && (
-                <span className="chat-needs-you" role="img" aria-label="Needs you" />
-              )}
-            </span>
-            <span className="chat-history-date" title={new Date(lastActivity).toLocaleString()}>
-              {formatRelativeTime(lastActivity, now)}
-            </span>
+            {content}
           </button>
           <div
             className="chat-row-actions"
@@ -211,7 +231,7 @@ export default function ChatSidebar({
   onOpen,
   onNewChat,
   onDelete,
-  onDeleteAll,
+  onDeleteMany,
   renameChat,
   renamesInFlight,
   onFavorite,
@@ -226,7 +246,7 @@ export default function ChatSidebar({
   onOpen: (chatSessionId: string) => void;
   onNewChat: () => void;
   onDelete: (chatSessionId: string) => void;
-  onDeleteAll: () => void;
+  onDeleteMany: (chatSessionIds: string[]) => void;
   renameChat: RenameChat;
   renamesInFlight: ReadonlySet<string>;
   onFavorite: (chatSessionId: string, favorite: boolean) => void;
@@ -236,7 +256,10 @@ export default function ChatSidebar({
   /** Whether chats a schedule started carry a mark naming it; the bubble's list has no room for one. */
   scheduleMarks?: boolean;
 }) {
-  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   // The answer of the message search and the query it answers: the matching chats,
   // or null when the search failed. An answer for any other query is not applied.
@@ -289,6 +312,39 @@ export default function ChatSidebar({
     : history;
   const rows = [...matching.filter((c) => c.isFavorite), ...matching.filter((c) => !c.isFavorite)];
 
+  // Only the listed rows count: a check on a row the search hides is kept, never sent.
+  const checkedIds = rows.filter((c) => selected.has(c.id)).map((c) => c.id);
+  const allChecked = rows.length > 0 && checkedIds.length === rows.length;
+  const someChecked = checkedIds.length > 0 && !allChecked;
+  const count = checkedIds.length;
+
+  const exitSelecting = () => {
+    setSelecting(false);
+    setSelected(new Set());
+    setConfirmDelete(false);
+  };
+  if (selecting && history.length === 0) exitSelecting();
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const c of rows) {
+        if (allChecked) next.delete(c.id);
+        else next.add(c.id);
+      }
+      return next;
+    });
+
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked;
+  }, [someChecked, selecting, confirmDelete]);
+
   return (
     <aside className={`chat-sidebar${full ? " chat-sidebar-full" : ""}`} aria-label="Chats">
       <button type="button" className="btn btn-primary" onClick={onNewChat}>
@@ -305,39 +361,66 @@ export default function ChatSidebar({
       />
       {history.length > 0 && (
         <div className="chat-history-head">
-          {confirmDeleteAll ? (
+          {!selecting ? (
+            <button
+              type="button"
+              className="chat-link-btn"
+              onClick={() => {
+                setSelecting(true);
+                setMenuFor(null);
+              }}
+            >
+              Select
+            </button>
+          ) : confirmDelete ? (
             <span
               className="chat-history-confirm"
               role="alertdialog"
-              aria-label="Delete all chats?"
+              aria-label={`Delete ${count} ${count === 1 ? "chat" : "chats"}?`}
             >
-              Delete all chats?
+              Delete {count} {count === 1 ? "chat" : "chats"}? This can't be undone.
               <button
                 type="button"
                 className="chat-link-btn chat-danger"
                 onClick={() => {
-                  setConfirmDeleteAll(false);
-                  onDeleteAll();
+                  exitSelecting();
+                  onDeleteMany(checkedIds);
                 }}
               >
-                Delete all
+                Delete
               </button>
               <button
                 type="button"
                 className="chat-link-btn"
-                onClick={() => setConfirmDeleteAll(false)}
+                onClick={() => setConfirmDelete(false)}
               >
                 Cancel
               </button>
             </span>
           ) : (
-            <button
-              type="button"
-              className="chat-link-btn chat-danger"
-              onClick={() => setConfirmDeleteAll(true)}
-            >
-              Delete all
-            </button>
+            <>
+              <label className="chat-history-select-all">
+                <input
+                  type="checkbox"
+                  ref={selectAllRef}
+                  aria-label="Select all"
+                  checked={allChecked}
+                  disabled={rows.length === 0}
+                  onChange={toggleAll}
+                />
+              </label>
+              <button
+                type="button"
+                className="chat-link-btn chat-danger"
+                disabled={count === 0}
+                onClick={() => setConfirmDelete(true)}
+              >
+                Delete ({count})
+              </button>
+              <button type="button" className="chat-link-btn" onClick={exitSelecting}>
+                Cancel
+              </button>
+            </>
           )}
         </div>
       )}
@@ -363,6 +446,9 @@ export default function ChatSidebar({
               onFavorite={() => onFavorite(c.id, !c.isFavorite)}
               starring={favoritesInFlight.has(c.id)}
               scheduleMark={scheduleMarks}
+              selecting={selecting}
+              checked={selected.has(c.id)}
+              onToggle={() => toggle(c.id)}
             />
           ))}
         </ul>

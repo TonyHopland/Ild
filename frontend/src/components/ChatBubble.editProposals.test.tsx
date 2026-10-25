@@ -13,7 +13,7 @@ const { handlers, invoke, chatService, aiProviderService, workItemService } = vi
     sendMessage: vi.fn(),
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
-    deleteAll: vi.fn(),
+    deleteMany: vi.fn(),
   },
   aiProviderService: {
     getAll: vi.fn(),
