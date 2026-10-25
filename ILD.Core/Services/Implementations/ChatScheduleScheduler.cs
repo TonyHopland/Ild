@@ -1,3 +1,4 @@
+using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,12 +25,15 @@ public sealed class ChatScheduleScheduler : BackgroundService
     private readonly IServiceScopeFactory _scopes;
     private readonly TimeProvider _time;
     private readonly ILogger<ChatScheduleScheduler> _log;
+    private readonly IMaintenanceState _maintenance;
 
-    public ChatScheduleScheduler(IServiceScopeFactory scopes, TimeProvider time, ILogger<ChatScheduleScheduler> log)
+    public ChatScheduleScheduler(
+        IServiceScopeFactory scopes, TimeProvider time, ILogger<ChatScheduleScheduler> log, IMaintenanceState? maintenance = null)
     {
         _scopes = scopes;
         _time = time;
         _log = log;
+        _maintenance = maintenance ?? MaintenanceState.Never;
     }
 
     /// <summary>One pass: every schedule due now, or owing a firing, is fired or skipped once.</summary>
@@ -67,15 +71,20 @@ public sealed class ChatScheduleScheduler : BackgroundService
             var wait = MaxWait;
             try
             {
-                if (!recovered)
+                // A firing is a chat turn and a write: not while a restore is replacing the data.
+                using var work = _maintenance.TryBeginWork();
+                if (work is not null)
                 {
-                    using var scope = _scopes.CreateScope();
-                    await scope.ServiceProvider.GetRequiredService<ChatScheduleService>().RecoverInterruptedAsync(stoppingToken);
-                    recovered = true;
-                }
+                    if (!recovered)
+                    {
+                        using var scope = _scopes.CreateScope();
+                        await scope.ServiceProvider.GetRequiredService<ChatScheduleService>().RecoverInterruptedAsync(stoppingToken);
+                        recovered = true;
+                    }
 
-                await RunDueAsync(stoppingToken);
-                wait = await UntilNextFiringAsync(stoppingToken);
+                    await RunDueAsync(stoppingToken);
+                    wait = await UntilNextFiringAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

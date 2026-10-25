@@ -58,11 +58,15 @@ public sealed class StuckRunWatchdog : BackgroundService
     private readonly ILoopEngine _engine;
     private readonly ILogger<StuckRunWatchdog> _log;
     private readonly WorkItemActor _actor;
+    private readonly IMaintenanceState _maintenance;
 
-    public StuckRunWatchdog(IServiceScopeFactory scopes, ILoopEngine engine, BootstrapCredentials instance, ILogger<StuckRunWatchdog> log)
+    public StuckRunWatchdog(
+        IServiceScopeFactory scopes, ILoopEngine engine, BootstrapCredentials instance, ILogger<StuckRunWatchdog> log,
+        IMaintenanceState? maintenance = null)
     {
         _scopes = scopes;
         _engine = engine;
+        _maintenance = maintenance ?? MaintenanceState.Never;
         _actor = WorkItemActor.System(instance.Username, "stuck run watchdog");
         _log = log;
     }
@@ -89,6 +93,11 @@ public sealed class StuckRunWatchdog : BackgroundService
 
     private async Task SweepOnceAsync(CancellationToken ct)
     {
+        // Mid-restore every run row is about to be replaced, and recovering one now would write to
+        // the data being restored and call a work item server whose rows are being swapped.
+        using var work = _maintenance.TryBeginWork();
+        if (work is null) return;
+
         using var scope = _scopes.CreateScope();
         var sp = scope.ServiceProvider;
         var runStore = sp.GetRequiredService<ILoopRunStore>();

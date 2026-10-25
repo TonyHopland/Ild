@@ -19,6 +19,7 @@ function deferred<T>() {
 
 function overview(incomplete: boolean, worktreesBytes = 5 * GB) {
   return {
+    databases: [],
     categories: [
       {
         key: "worktrees",
@@ -92,6 +93,15 @@ function incompleteMarks() {
 
 function spyServices() {
   const storage = (services as any).storageService;
+  // The backup section has its own tests; here it only has to have something to show.
+  vi.spyOn(storage, "getBackupStatus").mockResolvedValue({
+    databases: {
+      core: { available: false, reason: "No backup in this test." },
+      workitems: { available: false, reason: "No backup in this test." },
+    },
+    secretKeyConfigured: true,
+    minPassphraseLength: 12,
+  } as never);
   return {
     getOverview: vi.spyOn(storage, "getOverview"),
   };
@@ -191,6 +201,7 @@ const DELETED_REPO = "44444444-4444-4444-4444-444444444444";
 function overviewWithPreviewData() {
   const base = overview(false);
   return {
+    databases: [],
     categories: [
       ...base.categories,
       {

@@ -106,7 +106,10 @@ describe("Settings sections", () => {
   });
 
   test("shows the Storage section at its own URL and marks only it current", async () => {
-    vi.spyOn((services as any).storageService, "getOverview").mockResolvedValue({ categories: [] });
+    vi.spyOn((services as any).storageService, "getOverview").mockResolvedValue({
+      categories: [],
+      databases: [],
+    });
     renderAt("/settings/storage");
 
     expect(screen.getByRole("heading", { level: 2, name: "Storage" })).toBeTruthy();

@@ -89,4 +89,20 @@ export const api = {
   postForm: <T>(endpoint: string, form: FormData) =>
     send(endpoint, { method: "POST", body: form }).then(readJson<T>),
   getBlob: (endpoint: string) => send(endpoint, { method: "GET" }).then((r) => r.blob()),
+  /** A JSON POST whose answer is a file: the bytes with the name the server gave them, if it gave one. */
+  postForFile: async (
+    endpoint: string,
+    body: unknown,
+  ): Promise<{ blob: Blob; fileName: string | null }> => {
+    const response = await send(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    return {
+      blob: await response.blob(),
+      fileName: /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? null,
+    };
+  },
 };

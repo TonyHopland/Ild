@@ -10,7 +10,10 @@ public interface IStorageService
     Task<StorageOverview> GetOverviewAsync(CancellationToken cancellationToken);
 }
 
-public sealed record StorageOverview(IReadOnlyList<StorageCategory> Categories);
+public sealed record StorageOverview(IReadOnlyList<StorageCategory> Categories, IReadOnlyList<StorageDatabase> Databases);
+
+/// <summary>A database's size as it reports it; null when it cannot say, never an estimate.</summary>
+public sealed record StorageDatabase(string Key, string Label, long? Bytes);
 
 public sealed record StorageCategory(string Key, string Label, long? Bytes, bool Incomplete, IReadOnlyList<StorageEntry> Entries);
 

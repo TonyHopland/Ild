@@ -56,6 +56,9 @@ import {
   UserSession,
   WorkItemServerConfig,
   StorageOverview,
+  BackupDatabaseKey,
+  BackupStatus,
+  RestoreResult,
   RunAnalyticsOverview,
   AnalyticsFilters,
   NetworkForward,
@@ -1249,6 +1252,19 @@ export const storageService = {
   /** Measuring walks the disk, so a caller that loses interest should abort it. */
   getOverview: async (signal?: AbortSignal): Promise<StorageOverview> => {
     return api.get<StorageOverview>("/storage", signal);
+  },
+  getBackupStatus: async (signal?: AbortSignal): Promise<BackupStatus> => {
+    return api.get<BackupStatus>("/storage/backups", signal);
+  },
+  /** The encrypted backup of one database, for the browser to save. */
+  createBackup: async (database: BackupDatabaseKey, passphrase: string) => {
+    return api.postForFile(`/storage/backups/${database}`, { passphrase });
+  },
+  restoreBackup: async (database: BackupDatabaseKey, form: FormData): Promise<RestoreResult> => {
+    return api.postForm<RestoreResult>(`/storage/backups/${database}/restore`, form);
+  },
+  downloadPreRestoreBackup: async (database: BackupDatabaseKey): Promise<Blob> => {
+    return api.getBlob(`/storage/backups/${database}/pre-restore`);
   },
   /** Deletes a repository's kept preview data: the storage page's Delete and the repository's Reset. Refused (409) while a preview of the repository is running. */
   deletePreviewData: async (repositoryId: string): Promise<void> => {

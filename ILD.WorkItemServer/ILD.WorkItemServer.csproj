@@ -29,6 +29,12 @@
   <ItemGroup>
     <Compile Remove="data\runtime\**\*.cs" />
     <Compile Include="..\ILD.Data\NpgsqlPoolDefaults.cs" Link="NpgsqlPoolDefaults.cs" />
+    <Compile Include="..\ILD.Data\Backup\ArchiveManifest.cs" Link="Backup\ArchiveManifest.cs" />
+    <Compile Include="..\ILD.Data\Backup\BackupRefusedException.cs" Link="Backup\BackupRefusedException.cs" />
+    <Compile Include="..\ILD.Data\Backup\ForwardOnlyStream.cs" Link="Backup\ForwardOnlyStream.cs" />
+    <Compile Include="..\ILD.Data\Backup\FramedStreams.cs" Link="Backup\FramedStreams.cs" />
+    <Compile Include="..\ILD.Data\Backup\IDatabaseArchive.cs" Link="Backup\IDatabaseArchive.cs" />
+    <Compile Include="..\ILD.Data\Backup\PostgresDatabaseArchive.cs" Link="Backup\PostgresDatabaseArchive.cs" />
     <Content Remove="data\runtime\**\*" />
     <None Remove="data\runtime\**\*" />
   </ItemGroup>

@@ -502,6 +502,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
             => Task.FromResult(_resolve(hostLabel));
 
         public bool IsPreviewRunning(string worktreePath) => true;
+        public bool AnyPreviewRunning() => true;
 
         public Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();

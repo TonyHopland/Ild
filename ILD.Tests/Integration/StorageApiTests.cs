@@ -258,7 +258,7 @@ public class StorageOverviewTests
         using var doc = JsonDocument.Parse(body);
         var categories = doc.RootElement.GetProperty("categories").EnumerateArray().ToList();
         Assert.Equal(
-            new[] { "agent-installs", "chat-sessions", "other", "preview-data", "repository-clones", "temp", "worktrees" },
+            new[] { "agent-installs", "backups", "chat-sessions", "other", "preview-data", "repository-clones", "temp", "worktrees" },
             categories.Select(c => c.GetProperty("key").GetString()).OrderBy(k => k, StringComparer.Ordinal));
         Assert.All(categories, c => Assert.False(string.IsNullOrWhiteSpace(c.GetProperty("label").GetString())));
         // Temp is shared with every other test running now, so only the data root is quiet enough to pin.

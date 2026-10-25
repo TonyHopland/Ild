@@ -283,6 +283,8 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     public Guid? ActiveTurnId(Guid chatSessionId)
         => _turns.TryGetValue(chatSessionId, out var state) ? state.Current?.Id : null;
 
+    public bool AnyTurnActive => !_turns.IsEmpty;
+
     /// <summary>The gates currently held; for the test that they do not pile up.</summary>
     internal int GateCount => _gates.Count;
 

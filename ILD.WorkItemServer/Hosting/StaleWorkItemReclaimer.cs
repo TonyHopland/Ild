@@ -16,14 +16,17 @@ public sealed class StaleWorkItemReclaimer : BackgroundService
     private readonly ILogger<StaleWorkItemReclaimer> _logger;
     private readonly TimeSpan _interval;
     private readonly TimeSpan _timeout;
+    private readonly ImportGate _importGate;
 
     public StaleWorkItemReclaimer(
         IServiceScopeFactory scopes,
         IConfiguration config,
-        ILogger<StaleWorkItemReclaimer> logger)
+        ILogger<StaleWorkItemReclaimer> logger,
+        ImportGate importGate)
     {
         _scopes = scopes;
         _logger = logger;
+        _importGate = importGate;
         var timeoutMinutes = config.GetValue<int?>("WorkItemServer:StaleTimeoutMinutes") ?? 15;
         var intervalSeconds = config.GetValue<int?>("WorkItemServer:StaleScanIntervalSeconds") ?? 30;
         _timeout = TimeSpan.FromMinutes(timeoutMinutes);
@@ -36,11 +39,17 @@ public sealed class StaleWorkItemReclaimer : BackgroundService
         {
             try
             {
-                using var scope = _scopes.CreateScope();
-                scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().HistoryActor = Actor;
-                var svc = scope.ServiceProvider.GetRequiredService<IWorkItemService>();
-                var n = await svc.ReclaimStaleAsync(_timeout, stoppingToken);
-                if (n > 0) _logger.LogInformation("Reclaimed {Count} stale work item(s) to Ready", n);
+                // An import in progress holds the gate, and the rows it restores carry heartbeats
+                // from when the backup was made: a pass now would reclaim every claimed item.
+                using var pass = _importGate.TryEnterPass();
+                if (pass is not null)
+                {
+                    using var scope = _scopes.CreateScope();
+                    scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().HistoryActor = Actor;
+                    var svc = scope.ServiceProvider.GetRequiredService<IWorkItemService>();
+                    var n = await svc.ReclaimStaleAsync(_timeout, stoppingToken);
+                    if (n > 0) _logger.LogInformation("Reclaimed {Count} stale work item(s) to Ready", n);
+                }
             }
             catch (OperationCanceledException) { /* shutdown */ }
             catch (Exception ex)

@@ -28,6 +28,7 @@ public sealed class LoopEngine : ILoopEngine
     private readonly IRunProgressBuffer _progressBuffer;
     private readonly IWorkItemNotifier _workItemNotifier;
     private readonly IShutdownState _shutdown;
+    private readonly IMaintenanceState _maintenance;
     private readonly BootstrapCredentials _instance;
     private readonly ILogger<LoopEngine> _logger;
 
@@ -59,7 +60,8 @@ public sealed class LoopEngine : ILoopEngine
         ILogger<LoopEngine> logger,
         IWorkItemNotifier? workItemNotifier = null,
         IRunProgressBuffer? progressBuffer = null,
-        IShutdownState? shutdown = null)
+        IShutdownState? shutdown = null,
+        IMaintenanceState? maintenance = null)
     {
         _sp = sp;
         _registry = registry;
@@ -71,6 +73,7 @@ public sealed class LoopEngine : ILoopEngine
         // Defaulting to a never-signalled flag keeps an engine constructed
         // without one behaving exactly as it did before draining existed.
         _shutdown = shutdown ?? ShutdownState.NeverStopping;
+        _maintenance = maintenance ?? MaintenanceState.Never;
     }
 
     /// <summary>A run as the actor of its work item's changes, named by its step when it is on one.</summary>
@@ -814,6 +817,14 @@ public sealed class LoopEngine : ILoopEngine
         if (_shutdown.IsStopping)
         {
             _logger.LogDebug("LaunchAsync skipped for run {RunId}: host is stopping", runId);
+            return Task.CompletedTask;
+        }
+
+        // The backstop for the services that skip their passes during a restore: whatever else
+        // reaches a launch (a webhook, a resume) must not start a driver on data being replaced.
+        if (_maintenance.IsActive)
+        {
+            _logger.LogDebug("LaunchAsync skipped for run {RunId}: a restore is replacing the data", runId);
             return Task.CompletedTask;
         }
 

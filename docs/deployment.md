@@ -262,6 +262,39 @@ volumes:
   - ./.local/workitem-data:/data
 ```
 
+## Backup and restore
+
+**Settings > Storage > Backup and restore** takes and restores a backup of ILD's data, for any signed-in user (the agent cannot). It is two separate flows, each with its own file and its own passphrase ([ADR-0029](./adr/0029-backup-and-restore.md)):
+
+- **ILD data** (`IldCore`): templates, runs, chats, providers, settings, users.
+- **Work item data** (`IldWorkitems`): the built-in WorkItem Server's work items, history and attachments. With an external tracker this reads "This tracker does not support backup" and has no controls.
+
+A backup is one encrypted file. Its passphrase (at least 12 characters) is never stored: without it the file cannot be read, and ILD cannot recover it. Files on disk that are not in a database (run worktrees, repository clones, preview data) are not included.
+
+**Keep `.env` safe, separately.** A backup never contains `ILD_SECRET_KEY`, `ILD_SESSION_TOKEN_PEPPER` or the database passwords. A restore of ILD data needs the same `ILD_SECRET_KEY` the backup was made with, or the credentials it holds could not be read: a restore with a different key (or a key onto an instance without one) is refused before anything changes. A backup made without a key stores those credentials in plain text inside the encrypted file, and the UI asks you to acknowledge that before it creates one. A different `ILD_SESSION_TOKEN_PEPPER` only signs everyone out. ILD's saved WorkItem Server connection, API key included, comes back with the ILD data, so `WORKITEM_API_KEYS` in the new `.env` has to hold that key. The database passwords are those of the new cluster, set by its init script from `.env`.
+
+**Taking a backup.** Pause the scheduler (the scheduler chip on the Taskboard) and let the runs finish, then back up the work items and the ILD data. The browser holds the whole file in memory while it downloads and uploads it, so a backup of many gigabytes (mostly attachments) can fail in the browser; there is no command-line alternative.
+
+**Restoring.** A restore replaces all current data in that database, and restoring one database without the other can leave them inconsistent. Restore both, in this order, with the scheduler paused:
+
+1. Restore the **work items** first.
+2. Restore the **ILD data**, within 15 minutes.
+
+The order is not a convention: when ILD starts it cancels every run whose work item is gone, Done or reclaimed, so the work items must be there first. The WorkItem Server hands a claimed item back to Ready after 15 minutes without a heartbeat. Its import sets the heartbeat of every claimed item to the import time, and ILD takes the heartbeats over once the ILD data is restored and ILD has restarted, which is why the second step has 15 minutes.
+
+A restore needs the typed word `RESTORE`, and is refused with a 409 while a loop run is executing, a worktree preview is running or a chat is answering. Before it replaces anything it stores the data it is about to replace as an encrypted backup (same passphrase), which stays on the Storage page to download until the next restore of that database replaces it. A backup from a newer ILD is refused; one from an older ILD restores and is migrated forward. After the ILD data is restored ILD restarts itself, so the container needs `restart: unless-stopped` (the shipped compose file has it); sign in again after a minute.
+
+### Upgrading PostgreSQL 17 to 18
+
+The `postgres:18` image keeps its data under `/var/lib/postgresql` (the data directory moved into a version subdirectory), not `/var/lib/postgresql/data`. Keeping the old mount path leaves the new cluster outside the volume you meant it to use.
+
+1. On the running 17 stack, pause the scheduler, let runs finish, and take both backups. Keep `.env`.
+2. `docker compose down`. Leave the `postgres-data` volume alone: it is your way back.
+3. In `docker-compose.yml` set `image: postgres:18-alpine` and mount a **new** volume at the new path: `- postgres-data-18:/var/lib/postgresql` (declare `postgres-data-18` under `volumes:`).
+4. `docker compose up -d`. The init script creates the roles from `.env`, and both services create their schema on an empty database.
+5. Sign in, pause the scheduler, and restore the work items, then the ILD data, as above.
+6. Check a work item, a run and a provider connection test, then remove the old volume when you are done with it.
+
 ## Images
 
 The main `Dockerfile` builds the frontend, publishes the .NET host, and optionally installs additional runtime tooling used by work-item execution (see [Configuration](./configuration.md#build-time-container-options)). `Dockerfile.WorkItemServer` builds the separate WorkItem Server image.

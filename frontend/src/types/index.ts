@@ -1044,8 +1044,42 @@ export interface StorageCategory {
   entries: StorageEntry[];
 }
 
+/** A database's size as it reports it. A null size is unknown, never estimated. */
+export interface StorageDatabase {
+  key: string;
+  label: string;
+  bytes: number | null;
+}
+
 export interface StorageOverview {
   categories: StorageCategory[];
+  databases: StorageDatabase[];
+}
+
+export type BackupDatabaseKey = "core" | "workitems";
+
+/** The automatic backup a restore took of the data it replaced. */
+export interface PreRestoreBackup {
+  createdAt: string;
+  bytes: number;
+}
+
+export interface DatabaseBackupStatus {
+  available: boolean;
+  /** Why the database cannot be backed up here; present when it is not available. */
+  reason?: string | null;
+  preRestoreBackup?: PreRestoreBackup | null;
+}
+
+export interface BackupStatus {
+  databases: Record<BackupDatabaseKey, DatabaseBackupStatus>;
+  secretKeyConfigured: boolean;
+  minPassphraseLength: number;
+}
+
+export interface RestoreResult {
+  /** True when ILD's own data was restored: the instance restarts to apply it. */
+  restarting: boolean;
 }
 
 export interface RemoteProviderTypeOption {

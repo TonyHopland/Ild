@@ -268,6 +268,9 @@ public interface IWorktreePreviewService
     /// </summary>
     bool IsPreviewRunning(string worktreePath);
 
+    /// <summary>True while a preview runtime is active for any worktree.</summary>
+    bool AnyPreviewRunning();
+
     /// <summary>
     /// Turns a preview hostname's leading label into the loopback port a request
     /// should be forwarded to. <paramref name="hostLabel"/> is what
@@ -316,6 +319,7 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public bool IsPreviewRunning(string worktreePath) => false;
+    public bool AnyPreviewRunning() => false;
     public Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default)
         => Task.FromResult(PreviewTarget.Failed(
             PreviewTargetOutcome.PreviewNotRunning,

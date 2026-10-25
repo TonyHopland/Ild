@@ -15,6 +15,7 @@ var initialLogLevel = Enum.TryParse<LogEventLevel>(
         ? parsedLevel
         : LogEventLevel.Information;
 var loggingLevelSwitch = new LoggingLevelSwitch(initialLogLevel);
+Serilog.ILogger? hostLogger = null;
 
 try
 {
@@ -62,6 +63,8 @@ try
         {
             options.UseNpgsql(pooledConnectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public"));
         });
+        builder.Services.AddScoped<ILD.Data.Backup.IDatabaseArchive>(sp =>
+            new ILD.Data.Backup.PostgresDatabaseArchive<AppDbContext>(sp.GetRequiredService<AppDbContext>(), ILD.Data.Backup.ArchiveDatabase.Core));
     }
     // When no connection string is set (e.g. integration tests), skip AddDataLayer
     // so no Npgsql internal services are registered. The test factory substitutes
@@ -129,6 +132,11 @@ try
 
     var app = builder.Build();
 
+    // Resolving the logger factory is what installs this host's logger as the static Log.Logger, which
+    // is kept to close only that one on the way out (see the finally below).
+    _ = app.Services.GetRequiredService<ILoggerFactory>();
+    hostLogger = Log.Logger;
+
     _ = app.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>();
 
     // Attached here rather than injected: the buffer is a sink, so it is built
@@ -139,6 +147,16 @@ try
     // Refuse to start, rather than fail the first agent launch, when the files
     // carrying the ILD API token would have no root the agent cannot write.
     ILD.Core.Services.Implementations.AgentIsolation.EnsureAgentReadRoot();
+
+    // What a restore that died with the previous process left behind: an upload, or a backup half written.
+    try
+    {
+        app.Services.GetRequiredService<ILD.Core.Services.Backup.BackupDirectory>().RemoveStalePartials();
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Log.Warning(ex, "Could not remove the partial backup files the previous process left behind");
+    }
 
     using (var scope = app.Services.CreateScope())
     {
@@ -296,6 +314,7 @@ try
     }
     app.UseSecurityHeaders();
     app.UseCors("AllowFrontend");
+    app.UseMiddleware<MaintenanceMiddleware>();
 
     var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
     // Vite names every file under assets/ by its content hash, so a new build
@@ -351,7 +370,10 @@ try
 }
 finally
 {
-    Log.CloseAndFlush();
+    // Only this host's own logger. A test host that stops lets this run after the next host has
+    // installed its logger, and closing the static one then silences that host.
+    if (hostLogger is null || ReferenceEquals(Log.Logger, hostLogger))
+        Log.CloseAndFlush();
 }
 
 // Required for WebApplicationFactory<Program> in integration tests.

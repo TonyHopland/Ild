@@ -1,3 +1,4 @@
+using ILD.Core.Services.Backup;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
@@ -81,6 +82,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => ClaudeProjectFolders.ForProcess(sp.GetRequiredService<ILogger<ClaudeProjectFolders>>()));
         services.AddHostedService<ClaudeProjectFolderSweeper>();
         services.AddScoped<IStorageService, StorageService>();
+        // Backup and restore (ADR-0029). The core archive is registered by the host that has PostgreSQL.
+        services.AddSingleton<MaintenanceState>();
+        services.AddSingleton<IMaintenanceState>(sp => sp.GetRequiredService<MaintenanceState>());
+        services.AddSingleton<BackupOperationLock>();
+        services.AddSingleton<BackupDirectory>();
+        services.AddSingleton<DatabaseCatalog>();
+        services.AddScoped<BackupService>();
+        // Exports and imports run as long as the data is large, so this client has no timeout of its own.
+        services.AddHttpClient<IWorkItemServerBackupClient, WorkItemServerBackupClient>(c => c.Timeout = Timeout.InfiniteTimeSpan);
         services.AddScoped<IBranchNameOverrideService, BranchNameOverrideService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();

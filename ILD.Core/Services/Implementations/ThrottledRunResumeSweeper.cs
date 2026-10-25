@@ -76,13 +76,16 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
     private readonly IServiceScopeFactory _scopes;
     private readonly ILoopEngine _engine;
     private readonly ILogger<ThrottledRunResumeSweeper> _log;
+    private readonly IMaintenanceState _maintenance;
 
     public ThrottledRunResumeSweeper(
-        IServiceScopeFactory scopes, ILoopEngine engine, ILogger<ThrottledRunResumeSweeper> log)
+        IServiceScopeFactory scopes, ILoopEngine engine, ILogger<ThrottledRunResumeSweeper> log,
+        IMaintenanceState? maintenance = null)
     {
         _scopes = scopes;
         _engine = engine;
         _log = log;
+        _maintenance = maintenance ?? MaintenanceState.Never;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -107,6 +110,9 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
 
     private async Task SweepOnceAsync(CancellationToken ct)
     {
+        using var work = _maintenance.TryBeginWork();
+        if (work is null) return;
+
         using var scope = _scopes.CreateScope();
         var sp = scope.ServiceProvider;
 
