@@ -28,13 +28,16 @@ public sealed class PrStatusPoller : BackgroundService, IPrStatusPoller
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<PrStatusPoller> _log;
     private readonly TimeProvider _time;
+    private readonly IMaintenanceState _maintenance;
     private readonly SemaphoreSlim _pulse = new(0, 1);
 
-    public PrStatusPoller(IServiceScopeFactory scopes, ILogger<PrStatusPoller> log, TimeProvider time)
+    public PrStatusPoller(
+        IServiceScopeFactory scopes, ILogger<PrStatusPoller> log, TimeProvider time, IMaintenanceState? maintenance = null)
     {
         _scopes = scopes;
         _log = log;
         _time = time;
+        _maintenance = maintenance ?? MaintenanceState.Never;
     }
 
     public void Pulse()
@@ -50,6 +53,12 @@ public sealed class PrStatusPoller : BackgroundService, IPrStatusPoller
             var delay = TimeSpan.FromSeconds(AppSettingKeys.DefaultPrHeartbeatSeconds);
             try
             {
+                if (_maintenance.IsActive)
+                {
+                    await WaitForNextPassAsync(delay, stoppingToken);
+                    continue;
+                }
+
                 using var scope = _scopes.CreateScope();
                 var settings = scope.ServiceProvider.GetRequiredService<ISchedulerSettingsService>();
                 delay = TimeSpan.FromSeconds(Math.Max(1, await settings.GetPrHeartbeatSecondsAsync(stoppingToken)));

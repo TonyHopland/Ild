@@ -1,3 +1,4 @@
+using ILD.Core.Services.Backup;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -14,16 +15,19 @@ public sealed class StorageService : IStorageService
     private readonly string _dataRoot;
     private readonly string _worktreesRoot;
     private readonly string _chatRoot;
+    private readonly BackupService _backups;
 
     public StorageService(
         ILoopRunStore runs,
         IProviderStore providers,
         IConfiguration config,
-        ChatOptions chatOptions)
+        ChatOptions chatOptions,
+        BackupService backups)
     {
         _runs = runs;
         _providers = providers;
         _config = config;
+        _backups = backups;
         _dataRoot = Path.GetFullPath(HostPath(config, "App:DataPath"));
         _worktreesRoot = Path.GetFullPath(HostPath(config, "App:WorktreesPath"));
         _chatRoot = Path.GetFullPath(chatOptions.ScratchRoot);
@@ -40,6 +44,7 @@ public sealed class StorageService : IStorageService
         var chats = new CategoryTally("chat-sessions", "Chat sessions", hasBreakdown: false);
         var agents = new CategoryTally("agent-installs", "Agent installs", hasBreakdown: false);
         var temp = new CategoryTally("temp", "Temp", hasBreakdown: true);
+        var backups = new CategoryTally("backups", "Backups", hasBreakdown: false);
         var other = new CategoryTally("other", "Other ILD data", hasBreakdown: false);
 
         // Most specific first: a directory two measured paths reach is counted by the first.
@@ -79,13 +84,20 @@ public sealed class StorageService : IStorageService
         else
             temp.NotMeasured("scratch", "Agent scratch");
 
+        scan.Add(BackupDirectory.RootOf(_config), backups.Entry("all", backups.Label), backups.Shared);
+
         scan.Add(_dataRoot, other.Entry("all", other.Label), other.Shared);
 
         var measured = FileStatus.IsSupported;
         if (measured)
             scan.Run(cancellationToken);
+        var databases = await _backups.DescribeDatabasesAsync(cancellationToken);
         return new StorageOverview(
-            new[] { worktrees, clones, previewData, chats, agents, temp, other }.Select(c => c.ToCategory(measured)).ToList());
+            new[] { worktrees, clones, previewData, chats, agents, temp, backups, other }.Select(c => c.ToCategory(measured)).ToList(),
+            [
+                new StorageDatabase(BackupService.Core, "ILD data", databases[BackupService.Core].Info?.DatabaseBytes),
+                new StorageDatabase(BackupService.WorkItems, "Work item data", databases[BackupService.WorkItems].Info?.DatabaseBytes),
+            ]);
     }
 
     private static UsageTally RepositoryEntry(CategoryTally category, Guid? repositoryId, IReadOnlyDictionary<Guid, Repository> repositories)

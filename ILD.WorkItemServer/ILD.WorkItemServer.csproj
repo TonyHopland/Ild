@@ -29,6 +29,7 @@
   <ItemGroup>
     <Compile Remove="data\runtime\**\*.cs" />
     <Compile Include="..\ILD.Data\NpgsqlPoolDefaults.cs" Link="NpgsqlPoolDefaults.cs" />
+    <Compile Include="..\ILD.Data\Backup\*.cs" LinkBase="Backup" />
     <Content Remove="data\runtime\**\*" />
     <None Remove="data\runtime\**\*" />
   </ItemGroup>

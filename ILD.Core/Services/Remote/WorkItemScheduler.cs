@@ -94,6 +94,7 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
     private readonly TimeProvider _time;
     private readonly IShutdownState _shutdown;
     private readonly RepositoryParallelismHolds? _repositoryHolds;
+    private readonly IMaintenanceState _maintenance;
     private readonly SemaphoreSlim _pulse = new(0, 1);
 
     public WorkItemScheduler(
@@ -102,7 +103,8 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
         ILogger<WorkItemScheduler> log,
         TimeProvider time,
         IShutdownState? shutdown = null,
-        RepositoryParallelismHolds? repositoryHolds = null)
+        RepositoryParallelismHolds? repositoryHolds = null,
+        IMaintenanceState? maintenance = null)
     {
         _scopes = scopes;
         _options = options;
@@ -110,6 +112,7 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
         _time = time;
         _shutdown = shutdown ?? ShutdownState.NeverStopping;
         _repositoryHolds = repositoryHolds;
+        _maintenance = maintenance ?? MaintenanceState.Never;
     }
 
     public void Pulse()
@@ -134,6 +137,14 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
                 capStalls.Reset();
                 _repositoryHolds?.Clear();
                 await WaitForNextPassAsync(opts.PollInterval, stoppingToken);
+                continue;
+            }
+
+            // A restore is replacing the runs and, perhaps, the server's work items: a pass now would
+            // claim, heartbeat or close runs against data that is about to change under it.
+            if (_maintenance.IsActive)
+            {
+                await WaitForNextPassAsync(delay, stoppingToken);
                 continue;
             }
 

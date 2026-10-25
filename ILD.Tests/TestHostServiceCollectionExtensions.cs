@@ -114,6 +114,9 @@ internal static class TestHostServiceCollectionExtensions
         public bool IsPreviewRunning(string worktreePath)
             => false;
 
+        public bool AnyPreviewRunning()
+            => false;
+
         // Reached on every request to a *.{ILD_PREVIEW_PROXY_BASE} hostname, so it
         // reports "not running" rather than throwing — a test host that sets the
         // proxy base is exercising the proxy, not misusing the preview service.

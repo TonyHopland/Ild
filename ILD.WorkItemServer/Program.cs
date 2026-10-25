@@ -1,4 +1,5 @@
 using System.Reflection;
+using ILD.Data.Backup;
 using ILD.WorkItemServer.Attachments;
 using ILD.WorkItemServer.Auth;
 using ILD.WorkItemServer.Hosting;
@@ -56,12 +57,16 @@ public sealed class WorkItemServerProgram
             var pooledConnectionString = NpgsqlPoolDefaults.Apply(connectionString, "ILD.WorkItemServer", maxPoolSize: 8);
             builder.Services.AddDbContext<WorkItemServerDbContext>(opt =>
                 opt.UseNpgsql(pooledConnectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public")));
+            // The backup endpoints are served whenever an archive is registered.
+            builder.Services.AddScoped<IDatabaseArchive>(sp =>
+                new PostgresDatabaseArchive<WorkItemServerDbContext>(sp.GetRequiredService<WorkItemServerDbContext>(), "workitems"));
         }
         // When no connection string is set (e.g. integration tests), skip registration
         // so no Npgsql internal services are registered. The test factory substitutes
         // its own DbContext in ConfigureServices.
 
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<ImportGate>();
         builder.Services.AddScoped<IWorkItemService, WorkItemService>();
         builder.Services.AddScoped<IWorkItemAttachmentService, WorkItemAttachmentService>();
         builder.Services.AddScoped<IWorkItemEditProposalService, WorkItemEditProposalService>();

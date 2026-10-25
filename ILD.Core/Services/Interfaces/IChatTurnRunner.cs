@@ -51,6 +51,9 @@ public interface IChatTurnRunner
     /// </summary>
     Guid? ActiveTurnId(Guid chatSessionId);
 
+    /// <summary>True while any chat has a turn in flight or a send, stop or delete under way.</summary>
+    bool AnyTurnActive { get; }
+
     /// <summary>
     /// Cancel any in-flight turn for the session, then run <paramref name="delete"/>
     /// while still holding the session's turn gate, so a message submitted in the

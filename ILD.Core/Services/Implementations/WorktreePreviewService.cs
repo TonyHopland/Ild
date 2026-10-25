@@ -547,6 +547,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return _runtimes.ContainsKey(normalized);
     }
 
+    public bool AnyPreviewRunning() => !_runtimes.IsEmpty;
+
     public async Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default)
     {
         var match = PreviewHostLabelRegex.Match(hostLabel?.Trim() ?? string.Empty);

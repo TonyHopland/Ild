@@ -62,6 +62,8 @@ try
         {
             options.UseNpgsql(pooledConnectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public"));
         });
+        builder.Services.AddScoped<ILD.Data.Backup.IDatabaseArchive>(sp =>
+            new ILD.Data.Backup.PostgresDatabaseArchive<AppDbContext>(sp.GetRequiredService<AppDbContext>(), "core"));
     }
     // When no connection string is set (e.g. integration tests), skip AddDataLayer
     // so no Npgsql internal services are registered. The test factory substitutes
@@ -139,6 +141,16 @@ try
     // Refuse to start, rather than fail the first agent launch, when the files
     // carrying the ILD API token would have no root the agent cannot write.
     ILD.Core.Services.Implementations.AgentIsolation.EnsureAgentReadRoot();
+
+    // What a restore that died with the previous process left behind: an upload, or a backup half written.
+    try
+    {
+        app.Services.GetRequiredService<ILD.Core.Services.Backup.BackupDirectory>().RemoveStalePartials();
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Log.Warning(ex, "Could not remove the partial backup files the previous process left behind");
+    }
 
     using (var scope = app.Services.CreateScope())
     {
@@ -296,6 +308,7 @@ try
     }
     app.UseSecurityHeaders();
     app.UseCors("AllowFrontend");
+    app.UseMiddleware<MaintenanceMiddleware>();
 
     var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
     // Vite names every file under assets/ by its content hash, so a new build
