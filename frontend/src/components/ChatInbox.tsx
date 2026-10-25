@@ -222,8 +222,11 @@ export function ChatInboxProvider({ children }: { children: React.ReactNode }) {
         failed = true;
       }
       historyEpochRef.current += 1;
+      if (failed) {
+        void refreshHistory().catch((err) => console.error(err));
+        return;
+      }
       setHistory((prev) => prev.filter((c) => !gone.has(c.id)));
-      if (failed) void refreshHistory().catch((err) => console.error(err));
     },
     [refreshHistory],
   );

@@ -258,7 +258,8 @@ export default function ChatSidebar({
 }) {
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  // The ids the open confirmation asks about, fixed when it opened.
+  const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   const selectAllRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   // The answer of the message search and the query it answers: the matching chats,
@@ -321,7 +322,7 @@ export default function ChatSidebar({
   const exitSelecting = () => {
     setSelecting(false);
     setSelected(new Set());
-    setConfirmDelete(false);
+    setConfirmDelete(null);
   };
   if (selecting && history.length === 0) exitSelecting();
 
@@ -376,15 +377,16 @@ export default function ChatSidebar({
             <span
               className="chat-history-confirm"
               role="alertdialog"
-              aria-label={`Delete ${count} ${count === 1 ? "chat" : "chats"}?`}
+              aria-label={`Delete ${confirmDelete.length} ${confirmDelete.length === 1 ? "chat" : "chats"}?`}
             >
-              Delete {count} {count === 1 ? "chat" : "chats"}? This can't be undone.
+              Delete {confirmDelete.length} {confirmDelete.length === 1 ? "chat" : "chats"}? This
+              can't be undone.
               <button
                 type="button"
                 className="chat-link-btn chat-danger"
                 onClick={() => {
                   exitSelecting();
-                  onDeleteMany(checkedIds);
+                  onDeleteMany(confirmDelete);
                 }}
               >
                 Delete
@@ -392,7 +394,7 @@ export default function ChatSidebar({
               <button
                 type="button"
                 className="chat-link-btn"
-                onClick={() => setConfirmDelete(false)}
+                onClick={() => setConfirmDelete(null)}
               >
                 Cancel
               </button>
@@ -413,7 +415,7 @@ export default function ChatSidebar({
                 type="button"
                 className="chat-link-btn chat-danger"
                 disabled={count === 0}
-                onClick={() => setConfirmDelete(true)}
+                onClick={() => setConfirmDelete(checkedIds)}
               >
                 Delete ({count})
               </button>
