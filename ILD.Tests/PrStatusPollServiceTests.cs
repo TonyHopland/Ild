@@ -604,6 +604,52 @@ public class PrStatusPollServiceTests
     }
 
     [Fact]
+    public async Task A_head_that_moved_under_the_merge_ends_the_tick_without_firing_the_old_commits_edges()
+    {
+        var h = AutoMergeHarness(Green(approved: true), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed, LoopOutputs.OnApproved);
+        var before = PrSnapshotJson.Serialize(Green() with { Ci = RemotePrCiStatus.Pending, HeadSha = "head-1" });
+        h.Run.PrSnapshot = before;
+        h.Run.PrPolledEdgeStates = "";
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1"))
+            .ThrowsAsync(new RemoteHeadMovedException("head-1", "head-2"));
+
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+        Assert.Equal(PrAutoMerge.IldPending, h.Run.PrAutoMerge);
+        // The old commit's green CI is not left on the card, and its states are not the baseline.
+        Assert.Null(h.Run.PrSnapshot);
+        Assert.Equal("", h.Run.PrPolledEdgeStates);
+
+        // The next tick, on the new head, behaves normally: it merges.
+        h.Returns(Green(approved: true) with { HeadSha = "head-2" });
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-2")).ReturnsAsync(true);
+        h.Remote.Setup(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(PrAutoMerge.IldMerged, h.Run.PrAutoMerge);
+        h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+        Assert.NotNull(h.Run.PrSnapshot);
+    }
+
+    [Fact]
+    public async Task After_a_moved_head_the_new_heads_green_CI_still_fires_on_ci_passed_if_it_cannot_be_merged()
+    {
+        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed);
+        h.Run.PrPolledEdgeStates = "";
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1"))
+            .ThrowsAsync(new RemoteHeadMovedException("head-1", "head-2"));
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        // The new head is green but no longer mergeable; the edge is still newly true for it.
+        h.Returns(Green() with { HeadSha = "head-2", MergeBlocked = true });
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
+            It.Is<NodeSignal>(s => s.EdgeName == LoopOutputs.OnCiPassed)), Times.Once);
+    }
+
+    [Fact]
     public async Task A_snapshot_without_a_head_commit_makes_no_merge_attempt()
     {
         var h = AutoMergeHarness(Green() with { HeadSha = null }, PrAutoMerge.IldPending);
