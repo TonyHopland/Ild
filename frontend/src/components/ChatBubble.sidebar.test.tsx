@@ -977,6 +977,27 @@ describe("bulk delete mode", () => {
     expect(chatService.deleteMany).not.toHaveBeenCalled();
   });
 
+  test("changing a check while Delete is asking withdraws the question, so an unchecked chat is never sent", async () => {
+    await openWithThree();
+    enterSelecting();
+    fireEvent.click(boxOf("Alpha"));
+    fireEvent.click(boxOf("Beta"));
+    fireEvent.click(deleteButton(2));
+    await screen.findByRole("alertdialog", { name: "Delete 2 chats?" });
+
+    fireEvent.click(boxOf("Beta"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    fireEvent.click(deleteButton(1));
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog", { name: "Delete 1 chat?" })).getByRole(
+        "button",
+        { name: "Delete" },
+      ),
+    );
+    await waitFor(() => expect(chatService.deleteMany).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(chatService.deleteMany).mock.calls[0][0]).toEqual([expect.any(String)]);
+  });
+
   test("the selection-mode Cancel leaves without a request and the next Select starts unchecked", async () => {
     await openWithThree();
     enterSelecting();

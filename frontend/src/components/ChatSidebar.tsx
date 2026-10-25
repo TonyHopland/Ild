@@ -326,12 +326,16 @@ export default function ChatSidebar({
   };
   if (selecting && history.length === 0) exitSelecting();
 
-  const toggle = (id: string) =>
+  // Changing the checks or the search while the confirmation is open withdraws it, so
+  // what it asks about is always what the screen shows checked.
+  const toggle = (id: string) => {
+    setConfirmDelete(null);
     setSelected((prev) => {
       const next = new Set(prev);
       if (!next.delete(id)) next.add(id);
       return next;
     });
+  };
   const toggleAll = () =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -358,7 +362,10 @@ export default function ChatSidebar({
         placeholder="Search chats…"
         aria-label="Search chats"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setConfirmDelete(null);
+        }}
       />
       {history.length > 0 && (
         <div className="chat-history-head">

@@ -177,11 +177,7 @@ public class ChatController : ControllerBase
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
 
-        // Each chat is deleted while holding its turn gate (see Delete), so neither a
-        // streaming reply nor a message sent meanwhile outlives it.
-        var chats = await _chat.ListForUserAsync(userId, ct);
-        foreach (var chat in chats)
-            await _runner.DeleteAsync(chat.Id, () => _chat.DeleteAsync(userId, chat.Id, ct));
+        await DeleteOwnedAsync(userId, _ => true, ct);
         return NoContent();
     }
 
@@ -193,14 +189,19 @@ public class ChatController : ControllerBase
         if (request?.Ids is not { Length: > 0 } ids)
             return BadRequest(new { error = "At least one chat id is required." });
 
-        // Only the caller's own chats are listed, so another user's or an unknown id is
-        // ignored and the runner is never touched for it. Each chat is deleted under its
-        // turn gate, as in DeleteAll.
         var wanted = ids.ToHashSet();
-        var chats = await _chat.ListForUserAsync(userId, ct);
-        foreach (var chat in chats.Where(c => wanted.Contains(c.Id)))
-            await _runner.DeleteAsync(chat.Id, () => _chat.DeleteAsync(userId, chat.Id, ct));
+        await DeleteOwnedAsync(userId, id => wanted.Contains(id), ct);
         return NoContent();
+    }
+
+    // Only the caller's own chats are listed, so another user's or an unknown id is never
+    // touched. Each is deleted while holding its turn gate (see Delete), so neither a
+    // streaming reply nor a message sent meanwhile outlives it.
+    private async Task DeleteOwnedAsync(string userId, Func<Guid, bool> include, CancellationToken ct)
+    {
+        var chats = await _chat.ListForUserAsync(userId, ct);
+        foreach (var chat in chats.Where(c => include(c.Id)))
+            await _runner.DeleteAsync(chat.Id, () => _chat.DeleteAsync(userId, chat.Id, ct));
     }
 
     private bool TryResolveUser(out string userId, out IActionResult error)
