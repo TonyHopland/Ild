@@ -72,7 +72,8 @@ public sealed class ChatScheduleScheduler : BackgroundService
             try
             {
                 // A firing is a chat turn and a write: not while a restore is replacing the data.
-                if (!_maintenance.IsActive)
+                using var work = _maintenance.TryBeginWork();
+                if (work is not null)
                 {
                     if (!recovered)
                     {

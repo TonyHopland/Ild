@@ -110,7 +110,8 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
 
     private async Task SweepOnceAsync(CancellationToken ct)
     {
-        if (_maintenance.IsActive) return;
+        using var work = _maintenance.TryBeginWork();
+        if (work is null) return;
 
         using var scope = _scopes.CreateScope();
         var sp = scope.ServiceProvider;

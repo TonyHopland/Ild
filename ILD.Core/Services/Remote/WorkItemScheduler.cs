@@ -140,16 +140,17 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
                 continue;
             }
 
-            // A restore is replacing the runs and, perhaps, the server's work items: a pass now would
-            // claim, heartbeat or close runs against data that is about to change under it.
-            if (_maintenance.IsActive)
-            {
-                await WaitForNextPassAsync(delay, stoppingToken);
-                continue;
-            }
-
             try
             {
+                // A restore is replacing the runs and, perhaps, the server's work items: a pass now would
+                // claim, heartbeat or close runs against data that is about to change under it.
+                using var work = _maintenance.TryBeginWork();
+                if (work is null)
+                {
+                    await WaitForNextPassAsync(delay, stoppingToken);
+                    continue;
+                }
+
                 using var scope = _scopes.CreateScope();
                 var settings = scope.ServiceProvider.GetRequiredService<ISchedulerSettingsService>();
                 // Pause only suppresses auto-promotion of Ready items into Running;

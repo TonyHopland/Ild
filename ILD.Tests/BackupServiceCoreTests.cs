@@ -137,4 +137,37 @@ public sealed class BackupServiceCoreTests : IDisposable
         Assert.Null(_directory.PreRestoreInfo(BackupService.Core));
         Assert.False(_maintenance.IsActive);
     }
+
+    [Fact]
+    public async Task A_restore_waits_for_work_already_under_way_and_is_refused_when_it_does_not_finish()
+    {
+        var backup = await BackupAsync(null);
+        _maintenance.DrainTimeout = TimeSpan.Zero;
+        var inFlight = _maintenance.TryBeginWork();
+
+        // One lease is the request that carries the restore; the second is a pass or another request.
+        var extra = _maintenance.TryBeginWork();
+        var refused = await Assert.ThrowsAsync<BackupException>(() => RestoreAsync(backup, null));
+        Assert.Equal(BackupFailure.Conflict, refused.Failure);
+        Assert.Equal(0, _archive.Imports);
+        Assert.False(_maintenance.IsActive);
+
+        extra!.Dispose();
+        await RestoreAsync(backup, null);
+        Assert.Equal(1, _archive.Imports);
+        inFlight!.Dispose();
+    }
+
+    [Fact]
+    public void Work_does_not_start_during_a_restore_and_is_counted_before_one_can_begin()
+    {
+        var work = _maintenance.TryBeginWork();
+        Assert.NotNull(work);
+        using (_maintenance.TryEnter())
+            Assert.Null(_maintenance.TryBeginWork());
+        work.Dispose();
+
+        using var again = _maintenance.TryBeginWork();
+        Assert.NotNull(again);
+    }
 }

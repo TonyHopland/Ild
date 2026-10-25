@@ -95,7 +95,8 @@ public sealed class StuckRunWatchdog : BackgroundService
     {
         // Mid-restore every run row is about to be replaced, and recovering one now would write to
         // the data being restored and call a work item server whose rows are being swapped.
-        if (_maintenance.IsActive) return;
+        using var work = _maintenance.TryBeginWork();
+        if (work is null) return;
 
         using var scope = _scopes.CreateScope();
         var sp = scope.ServiceProvider;

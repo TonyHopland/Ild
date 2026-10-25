@@ -53,7 +53,8 @@ public sealed class PrStatusPoller : BackgroundService, IPrStatusPoller
             var delay = TimeSpan.FromSeconds(AppSettingKeys.DefaultPrHeartbeatSeconds);
             try
             {
-                if (_maintenance.IsActive)
+                using var work = _maintenance.TryBeginWork();
+                if (work is null)
                 {
                     await WaitForNextPassAsync(delay, stoppingToken);
                     continue;

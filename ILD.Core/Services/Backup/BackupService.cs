@@ -108,7 +108,7 @@ public sealed class BackupService(
             SecretProtector.IsEnabled,
             PassphrasePolicy.MinLength);
 
-    public static string FileName(string database)
+    private static string FileName(string database)
         => $"ild-{database}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.ildbackup";
 
     /// <summary>
@@ -160,6 +160,10 @@ public sealed class BackupService(
             var restarting = false;
             try
             {
+                // Requests and passes admitted before the flag went up are still running; the request that
+                // brought this restore is one of them.
+                if (!await maintenance.WaitForWorkAsync(allowed: 1, ct))
+                    throw new BackupException(BackupFailure.Conflict, "Requests or background passes are still running. Try again in a moment.");
                 await RequireNothingRunningAsync();
 
                 // The data about to be replaced, kept for download; it replaces the previous one only once it is complete.

@@ -85,7 +85,6 @@ public sealed class BackupDirectory
     {
         private bool _moved;
 
-        public string Path => path;
         public FileStream Stream => stream;
 
         /// <summary>Replaces <paramref name="target"/> with this file, which is then no longer removed on disposal.</summary>

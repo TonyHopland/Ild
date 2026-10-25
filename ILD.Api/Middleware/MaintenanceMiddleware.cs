@@ -9,13 +9,24 @@ namespace ILD.Api.Middleware;
 /// </summary>
 public sealed class MaintenanceMiddleware(RequestDelegate next, IMaintenanceState maintenance)
 {
-    public Task InvokeAsync(HttpContext context)
+    public async Task InvokeAsync(HttpContext context)
     {
-        if (!maintenance.IsActive || !context.Request.Path.StartsWithSegments("/api"))
-            return next(context);
+        if (!context.Request.Path.StartsWithSegments("/api"))
+        {
+            await next(context);
+            return;
+        }
+
+        // Held for the whole request, so a restore that begins meanwhile waits for it.
+        using var work = maintenance.TryBeginWork();
+        if (work is not null)
+        {
+            await next(context);
+            return;
+        }
 
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         context.Response.Headers.RetryAfter = "30";
-        return context.Response.WriteAsJsonAsync(new { error = "ILD is restoring a backup. Try again in a minute." });
+        await context.Response.WriteAsJsonAsync(new { error = "ILD is restoring a backup. Try again in a minute." });
     }
 }

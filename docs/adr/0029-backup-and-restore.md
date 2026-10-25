@@ -93,6 +93,7 @@ of the data that cannot be.
   other database, from a newer ILD (a migration this build does not know, or a higher
   semantic version; an unparsable version is judged by its migrations alone), or altered
   or cut short, is refused with the data as it was.
+- Requests and background passes already under way when the restore begins are waited for (30 seconds, then a 409); anything that starts later sees the flag and does not run.
 - Nothing may be running that the data belongs to: a loop run, a worktree preview or a
   chat turn is a 409. While a restore runs, other API requests get 503 and the scheduler,
   throttled-resume sweeper, stuck-run watchdog, PR status poller and chat schedule
