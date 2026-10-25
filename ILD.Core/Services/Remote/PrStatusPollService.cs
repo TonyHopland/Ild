@@ -223,6 +223,9 @@ public sealed class PrStatusPollService : IPrStatusPollService
             NodeSignal.Custom(edge, PrNodeEdges.Describe(edge, snapshot, detail, run.WorkItemId)));
     }
 
+    /// <summary>What <see cref="TryAutoMergeAsync"/> did: merged, found the head moved on, or did not merge.</summary>
+    private enum AutoMergeOutcome { NotMerged, Merged, HeadMoved }
+
     /// <summary>
     /// ILD's one merge attempt on an AutoMerge pull request the provider will
     /// not merge by itself (<see cref="PrAutoMerge.IldPending"/>), made once the
@@ -234,8 +237,6 @@ public sealed class PrStatusPollService : IPrStatusPollService
     /// never repeated: the run stays parked where it is, and a human is asked to
     /// merge by hand — which the heartbeat then sees as it sees any merge.
     /// </summary>
-    private enum AutoMergeOutcome { NotMerged, Merged, HeadMoved }
-
     private async Task<AutoMergeOutcome> TryAutoMergeAsync(LoopRun run, RemotePrSnapshot snapshot, string repoUrl, string prNumber)
     {
         if (run.PrAutoMerge != PrAutoMerge.IldPending || !MayMerge(snapshot) || _workItems is null)
