@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Board cards keep their PR status current.** A card parked at the PR step updates when CI or the review changes, and drops the old result after a new push.
+- **Board cards keep their PR status current.** After a push the card shows no PR badge until the forge reports CI for the new commit, then follows it as CI and reviews change.
 - **Dragging a card on the Taskboard shows a steady drop line and a move cursor everywhere over a column, gaps and header included.**
 - **Claude Code transcripts of finished runs and deleted chats no longer pile up on the agent's disk until it is full.**
 

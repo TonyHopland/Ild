@@ -189,13 +189,11 @@ export default function Taskboard() {
 
     // When a running item advances to a new node, re-sync it so its card shows
     // the current step. Node transitions don't change the work item's status, so
-    // this is the only signal that keeps a running card's step fresh.
-    const onRunProgressed = (message: TypedSignalRMessage<"WorkItemRunProgressed">) => {
-      syncWorkItem(message.payload.workItemId, { itemChanged: false });
-    };
-
-    // A poll moved a parked item's PR badges, or a push cleared them.
-    const onPrStatusChanged = (message: TypedSignalRMessage<"WorkItemPrStatusChanged">) => {
+    // this is the only signal that keeps a running card's step fresh. A poll that
+    // moved a parked item's PR badges re-syncs it the same way.
+    const onRunProgressed = (
+      message: TypedSignalRMessage<"WorkItemRunProgressed" | "WorkItemPrStatusChanged">,
+    ) => {
       syncWorkItem(message.payload.workItemId, { itemChanged: false });
     };
 
@@ -215,7 +213,7 @@ export default function Taskboard() {
     on("WorkItemStateChanged", onWorkItemStateChanged);
     on("PreviewStateChanged", onPreviewStateChanged);
     on("WorkItemRunProgressed", onRunProgressed);
-    on("WorkItemPrStatusChanged", onPrStatusChanged);
+    on("WorkItemPrStatusChanged", onRunProgressed);
     on("WorkItemBoardReordered", onBoardReordered);
     on("WorkItemEditProposalsChanged", onEditProposalsChanged);
 
@@ -224,7 +222,7 @@ export default function Taskboard() {
       off("WorkItemStateChanged", onWorkItemStateChanged);
       off("PreviewStateChanged", onPreviewStateChanged);
       off("WorkItemRunProgressed", onRunProgressed);
-      off("WorkItemPrStatusChanged", onPrStatusChanged);
+      off("WorkItemPrStatusChanged", onRunProgressed);
       off("WorkItemBoardReordered", onBoardReordered);
       off("WorkItemEditProposalsChanged", onEditProposalsChanged);
       for (const t of delayedTimers) clearTimeout(t);

@@ -487,6 +487,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         {
             Draft = pr.TryGetProperty("isDraft", out var draft) && draft.ValueKind == JsonValueKind.True,
             MergeBlocked = mergeStatus == "rejectedbypolicy" || evaluations.Any(BlocksMerge),
+            HeadSha = ReadString(Child(pr, "lastMergeSourceCommit"), "commitId"),
         };
     }
 

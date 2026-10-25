@@ -99,6 +99,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<LoopRun>()
             .Property(r => r.PrAutoMergeError)
             .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
+        // The commit a push is waiting for the forge to report is cleared by the
+        // heartbeat that sees it; a stale instance saved afterwards must not restore it.
+        modelBuilder.Entity<LoopRun>()
+            .Property(r => r.PrPushedCommit)
+            .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
     }
 
     /// <summary>

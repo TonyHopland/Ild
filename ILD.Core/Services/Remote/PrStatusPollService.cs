@@ -82,10 +82,6 @@ public sealed class PrStatusPollService : IPrStatusPollService
         }
     }
 
-    /// <summary>The fields a board card shows; null when there is no snapshot.</summary>
-    private static (string, bool, bool?, string?, RemotePrCiStatus, bool, bool)? BadgesOf(RemotePrSnapshot? s)
-        => s is null ? null : (s.State, s.Merged, s.Mergeable, s.MergeableState, s.Ci, s.Approved, s.ChangesRequested);
-
     private async Task PollRunAsync(LoopRun run, CancellationToken ct)
     {
         var repoUrl = RemotePrUrl.ExtractRepoUrl(run.PrUrl);
@@ -96,6 +92,19 @@ public sealed class PrStatusPollService : IPrStatusPollService
         var snapshot = await _remote.GetPullRequestSnapshotAsync(repoUrl, prNumber);
         if (snapshot is null)
             return;
+
+        // A push by the PR node cleared the stored result and recorded the commit it
+        // pushed. Until the forge reports that commit as the head, this read may still
+        // describe the previous one, so the whole tick waits: nothing stored, no edge,
+        // no merge, no event. There is no timeout; a head that never matches (a force
+        // push over that commit) leaves the card blank until a person steps in.
+        if (run.PrPushedCommit is { } pushed)
+        {
+            if (!string.Equals(snapshot.HeadSha, pushed, StringComparison.OrdinalIgnoreCase))
+                return;
+            await _runs.ClearPrPushedCommitAsync(run.Id, pushed);
+            run.PrPushedCommit = null;
+        }
 
         var runNode = await ResolveRunNodeAsync(run);
         if (runNode is null)
@@ -126,13 +135,13 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // instance was loaded before the forge fetch above and stays tracked for
         // the whole pass — so writing its copy back, here or on any later save in
         // this scope, would revert whatever was recorded meanwhile.
-        var badgesBefore = BadgesOf(PrSnapshotJson.TryParse(run.PrSnapshot));
+        var badgesBefore = WorkItemPrStatus.From(PrSnapshotJson.TryParse(run.PrSnapshot));
         run.PrSnapshot = PrSnapshotJson.Serialize(snapshot);
         run.PrPolledEdgeStates = string.Join(",", newStates);
         run.UpdatedAt = DateTime.UtcNow;
         await _runs.UpdateRunAsync(run);
         await _notifier.PrSnapshotChangedAsync(run.Id);
-        if (_boardNotifier is not null && badgesBefore != BadgesOf(snapshot))
+        if (_boardNotifier is not null && badgesBefore != WorkItemPrStatus.From(snapshot))
             await _boardNotifier.PrStatusChangedAsync(run.WorkItemId);
 
         // A run with no ledger yet records what is already on the pull request

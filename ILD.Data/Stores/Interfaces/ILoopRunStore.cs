@@ -294,6 +294,21 @@ public interface ILoopRunStore
     Task<bool> TrySetPrAutoMergeAsync(Guid runId, PrAutoMerge? expected, PrAutoMerge next, string? error = null);
 
     /// <summary>
+    /// After the PR node pushed to a pull request that already exists: drops the
+    /// stored snapshot (it describes the previous commit) and records
+    /// <paramref name="pushedCommit"/>, the commit the heartbeat must see as the
+    /// pull request's head before it stores anything again. One update.
+    /// </summary>
+    Task RecordPrPushAsync(Guid runId, string? pushedCommit);
+
+    /// <summary>
+    /// Forgets the recorded pushed commit once the heartbeat has read it as the
+    /// head. Only if the column still holds <paramref name="expected"/>, so a newer
+    /// push's record is never cleared by an older poll.
+    /// </summary>
+    Task ClearPrPushedCommitAsync(Guid runId, string expected);
+
+    /// <summary>
     /// Refresh a tracked <see cref="LoopRun"/> instance with the row's current
     /// column values, discarding unsaved in-memory changes. Used by the engine
     /// before persisting so a stale instance held across a long node execution

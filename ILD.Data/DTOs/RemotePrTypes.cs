@@ -124,6 +124,13 @@ public record RemotePrSnapshot(
     /// where the provider does not report such a block.
     /// </summary>
     public bool MergeBlocked { get; init; }
+
+    /// <summary>
+    /// The commit the pull request's head pointed at when this snapshot was read,
+    /// and the one <see cref="Ci"/> belongs to. Null on a snapshot persisted before
+    /// the field existed, or when the provider did not report one.
+    /// </summary>
+    public string? HeadSha { get; init; }
 }
 
 /// <summary>

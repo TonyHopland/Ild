@@ -590,6 +590,18 @@ public class LoopRunStore : ILoopRunStore
         return rows > 0;
     }
 
+    public async Task RecordPrPushAsync(Guid runId, string? pushedCommit)
+        => await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.PrSnapshot, (string?)null)
+                .SetProperty(r => r.PrPushedCommit, pushedCommit));
+
+    public async Task ClearPrPushedCommitAsync(Guid runId, string expected)
+        => await _db.LoopRuns
+            .Where(r => r.Id == runId && r.PrPushedCommit == expected)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrPushedCommit, (string?)null));
+
     public async Task CreateRunNodeAsync(LoopRunNode runNode)
     {
         _db.LoopRunNodes.Add(runNode);

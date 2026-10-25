@@ -184,6 +184,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         {
             Draft = pr.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True,
             MergeBlocked = IsMergeBlocked(pr),
+            HeadSha = headSha,
         };
     }
 

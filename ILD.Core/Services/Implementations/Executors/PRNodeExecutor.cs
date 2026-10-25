@@ -108,6 +108,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         {
             string? prepError = null;
             var pushed = false;
+            var prExisted = !string.IsNullOrEmpty(ctx.Run.PrUrl);
             try
             {
                 var diff = await repoManager.GetDiffAsync(ctx.Run.WorktreePath);
@@ -133,10 +134,9 @@ public sealed class PRNodeExecutor : INodeExecutor
                 }
             }
             catch (Exception ex) { prepError = ex.Message; }
-            // The pushed commit has no result yet; drop the previous commit's so the
-            // board card stops showing it until the next heartbeat stores the forge's answer.
-            if (pushed)
-                await ClearPrSnapshotAsync(ctx, sp);
+            // The stored result belongs to the previous commit; the pushed one has none yet.
+            if (pushed && prExisted)
+                await ClearPrSnapshotAsync(ctx, sp, repoManager);
             if (prepError is not null)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, prepError);
@@ -346,16 +346,22 @@ public sealed class PRNodeExecutor : INodeExecutor
         }
     }
 
-    private static async Task ClearPrSnapshotAsync(NodeExecutionContext ctx, IServiceProvider sp)
+    /// <summary>
+    /// Drops the previous commit's stored result and records the commit just pushed, so the
+    /// heartbeat stores nothing until the forge reports that commit as the pull request's
+    /// head. The detail dialog is told; the board card shows no PR badges outside the PR node.
+    /// </summary>
+    private static async Task ClearPrSnapshotAsync(NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager)
     {
-        if (ctx.Run.PrSnapshot is null || sp.GetService<ILoopRunStore>() is not { } runs)
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
             return;
+        string? head = null;
+        try { head = await repoManager.GetHeadCommitAsync(ctx.Run.WorktreePath!); }
+        catch { }
         ctx.Run.PrSnapshot = null;
-        await runs.UpdateRunAsync(ctx.Run);
+        await runs.RecordPrPushAsync(ctx.Run.Id, head);
         if (sp.GetService<IRunNotifier>() is { } runNotifier)
             await runNotifier.PrSnapshotChangedAsync(ctx.Run.Id);
-        if (sp.GetService<IWorkItemNotifier>() is { } board)
-            await board.PrStatusChangedAsync(ctx.Run.WorkItemId);
     }
 
     /// <summary>

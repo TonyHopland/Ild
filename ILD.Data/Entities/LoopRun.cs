@@ -255,6 +255,13 @@ public class LoopRun : IHasUpdatedAt
     // survives restarts and is never reverted by a full-row write.
     public PrAutoMerge? PrAutoMerge { get; set; }
 
+    // The commit the PR node last pushed to a pull request that already existed,
+    // while the heartbeat has yet to read the pull request with that commit as its
+    // head. Set together with clearing PrSnapshot, cleared by the heartbeat once the
+    // forge reports this head. Targeted-only like the columns above.
+    [MaxLength(64)]
+    public string? PrPushedCommit { get; set; }
+
     // Why ILD's one AutoMerge attempt failed, shown to the human asked to merge.
     [MaxLength(1024)]
     public string? PrAutoMergeError { get; set; }

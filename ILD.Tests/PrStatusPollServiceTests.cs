@@ -20,10 +20,11 @@ public class PrStatusPollServiceTests
         RemotePrCiStatus ci = RemotePrCiStatus.None,
         bool approved = false,
         bool changesRequested = false,
-        IReadOnlyList<RemotePrCheck>? failedChecks = null)
+        IReadOnlyList<RemotePrCheck>? failedChecks = null,
+        string? headSha = null)
         => new("t", "b", state, merged, null, null, ci,
             failedChecks ?? Array.Empty<RemotePrCheck>(), approved, changesRequested,
-            Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow);
+            Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow) { HeadSha = headSha };
 
     private static LoopNodeEdge CustomEdge(Guid sourceNodeId, string name) => new()
     {
@@ -105,6 +106,49 @@ public class PrStatusPollServiceTests
 
         Assert.Equal(RemotePrCiStatus.Pending, PrSnapshotJson.TryParse(h.Run.PrSnapshot)!.Ci);
         h.Board.Verify(n => n.PrStatusChangedAsync("wi-1"), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_poll_that_still_reads_the_old_head_stores_nothing_and_fires_nothing()
+    {
+        // The push cleared the stored result; the forge still reports the old head with its red CI.
+        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed, headSha: "old"), baseline: null);
+        h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnCiFailed) });
+        h.Run.PrSnapshot = null;
+        h.Run.PrPushedCommit = "pushed";
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(h.Run.PrSnapshot);
+        Assert.Null(h.Run.PrPolledEdgeStates);
+        h.Runs.Verify(s => s.UpdateRunAsync(It.IsAny<LoopRun>()), Times.Never);
+        h.Runs.Verify(s => s.ClearPrPushedCommitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
+        h.Notifier.Verify(n => n.PrSnapshotChangedAsync(It.IsAny<Guid>()), Times.Never);
+        h.Board.Verify(n => n.PrStatusChangedAsync(It.IsAny<string>()), Times.Never);
+        h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_poll_that_reads_the_pushed_commit_stores_the_result_and_clears_the_record()
+    {
+        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending, headSha: "pushed"), baseline: null);
+        h.Run.PrSnapshot = null;
+        h.Run.PrPushedCommit = "pushed";
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(RemotePrCiStatus.Pending, PrSnapshotJson.TryParse(h.Run.PrSnapshot)!.Ci);
+        h.Runs.Verify(s => s.ClearPrPushedCommitAsync(h.Run.Id, "pushed"), Times.Once);
+        h.Board.Verify(n => n.PrStatusChangedAsync("wi-1"), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_run_with_no_recorded_commit_is_polled_whatever_head_the_forge_reports()
+    {
+        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending, headSha: "anything"), baseline: null);
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(h.Run.PrSnapshot);
+        h.Runs.Verify(s => s.ClearPrPushedCommitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
     }
 
     [Fact]

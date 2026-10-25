@@ -30,6 +30,7 @@ public class PRNodeExecutorPushClearsSnapshotTests
         {
             var repoManager = new Mock<IRepositoryManager>();
             repoManager.Setup(m => m.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoManager.Setup(m => m.GetHeadCommitAsync(worktree)).ReturnsAsync("pushed-sha");
             repoManager.Setup(m => m.PushAsync(worktree, It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
                 .ReturnsAsync(pushSucceeds ? (true, (string?)null) : (false, "rejected"));
 
@@ -67,14 +68,14 @@ public class PRNodeExecutorPushClearsSnapshotTests
     }
 
     [Fact]
-    public async Task A_successful_push_clears_the_previous_commits_snapshot_and_notifies_the_board()
+    public async Task A_successful_push_clears_the_previous_commits_snapshot_and_records_the_pushed_commit()
     {
         var s = await RunAsync(pushSucceeds: true);
 
         Assert.Null(s.Run.PrSnapshot);
-        s.Runs.Verify(r => r.UpdateRunAsync(It.Is<LoopRun>(x => x.PrSnapshot == null)), Times.Once);
+        s.Runs.Verify(r => r.RecordPrPushAsync(s.Run.Id, "pushed-sha"), Times.Once);
         s.RunNotifier.Verify(n => n.PrSnapshotChangedAsync(s.Run.Id), Times.Once);
-        s.Board.Verify(n => n.PrStatusChangedAsync("WI-1"), Times.Once);
+        s.Board.Verify(n => n.PrStatusChangedAsync(It.IsAny<string>()), Times.Never);
     }
 
     [Fact]
@@ -83,7 +84,7 @@ public class PRNodeExecutorPushClearsSnapshotTests
         var s = await RunAsync(pushSucceeds: false);
 
         Assert.NotNull(s.Run.PrSnapshot);
-        s.Runs.Verify(r => r.UpdateRunAsync(It.IsAny<LoopRun>()), Times.Never);
+        s.Runs.Verify(r => r.RecordPrPushAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
         s.Board.Verify(n => n.PrStatusChangedAsync(It.IsAny<string>()), Times.Never);
     }
 }

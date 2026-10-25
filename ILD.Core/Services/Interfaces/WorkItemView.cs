@@ -185,4 +185,18 @@ public sealed record WorkItemPrStatus(
     string? MergeableState,
     RemotePrCiStatus Ci,
     bool Approved,
-    bool ChangesRequested);
+    bool ChangesRequested)
+{
+    /// <summary>The badge subset of <paramref name="snapshot"/>; null when there is no snapshot.</summary>
+    public static WorkItemPrStatus? From(RemotePrSnapshot? snapshot)
+        => snapshot is null
+            ? null
+            : new WorkItemPrStatus(
+                snapshot.State,
+                snapshot.Merged,
+                snapshot.Mergeable,
+                snapshot.MergeableState,
+                snapshot.Ci,
+                snapshot.Approved,
+                snapshot.ChangesRequested);
+}

@@ -124,6 +124,7 @@ public class RemoteProviderServiceTests
         Assert.Equal("review", snapshot.Conversation[0].Kind);
         Assert.Equal("comment", snapshot.Conversation[1].Kind);
         Assert.Equal("review_comment", snapshot.Conversation[2].Kind);
+        Assert.Equal("abc", snapshot.HeadSha);
     }
 
     /// <summary>
@@ -194,6 +195,7 @@ public class RemoteProviderServiceTests
 
         Assert.True(snapshot!.Draft);
         Assert.False(snapshot.MergeBlocked);
+        Assert.Equal("abc", snapshot.HeadSha);
     }
 
     [Fact]
@@ -1143,12 +1145,13 @@ public class RemoteProviderServiceTests
 
         var handler = new AzureHandler()
             .On(u => u.Contains("/threads") || u.Contains("/statuses") || u.Contains("/evaluations"), "{\"value\":[]}")
-            .On(u => u.Contains("/pullrequests/7?"), "{\"status\":\"active\",\"isDraft\":true,\"mergeStatus\":\"succeeded\"}");
+            .On(u => u.Contains("/pullrequests/7?"), "{\"status\":\"active\",\"isDraft\":true,\"mergeStatus\":\"succeeded\",\"lastMergeSourceCommit\":{\"commitId\":\"az-head\"}}");
 
         var snapshot = await CreateService(db, handler).GetPullRequestSnapshotAsync(AzureRepoUrl, "7");
 
         Assert.True(snapshot!.Draft);
         Assert.False(snapshot.MergeBlocked);
+        Assert.Equal("az-head", snapshot.HeadSha);
     }
 
     [Fact]
