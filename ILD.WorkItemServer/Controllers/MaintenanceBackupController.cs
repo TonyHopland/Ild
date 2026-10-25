@@ -55,7 +55,9 @@ public sealed class MaintenanceBackupController(
             return UnprocessableEntity(new { error = ex.Message });
         }
 
-        await db.Database.MigrateAsync(ct);
+        // The data is replaced, and what follows is not abandoned if the caller hangs up: the import was
+        // the part that could be rolled back.
+        await db.Database.MigrateAsync(CancellationToken.None);
 
         // Heartbeats in the archive date from when it was made. Left alone, the reclaimer
         // would hand every claimed item back to Ready as soon as the gate opens, which is
@@ -63,7 +65,7 @@ public sealed class MaintenanceBackupController(
         var now = clock.GetUtcNow().UtcDateTime;
         await db.WorkItems
             .Where(w => (w.Status == WorkItemStatus.Running || w.Status == WorkItemStatus.WaitingForIld) && w.LastHeartbeatAt != null)
-            .ExecuteUpdateAsync(set => set.SetProperty(w => w.LastHeartbeatAt, now), ct);
+            .ExecuteUpdateAsync(set => set.SetProperty(w => w.LastHeartbeatAt, now), CancellationToken.None);
 
         logger.LogInformation("Work item data imported by {Username}", Actor());
         return Ok();

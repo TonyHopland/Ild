@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Backup;
@@ -293,8 +294,9 @@ public sealed class BackupService(
                 ? new DatabaseState(true, null, info)
                 : new DatabaseState(false, "This tracker does not support backup.", null);
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or NotSupportedException)
         {
+            // NotSupported and Json: it answered, with something that is not backup info.
             return new DatabaseState(false, $"The WorkItem Server could not be asked about backup: {ex.Message}", null);
         }
     }

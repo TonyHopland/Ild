@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Back up and restore ILD's data from Settings > Storage.** The ILD data and the work item data are separate, passphrase-encrypted files, and a restore works on a new PostgreSQL version.
 - **While the scheduler is paused, Start now in a Ready item's dialog starts that one item; the scheduler stays paused.**
 - **Exporting a loop can include the global variables it uses, and importing it creates them or shows what differs before overwriting one.**
 
