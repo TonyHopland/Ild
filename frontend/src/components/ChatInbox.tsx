@@ -197,38 +197,34 @@ export function ChatInboxProvider({ children }: { children: React.ReactNode }) {
     [refreshHistory],
   );
 
-  const deleteChat = useCallback(async (id: string) => {
-    setActiveChatId((active) => (active === id ? null : active));
-    try {
-      await chatService.deleteOne(id);
-    } catch {
-      /* even on error, drop it locally — it is gone or never existed */
-    }
-    historyEpochRef.current += 1;
-    setHistory((prev) => prev.filter((c) => c.id !== id));
-  }, []);
-
-  // One request for the lot. A failure may have deleted only some of them, so the
-  // list is re-read rather than guessed.
-  const deleteChats = useCallback(
-    async (ids: string[]) => {
+  // A failure may have deleted only some of the chats, or none, so the list is re-read
+  // rather than guessed.
+  const removeChats = useCallback(
+    async (ids: string[], request: () => Promise<void>) => {
       const gone = new Set(ids);
       setActiveChatId((active) => (active !== null && gone.has(active) ? null : active));
-      let failed = false;
       try {
-        await chatService.deleteMany(ids);
+        await request();
       } catch (err) {
         console.error(err);
-        failed = true;
-      }
-      historyEpochRef.current += 1;
-      if (failed) {
+        historyEpochRef.current += 1;
         void refreshHistory().catch((err) => console.error(err));
         return;
       }
+      historyEpochRef.current += 1;
       setHistory((prev) => prev.filter((c) => !gone.has(c.id)));
     },
     [refreshHistory],
+  );
+
+  const deleteChat = useCallback(
+    (id: string) => removeChats([id], () => chatService.deleteOne(id)),
+    [removeChats],
+  );
+
+  const deleteChats = useCallback(
+    (ids: string[]) => removeChats(ids, () => chatService.deleteMany(ids)),
+    [removeChats],
   );
 
   // A rename the server took is shown at once, like a delete; the re-read that

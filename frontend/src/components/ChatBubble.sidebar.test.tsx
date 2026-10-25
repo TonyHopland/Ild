@@ -1081,6 +1081,21 @@ describe("bulk delete mode", () => {
     logged.mockRestore();
   });
 
+  test("a failed single delete is logged and the list is re-read instead of dropping the chat", async () => {
+    await openWithThree();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    chatService.deleteOne.mockImplementationOnce(() => Promise.reject(new Error("boom")));
+    const reads = chatService.listHistory.mock.calls.length;
+
+    showChatActions("Alpha");
+    fireEvent.click(within(sidebar()).getByRole("button", { name: "Delete chat Alpha" }));
+
+    await waitFor(() => expect(logged).toHaveBeenCalled());
+    await waitFor(() => expect(chatService.listHistory.mock.calls.length).toBeGreaterThan(reads));
+    expect(within(sidebar()).getByText("Alpha")).toBeTruthy();
+    logged.mockRestore();
+  });
+
   test("selection mode ends when the last chat goes", async () => {
     await openWithThree();
     enterSelecting();

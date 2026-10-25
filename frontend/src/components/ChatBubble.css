@@ -580,7 +580,8 @@
 .chat-history-select-all {
   display: flex;
   align-items: center;
-  margin-right: auto;
+  /* The rows' own right padding, so its box sits over theirs. */
+  padding-right: 0.5rem;
 }
 
 .chat-history-title {

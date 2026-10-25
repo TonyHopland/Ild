@@ -260,7 +260,6 @@ export default function ChatSidebar({
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   // The ids the open confirmation asks about, fixed when it opened.
   const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
-  const selectAllRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   // The answer of the message search and the query it answers: the matching chats,
   // or null when the search failed. An answer for any other query is not applied.
@@ -324,7 +323,6 @@ export default function ChatSidebar({
     setSelected(new Set());
     setConfirmDelete(null);
   };
-  if (selecting && history.length === 0) exitSelecting();
 
   // Changing the checks or the search while the confirmation is open withdraws it, so
   // what it asks about is always what the screen shows checked.
@@ -346,9 +344,13 @@ export default function ChatSidebar({
       return next;
     });
 
+  // The last chat going ends selection mode, so chats that arrive later show the normal list.
   useEffect(() => {
-    if (selectAllRef.current) selectAllRef.current.indeterminate = someChecked;
-  }, [someChecked, selecting, confirmDelete]);
+    if (!selecting || history.length > 0) return;
+    setSelecting(false);
+    setSelected(new Set());
+    setConfirmDelete(null);
+  }, [selecting, history.length]);
 
   return (
     <aside className={`chat-sidebar${full ? " chat-sidebar-full" : ""}`} aria-label="Chats">
@@ -408,16 +410,6 @@ export default function ChatSidebar({
             </span>
           ) : (
             <>
-              <label className="chat-history-select-all">
-                <input
-                  type="checkbox"
-                  ref={selectAllRef}
-                  aria-label="Select all"
-                  checked={allChecked}
-                  disabled={rows.length === 0}
-                  onChange={toggleAll}
-                />
-              </label>
               <button
                 type="button"
                 className="chat-link-btn chat-danger"
@@ -429,6 +421,19 @@ export default function ChatSidebar({
               <button type="button" className="chat-link-btn" onClick={exitSelecting}>
                 Cancel
               </button>
+              {/* Last, so it lines up with the rows' checkboxes at their ends. */}
+              <label className="chat-history-select-all">
+                <input
+                  type="checkbox"
+                  ref={(el) => {
+                    if (el) el.indeterminate = someChecked;
+                  }}
+                  aria-label="Select all"
+                  checked={allChecked}
+                  disabled={rows.length === 0}
+                  onChange={toggleAll}
+                />
+              </label>
             </>
           )}
         </div>

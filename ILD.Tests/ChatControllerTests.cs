@@ -342,60 +342,6 @@ public class ChatControllerTests
     }
 
     [Fact]
-    public async Task DeleteAll_removes_every_chat_the_caller_owns_and_no_others()
-    {
-        using var db = new TestDb();
-        var scratchRoot = Path.Combine(Path.GetTempPath(), "ild-chat-controller-tests", Guid.NewGuid().ToString("N"));
-        try
-        {
-            Guid Seed(string owner)
-            {
-                var id = Guid.NewGuid();
-                var scratch = Path.Combine(scratchRoot, id.ToString("N"));
-                Directory.CreateDirectory(scratch);
-                using var ctx = db.Fresh();
-                ctx.ChatSessions.Add(new ChatSession
-                {
-                    Id = id,
-                    UserId = owner,
-                    AiProviderId = Guid.NewGuid(),
-                    ProviderType = "claude-code",
-                    ToolAllowlistCsv = "ild",
-                    ScratchPath = scratch,
-                    CreatedAt = DateTime.UtcNow,
-                });
-                ctx.SaveChanges();
-                return id;
-            }
-            var mine = new[] { Seed("tony"), Seed("tony") };
-            var others = Seed("alice");
-
-            var notifier = Mock.Of<IChatNotifier>();
-            var chat = new ChatService(db.Context, new ProviderStore(db.Context), Mock.Of<IAgentAdapterRegistry>(), notifier,
-                new ChatOptions { ScratchRoot = scratchRoot }, new LoopRunStore(db.Context), new ChatLoopScratchpad(), new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
-            var runnerServices = new ServiceCollection().AddScoped<IChatService>(_ => chat).BuildServiceProvider();
-            var runner = ActivatorUtilities.CreateInstance<ChatTurnRunner>(runnerServices, notifier, NullLogger<ChatTurnRunner>.Instance);
-            var http = new DefaultHttpContext
-            {
-                User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "tony")], "ILD", ClaimTypes.Name, ClaimTypes.Role)),
-            };
-            var controller = new ChatController(chat, runner) { ControllerContext = new ControllerContext { HttpContext = http } };
-
-            var result = await controller.DeleteAll(TestContext.Current.CancellationToken);
-
-            Assert.Equal(StatusCodes.Status204NoContent, StatusOf(result));
-            using var after = db.Fresh();
-            Assert.Equal([others], after.ChatSessions.AsNoTracking().Select(c => c.Id).ToList());
-            Assert.All(mine, id => Assert.False(Directory.Exists(Path.Combine(scratchRoot, id.ToString("N"))), "scratch directories should be removed"));
-            Assert.True(Directory.Exists(Path.Combine(scratchRoot, others.ToString("N"))));
-        }
-        finally
-        {
-            try { if (Directory.Exists(scratchRoot)) Directory.Delete(scratchRoot, true); } catch { }
-        }
-    }
-
-    [Fact]
     public async Task DeleteMany_removes_only_the_listed_chats_the_caller_owns()
     {
         using var db = new TestDb();

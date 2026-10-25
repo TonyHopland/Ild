@@ -11,7 +11,7 @@ namespace ILD.Api.Controllers;
 /// endpoints start chats, list/resume retained history, submit messages (which
 /// interrupt any in-flight turn rather than queueing), cancel an in-flight turn
 /// on its own, record how far a chat has been read, rename, star and search
-/// chats, and delete chats (one, several or all). Besides an explicit delete, a chat goes only by the
+/// chats, and delete chats (one or several). Besides an explicit delete, a chat goes only by the
 /// opt-in inactivity setting, which spares starred chats (<c>ChatInactivitySweeper</c>).
 /// </summary>
 [ApiController]
@@ -172,15 +172,6 @@ public class ChatController : ControllerBase
         return NoContent();
     }
 
-    [HttpDelete]
-    public async Task<IActionResult> DeleteAll(CancellationToken ct)
-    {
-        if (!TryResolveUser(out var userId, out var error)) return error;
-
-        await DeleteOwnedAsync(userId, _ => true, ct);
-        return NoContent();
-    }
-
     [HttpPost("delete")]
     public async Task<IActionResult> DeleteMany([FromBody] DeleteChatsRequest? request, CancellationToken ct)
     {
@@ -189,19 +180,14 @@ public class ChatController : ControllerBase
         if (request?.Ids is not { Length: > 0 } ids)
             return BadRequest(new { error = "At least one chat id is required." });
 
+        // Only the caller's own chats are listed, so another user's or an unknown id is never
+        // touched. Each is deleted while holding its turn gate (see Delete), so neither a
+        // streaming reply nor a message sent meanwhile outlives it.
         var wanted = ids.ToHashSet();
-        await DeleteOwnedAsync(userId, id => wanted.Contains(id), ct);
-        return NoContent();
-    }
-
-    // Only the caller's own chats are listed, so another user's or an unknown id is never
-    // touched. Each is deleted while holding its turn gate (see Delete), so neither a
-    // streaming reply nor a message sent meanwhile outlives it.
-    private async Task DeleteOwnedAsync(string userId, Func<Guid, bool> include, CancellationToken ct)
-    {
         var chats = await _chat.ListForUserAsync(userId, ct);
-        foreach (var chat in chats.Where(c => include(c.Id)))
+        foreach (var chat in chats.Where(c => wanted.Contains(c.Id)))
             await _runner.DeleteAsync(chat.Id, () => _chat.DeleteAsync(userId, chat.Id, ct));
+        return NoContent();
     }
 
     private bool TryResolveUser(out string userId, out IActionResult error)
