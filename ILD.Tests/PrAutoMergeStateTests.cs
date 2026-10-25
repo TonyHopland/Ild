@@ -81,7 +81,7 @@ public class PrAutoMergeStateTests
     private static RemotePrSnapshot Green()
         => new RemotePrSnapshot("t", "b", "open", false, true, "clean", RemotePrCiStatus.Passed,
             Array.Empty<RemotePrCheck>(), false, false,
-            Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow) with { Draft = false, MergeBlocked = false };
+            Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow) with { Draft = false, MergeBlocked = false, HeadSha = "head-1" };
 
     private static async Task<LoopRun> RereadAsync(TestDb db, Guid runId)
     {
@@ -153,6 +153,76 @@ public class PrAutoMergeStateTests
     }
 
     [Fact]
+    public async Task Recording_a_push_clears_the_snapshot_and_sets_the_pushed_commit()
+    {
+        using var db = new TestDb();
+        var seeded = await SeedParkedRunAsync(db, null);
+        var snapshot = new LoopRunStore(db.Fresh());
+        var run = await snapshot.GetByIdAsync(seeded.Run.Id);
+        run!.PrSnapshot = PrSnapshotJson.Serialize(Green());
+        await snapshot.UpdateRunAsync(run);
+
+        await new LoopRunStore(db.Fresh()).RecordPrPushAsync(seeded.Run.Id, "pushed");
+
+        var reread = await RereadAsync(db, seeded.Run.Id);
+        Assert.Null(reread.PrSnapshot);
+        Assert.Equal("pushed", reread.PrPushedCommit);
+    }
+
+    [Fact]
+    public async Task A_full_row_write_from_an_instance_loaded_before_the_push_cannot_drop_the_pushed_commit()
+    {
+        using var db = new TestDb();
+        var seeded = await SeedParkedRunAsync(db, null);
+        var stale = await db.LoopRuns.GetByIdAsync(seeded.Run.Id);
+
+        await new LoopRunStore(db.Fresh()).RecordPrPushAsync(seeded.Run.Id, "pushed");
+
+        stale!.PrPushedCommit = null;
+        stale.UpdatedAt = DateTime.UtcNow;
+        await db.LoopRuns.UpdateRunAsync(stale);
+
+        Assert.Equal("pushed", (await RereadAsync(db, seeded.Run.Id)).PrPushedCommit);
+    }
+
+    [Fact]
+    public async Task Clearing_the_pushed_commit_only_clears_the_one_it_was_given()
+    {
+        using var db = new TestDb();
+        var seeded = await SeedParkedRunAsync(db, null);
+        await new LoopRunStore(db.Fresh()).RecordPrPushAsync(seeded.Run.Id, "second");
+
+        await new LoopRunStore(db.Fresh()).ClearPrPushedCommitAsync(seeded.Run.Id, "first");
+        Assert.Equal("second", (await RereadAsync(db, seeded.Run.Id)).PrPushedCommit);
+
+        await new LoopRunStore(db.Fresh()).ClearPrPushedCommitAsync(seeded.Run.Id, "second");
+        Assert.Null((await RereadAsync(db, seeded.Run.Id)).PrPushedCommit);
+    }
+
+    [Fact]
+    public async Task A_merge_refused_because_the_head_moved_is_put_back_to_pending_not_failed()
+    {
+        using var db = new TestDb();
+        var seeded = await SeedParkedRunAsync(db, PrAutoMerge.IldPending);
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Green());
+        remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1"))
+            .ThrowsAsync(new RemoteHeadMovedException("head-1", "head-2"));
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync("wi-1"))
+            .ReturnsAsync(new WorkItemView { Id = "wi-1", Title = "T", Tags = new[] { "AutoMerge" } });
+
+        await new PrStatusPollService(
+            new LoopRunStore(db.Fresh()), remote.Object, Mock.Of<ILoopEngine>(), Mock.Of<IRunNotifier>(),
+            NullLogger<PrStatusPollService>.Instance, workItems.Object, Mock.Of<IEventLogService>())
+            .PollOnceAsync(TestContext.Current.CancellationToken);
+
+        var reread = await RereadAsync(db, seeded.Run.Id);
+        Assert.Equal(PrAutoMerge.IldPending, reread.PrAutoMerge);
+        Assert.Null(reread.PrAutoMergeError);
+    }
+
+    [Fact]
     public async Task A_refused_merge_stays_parked_is_not_retried_after_a_restart_and_a_human_merge_moves_on()
     {
         using var db = new TestDb();
@@ -160,7 +230,7 @@ public class PrAutoMergeStateTests
 
         var remote = new Mock<IRemoteProvider>();
         remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Green());
-        remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7")).ReturnsAsync(false);
+        remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(false);
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(m => m.GetWorkItemAsync("wi-1"))
             .ReturnsAsync(new WorkItemView { Id = "wi-1", Title = "T", Tags = new[] { "AutoMerge" } });
@@ -182,7 +252,7 @@ public class PrAutoMergeStateTests
         Assert.Contains(await new LoopRunStore(db.Fresh()).GetPrAwaitingMergeRunsAsync(), r => r.Id == seeded.Run.Id);
 
         await Service().PollOnceAsync(TestContext.Current.CancellationToken);
-        remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Once);
+        remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
         engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
 
         remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(
@@ -191,6 +261,6 @@ public class PrAutoMergeStateTests
 
         engine.Verify(e => e.SignalNodeResultAsync(seeded.Run.Id, seeded.RunNode.Id,
             It.Is<NodeSignal>(s => s.EdgeName == LoopOutputs.OnMerged)), Times.Once);
-        remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Once);
+        remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
     }
 }

@@ -325,7 +325,7 @@ public class PrStatusPollServiceTests
     private static RemotePrSnapshot Green(bool approved = false)
         => new RemotePrSnapshot("t", "b", "open", false, true, "clean", RemotePrCiStatus.Passed,
             Array.Empty<RemotePrCheck>(), approved, false,
-            Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow) with { Draft = false, MergeBlocked = false };
+            Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow) with { Draft = false, MergeBlocked = false, HeadSha = "head-1" };
 
     private static RemotePrSnapshot MergedByHand()
         => Snapshot(state: "closed", merged: true);
@@ -363,7 +363,7 @@ public class PrStatusPollServiceTests
     }
 
     private static void VerifyMergeCalls(Harness h, Times times)
-        => h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>()), times);
+        => h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), times);
 
     [Fact]
     public async Task AutoMerge_fallback_merges_on_the_first_green_tick_before_any_edge_and_on_merged_fires_next_tick()
@@ -373,12 +373,12 @@ public class PrStatusPollServiceTests
         // node before ILD has merged.
         var h = AutoMergeHarness(Green(approved: true), PrAutoMerge.IldPending,
             LoopOutputs.OnCiPassed, LoopOutputs.OnApproved, LoopOutputs.OnMerged);
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7")).ReturnsAsync(true);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(true);
         h.Remote.Setup(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
-        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "7"), Times.Once);
+        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>()), Times.Once);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
         Assert.Equal(PrAutoMerge.IldMerged, h.Run.PrAutoMerge);
         // The tick still records what it saw.
@@ -408,7 +408,7 @@ public class PrStatusPollServiceTests
         // Native: the provider merges, and ILD must not race it. Null: not an
         // AutoMerge pull request, or a run from before the fallback existed.
         var h = AutoMergeHarness(Green(), state, LoopOutputs.OnCiPassed);
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>())).ReturnsAsync(true);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
@@ -443,7 +443,7 @@ public class PrStatusPollServiceTests
             _ => throw new ArgumentOutOfRangeException(nameof(why)),
         };
         var h = AutoMergeHarness(notYet, PrAutoMerge.IldPending);
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7")).ReturnsAsync(true);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(true);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -454,7 +454,7 @@ public class PrStatusPollServiceTests
         h.Returns(green);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
-        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "7"), Times.Once);
+        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>()), Times.Once);
     }
 
     [Theory]
@@ -464,7 +464,7 @@ public class PrStatusPollServiceTests
     public async Task AutoMerge_fallback_reads_the_tag_live_and_makes_no_attempt_without_it(string why)
     {
         var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7")).ReturnsAsync(true);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(true);
         switch (why)
         {
             case "tag removed":
@@ -492,7 +492,7 @@ public class PrStatusPollServiceTests
         h.WorkItems.Setup(m => m.GetWorkItemAsync("wi-1"))
             .ReturnsAsync(new WorkItemView { Id = "wi-1", Title = "T", Tags = new[] { "AutoMerge" } });
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
-        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "7"), Times.Once);
+        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>()), Times.Once);
     }
 
     [Fact]
@@ -501,7 +501,7 @@ public class PrStatusPollServiceTests
         var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
         h.Runs.Setup(s => s.TrySetPrAutoMergeAsync(h.Run.Id, It.IsAny<PrAutoMerge?>(), It.IsAny<PrAutoMerge>(), It.IsAny<string?>()))
             .ReturnsAsync(false);
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>())).ReturnsAsync(true);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -515,7 +515,7 @@ public class PrStatusPollServiceTests
     {
         var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending,
             LoopOutputs.OnCiFailed, LoopOutputs.OnMerged);
-        var merge = h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7"));
+        var merge = h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>()));
         if (throws)
             merge.ThrowsAsync(new HttpRequestException("At least 1 approving review is required"));
         else
@@ -568,10 +568,57 @@ public class PrStatusPollServiceTests
     }
 
     [Fact]
+    public async Task AutoMerge_names_the_commit_whose_CI_it_checked()
+    {
+        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1")).ReturnsAsync(true);
+        h.Remote.Setup(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1"), Times.Once);
+        Assert.Equal(PrAutoMerge.IldMerged, h.Run.PrAutoMerge);
+    }
+
+    [Fact]
+    public async Task A_merge_refused_because_the_head_moved_goes_back_to_pending_and_asks_no_one()
+    {
+        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1"))
+            .ThrowsAsync(new RemoteHeadMovedException("head-1", "head-2"));
+
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(PrAutoMerge.IldPending, h.Run.PrAutoMerge);
+        Assert.Null(h.Run.PrAutoMergeError);
+        h.EventLog.Verify(e => e.AppendAsync(It.IsAny<Guid>(), EventType.PrMergeFailed, It.IsAny<string>(),
+            It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
+
+        // The next tick looks again, against the new head's CI.
+        h.Returns(Green() with { HeadSha = "head-2" });
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-2")).ReturnsAsync(true);
+        h.Remote.Setup(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(PrAutoMerge.IldMerged, h.Run.PrAutoMerge);
+    }
+
+    [Fact]
+    public async Task A_snapshot_without_a_head_commit_makes_no_merge_attempt()
+    {
+        var h = AutoMergeHarness(Green() with { HeadSha = null }, PrAutoMerge.IldPending);
+
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        VerifyMergeCalls(h, Times.Never());
+        Assert.Equal(PrAutoMerge.IldPending, h.Run.PrAutoMerge);
+    }
+
+    [Fact]
     public async Task A_failed_AutoMerge_tick_still_routes_the_edges_it_would_have_routed_even_when_the_log_is_down()
     {
         var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed);
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7")).ReturnsAsync(false);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(false);
         h.EventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(),
                 It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ThrowsAsync(new InvalidOperationException("event log unavailable"));
@@ -589,7 +636,7 @@ public class PrStatusPollServiceTests
     public async Task A_branch_that_will_not_delete_after_an_AutoMerge_is_reported_and_blocks_nothing(bool throws)
     {
         var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed, LoopOutputs.OnMerged);
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7")).ReturnsAsync(true);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(true);
         var delete = h.Remote.Setup(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>()));
         if (throws)
             delete.ThrowsAsync(new HttpRequestException("forge down"));
@@ -614,7 +661,7 @@ public class PrStatusPollServiceTests
     public async Task A_merge_that_throws_on_one_run_does_not_stop_the_next_run_merging()
     {
         var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7"))
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>()))
             .ThrowsAsync(new TaskCanceledException("forge timed out"));
 
         var otherNodeId = Guid.NewGuid();
@@ -635,7 +682,7 @@ public class PrStatusPollServiceTests
         });
         ClaimsAgainst(h.Runs, other);
         h.Remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/other", "9")).ReturnsAsync(Green());
-        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "9")).ReturnsAsync(true);
+        h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "9", It.IsAny<string?>())).ReturnsAsync(true);
         h.WorkItems.Setup(m => m.GetWorkItemAsync("wi-2"))
             .ReturnsAsync(new WorkItemView { Id = "wi-2", Title = "T2", Tags = new[] { "AutoMerge" } });
 
@@ -643,7 +690,7 @@ public class PrStatusPollServiceTests
 
         Assert.Equal(PrAutoMerge.IldFailed, h.Run.PrAutoMerge);
         Assert.Contains("forge timed out", h.Run.PrAutoMergeError);
-        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "9"), Times.Once);
+        h.Remote.Verify(r => r.MergePullRequestAsync(It.IsAny<string>(), "9", It.IsAny<string?>()), Times.Once);
         Assert.Equal(PrAutoMerge.IldMerged, other.PrAutoMerge);
     }
 }

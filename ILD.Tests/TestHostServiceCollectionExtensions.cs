@@ -128,7 +128,7 @@ internal static class TestHostServiceCollectionExtensions
         public Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body)
             => throw Unexpected(nameof(IRemoteProvider));
 
-        public Task<bool> MergePullRequestAsync(string repoUrl, string prNumber)
+        public Task<bool> MergePullRequestAsync(string repoUrl, string prNumber, string? expectedHeadSha = null)
             => throw Unexpected(nameof(IRemoteProvider));
 
         public Task<bool> EnablePullRequestAutoMergeAsync(string repoUrl, string prNumber)

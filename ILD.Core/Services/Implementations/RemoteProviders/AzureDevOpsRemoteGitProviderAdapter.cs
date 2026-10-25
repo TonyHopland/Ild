@@ -156,21 +156,30 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         return new RemotePrResult(PrApi(repo, prNumber), WebUrl(repo, prNumber), RemotePrStatus.Open, null);
     }
 
-    public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    protected override async Task<string?> ReadHeadShaAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        var pr = await GetObjectAsync(http, Versioned(PrApi(repo, prNumber)));
+        return ReadString(Child(pr, "lastMergeSourceCommit"), "commitId");
+    }
+
+    public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string? expectedHeadSha = null)
     {
         ApplyHeaders(http, repo.Provider);
 
         // Completing a PR echoes back the source commit the caller last saw, so
-        // Azure DevOps refuses a completion that would race a fresh push.
-        var pr = await GetObjectAsync(http, Versioned(PrApi(repo, prNumber)));
-        var lastCommit = ReadString(Child(pr, "lastMergeSourceCommit"), "commitId");
+        // Azure DevOps refuses a completion that would race a fresh push. A caller that
+        // checked a particular commit names it; otherwise the current one is read here.
+        var lastCommit = expectedHeadSha ?? await ReadHeadShaAsync(http, repo, prNumber);
         if (lastCommit is null)
             return false;
 
         using var resp = await http.PatchAsJsonAsync(
             Versioned(PrApi(repo, prNumber)),
             new { status = "completed", lastMergeSourceCommit = new { commitId = lastCommit } });
-        return resp.IsSuccessStatusCode;
+        if (resp.IsSuccessStatusCode)
+            return true;
+        await ThrowIfHeadMovedAsync(http, repo, prNumber, expectedHeadSha);
+        return false;
     }
 
     /// <summary>

@@ -136,7 +136,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             catch (Exception ex) { prepError = ex.Message; }
             // The stored result belongs to the previous commit; the pushed one has none yet.
             if (pushed && prExisted)
-                await ClearPrSnapshotAsync(ctx, sp, repoManager);
+                await RecordPrPushAsync(ctx, sp, repoManager);
             if (prepError is not null)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, prepError);
@@ -351,13 +351,21 @@ public sealed class PRNodeExecutor : INodeExecutor
     /// heartbeat stores nothing until the forge reports that commit as the pull request's
     /// head. The detail dialog is told; the board card shows no PR badges outside the PR node.
     /// </summary>
-    private static async Task ClearPrSnapshotAsync(NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager)
+    private static async Task RecordPrPushAsync(NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager)
     {
         if (sp.GetService<ILoopRunStore>() is not { } runs)
             return;
+        var log = sp.GetService<ILogger<PRNodeExecutor>>();
         string? head = null;
         try { head = await repoManager.GetHeadCommitAsync(ctx.Run.WorktreePath!); }
-        catch { }
+        catch (Exception ex)
+        {
+            log?.LogWarning(ex, "Could not read HEAD of {Worktree} after pushing run {RunId}", ctx.Run.WorktreePath, ctx.Run.Id);
+        }
+        if (head is null)
+            log?.LogWarning(
+                "No pushed commit recorded for run {RunId}: the heartbeat cannot tell the old head from the new one",
+                ctx.Run.Id);
         ctx.Run.PrSnapshot = null;
         await runs.RecordPrPushAsync(ctx.Run.Id, head);
         if (sp.GetService<IRunNotifier>() is { } runNotifier)

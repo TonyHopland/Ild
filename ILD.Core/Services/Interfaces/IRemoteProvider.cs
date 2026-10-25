@@ -4,10 +4,26 @@ using ILD.Data.Enums;
 using ILD.Data.Entities;
 namespace ILD.Core.Services.Interfaces;
 
+/// <summary>
+/// The forge refused a merge because the pull request's head is no longer the commit the
+/// caller asked to merge. Not a failed merge: nothing was merged and the caller may look
+/// again against the new head.
+/// </summary>
+public sealed class RemoteHeadMovedException(string expected, string? current)
+    : Exception($"the pull request head moved on from {expected}")
+{
+    public string Expected { get; } = expected;
+    public string? Current { get; } = current;
+}
+
 public interface IRemoteProvider
 {
     Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body);
-    Task<bool> MergePullRequestAsync(string repoUrl, string prNumber);
+    /// <summary>
+    /// Merge the pull request. With <paramref name="expectedHeadSha"/> the forge must refuse if the head
+    /// is a different commit, reported as <see cref="RemoteHeadMovedException"/> rather than false.
+    /// </summary>
+    Task<bool> MergePullRequestAsync(string repoUrl, string prNumber, string? expectedHeadSha = null);
 
     /// <summary>
     /// Turn on auto-merge for a pull request when the repository supports it.

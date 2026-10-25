@@ -221,6 +221,11 @@ public sealed class PrStatusPollService : IPrStatusPollService
         if (run.PrAutoMerge != PrAutoMerge.IldPending || !MayMerge(snapshot) || _workItems is null)
             return false;
 
+        // The merge names the commit whose CI this snapshot read, so a forge that did not say which
+        // commit that was leaves nothing to name: wait for a snapshot that does.
+        if (snapshot.HeadSha is not { Length: > 0 } checkedHead)
+            return false;
+
         WorkItemView? workItem;
         try
         {
@@ -242,8 +247,18 @@ public sealed class PrStatusPollService : IPrStatusPollService
         string? failure = null;
         try
         {
-            if (!await _remote.MergePullRequestAsync(repoUrl, prNumber))
+            if (!await _remote.MergePullRequestAsync(repoUrl, prNumber, checkedHead))
                 failure = "the provider refused or could not complete the merge";
+        }
+        catch (RemoteHeadMovedException moved)
+        {
+            // Nothing was merged and the commit that was checked is no longer the head: not a failed
+            // attempt. Hand it back so a later tick checks the new head's CI.
+            _log.LogInformation(
+                "AutoMerge: head of {PrUrl} moved from {Expected} to {Current} before the merge; waiting for CI on the new head",
+                run.PrUrl, moved.Expected, moved.Current ?? "an unknown commit");
+            await TrySetAutoMergeAsync(run.Id, PrAutoMerge.IldPending, null);
+            return false;
         }
         catch (Exception ex)
         {

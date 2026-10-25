@@ -1481,7 +1481,7 @@ public class WorkItemManagerTests
     public async Task MergePullRequest_merges_deletes_branch_and_advances_OnSuccess()
     {
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42")).ReturnsAsync(true);
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42", It.IsAny<string?>())).ReturnsAsync(true);
         remote.Setup(r => r.DeleteBranchAsync(MergeRepoCloneUrl, "ild/wi-x-run-1")).ReturnsAsync(true);
         var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
         using var _ = db;
@@ -1495,7 +1495,7 @@ public class WorkItemManagerTests
         Assert.True(result!.Merged);
         Assert.True(result.BranchDeleted);
         Assert.Null(result.BranchWarning);
-        remote.Verify(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42"), Times.Once);
+        remote.Verify(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42", It.IsAny<string?>()), Times.Once);
         remote.Verify(r => r.DeleteBranchAsync(MergeRepoCloneUrl, "ild/wi-x-run-1"), Times.Once);
         // OnSuccess continuation is identical to Approve: deliver Success to the parked node.
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId,
@@ -1506,7 +1506,7 @@ public class WorkItemManagerTests
     public async Task MergePullRequest_does_not_delete_branch_when_not_requested()
     {
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "7")).ReturnsAsync(true);
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "7", It.IsAny<string?>())).ReturnsAsync(true);
         var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
         using var _ = db;
 
@@ -1528,7 +1528,7 @@ public class WorkItemManagerTests
         // The PR belongs to the run, and the run keeps the repository it was
         // created on: re-pointing the item only affects its next run.
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "42")).ReturnsAsync(true);
+        remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "42", It.IsAny<string?>())).ReturnsAsync(true);
         var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
         using var _ = db;
         var otherRepo = new Repository
@@ -1549,15 +1549,15 @@ public class WorkItemManagerTests
         var result = await mgr.MergePullRequestAsync(id, deleteBranch: false);
 
         Assert.True(result!.Merged);
-        remote.Verify(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42"), Times.Once);
-        remote.Verify(r => r.MergePullRequestAsync(otherRepo.CloneUrl, It.IsAny<string>()), Times.Never);
+        remote.Verify(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42", It.IsAny<string?>()), Times.Once);
+        remote.Verify(r => r.MergePullRequestAsync(otherRepo.CloneUrl, It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Fact]
     public async Task MergePullRequest_failed_merge_leaves_item_parked_and_does_not_advance()
     {
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "9")).ReturnsAsync(false);
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "9", It.IsAny<string?>())).ReturnsAsync(false);
         var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
         using var _ = db;
 
@@ -1579,7 +1579,7 @@ public class WorkItemManagerTests
     public async Task MergePullRequest_branch_delete_failure_is_reported_but_does_not_block_continuation()
     {
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "11")).ReturnsAsync(true);
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "11", It.IsAny<string?>())).ReturnsAsync(true);
         remote.Setup(r => r.DeleteBranchAsync(MergeRepoCloneUrl, "ild/wi-x-run-4")).ReturnsAsync(false);
         var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
         using var _ = db;
@@ -1601,7 +1601,7 @@ public class WorkItemManagerTests
     public async Task MergePullRequest_with_a_run_that_is_not_waiting_still_reports_the_merge()
     {
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "13")).ReturnsAsync(true);
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "13", It.IsAny<string?>())).ReturnsAsync(true);
         var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
         using var _ = db;
 
