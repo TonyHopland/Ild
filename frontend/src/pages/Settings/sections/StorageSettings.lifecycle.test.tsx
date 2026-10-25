@@ -5,6 +5,7 @@ import { storageService } from "../../../services/auth";
 import type { StorageOverview } from "../../../types";
 
 const overview: StorageOverview = {
+  databases: [],
   categories: [
     { key: "worktrees", label: "Worktrees", bytes: 4096, incomplete: false, entries: [] },
   ],

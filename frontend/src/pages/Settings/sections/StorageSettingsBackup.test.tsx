@@ -78,8 +78,9 @@ async function renderLoaded() {
 }
 
 beforeEach(() => {
+  createObjectURL.mockClear();
   Object.defineProperty(URL, "createObjectURL", {
-    value: vi.fn(() => "blob:backup"),
+    value: createObjectURL,
     configurable: true,
     writable: true,
   });

@@ -6,6 +6,7 @@ import * as services from "../../../services/auth";
 const REPO = "55555555-5555-5555-5555-555555555555";
 
 const overview = {
+  databases: [],
   categories: [
     {
       key: "preview-data",
@@ -73,7 +74,7 @@ describe("StorageSettings preview data focus and outcome", () => {
     );
     expect(getOverview).toHaveBeenCalledTimes(2);
 
-    remeasure.resolve({ categories: [] } as never);
+    remeasure.resolve({ categories: [], databases: [] } as never);
     await waitFor(() => expect(screen.queryByText("delta-app")).toBeNull());
   });
 

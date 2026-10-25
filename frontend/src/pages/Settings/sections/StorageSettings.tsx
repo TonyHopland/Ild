@@ -3,6 +3,7 @@ import { storageService } from "../../../services/auth";
 import type { ApiError, StorageOverview } from "../../../types";
 import { formatBytes } from "../../../utils/attachments";
 import PreviewDataDelete from "../../../components/PreviewDataDelete";
+import BackupRestoreSettings from "./BackupRestoreSettings";
 
 type Overview = { data: StorageOverview | null; loading: boolean; error: string | null };
 
@@ -167,7 +168,25 @@ export default function StorageSettings() {
             ))}
           </ul>
         )}
+        {overview.data && overview.data.databases.some((database) => database.bytes !== null) && (
+          <ul className="storage-categories storage-databases" aria-label="Databases">
+            {overview.data.databases.map(
+              (database) =>
+                database.bytes !== null && (
+                  <li key={database.key} className="storage-category">
+                    <Line label={database.label} bytes={database.bytes} incomplete={false} />
+                  </li>
+                ),
+            )}
+          </ul>
+        )}
       </section>
+
+      <BackupRestoreSettings
+        onChanged={() => {
+          if (mounted.current) void measure();
+        }}
+      />
     </>
   );
 }
