@@ -4,6 +4,8 @@ import {
   parseImportFile,
   exportNodesToLoopNodes,
   exportEdgesToLoopNodeEdges,
+  usedGlobalVariableNames,
+  pickGlobalVariables,
 } from "../loopTemplateExport";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 import type { LoopTemplate } from "../../types";
@@ -367,6 +369,107 @@ describe("loopTemplateExport", () => {
           },
         ]);
       }
+    });
+  });
+});
+
+describe("global variables in loop documents", () => {
+  const gv = (name: string, value: string) => ({
+    id: `id-${name}`,
+    name,
+    value,
+    updatedAt: "2026-10-01T10:00:00Z",
+    usedBy: [],
+  });
+
+  describe("usedGlobalVariableNames", () => {
+    test("finds placeholders anywhere in a config, distinct ignoring case, in order of first appearance", () => {
+      const names = usedGlobalVariableNames([
+        { config: { prompt: "a {{Global.beta}} b {{ global.Alpha }}" } },
+        { config: { nested: { list: ["{{GLOBAL.BETA}}", "{{Global.gamma_2}}"] } } },
+      ]);
+      expect(names).toEqual(["beta", "Alpha", "gamma_2"]);
+    });
+
+    test("ignores non-global placeholders and names that break the name rule", () => {
+      const names = usedGlobalVariableNames([
+        {
+          config: {
+            prompt:
+              "{{Session.x}} {{Global.}} {{Global.1abc}} {{Global.a-b}} {{Globalx}} {{Global.ok}}",
+          },
+        },
+      ]);
+      expect(names).toEqual(["ok"]);
+    });
+
+    test("finds nothing in loops without placeholders", () => {
+      expect(usedGlobalVariableNames([{ config: {} }, { config: { cmd: "echo hi" } }])).toEqual([]);
+    });
+  });
+
+  describe("pickGlobalVariables", () => {
+    test("returns the stored name and value in used order, matching ignoring case and omitting missing ones", () => {
+      const picked = pickGlobalVariables(
+        ["zed", "missing", "ALPHA"],
+        [gv("Alpha", "one"), gv("Zed", "two"), gv("Unused", "three")],
+      );
+      expect(picked).toEqual([
+        { name: "Zed", value: "two" },
+        { name: "Alpha", value: "one" },
+      ]);
+    });
+  });
+
+  describe("parseImportFile globalVariables", () => {
+    const base = {
+      $schema: "ild-loop-template/v2",
+      name: "L",
+      description: "",
+      recoveryPolicy: RecoveryPolicy.AutoResume,
+      nodes: [{ id: "s", type: NodeType.Start, label: "Start", config: {} }],
+      edges: [],
+    };
+    const parse = (extra: Record<string, unknown>) =>
+      parseImportFile(JSON.stringify({ ...base, ...extra }));
+
+    test("a file without the key has no globalVariables in the result", () => {
+      const r = parse({});
+      expect(r.ok).toBe(true);
+      if (r.ok) expect("globalVariables" in r.data).toBe(false);
+    });
+
+    test("accepts a valid list, including an empty value", () => {
+      const list = [
+        { name: "a", value: "x" },
+        { name: "B_2", value: "" },
+        { name: "L" + "x".repeat(127), value: "v" },
+      ];
+      const r = parse({ globalVariables: list });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.data.globalVariables).toEqual(list);
+    });
+
+    test.each([
+      ["not an array", { a: "b" }],
+      ["an entry that is not an object", ["a"]],
+      ["a non-string value", [{ name: "a", value: 1 }]],
+      ["a missing value", [{ name: "a" }]],
+      ["an empty name", [{ name: "", value: "x" }]],
+      ["a name starting with a digit", [{ name: "1a", value: "x" }]],
+      ["a name with a dash", [{ name: "a-b", value: "x" }]],
+      ["a name longer than 128 characters", [{ name: "a".repeat(129), value: "x" }]],
+      [
+        "names equal ignoring case",
+        [
+          { name: "Abc", value: "1" },
+          { name: "aBC", value: "2" },
+        ],
+      ],
+    ])("rejects %s", (_label, globalVariables) => {
+      const r = parse({ globalVariables });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/^Invalid format — 'globalVariables'/);
     });
   });
 });

@@ -1,4 +1,6 @@
 import type {
+  ExportedGlobalVariable,
+  GlobalVariable,
   LoopTemplate,
   LoopTemplateExport,
   LoopTemplateExportNode,
@@ -7,8 +9,45 @@ import type {
   LoopNodeEdge,
 } from "../types";
 import { RecoveryPolicy } from "../types";
+import { placeholderKeys, VARIABLE_NAME } from "./promptPlaceholder";
 
 const EXPORT_SCHEMA = "ild-loop-template/v2" as const;
+
+/** Mirrors `PromptPlaceholderRegistry.GlobalPrefix`. */
+const GLOBAL_PREFIX = "global.";
+
+/**
+ * The global variables the nodes interpolate, distinct ignoring case, in order
+ * of first appearance. Mirrors `PromptPlaceholderRegistry.GlobalVariableNames`
+ * over the stored config JSON, which is what the server's usage scan reads.
+ */
+export function usedGlobalVariableNames(nodes: { config: unknown }[]): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const node of nodes) {
+    for (const key of placeholderKeys(JSON.stringify(node.config))) {
+      if (!key.toLowerCase().startsWith(GLOBAL_PREFIX)) continue;
+      const name = key.slice(GLOBAL_PREFIX.length);
+      if (VARIABLE_NAME.test(name) && !seen.has(name.toLowerCase())) {
+        seen.add(name.toLowerCase());
+        names.push(name);
+      }
+    }
+  }
+  return names;
+}
+
+/** The stored name and value of each used variable that exists, in the order used. */
+export function pickGlobalVariables(
+  used: string[],
+  all: GlobalVariable[],
+): ExportedGlobalVariable[] {
+  const byName = new Map(all.map((g) => [g.name.toLowerCase(), g]));
+  return used.flatMap((name) => {
+    const found = byName.get(name.toLowerCase());
+    return found ? [{ name: found.name, value: found.value }] : [];
+  });
+}
 
 /**
  * Serialize a LoopTemplate (from the editor's current graph + template metadata)
@@ -118,6 +157,14 @@ export function parseImportFile(raw: string): ParseImportResult {
     }
   }
 
+  if (obj.globalVariables !== undefined && !validateExportGlobalVariables(obj.globalVariables)) {
+    return {
+      ok: false,
+      error:
+        "Invalid format — 'globalVariables' must be a list of { name, value } with unique valid names and string values.",
+    };
+  }
+
   return {
     ok: true,
     data: {
@@ -127,6 +174,9 @@ export function parseImportFile(raw: string): ParseImportResult {
       recoveryPolicy: obj.recoveryPolicy as RecoveryPolicy,
       nodes: obj.nodes as LoopTemplateExportNode[],
       edges: obj.edges as LoopTemplateExportEdge[],
+      ...(obj.globalVariables !== undefined && {
+        globalVariables: obj.globalVariables as ExportedGlobalVariable[],
+      }),
     },
   };
 }
@@ -189,4 +239,19 @@ function validateExportEdge(edge: unknown): boolean {
     typeof obj.targetNodeId === "string" &&
     typeof obj.edgeType === "string"
   );
+}
+
+function validateExportGlobalVariables(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") return false;
+    const { name, value: text } = entry as Record<string, unknown>;
+    if (typeof name !== "string" || !VARIABLE_NAME.test(name) || typeof text !== "string") {
+      return false;
+    }
+    if (seen.has(name.toLowerCase())) return false;
+    seen.add(name.toLowerCase());
+  }
+  return true;
 }
