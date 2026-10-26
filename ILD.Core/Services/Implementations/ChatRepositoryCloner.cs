@@ -102,7 +102,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
             return Refused(ChatRepositoryCloneOutcome.InvalidBranch, "Branch name cannot be 'HEAD'.");
 
         var provider = await _providers.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
-        var auth = provider is null ? null : new GitAuthOptions(repo.CloneUrl, provider.ApiKey, provider.Type);
+        var auth = new GitAuthOptions(repo.CloneUrl, provider?.ApiKey, provider?.Type);
 
         // The git work does not run on the request's token: a client that times out
         // or goes away would otherwise kill a clone half-way, and the agent's retry

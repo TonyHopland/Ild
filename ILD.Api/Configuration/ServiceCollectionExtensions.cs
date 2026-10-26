@@ -33,11 +33,13 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetService<ILogger<RepositoryManager>>();
             var config = sp.GetRequiredService<IConfiguration>();
             var worktreesRoot = config["App:WorktreesPath"];
+            var dataPath = config["App:DataPath"];
 
             return new RepositoryManager(
                 runner,
                 logger,
-                string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot);
+                string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot,
+                mirrorsRoot: Path.GetFullPath(Path.Combine(string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath, "git-mirrors")));
         });
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();

@@ -93,9 +93,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         yield return new NodeOutcome.NodeStarting(renderedPrompt);
 
         var remoteProvider = await providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
-        var gitAuth = remoteProvider is null
-            ? null
-            : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
+        var gitAuth = new GitAuthOptions(repo.CloneUrl, remoteProvider?.ApiKey, remoteProvider?.Type);
         var branch = ctx.Run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, ctx.Run.Id);
         // The PR targets the branch the run was built from, not the repository
         // default: an item that continues or hotfixes a branch is asking for its

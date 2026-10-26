@@ -62,7 +62,7 @@ public class ConnectionTesterTests : IDisposable
         public static ScriptedRunner Exit(int code, string stderr = "")
             => new(_ => Task.FromResult(new ProcessResult(code, string.Empty, stderr)));
 
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
         {
             Calls.Add((args, workingDirectory, new Dictionary<string, string?>(environmentVariables ?? new Dictionary<string, string?>()), ct));
             return _respond(ct);

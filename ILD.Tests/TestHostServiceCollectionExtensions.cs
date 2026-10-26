@@ -75,7 +75,8 @@ internal static class TestHostServiceCollectionExtensions
             IReadOnlyList<string> args,
             string? workingDirectory = null,
             CancellationToken ct = default,
-            IReadOnlyDictionary<string, string?>? environmentVariables = null)
+            IReadOnlyDictionary<string, string?>? environmentVariables = null,
+            ProcessRunOptions? options = null)
             => throw Unexpected(nameof(IProcessRunner));
     }
 
