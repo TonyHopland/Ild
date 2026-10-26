@@ -157,6 +157,18 @@ public class LoopRunVariableStoreTests
     }
 
     [Fact]
+    public async Task Each_write_reports_whether_it_created_the_variable_changed_it_or_left_it_as_it_was()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+
+        Assert.Equal(VariableWriteEffect.Created, await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "build"));
+        Assert.Equal(VariableWriteEffect.Changed, await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "review"));
+        Assert.Equal(VariableWriteEffect.Unchanged, await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "review"));
+        Assert.Equal(VariableWriteEffect.Changed, await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "Review"));
+    }
+
+    [Fact]
     public async Task A_variable_set_before_history_was_kept_is_recorded_as_changed_not_created()
     {
         using var db = new TestDb();

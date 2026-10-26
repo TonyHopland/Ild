@@ -151,9 +151,11 @@ public interface ILoopRunStore
     /// Create or overwrite a single loop variable by (runId, name), touching only
     /// that row so concurrent writes to other variables / control-plane columns
     /// are never clobbered. Also appends the write to the run's variable history,
-    /// attributed to whichever node execution is running at the time.
+    /// attributed to whichever node execution is running at the time. Reports
+    /// whether the write created the variable, changed it, or stored the value it
+    /// already had.
     /// </summary>
-    Task SetVariableAsync(Guid runId, string name, string value);
+    Task<VariableWriteEffect> SetVariableAsync(Guid runId, string name, string value);
 
     /// <summary>
     /// The node execution of the run that is running now, the most recently

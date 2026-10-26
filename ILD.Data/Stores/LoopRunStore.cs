@@ -264,7 +264,7 @@ public class LoopRunStore : ILoopRunStore
             .Select(rn => (Guid?)rn.LoopNodeId)
             .FirstOrDefaultAsync();
 
-    public async Task SetVariableAsync(Guid runId, string name, string value)
+    public async Task<VariableWriteEffect> SetVariableAsync(Guid runId, string name, string value)
     {
         value = AppDbContext.WithoutNul(value);
         var runningNodeId = await GetRunningNodeIdAsync(runId);
@@ -330,7 +330,9 @@ public class LoopRunStore : ILoopRunStore
             });
             await _db.SaveChangesAsync();
             await tx.CommitAsync();
-            return;
+            return previousValue is null ? VariableWriteEffect.Created
+                : previousValue == value ? VariableWriteEffect.Unchanged
+                : VariableWriteEffect.Changed;
         }
 
         throw new InvalidOperationException(

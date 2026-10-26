@@ -217,6 +217,7 @@ public class LoopEngineSetVariableTests
         Assert.Equal(LoopRunNodeStatus.Failed, set.Status);
         Assert.Contains("10000", set.Error);
         Assert.Contains(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["fallback"].Id);
+        Assert.DoesNotContain(h.ReloadEvents(), e => e.EventType == EventType.VariableSet);
         Assert.Equal(new[] { "seed" }, (await store.GetVariablesAsync(h.RunId)).Select(v => v.Name));
     }
 
@@ -270,5 +271,27 @@ public class LoopEngineSetVariableTests
 
         Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
         Assert.Equal("be brief", Assert.Single(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["next"].Id).Output);
+    }
+
+    [Fact]
+    public async Task Each_write_logs_which_variable_it_set_and_whether_it_was_new_or_changed_but_never_the_value()
+    {
+        using var h = Harness();
+        Graph(h, Assignments(("phase", "review"), ("ticket", "T-7"), ("handoff", "{{Node.Input}}")),
+            NodeType.Prompt, """{"prompt":"after"}""");
+        var store = h.Services.GetRequiredService<ILoopRunStore>();
+        await store.SetVariableAsync(h.RunId, "phase", "review");
+        await store.SetVariableAsync(h.RunId, "handoff", "old");
+
+        await h.RunAsync();
+
+        var set = Assert.Single(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["set"].Id);
+        var logged = h.ReloadEvents().Where(e => e.EventType == EventType.VariableSet).ToList();
+        Assert.Equal(new[] { "phase (unchanged)", "ticket (new)", "handoff (changed)" }, logged.Select(e => e.Data));
+        Assert.All(logged, e =>
+        {
+            Assert.Equal(set.Id, e.RunNodeId);
+            Assert.Equal(h.NodesById["set"].Id, e.NodeId);
+        });
     }
 }
