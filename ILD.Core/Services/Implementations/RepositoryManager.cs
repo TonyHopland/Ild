@@ -407,15 +407,22 @@ public class RepositoryManager : IRepositoryManager
         var (code, stdout, _) = await RunAsync(worktreePath, ["rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}^{{commit}}"], ct);
         var remoteSha = code == 0 && IsCommitSha(stdout.Trim()) ? stdout.Trim() : new string('0', sha.Length);
 
-        // The line goes in through the child's stdin, so no file is created anywhere the agent can reach.
-        using var line = new MemoryStream(Encoding.UTF8.GetBytes($"{reference} {sha} {reference} {remoteSha}\n"));
-        var (exitCode, hookOut, hookErr) = await RunAsync(
-            worktreePath,
-            ["hook", "run", "--ignore-missing", "--to-stdin=/dev/stdin", "pre-push", "--", "origin", WithoutUserInfo(auth.RemoteUrl)],
-            ct, stdinFrom: line);
-        if (exitCode == 0) return null;
+        if (TrustedRepositoryRoot(worktreePath) is null)
+            return $"{worktreePath} is not a git clone or worktree created by ILD";
 
-        var output = (string.IsNullOrWhiteSpace(hookErr) ? hookOut : hookErr).Trim();
+        // The line goes in through stdin, so no file exists anywhere. git reopens its stdin by path
+        // (/dev/stdin), and the pipe ILD makes belongs to ILD's uid, which the agent cannot open; so the
+        // agent's own shell makes the pipe git reads, from a cat that already holds ILD's end open.
+        var script = """
+            cat | exec git -C "$1" hook run --ignore-missing --to-stdin=/dev/stdin pre-push -- origin "$2"
+            """;
+        using var line = new MemoryStream(Encoding.UTF8.GetBytes($"{reference} {sha} {reference} {remoteSha}\n"));
+        var result = await _runner.RunAsync(
+            "/bin/sh", ["-c", script, "sh", Path.GetFullPath(worktreePath), WithoutUserInfo(auth.RemoteUrl)],
+            "/", ct, null, _agentOptions with { StandardInputFrom = line });
+        if (result.Success) return null;
+
+        var output = (string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr).Trim();
         return $"pre-push hook failed: {(output.Length > HookOutputTail ? output[^HookOutputTail..] : output)}";
     }
 
@@ -1067,7 +1074,7 @@ public class RepositoryManager : IRepositoryManager
     /// whose <c>.git</c> pointer is not one <see cref="TrustedRepositoryRoot"/> accepts.
     /// </summary>
     private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(
-        string cwd, IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null, Stream? stdinFrom = null)
+        string cwd, IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null)
     {
         if (TrustedRepositoryRoot(cwd) is null)
         {
@@ -1075,15 +1082,15 @@ public class RepositoryManager : IRepositoryManager
             return (RefusedExitCode, string.Empty, $"{cwd} is not a git clone or worktree created by ILD");
         }
 
-        return await AgentGitAsync(["-C", Path.GetFullPath(cwd), .. args], ct, stdoutTo, stdinFrom);
+        return await AgentGitAsync(["-C", Path.GetFullPath(cwd), .. args], ct, stdoutTo);
     }
 
     private async Task<(int ExitCode, string StdOut, string StdErr)> AgentGitAsync(
-        IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null, Stream? stdinFrom = null)
+        IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null)
     {
         // From "/" and addressing the directory with -C: the orchestrator never enters
         // one the agent owns.
-        var options = _agentOptions with { StandardOutputTo = stdoutTo, StandardInputFrom = stdinFrom };
+        var options = stdoutTo is null ? _agentOptions : _agentOptions with { StandardOutputTo = stdoutTo };
         var r = await _runner.RunAsync("git", args, "/", ct, null, options);
         if (!r.Success)
             _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), r.ExitCode, r.StdErr);
