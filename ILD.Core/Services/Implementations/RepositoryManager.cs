@@ -689,7 +689,13 @@ public class RepositoryManager : IRepositoryManager
             throw new ArgumentException("A diff range is made of full commit SHAs.", nameof(range));
     }
 
-    private static bool IsCommitSha(string value)
+    /// <summary>The clone URL with any credentials in it removed.</summary>
+    internal static string WithoutUserInfo(string cloneUrl)
+        => Uri.TryCreate(cloneUrl, UriKind.Absolute, out var uri) && uri.UserInfo.Length > 0
+            ? new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.AbsoluteUri
+            : cloneUrl;
+
+    internal static bool IsCommitSha(string value)
         => value.Length is 40 or 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static IEnumerable<string> EnumerateBaseRefCandidates(string? defaultBranch)

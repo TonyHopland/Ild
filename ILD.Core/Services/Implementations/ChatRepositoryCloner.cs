@@ -203,7 +203,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         // was cut short after its marker was written: the call completes it.
         var previous = await Git("rev-parse", "--verify", "-q", "HEAD^{commit}");
         var fresh = previous.ExitCode != 0;
-        await CheckedAsync(Git("config", "--local", "remote.origin.url", WithoutUserInfo(job.Repo.CloneUrl)), relativePath);
+        await CheckedAsync(Git("config", "--local", "remote.origin.url", RepositoryManager.WithoutUserInfo(job.Repo.CloneUrl)), relativePath);
         await CheckedAsync(Git("config", "--local", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"), relativePath);
 
         var fetch = await Git("fetch", "-q", "--no-tags", basePath, $"+{remoteRef}:{remoteRef}");
@@ -327,11 +327,6 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
             trimmed = trimmed[..MaxFolderNameLength].TrimEnd('.', '-');
         return trimmed.Length == 0 ? "repository" : trimmed;
     }
-
-    private static string WithoutUserInfo(string cloneUrl)
-        => Uri.TryCreate(cloneUrl, UriKind.Absolute, out var uri) && uri.UserInfo.Length > 0
-            ? new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.AbsoluteUri
-            : cloneUrl;
 
     private static ChatRepositoryCloneResult Refused(ChatRepositoryCloneOutcome outcome, string message) => new(outcome, message);
 

@@ -57,14 +57,9 @@ internal sealed class GitMirror
     /// <summary>Where the mirror of <paramref name="cloneUrl"/> lives, keyed by the URL without credentials.</summary>
     public string PathFor(string cloneUrl)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(WithoutUserInfo(cloneUrl)));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(RepositoryManager.WithoutUserInfo(cloneUrl)));
         return Path.Combine(_root, Convert.ToHexStringLower(hash));
     }
-
-    private static string WithoutUserInfo(string cloneUrl)
-        => Uri.TryCreate(cloneUrl, UriKind.Absolute, out var uri) && uri.UserInfo.Length > 0
-            ? new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.AbsoluteUri
-            : cloneUrl;
 
     /// <summary>
     /// The mirror of <paramref name="cloneUrl"/>, made if it is not there yet, held
@@ -247,15 +242,15 @@ internal sealed class GitMirror
             }
 
             var push = await GitAsync(["push", "--quiet", "--", auth.RemoteUrl, $"{sha}:refs/heads/{branch}"], auth, ct);
-            if (!push.Success)
-                return (false, push.StdErr);
-
-            var track = await GitAsync(["update-ref", $"refs/heads/{branch}", sha], null, ct);
-            if (!track.Success)
-                _owner._logger?.LogWarning("The mirror could not record {Branch} at {Sha}: {Error}", branch, sha, track.StdErr.Trim());
+            if (push.Success)
+            {
+                var track = await GitAsync(["update-ref", $"refs/heads/{branch}", sha], null, ct);
+                if (!track.Success)
+                    _owner._logger?.LogWarning("The mirror could not record {Branch} at {Sha}: {Error}", branch, sha, track.StdErr.Trim());
+            }
             if (imported)
                 await GitAsync(["update-ref", "-d", StagingRef], null, ct);
-            return (true, null);
+            return push.Success ? (true, null) : (false, push.StdErr);
         }
 
         private async Task<bool> HasCommitAsync(string sha, CancellationToken ct)
@@ -337,22 +332,19 @@ internal sealed class GitMirror
                 if (line[0] == '-')
                 {
                     var id = line[1..].Split(' ', 2)[0];
-                    if (!IsObjectId(id))
+                    if (!RepositoryManager.IsCommitSha(id))
                         return (null, prerequisites);
                     prerequisites.Add(id);
                     continue;
                 }
 
                 var space = line.IndexOf(' ');
-                if (space > 0 && line[(space + 1)..] == reference && IsObjectId(line[..space]))
+                if (space > 0 && line[(space + 1)..] == reference && RepositoryManager.IsCommitSha(line[..space]))
                     tip = line[..space];
             }
 
             return (null, prerequisites);
         }
-
-        private static bool IsObjectId(string value)
-            => value.Length is 40 or 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
         private static async Task<string?> ReadLineAsync(Stream stream, CancellationToken ct)
         {

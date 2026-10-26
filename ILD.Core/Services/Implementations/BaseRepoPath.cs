@@ -22,10 +22,15 @@ internal static class BaseRepoPath
         => Path.Combine(StoreRoot(config), repositoryId.ToString("N"));
 
     /// <summary>The directory every fallback clone lives under, one per repository id.</summary>
-    public static string StoreRoot(IConfiguration? config)
+    public static string StoreRoot(IConfiguration? config) => DataFolder(config, "repos");
+
+    /// <summary>The directory the orchestrator's per-remote git mirrors live under (ADR-0014).</summary>
+    public static string MirrorRoot(IConfiguration? config) => DataFolder(config, "git-mirrors");
+
+    private static string DataFolder(IConfiguration? config, string name)
     {
         var dataPath = config?["App:DataPath"];
-        return Path.GetFullPath(Path.Combine(string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath, "repos"));
+        return Path.GetFullPath(Path.Combine(string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath, name));
     }
 
     /// <summary>
