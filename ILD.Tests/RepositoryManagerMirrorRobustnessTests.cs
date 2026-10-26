@@ -165,8 +165,9 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
             Assert.Equal(0, mkfifo.ExitCode);
         }
 
-        Assert.False(await mgr.CommitAsync(wt, "refused").WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
-        Assert.False(await mgr.ValidateWorktreeHealthAsync(wt).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        // Off the test's thread: a pointer read that blocks must fail the test, not hang it.
+        Assert.False(await Task.Run(() => mgr.CommitAsync(wt, "refused")).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
+        Assert.False(await Task.Run(() => mgr.ValidateWorktreeHealthAsync(wt)).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -181,7 +182,8 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Directory.Delete(probe);
 
         var mgr = NewManager(isolated: false);
-        await ClonedWithWorktreeAsync(mgr, "ild/wi-34-run-1");
+        var (_, _, auth, wt) = await ClonedWithWorktreeAsync(mgr, "ild/wi-34-run-1");
+        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken, auth));
 
         var mirror = Assert.Single(Directory.GetDirectories(_mirrors));
         Assert.True(File.GetUnixFileMode(mirror).HasFlag(UnixFileMode.SetGroup));
