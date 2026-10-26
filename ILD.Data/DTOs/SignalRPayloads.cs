@@ -33,6 +33,8 @@ public record WorkItemEditProposalsChangedPayload(string WorkItemId);
 
 public record GlobalVariableProposalsChangedPayload(string Name);
 
+public record HumanInputProposalsChangedPayload(string WorkItemId);
+
 public record LoopTemplateProposalsChangedPayload(Guid TemplateId);
 
 public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line, long Seq);

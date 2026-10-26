@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IGlobalVariableStore, Stores.GlobalVariableStore>();
         services.AddScoped<IGlobalVariableProposalStore, Stores.GlobalVariableProposalStore>();
         services.AddScoped<ILoopTemplateProposalStore, Stores.LoopTemplateProposalStore>();
+        services.AddScoped<IHumanInputProposalStore, Stores.HumanInputProposalStore>();
         return services;
     }
 }

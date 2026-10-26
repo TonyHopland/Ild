@@ -703,6 +703,84 @@ namespace ILD.Data.Migrations
                     b.ToTable("GlobalVariableProposals");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.HumanInputProposal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByLoopRunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DecidedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTime?>("DecisionDeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Output")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("Rationale")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RunNodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(8192)
+                        .HasColumnType("character varying(8192)");
+
+                    b.Property<string>("WorkItemId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByChatSessionId");
+
+                    b.HasIndex("CreatedByLoopRunId");
+
+                    b.HasIndex("RunNodeId");
+
+                    b.HasIndex("WorkItemId");
+
+                    b.HasIndex(new[] { "CreatedByChatSessionId", "WorkItemId" }, "IX_HumanInputProposals_ChatSession_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.HasIndex(new[] { "CreatedByLoopRunId", "WorkItemId" }, "IX_HumanInputProposals_LoopRun_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.ToTable("HumanInputProposals");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.LoopNode", b =>
                 {
                     b.Property<Guid>("Id")

@@ -126,9 +126,17 @@ internal sealed class AgentProposals<TProposal, TStatus>
 
     /// <summary>Reject a pending proposal, keeping the human's reason when they gave one. Returns the rows written.</summary>
     public Task<int> RejectAsync(Guid id, string? reason, CancellationToken ct)
+        => RejectAsync(id, reason, _ => { }, ct);
+
+    /// <summary>
+    /// <see cref="RejectAsync(Guid, string?, CancellationToken)"/>, and
+    /// <paramref name="alsoSet"/> writes what else that kind of decision records.
+    /// </summary>
+    public Task<int> RejectAsync(
+        Guid id, string? reason, Action<UpdateSettersBuilder<TProposal>> alsoSet, CancellationToken ct)
     {
         var trimmed = reason is null ? null : AppDbContext.WithoutNul(reason).Trim();
-        return DecideAsync(id, Statuses.Rejected, trimmed is "" ? null : trimmed, DateTime.UtcNow, ct);
+        return DecideAsync(id, Statuses.Rejected, trimmed is "" ? null : trimmed, DateTime.UtcNow, alsoSet, ct);
     }
 
     /// <summary>

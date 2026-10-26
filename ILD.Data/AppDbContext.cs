@@ -48,6 +48,7 @@ public class AppDbContext : DbContext
     public DbSet<RepositoryPackageFeed> RepositoryPackageFeeds => Set<RepositoryPackageFeed>();
     public DbSet<GlobalVariable> GlobalVariables => Set<GlobalVariable>();
     public DbSet<GlobalVariableProposal> GlobalVariableProposals => Set<GlobalVariableProposal>();
+    public DbSet<HumanInputProposal> HumanInputProposals => Set<HumanInputProposal>();
     public DbSet<LoopTemplateProposal> LoopTemplateProposals => Set<LoopTemplateProposal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -435,6 +436,23 @@ public class AppDbContext : DbContext
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
             e.HasIndex(p => new { p.CreatedByChatSessionId, p.NormalizedName }, "IX_GlobalVariableProposals_ChatSession_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
+        });
+
+        modelBuilder.Entity<HumanInputProposal>(e =>
+        {
+            e.HasIndex(p => p.WorkItemId);
+            e.HasIndex(p => p.RunNodeId);
+            e.HasIndex(p => p.CreatedByLoopRunId);
+            e.HasIndex(p => p.CreatedByChatSessionId);
+            // One pending suggestion per source per work item, enforced where the
+            // race is: two suggestions that both pass the supersede step must not
+            // both stay pending. The filter is HumanInputProposalStatus.Pending (0).
+            e.HasIndex(p => new { p.CreatedByLoopRunId, p.WorkItemId }, "IX_HumanInputProposals_LoopRun_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
+            e.HasIndex(p => new { p.CreatedByChatSessionId, p.WorkItemId }, "IX_HumanInputProposals_ChatSession_Pending")
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
         });
