@@ -9,24 +9,52 @@ namespace ILD.Tests;
 [Collection("Git")]
 public class RepositoryManagerTests : IDisposable
 {
+    // Not a group this host knows, so the mirrors stay where they are made.
+    private const string SharedGroup = "agents";
+
     private sealed class RecordingRunner : IProcessRunner
     {
-        public List<(string FileName, IReadOnlyList<string> Args, string? WorkingDirectory, IReadOnlyDictionary<string, string?>? Environment)> Calls { get; } = new();
+        public List<(string FileName, IReadOnlyList<string> Args, string? WorkingDirectory, IReadOnlyDictionary<string, string?>? Environment, ProcessRunOptions? Options)> Calls { get; } = new();
 
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
         {
-            Calls.Add((fileName, args, workingDirectory, environmentVariables == null ? null : new Dictionary<string, string?>(environmentVariables)));
+            Calls.Add((fileName, args, workingDirectory, environmentVariables == null ? null : new Dictionary<string, string?>(environmentVariables), options));
             return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
         }
     }
 
     private readonly string _tmp;
     private readonly string _repo;
+    private readonly string _mirrors;
+    private readonly List<AuditingRunner> _auditors = new();
+
+    /// <summary>
+    /// Whether the managers under test run as in a uid-isolated deployment. The
+    /// subclass flips it, so every real-git test here runs once per mode.
+    /// </summary>
+    protected virtual bool Isolated => false;
+
+    private RepositoryManager NewManager(string worktreesRoot, ILogger<RepositoryManager>? logger = null)
+    {
+        var runner = new AuditingRunner(Isolated);
+        runner.Forbid(_repo);
+        runner.Forbid(worktreesRoot);
+        lock (_auditors) _auditors.Add(runner);
+        return new RepositoryManager(runner, logger, worktreesRoot, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup);
+    }
+
+    private static readonly AgentIdentity IsolatedAgent = new("agent", "agents", "/home/agent");
+
+    private void Forbid(string path)
+    {
+        lock (_auditors) foreach (var auditor in _auditors) auditor.Forbid(path);
+    }
 
     public RepositoryManagerTests()
     {
         _tmp = Path.Combine(Path.GetTempPath(), "ild-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tmp);
+        _mirrors = Path.Combine(_tmp, "mirrors");
         _repo = Path.Combine(_tmp, "repo");
         Directory.CreateDirectory(_repo);
 
@@ -40,14 +68,16 @@ public class RepositoryManagerTests : IDisposable
 
     public void Dispose()
     {
+        var violations = _auditors.SelectMany(a => a.Violations).ToList();
         try { Directory.Delete(_tmp, recursive: true); } catch { }
         GC.SuppressFinalize(this);
+        Assert.True(violations.Count == 0, "git isolation violated:\n" + string.Join("\n", violations));
     }
 
     [Fact]
     public async Task CreateWorktree_creates_a_new_branch_and_directory()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-x");
 
         Assert.True(Directory.Exists(path));
@@ -59,7 +89,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task CreateWorktree_supports_branch_names_with_slashes()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "ild/wi-11");
 
         Assert.EndsWith(Path.Combine("ild", "wi-11"), path);
@@ -71,7 +101,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task Commit_and_diff_round_trip()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-y");
         File.WriteAllText(Path.Combine(path, "new.txt"), "content\n");
 
@@ -96,7 +126,7 @@ public class RepositoryManagerTests : IDisposable
         // The repo custom .env is injected as process env, but a preview/install step
         // (or the repo) could materialise it on disk. Even with no .gitignore entry,
         // an untracked .env must never ride into the run commit — and thence the PR.
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-secret");
 
         File.WriteAllText(Path.Combine(path, ".env"), "API_TOKEN=super-secret\n");
@@ -125,7 +155,7 @@ public class RepositoryManagerTests : IDisposable
         Git(_repo, "add", "-f", ".env");
         Git(_repo, "commit", "-m", "track env");
 
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-tracked-env");
 
         File.WriteAllText(Path.Combine(path, ".env"), "PUBLIC=2\n");
@@ -141,7 +171,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task CreateWorktree_does_not_write_tool_config_into_the_worktree()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         // The seed repo has no opencode.json, so anything present afterwards was
         // synthesized by worktree creation rather than checked out from the repo.
         Assert.False(File.Exists(Path.Combine(_repo, "opencode.json")));
@@ -154,7 +184,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task DestroyWorktree_removes_directory()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-z");
         Assert.True(Directory.Exists(path));
 
@@ -168,7 +198,7 @@ public class RepositoryManagerTests : IDisposable
         // root can delete a read-only tree, so the failure cannot be staged there.
         if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
 
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-locked");
         var locked = Directory.CreateDirectory(Path.Combine(path, "locked")).FullName;
         File.WriteAllText(Path.Combine(locked, "file"), "x");
@@ -192,7 +222,7 @@ public class RepositoryManagerTests : IDisposable
         // and leave them on disk; a link must go as the link, not as its target.
         if (!OperatingSystem.IsLinux() && kind == "dangling-link") return;
 
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = Path.Combine(_tmp, "leftover-" + kind);
         if (kind == "file")
             File.WriteAllText(path, "left behind");
@@ -212,7 +242,7 @@ public class RepositoryManagerTests : IDisposable
         if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
 
         var logger = new RecordingLogger();
-        var mgr = new RepositoryManager(logger, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"), logger);
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-stuck");
         var parent = Path.GetDirectoryName(path)!;
         File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserExecute);
@@ -253,7 +283,7 @@ public class RepositoryManagerTests : IDisposable
         Directory.CreateDirectory(stalePath);
         File.WriteAllText(Path.Combine(stalePath, "leftover.txt"), "stale");
 
-        var mgr = new RepositoryManager(worktreesRoot: root);
+        var mgr = NewManager(root);
         var path = await mgr.CreateWorktreeAsync(_repo, "ild/wi-11");
 
         Assert.Equal(stalePath, path);
@@ -265,69 +295,93 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task ReadFile_returns_content_and_blocks_path_traversal()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-r");
 
         Assert.Contains("hello", (await mgr.ReadFileAsync(path, "README.md")));
         Assert.Null((await mgr.ReadFileAsync(path, "../README.md")));
     }
 
-    [Fact]
-    public async Task CloneAsync_passes_git_askpass_environment_when_api_key_is_present()
+    private AuditingRunner LastRunner => _auditors[^1];
+
+    /// <summary>A run branch with one commit in a worktree of a clone of a local origin.</summary>
+    private async Task<(string Origin, string Worktree, RepositoryManager Mgr)> CommittedRunBranchAsync(string branch)
     {
-        var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
-        var targetPath = Path.Combine(_tmp, "clone-target");
+        var (work, mgr) = CloneWithOrigin();
+        var origin = GitOutput(work, "remote", "get-url", "origin").Trim();
+        var wt = await mgr.CreateWorktreeAsync(work, branch);
+        File.WriteAllText(Path.Combine(wt, "run.txt"), "run output\n");
+        Assert.True(await mgr.CommitAsync(wt, "run work"));
+        return (origin, wt, mgr);
+    }
 
-        await mgr.CloneAsync(
-            "https://gitlab.example.com/group/repo.git",
-            targetPath,
-            auth: new GitAuthOptions("https://gitlab.example.com/group/repo.git", "token-123", "GitLab"), cancellationToken: TestContext.Current.CancellationToken);
+    [Fact]
+    public async Task CloneAsync_authenticates_only_the_orchestrators_mirror_operations()
+    {
+        var origin = Path.Combine(_tmp, "clone-origin");
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
+        Directory.CreateDirectory(origin);
+        Git(origin, "init", "-b", "main");
+        Git(origin, "config", "user.email", "t@t.io");
+        Git(origin, "config", "user.name", "Tester");
+        File.WriteAllText(Path.Combine(origin, "a.txt"), "a\n");
+        Git(origin, "add", "-A");
+        Git(origin, "commit", "-m", "seed");
+        var target = Path.Combine(_tmp, "clone-target");
 
-        Assert.Single(runner.Calls);
-        Assert.NotNull(runner.Calls[0].Environment);
-        Assert.False(string.IsNullOrWhiteSpace(runner.Calls[0].Environment!["GIT_ASKPASS"]));
-        Assert.Equal("oauth2", runner.Calls[0].Environment!["ILD_GIT_USERNAME"]);
-        Assert.Equal("token-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
+        var (ok, error) = await mgr.CloneAsync(origin, target, TestContext.Current.CancellationToken,
+            new GitAuthOptions(origin, "token-123", "GitLab"));
+
+        Assert.True(ok, error);
+        Assert.True(File.Exists(Path.Combine(target, "a.txt")));
+        var calls = LastRunner.Calls;
+        var authenticated = calls.Where(c => c.Environment?.ContainsKey("ILD_GIT_PASSWORD") == true).ToList();
+        Assert.NotEmpty(authenticated);
+        Assert.All(authenticated, call =>
+        {
+            Assert.True(call.Orchestrator, "only the orchestrator's mirror operations carry the token");
+            Assert.False(string.IsNullOrWhiteSpace(call.Environment!["GIT_ASKPASS"]));
+            Assert.Equal("oauth2", call.Environment["ILD_GIT_USERNAME"]);
+            Assert.Equal("token-123", call.Environment["ILD_GIT_PASSWORD"]);
+        });
+        var clone = calls.Single(c => c.Args.Contains("clone"));
+        Assert.False(clone.Orchestrator);
+        Assert.DoesNotContain(origin, clone.Args);
     }
 
     [Fact]
     public async Task PushAsync_uses_non_blank_username_for_forgejo_style_remotes()
     {
-        var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var (origin, wt, mgr) = await CommittedRunBranchAsync("ild/wi-17");
 
-        await mgr.PushAsync(
-            _repo,
-            "ild/wi-17",
-            auth: new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo"), cancellationToken: TestContext.Current.CancellationToken);
+        var (ok, error) = await mgr.PushAsync(wt, "ild/wi-17", TestContext.Current.CancellationToken,
+            new GitAuthOptions(origin, "token-123", "Forgejo"));
 
-        Assert.Single(runner.Calls);
-        Assert.NotNull(runner.Calls[0].Environment);
-        Assert.Equal("git", runner.Calls[0].Environment!["ILD_GIT_USERNAME"]);
-        Assert.Equal("token-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
+        Assert.True(ok, error);
+        var push = LastRunner.Calls.Single(c => c.Args.Contains("push"));
+        Assert.True(push.Orchestrator);
+        Assert.Equal("git", push.Environment!["ILD_GIT_USERNAME"]);
+        Assert.Equal("token-123", push.Environment["ILD_GIT_PASSWORD"]);
     }
 
     [Fact]
     public async Task PushAsync_sends_the_azure_devops_pat_as_the_password_under_a_placeholder_username()
     {
-        var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var (origin, wt, mgr) = await CommittedRunBranchAsync("ild/wi-18");
 
-        await mgr.PushAsync(
-            _repo,
-            "ild/wi-18",
-            auth: new GitAuthOptions("https://dev.azure.com/contoso/widgets/_git/app", "pat-123", "AzureDevOps"), cancellationToken: TestContext.Current.CancellationToken);
+        var (ok, error) = await mgr.PushAsync(wt, "ild/wi-18", TestContext.Current.CancellationToken,
+            new GitAuthOptions(origin, "pat-123", "AzureDevOps"));
 
-        Assert.Single(runner.Calls);
-        Assert.Equal("pat", runner.Calls[0].Environment!["ILD_GIT_USERNAME"]);
-        Assert.Equal("pat-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
+        Assert.True(ok, error);
+        var push = LastRunner.Calls.Single(c => c.Args.Contains("push"));
+        Assert.Equal("pat", push.Environment!["ILD_GIT_USERNAME"]);
+        Assert.Equal("pat-123", push.Environment["ILD_GIT_PASSWORD"]);
     }
 
     [Fact]
     public async Task DeleteLocalBranchAsync_deletes_existing_branch()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         // Create a branch to delete
         Git(_repo, "branch", "to-delete");
 
@@ -343,12 +397,13 @@ public class RepositoryManagerTests : IDisposable
     public async Task DeleteLocalBranchAsync_calls_git_branch_D_with_correct_args()
     {
         var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
 
         await mgr.DeleteLocalBranchAsync(_repo, "does-not-exist");
 
         Assert.Single(runner.Calls);
         Assert.Equal("git", runner.Calls[0].FileName);
+        Assert.Equal(IsolatedAgent, runner.Calls[0].Options?.AsAgent);
         Assert.Contains("-D", runner.Calls[0].Args);
         Assert.Contains("does-not-exist", runner.Calls[0].Args);
     }
@@ -356,7 +411,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task ResolveBaseRepoPathAsync_returns_base_repo_from_worktree()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var wtPath = await mgr.CreateWorktreeAsync(_repo, "resolve-test");
 
         var basePath = await mgr.ResolveBaseRepoPathAsync(wtPath);
@@ -368,13 +423,14 @@ public class RepositoryManagerTests : IDisposable
     public async Task ResetHardAsync_calls_git_reset_hard_with_revision()
     {
         var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
 
         var success = await mgr.ResetHardAsync(_repo, "origin/main", TestContext.Current.CancellationToken);
         Assert.True(success);
 
         Assert.Single(runner.Calls);
         Assert.Equal("git", runner.Calls[0].FileName);
+        Assert.Equal(IsolatedAgent, runner.Calls[0].Options?.AsAgent);
         Assert.Contains("reset", runner.Calls[0].Args);
         Assert.Contains("--hard", runner.Calls[0].Args);
         Assert.Contains("origin/main", runner.Calls[0].Args);
@@ -383,7 +439,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task ResetHardAsync_resets_working_tree_to_revision()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
 
         // Create a commit to have something to reset from
         File.WriteAllText(Path.Combine(_repo, "file-a.txt"), "content a\n");
@@ -737,7 +793,7 @@ public class RepositoryManagerTests : IDisposable
         Git(origin, "add", "-A");
         Git(origin, "commit", "-m", "seed");
 
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var info = await mgr.InspectRemoteAsync(origin, TestContext.Current.CancellationToken);
 
         Assert.NotNull(info);
@@ -748,7 +804,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task InspectRemoteAsync_returns_null_for_unfetchable_remote()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         var missing = Path.Combine(_tmp, "does-not-exist-" + Guid.NewGuid().ToString("N"));
 
         Assert.Null(await mgr.InspectRemoteAsync(missing, TestContext.Current.CancellationToken));
@@ -970,7 +1026,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task WriteWorktreeFile_refuses_a_worktree_that_is_missing_or_not_one()
     {
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = NewManager(Path.Combine(_tmp, "wt"));
         // A work item between runs has no worktree path at all, and a stale one
         // may name a directory git no longer knows about.
         var plainDir = Path.Combine(_tmp, "not-a-worktree-" + Guid.NewGuid().ToString("N"));
@@ -1025,7 +1081,7 @@ public class RepositoryManagerTests : IDisposable
         var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-1-run-1");
         CommitOnOrigin(origin, "ild/wi-1-run-1", "mod.txt", "pushed by a human\n");
 
-        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken));
+        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken, new GitAuthOptions(origin, null)));
         Assert.Equal(1, await mgr.GetCommitsBehindCountAsync(wt, "origin/ild/wi-1-run-1"));
 
         var rebase = await mgr.RebaseAsync(wt, "origin/ild/wi-1-run-1", TestContext.Current.CancellationToken);
@@ -1047,7 +1103,7 @@ public class RepositoryManagerTests : IDisposable
         Git(wt, "commit", "-m", "agent work");
         var localHead = GitOutput(wt, "rev-parse", "HEAD").Trim();
         CommitOnOrigin(origin, "ild/wi-2-run-1", "mod.txt", "written by a human\n");
-        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken));
+        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken, new GitAuthOptions(origin, null)));
 
         var rebase = await mgr.RebaseAsync(wt, "origin/ild/wi-2-run-1", TestContext.Current.CancellationToken);
 
@@ -1070,12 +1126,12 @@ public class RepositoryManagerTests : IDisposable
     /// </summary>
     private sealed class CancellingRebaseRunner : IProcessRunner
     {
-        public List<(IReadOnlyList<string> Args, CancellationToken Token)> Calls { get; } = new();
+        public List<(IReadOnlyList<string> Args, CancellationToken Token, ProcessRunOptions? Options)> Calls { get; } = new();
 
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
         {
-            Calls.Add((args, ct));
-            if (args.Count > 0 && args[0] == "rebase" && !args.Contains("--abort"))
+            Calls.Add((args, ct, options));
+            if (args.Contains("rebase") && !args.Contains("--abort"))
                 throw new OperationCanceledException(ct);
             return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
         }
@@ -1085,7 +1141,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task RebaseAsync_unwinds_before_letting_a_cancellation_propagate()
     {
         var runner = new CancellingRebaseRunner();
-        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -1098,26 +1154,38 @@ public class RepositoryManagerTests : IDisposable
         // killed on arrival for the same reason the rebase was.
         var abort = runner.Calls.Single(c => c.Args.Contains("--abort"));
         Assert.False(abort.Token.IsCancellationRequested);
+        Assert.Equal(IsolatedAgent, abort.Options?.AsAgent);
+        Assert.Equal(IsolatedAgent, runner.Calls.First(c => c.Args.Contains("rebase") && !c.Args.Contains("--abort")).Options?.AsAgent);
     }
 
     [Fact]
     public async Task Pull_path_authenticates_the_fetch_and_leaks_no_credential_to_the_rebase()
     {
-        var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
-        var auth = new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo");
+        var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-3-run-1");
+        CommitOnOrigin(origin, "ild/wi-3-run-1", "mod.txt", "pushed by a human\n");
+        var auth = new GitAuthOptions(origin, "token-123", "Forgejo");
+        var before = LastRunner.Calls.Count;
 
-        await mgr.FetchAsync(_repo, auth: auth, cancellationToken: TestContext.Current.CancellationToken);
-        await mgr.RebaseAsync(_repo, "origin/ild/wi-3-run-1", TestContext.Current.CancellationToken);
+        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken, auth));
+        Assert.True((await mgr.RebaseAsync(wt, "origin/ild/wi-3-run-1", TestContext.Current.CancellationToken)).Success);
 
+        var calls = LastRunner.Calls.Skip(before).ToList();
         // The fetch is the only half of a pull that talks to the remote.
-        Assert.Equal("token-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
-        Assert.False(string.IsNullOrWhiteSpace(runner.Calls[0].Environment!["GIT_ASKPASS"]));
+        var authenticated = calls.Where(c => c.Environment?.ContainsKey("ILD_GIT_PASSWORD") == true).ToList();
+        Assert.NotEmpty(authenticated);
+        Assert.All(authenticated, c =>
+        {
+            Assert.True(c.Orchestrator);
+            Assert.Equal("token-123", c.Environment!["ILD_GIT_PASSWORD"]);
+            Assert.False(string.IsNullOrWhiteSpace(c.Environment["GIT_ASKPASS"]));
+        });
         // The rebase is local-only: no token, no askpass path, nothing for an
         // agent-authored git hook to read back out of the environment (ADR-0014).
-        Assert.Contains("rebase", runner.Calls[1].Args);
-        Assert.Null(runner.Calls[1].Environment);
+        var rebase = calls.Single(c => c.Args.Contains("rebase"));
+        Assert.False(rebase.Orchestrator);
+        Assert.DoesNotContain(rebase.Environment?.Keys ?? [], k => k is "GIT_ASKPASS" or "ILD_GIT_USERNAME" or "ILD_GIT_PASSWORD");
     }
+
 
     [Fact]
     public async Task GetUncommittedFilesAsync_names_tracked_changes_and_ignores_untracked_files()
@@ -1174,7 +1242,7 @@ public class RepositoryManagerTests : IDisposable
     /// </summary>
     private sealed class SilentSuccessRunner : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
             => Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
     }
 
@@ -1184,7 +1252,7 @@ public class RepositoryManagerTests : IDisposable
         // `--exit-code` puts the answer in the exit code; corroborating it against
         // stdout only adds a way to mistake an existing branch for a free one, and
         // that is the direction the conflict check must never fail in.
-        var mgr = new RepositoryManager(new SilentSuccessRunner(), worktreesRoot: Path.Combine(_tmp, "wt"));
+        var mgr = new RepositoryManager(new SilentSuccessRunner(), worktreesRoot: Path.Combine(_tmp, "wt"), mirrorsRoot: _mirrors);
 
         Assert.True(await mgr.RemoteHasBranchAsync("https://example.invalid/repo.git", "feature/foo", TestContext.Current.CancellationToken));
     }
@@ -1211,7 +1279,8 @@ public class RepositoryManagerTests : IDisposable
         Git(work, "config", "user.email", "t@t.io");
         Git(work, "config", "user.name", "Tester");
 
-        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt-" + Guid.NewGuid().ToString("N")));
+        var mgr = NewManager(Path.Combine(_tmp, "wt-" + Guid.NewGuid().ToString("N")));
+        Forbid(work);
         return (work, mgr);
     }
 

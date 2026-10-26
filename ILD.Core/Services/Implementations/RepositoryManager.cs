@@ -1,4 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Win32.SafeHandles;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
@@ -8,19 +11,58 @@ namespace ILD.Core.Services.Implementations;
 /// <summary>
 /// Wraps git CLI via <see cref="IProcessRunner"/> to manage repository worktrees.
 /// All operations are best-effort; non-zero exit codes return false (or empty for queries).
+///
+/// <para>
+/// Everything git does in a clone or worktree runs as the agent user (ADR-0014):
+/// those directories, their config, hooks and attributes are the agent's to write, so
+/// whatever they make git execute must only ever have the agent's privileges. The
+/// orchestrator runs git only in its own per-remote mirror (<see cref="GitMirror"/>)
+/// and for <c>ls-remote</c>, each with a clean configuration and an environment
+/// built from scratch. The remote's URL always comes from the caller, never from
+/// the clone's config.
+/// </para>
 /// </summary>
 public class RepositoryManager : IRepositoryManager
 {
+    private const int RefusedExitCode = 128;
+
     private static readonly string AskPassScriptPath = EnsureAskPassScript();
     private readonly ILogger<RepositoryManager>? _logger;
     private readonly IProcessRunner _runner;
     private readonly string _worktreesRoot;
+    private readonly AgentIdentity? _agent;
+    private readonly GitMirror _mirrors;
+    private readonly ProcessRunOptions _agentOptions;
 
-    public RepositoryManager(IProcessRunner runner, ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
+    /// <param name="agent">
+    /// Who git runs as in clones and worktrees; null reads <see cref="AgentIsolation"/>'s configuration,
+    /// and git then runs as the orchestrator itself when no agent user is configured.
+    /// </param>
+    /// <param name="mirrorsRoot">Where the per-remote mirrors live.</param>
+    /// <param name="sharedGroup">
+    /// The group the orchestrator and the agent share, which the mirrors are handed to; null reads
+    /// <see cref="AgentIsolation.SharedGroup"/>. Not <see cref="AgentIdentity.Group"/>, which is the agent's
+    /// primary group, only for <c>setpriv --regid</c>, and which the orchestrator is not a member of.
+    /// </param>
+    public RepositoryManager(
+        IProcessRunner runner,
+        ILogger<RepositoryManager>? logger = null,
+        string? worktreesRoot = null,
+        AgentIdentity? agent = null,
+        string? mirrorsRoot = null,
+        string? sharedGroup = null)
     {
         _runner = runner;
         _logger = logger;
         _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
+        _agent = agent ?? ConfiguredAgent();
+        _agentOptions = new ProcessRunOptions(AsAgent: _agent, AgentScoped: true);
+        _mirrors = new GitMirror(
+            mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
+            sharedGroup ?? AgentIsolation.SharedGroup,
+            sharedWithAgent: _agent is not null,
+            (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
+            logger);
     }
 
     // Test/back-compat constructor: spins up a local ProcessRunner.
@@ -29,22 +71,46 @@ public class RepositoryManager : IRepositoryManager
     {
     }
 
+    /// <summary>Where the mirrors live for a deployment configured by <paramref name="config"/>.</summary>
+    public static string MirrorRoot(IConfiguration? config) => BaseRepoPath.MirrorRoot(config);
+
+    private static AgentIdentity? ConfiguredAgent()
+        => AgentIsolation.AgentUser is { } user
+            ? new AgentIdentity(user, AgentIsolation.AgentGroup ?? user, AgentIsolation.AgentHome ?? string.Empty)
+            : null;
+
     public async Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        var parent = Path.GetDirectoryName(targetPath);
-        if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
-        var result = await _runner.RunAsync("git", new[] { "clone", cloneUrl, targetPath }, parent, cancellationToken, BuildGitEnvironment(auth));
-        return result.Success ? (true, null) : (false, result.StdErr);
+        // git makes the folders above the clone, as the agent, so the agent owns what it writes into.
+        var target = Path.GetFullPath(targetPath);
+
+        var remote = (auth ?? new GitAuthOptions(cloneUrl, null)) with { RemoteUrl = cloneUrl };
+        var (mirror, openError) = await _mirrors.OpenAsync(cloneUrl, cancellationToken);
+        if (mirror is null) return (false, openError);
+        using (mirror)
+        {
+            var fetched = await FetchMirrorAsync(mirror, remote, cancellationToken);
+            if (!fetched.Ok) return (false, fetched.Error);
+
+            // A full copy of its own: no hardlinks and no alternates, so the clone
+            // stays whole whatever happens to the mirror.
+            try
+            {
+                var (code, _, stderr) = await mirror.ReadableByAgentAsync(
+                    path => AgentGitAsync(["clone", "--quiet", "--no-local", "--", path, target], cancellationToken), cancellationToken);
+                return code == 0 ? (true, null) : (false, stderr);
+            }
+            catch (IOException ex)
+            {
+                return (false, ex.Message);
+            }
+        }
     }
 
     public async Task<string> CreateWorktreeAsync(string repoPath, string branchName)
     {
         Directory.CreateDirectory(_worktreesRoot);
         var worktreePath = Path.GetFullPath(Path.Combine(_worktreesRoot, branchName));
-        var parent = Path.GetDirectoryName(worktreePath);
-        if (!string.IsNullOrEmpty(parent))
-            Directory.CreateDirectory(parent);
-
         await RunAsync(repoPath, "worktree", "prune");
 
         if (Directory.Exists(worktreePath))
@@ -89,8 +155,12 @@ public class RepositoryManager : IRepositoryManager
         if (Directory.Exists(worktreePath) && new DirectoryInfo(worktreePath).LinkTarget is null)
         {
             // Only a real directory can be a worktree; anything else here just goes.
-            repoPath = await ResolveMainRepoPathAsync(worktreePath) ?? worktreePath;
-            await RunAsync(repoPath, "worktree", "remove", "--force", worktreePath);
+            // Only a worktree whose pointer is ours is handed to git; anything else is
+            // cleared like a stray directory, and its registration, if it has one,
+            // is left for the next prune.
+            repoPath = TrustedRepositoryRoot(worktreePath);
+            if (repoPath is not null)
+                await RunAsync(repoPath, "worktree", "remove", "--force", worktreePath);
         }
 
         if (AgentWritableFiles.EntryExists(worktreePath))
@@ -138,8 +208,55 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        var (code, _, _) = await RunAsync(worktreePath, new[] { "fetch", "origin" }, cancellationToken, auth);
-        return code == 0;
+        if (auth is null || string.IsNullOrWhiteSpace(auth.RemoteUrl) || TrustedRepositoryRoot(worktreePath) is null)
+            return false;
+
+        var (mirror, _) = await _mirrors.OpenAsync(auth.RemoteUrl, cancellationToken);
+        if (mirror is null) return false;
+        using (mirror)
+        {
+            var fetched = await FetchMirrorAsync(mirror, auth, cancellationToken);
+            return fetched.Ok && await SyncFromMirrorAsync(mirror, worktreePath, fetched.DefaultBranch, cancellationToken);
+        }
+    }
+
+    /// <summary>The remote's branches into the mirror, with the remote's own default branch as the mirror's HEAD.</summary>
+    private async Task<(bool Ok, string? Error, string? DefaultBranch)> FetchMirrorAsync(GitMirror.Session mirror, GitAuthOptions auth, CancellationToken ct)
+    {
+        var (code, stdout, _) = await LsRemoteAsync(["ls-remote", "--symref", "--", auth.RemoteUrl, "HEAD"], auth, ct);
+        var defaultBranch = code == 0 ? ParseSymrefDefaultBranch(stdout) : null;
+        var (ok, error) = await mirror.FetchAsync(auth, defaultBranch, ct);
+        return (ok, error, defaultBranch);
+    }
+
+    /// <summary>
+    /// Bring the clone's remote-tracking refs to what the mirror holds: every branch, pruning the ones the
+    /// remote no longer has, or just <paramref name="onlyBranch"/> when the mirror is known to hold no more
+    /// than that (a push to a mirror not fetched yet). The agent does this without credentials, from the
+    /// mirror's path rather than from any remote its config names.
+    /// </summary>
+    private async Task<bool> SyncFromMirrorAsync(
+        GitMirror.Session mirror, string worktreePath, string? defaultBranch, CancellationToken ct, string? onlyBranch = null)
+    {
+        var refspec = onlyBranch is null
+            ? "+refs/heads/*:refs/remotes/origin/*"
+            : $"+refs/heads/{onlyBranch}:refs/remotes/origin/{onlyBranch}";
+        int code;
+        try
+        {
+            (code, _, _) = await mirror.ReadableByAgentAsync(
+                path => RunAsync(worktreePath, ["fetch", "--quiet", .. onlyBranch is null ? new[] { "--prune" } : [], "--", path, refspec], ct), ct);
+        }
+        catch (IOException ex)
+        {
+            _logger?.LogWarning(ex, "Could not open the mirror to the agent for {Worktree}", worktreePath);
+            return false;
+        }
+        if (code != 0) return false;
+
+        if (defaultBranch is not null)
+            await RunAsync(worktreePath, ["symbolic-ref", "refs/remotes/origin/HEAD", $"refs/remotes/origin/{defaultBranch}"], ct);
+        return true;
     }
 
 
@@ -225,27 +342,30 @@ public class RepositoryManager : IRepositoryManager
     /// </summary>
     private async Task EnsureSecretExcludesAsync(string worktreePath)
     {
+        if (TrustedRepositoryRoot(worktreePath) is null) return;
+
+        // Run as the agent: the exclude file lives where the agent can replace it with
+        // a link, and the orchestrator must never open a path it chose. A link is left
+        // alone, so nothing is written through it.
+        var script = """
+            wt="$1"; shift
+            file=$(git -C "$wt" rev-parse --git-path info/exclude) || exit 0
+            case "$file" in /*) ;; *) file="$wt/$file" ;; esac
+            [ -L "$file" ] && exit 0
+            mkdir -p -- "$(dirname -- "$file")" || exit 0
+            if [ -s "$file" ] && [ -n "$(tail -c 1 -- "$file")" ]; then printf '\n' >> "$file"; fi
+            for pattern in "$@"; do
+              grep -qxF -- "$pattern" "$file" 2>/dev/null || printf '%s\n' "$pattern" >> "$file"
+            done
+            """;
         try
         {
-            var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "--git-path", "info/exclude");
-            if (code != 0 || string.IsNullOrWhiteSpace(stdout)) return;
-
-            var excludePath = stdout.Trim();
-            if (!Path.IsPathRooted(excludePath))
-                excludePath = Path.GetFullPath(Path.Combine(worktreePath, excludePath));
-
-            var existing = File.Exists(excludePath)
-                ? await File.ReadAllLinesAsync(excludePath)
-                : Array.Empty<string>();
-            var have = new HashSet<string>(existing.Select(l => l.Trim()), StringComparer.Ordinal);
-            var missing = SecretExcludePatterns.Where(p => !have.Contains(p)).ToList();
-            if (missing.Count == 0) return;
-
-            Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
-            var prefix = existing.Length > 0 && existing[^1].Length > 0 ? Environment.NewLine : string.Empty;
-            await File.AppendAllTextAsync(excludePath, prefix + string.Join(Environment.NewLine, missing) + Environment.NewLine);
+            var result = await _runner.RunAsync(
+                "/bin/sh", ["-c", script, "sh", Path.GetFullPath(worktreePath), .. SecretExcludePatterns], "/", CancellationToken.None, null, _agentOptions);
+            if (!result.Success)
+                _logger?.LogDebug("Failed to write secret excludes for {Worktree}: {Error}", worktreePath, result.StdErr);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
         {
             _logger?.LogDebug(ex, "Failed to write secret excludes for {Worktree}", worktreePath);
         }
@@ -253,8 +373,75 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<(bool Success, string? Error)> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        var (code, _, stderr) = await RunAsync(worktreePath, new[] { "push", "-u", "origin", branchName }, cancellationToken, auth);
-        return code == 0 ? (true, null) : (false, stderr);
+        if (auth is null || string.IsNullOrWhiteSpace(auth.RemoteUrl))
+            return (false, "no remote URL to push to");
+
+        var (code, stdout, stderr) = await RunAsync(worktreePath, ["rev-parse", "--verify", $"refs/heads/{branchName}^{{commit}}"], cancellationToken);
+        var sha = stdout.Trim();
+        if (code != 0 || !IsCommitSha(sha))
+            return (false, string.IsNullOrWhiteSpace(stderr) ? $"branch '{branchName}' has no commit to push" : stderr);
+
+        if (await RunPrePushHookAsync(worktreePath, branchName, sha, auth, cancellationToken) is { } rejection)
+            return (false, rejection);
+
+        var (mirror, openError) = await _mirrors.OpenAsync(auth.RemoteUrl, cancellationToken);
+        if (mirror is null) return (false, openError);
+        using (mirror)
+        {
+            // The agent writes the bundle; what the remote receives is what the mirror
+            // took from it, pushed by the orchestrator from a place the agent cannot write.
+            var bundle = new[] { "bundle", "create", "--quiet", "-", $"refs/heads/{branchName}" };
+            var pushed = await mirror.PushAsync(
+                auth, branchName, sha,
+                async (incremental, sink) =>
+                {
+                    var r = await RunAsync(worktreePath, incremental ? [.. bundle, "--not", "--remotes=origin"] : bundle, cancellationToken, sink);
+                    return new ProcessResult(r.ExitCode, r.StdOut, r.StdErr);
+                },
+                cancellationToken);
+            if (!pushed.Ok)
+                return (false, pushed.Error);
+
+            if (!await SyncFromMirrorAsync(mirror, worktreePath, null, cancellationToken, branchName)
+                || (await RunAsync(worktreePath, ["branch", "--set-upstream-to", $"origin/{branchName}", branchName], cancellationToken)).ExitCode != 0)
+                _logger?.LogWarning("Pushed {Branch}, but could not record origin/{Branch} as its upstream in {Worktree}", branchName, branchName, worktreePath);
+            return (true, null);
+        }
+    }
+
+    private const int HookOutputTail = 2000;
+
+    /// <summary>
+    /// The worktree's <c>pre-push</c> hook, run as the agent before anything is sent, as <c>git push</c>
+    /// would run it: with <c>origin</c> and the remote URL as arguments and the ref being pushed on stdin.
+    /// The push happens from the mirror, where no clone's hooks run, so this is the only place the hook
+    /// gets to object. Null when the hook accepts or there is none; otherwise why it did not. The hook has
+    /// no credentials, so one that needs the repository token fails here.
+    /// </summary>
+    private async Task<string?> RunPrePushHookAsync(
+        string worktreePath, string branchName, string sha, GitAuthOptions auth, CancellationToken ct)
+    {
+        var reference = $"refs/heads/{branchName}";
+        var (code, stdout, _) = await RunAsync(worktreePath, ["rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}^{{commit}}"], ct);
+        var remoteSha = code == 0 && IsCommitSha(stdout.Trim()) ? stdout.Trim() : new string('0', sha.Length);
+
+        if (TrustedRepositoryRoot(worktreePath) is null)
+            return $"{worktreePath} is not a git clone or worktree created by ILD";
+
+        // The line goes in through stdin, so no file exists anywhere. git reopens its stdin by path
+        // (/dev/stdin), and the pipe ILD makes belongs to ILD's uid, which the agent cannot open; so the
+        // agent's own shell makes the pipe git reads, from a cat that already holds ILD's end open.
+        var script = """
+            cat | exec git -C "$1" hook run --ignore-missing --to-stdin=/dev/stdin pre-push -- origin "$2"
+            """;
+        using var line = new MemoryStream(Encoding.UTF8.GetBytes($"{reference} {sha} {reference} {remoteSha}\n"));
+        var result = await _runner.RunAsync(
+            "/bin/sh", ["-c", script, "sh", Path.GetFullPath(worktreePath), WithoutUserInfo(auth.RemoteUrl)],
+            "/", ct, null, _agentOptions with { StandardInputFrom = line });
+        if (result.Success) return null;
+
+        var output = (string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr).Trim();
+        return $"pre-push hook failed: {(output.Length > HookOutputTail ? output[^HookOutputTail..] : output)}";
     }
 
     public async Task<string?> GetDiffAsync(string worktreePath)
@@ -562,7 +749,13 @@ public class RepositoryManager : IRepositoryManager
             throw new ArgumentException("A diff range is made of full commit SHAs.", nameof(range));
     }
 
-    private static bool IsCommitSha(string value)
+    /// <summary>The clone URL with any credentials in it removed.</summary>
+    internal static string WithoutUserInfo(string cloneUrl)
+        => Uri.TryCreate(cloneUrl, UriKind.Absolute, out var uri) && uri.UserInfo.Length > 0
+            ? new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.AbsoluteUri
+            : cloneUrl;
+
+    internal static bool IsCommitSha(string value)
         => value.Length is 40 or 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static IEnumerable<string> EnumerateBaseRefCandidates(string? defaultBranch)
@@ -582,7 +775,7 @@ public class RepositoryManager : IRepositoryManager
         if (string.IsNullOrWhiteSpace(cloneUrl))
             return null;
 
-        var (code, stdout, _) = await RunAsync(Path.GetTempPath(), new[] { "ls-remote", "--symref", cloneUrl, "HEAD" }, cancellationToken, auth);
+        var (code, stdout, _) = await LsRemoteAsync(["ls-remote", "--symref", "--", cloneUrl, "HEAD"], auth, cancellationToken);
         if (code != 0)
             return null;
 
@@ -594,10 +787,8 @@ public class RepositoryManager : IRepositoryManager
         if (string.IsNullOrWhiteSpace(cloneUrl) || string.IsNullOrWhiteSpace(branchName))
             return null;
 
-        var (code, _, _) = await RunAsync(
-            Path.GetTempPath(),
-            new[] { "ls-remote", "--heads", "--exit-code", cloneUrl, $"refs/heads/{branchName}" },
-            cancellationToken, auth);
+        var (code, _, _) = await LsRemoteAsync(
+            ["ls-remote", "--heads", "--exit-code", "--", cloneUrl, $"refs/heads/{branchName}"], auth, cancellationToken);
 
         // `--exit-code` is what makes the three answers we need distinguishable,
         // and it encodes them in the exit code alone: 0 = the ref is there,
@@ -615,19 +806,9 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<GitRemoteProbe> ProbeRemoteAsync(string cloneUrl, string? branch, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        // The probe holds the key, so it must not discover a repository whose
-        // config or hooks another user could have planted (/tmp is agent-writable):
-        // run in the owner-only private root and stop discovery from climbing out.
-        var cwd = AgentIsolation.CreatePrivateDirectory();
-        var environment = new Dictionary<string, string?>(
-            BuildGitEnvironment(auth) ?? new Dictionary<string, string?>(), StringComparer.Ordinal)
-        {
-            ["GIT_TERMINAL_PROMPT"] = "0",
-            ["GIT_CEILING_DIRECTORIES"] = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(cwd)),
-        };
         var target = string.IsNullOrWhiteSpace(branch) ? "HEAD" : $"refs/heads/{branch}";
 
-        var r = await _runner.RunAsync("git", new[] { "ls-remote", "--exit-code", "--", cloneUrl, target }, cwd, cancellationToken, environment);
+        var r = await LsRemoteAsync(["ls-remote", "--exit-code", "--", cloneUrl, target], auth, cancellationToken);
         // ls-remote matches its pattern as a glob against the tail of each ref,
         // so "main*" or "x/refs/heads/main" can satisfy "main": only the exact
         // ref in its listing counts as found, anything else is an answer without it.
@@ -642,7 +823,7 @@ public class RepositoryManager : IRepositoryManager
 
     // `git ls-remote --symref <url> HEAD` advertises the default branch as a
     // line like "ref: refs/heads/main\tHEAD"; pull the branch name out of it.
-    private static string? ParseSymrefDefaultBranch(string lsRemoteOutput)
+    internal static string? ParseSymrefDefaultBranch(string lsRemoteOutput)
     {
         foreach (var line in lsRemoteOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
@@ -834,29 +1015,161 @@ public class RepositoryManager : IRepositoryManager
     }
 
     public Task<string?> ResolveBaseRepoPathAsync(string worktreePath)
-        => ResolveMainRepoPathAsync(worktreePath);
+        => Task.FromResult(TrustedRepositoryRoot(worktreePath));
 
-    private async Task<string?> ResolveMainRepoPathAsync(string worktreePath)
+    /// <summary>
+    /// The repository that owns <paramref name="path"/>, when <c>path/.git</c> is something this
+    /// manager made: a real directory (a clone), or a regular file naming
+    /// <c>&lt;repo&gt;/.git/worktrees/&lt;name&gt;</c> where <c>&lt;repo&gt;/.git</c> is a real
+    /// directory and that worktree entry points back at <c>path/.git</c>. Null for anything else,
+    /// links included: the agent writes these paths, and a pointer it redirected would make git
+    /// open a repository, config and hooks of its choosing.
+    /// </summary>
+    internal static string? TrustedRepositoryRoot(string path)
     {
-        var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "--git-common-dir");
-        if (code != 0) return null;
-        var gitDir = stdout.Trim();
-        if (!Path.IsPathRooted(gitDir)) gitDir = Path.GetFullPath(Path.Combine(worktreePath, gitDir));
-        return Path.GetDirectoryName(gitDir);
+        var worktree = Path.GetFullPath(path);
+        var dotGit = Path.Combine(worktree, ".git");
+        if (LinkTargetOf(dotGit) is not null) return null;
+        if (Directory.Exists(dotGit)) return worktree;
+        if (!File.Exists(dotGit)) return null;
+
+        var pointer = ReadSmallText(dotGit);
+        const string prefix = "gitdir:";
+        if (pointer is null || !pointer.StartsWith(prefix, StringComparison.Ordinal)) return null;
+        var entry = pointer[prefix.Length..].Trim();
+        if (!Path.IsPathRooted(entry) || Path.GetFullPath(entry) != entry) return null;
+
+        var worktrees = Path.GetDirectoryName(entry);
+        var gitDir = worktrees is null ? null : Path.GetDirectoryName(worktrees);
+        if (worktrees is null || gitDir is null || Path.GetFileName(worktrees) != "worktrees" || Path.GetFileName(gitDir) != ".git") return null;
+        var repository = Path.GetDirectoryName(gitDir);
+        if (repository is null) return null;
+
+        if (LinkTargetOf(gitDir) is not null || !Directory.Exists(gitDir)) return null;
+        if (LinkTargetOf(worktrees) is not null || LinkTargetOf(entry) is not null || !Directory.Exists(entry)) return null;
+
+        var backlink = ReadSmallText(Path.Combine(entry, "gitdir"))?.Trim();
+        if (backlink is null || !Path.IsPathRooted(backlink)) return null;
+        return ResolveLinks(Path.GetFullPath(backlink)) == ResolveLinks(dotGit) ? repository : null;
+    }
+
+    private const int MaxPointerBytes = 4096;
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int OpenFile(string pathname, int flags);
+
+    // O_RDONLY | O_NONBLOCK | O_CLOEXEC. Opened without waiting, so a pipe the agent put where the
+    // file should be reads as empty instead of blocking the orchestrator until something writes to it.
+    private static readonly int OpenNonBlocking = OperatingSystem.IsMacOS() ? 0x4 | 0x1000000 : 0x800 | 0x80000;
+
+    /// <summary>The first <see cref="MaxPointerBytes"/> of a regular file, or null for anything else.</summary>
+    private static string? ReadSmallText(string file)
+    {
+        try
+        {
+            if (Storage.FileStatus.IsSupported
+                && (Storage.FileStatus.TryGet(file, out var status) != 0 || status.Kind != Storage.FileKind.File))
+                return null;
+
+            var descriptor = OpenFile(file, OpenNonBlocking);
+            if (descriptor < 0) return null;
+            using var stream = new FileStream(new SafeFileHandle(descriptor, ownsHandle: true), FileAccess.Read, bufferSize: 0);
+            var buffer = new byte[MaxPointerBytes];
+            var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+            return read == buffer.Length ? null : Encoding.UTF8.GetString(buffer, 0, read);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
         => RunAsync(cwd, args, CancellationToken.None);
 
-    private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, IReadOnlyList<string> args, CancellationToken ct)
-        => await RunAsync(cwd, args, ct, null);
-
-    private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, IReadOnlyList<string> args, CancellationToken ct, GitAuthOptions? auth)
+    /// <summary>
+    /// <c>git -C <paramref name="cwd"/></c> as the agent. Refused, without starting git, for a directory
+    /// whose <c>.git</c> pointer is not one <see cref="TrustedRepositoryRoot"/> accepts.
+    /// </summary>
+    private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(
+        string cwd, IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null)
     {
-        var r = await _runner.RunAsync("git", args, cwd, ct, BuildGitEnvironment(auth));
+        if (TrustedRepositoryRoot(cwd) is null)
+        {
+            _logger?.LogWarning("Refused git {Args} in {Directory}: its .git is not a clone or worktree of ours", string.Join(' ', args), cwd);
+            return (RefusedExitCode, string.Empty, $"{cwd} is not a git clone or worktree created by ILD");
+        }
+
+        return await AgentGitAsync(["-C", Path.GetFullPath(cwd), .. args], ct, stdoutTo);
+    }
+
+    private async Task<(int ExitCode, string StdOut, string StdErr)> AgentGitAsync(
+        IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null)
+    {
+        // From "/" and addressing the directory with -C: the orchestrator never enters
+        // one the agent owns.
+        var options = stdoutTo is null ? _agentOptions : _agentOptions with { StandardOutputTo = stdoutTo };
+        var r = await _runner.RunAsync("git", args, "/", ct, null, options);
         if (!r.Success)
-            _logger?.LogDebug("git {Args} in {Worktree} exited {Code}: {Err}", string.Join(' ', args), cwd, r.ExitCode, r.StdErr);
+            _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), r.ExitCode, r.StdErr);
         return (r.ExitCode, r.StdOut, r.StdErr);
+    }
+
+    private Task<ProcessResult> LsRemoteAsync(IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct)
+    {
+        // The key is in this process's environment, so it must not discover a repository
+        // whose config another user could have planted (/tmp is agent-writable): it runs in
+        // the owner-only private root, and discovery may not climb out of it.
+        var cwd = AgentIsolation.CreatePrivateDirectory();
+        return OrchestratorGitAsync(cwd, args, auth, ct, Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(cwd)));
+    }
+
+    private static readonly (string Key, string Value)[] OrchestratorGitConfig =
+    [
+        ("core.hooksPath", "/dev/null"),
+        ("core.fsmonitor", "false"),
+        ("credential.helper", ""),
+        ("core.sshCommand", ""),
+        ("protocol.ext.allow", "never"),
+        ("gc.autoDetach", "false"),
+    ];
+
+    /// <summary>
+    /// git as the orchestrator, for its own mirror and the remote. Nothing is inherited: not the
+    /// orchestrator's environment, not the system or user configuration; only the credential
+    /// when the caller has one.
+    /// </summary>
+    private async Task<ProcessResult> OrchestratorGitAsync(
+        string cwd, IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct,
+        string? ceilingDirectories = null, Stream? standardInput = null)
+    {
+        var home = AgentIsolation.CreatePrivateDirectory("git-home");
+        if (OperatingSystem.IsLinux())
+            File.SetUnixFileMode(home, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["PATH"] = Environment.GetEnvironmentVariable("PATH") ?? "/usr/local/bin:/usr/bin:/bin",
+            ["HOME"] = home,
+            ["GIT_TERMINAL_PROMPT"] = "0",
+            ["GIT_CONFIG_NOSYSTEM"] = "1",
+            ["GIT_CONFIG_GLOBAL"] = "/dev/null",
+            ["GIT_CONFIG_COUNT"] = OrchestratorGitConfig.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+        for (var i = 0; i < OrchestratorGitConfig.Length; i++)
+        {
+            environment[$"GIT_CONFIG_KEY_{i}"] = OrchestratorGitConfig[i].Key;
+            environment[$"GIT_CONFIG_VALUE_{i}"] = OrchestratorGitConfig[i].Value;
+        }
+        if (ceilingDirectories is not null)
+            environment["GIT_CEILING_DIRECTORIES"] = ceilingDirectories;
+        foreach (var (key, value) in BuildGitEnvironment(auth) ?? new Dictionary<string, string?>())
+            environment[key] = value;
+
+        var r = await _runner.RunAsync("git", args, cwd, ct, environment, new ProcessRunOptions(CleanEnvironment: true, StandardInputFrom: standardInput));
+        if (!r.Success)
+            _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), r.ExitCode, r.StdErr);
+        return r;
     }
 
     private static IReadOnlyDictionary<string, string?>? BuildGitEnvironment(GitAuthOptions? auth)

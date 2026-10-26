@@ -1281,9 +1281,7 @@ public class WorkItemManager : IWorkItemManager
             return (null, "Could not resolve the work item's branch.");
 
         var remoteProvider = await _providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
-        var gitAuth = remoteProvider is null
-            ? null
-            : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
+        var gitAuth = new GitAuthOptions(repo.CloneUrl, remoteProvider?.ApiKey, remoteProvider?.Type);
 
         return (new BranchContext(wi, wi.WorktreePath, branch, gitAuth), null);
     }

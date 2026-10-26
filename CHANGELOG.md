@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A coding agent can no longer make ILD run its commands through a git hook or filter.** Everything git does in a repository's clone or worktree now runs as the agent user, and ILD talks to the remote only through its own copy; the first fetch of each repository after upgrading downloads it again, a `pre-push` hook runs before the push without credentials, and Git LFS is not supported.
 - **Delete several chats at once: Select in the chat list lets you check the ones to delete, replacing Delete all.**
 - **The image ships Node 26.12.1, which no longer includes corepack, so the image has no pnpm.**
 

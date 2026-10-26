@@ -18,10 +18,34 @@ public interface IProcessRunner
         IReadOnlyList<string> args,
         string? workingDirectory = null,
         CancellationToken ct = default,
-        IReadOnlyDictionary<string, string?>? environmentVariables = null);
+        IReadOnlyDictionary<string, string?>? environmentVariables = null,
+        ProcessRunOptions? options = null);
 }
 
 public readonly record struct ProcessResult(int ExitCode, string StdOut, string StdErr)
 {
     public bool Success => ExitCode == 0;
 }
+
+/// <summary>
+/// The unprivileged user a child crosses to (see <c>AgentIsolation.Route</c>). <paramref name="Group"/> is the
+/// agent's PRIMARY group, for <c>setpriv --regid</c> only; the orchestrator is not a member of it. The group
+/// both uids share (<c>AgentIsolation.SharedGroup</c>) is a different one, and is not carried here.
+/// </summary>
+public sealed record AgentIdentity(string User, string Group, string Home);
+
+/// <summary>
+/// Whose child a process is. With no options it is the orchestrator's own and
+/// inherits its environment minus the secrets an agent must never see.
+/// </summary>
+/// <param name="AsAgent">Run as this user, through the same crossing the agent CLIs take.</param>
+/// <param name="CleanEnvironment">Start from an empty environment: the child gets only what the caller passes.</param>
+/// <param name="AgentScoped">The child works on agent-written input: it inherits neither the orchestrator's secrets, topology nor git credentials, whether or not the uid crosses.</param>
+/// <param name="StandardOutputTo">Receives stdout verbatim instead of <see cref="ProcessResult.StdOut"/>, for output that is not text.</param>
+/// <param name="StandardInputFrom">Read to its end into the child's stdin, which is then closed.</param>
+public sealed record ProcessRunOptions(
+    AgentIdentity? AsAgent = null,
+    bool CleanEnvironment = false,
+    bool AgentScoped = false,
+    Stream? StandardOutputTo = null,
+    Stream? StandardInputFrom = null);

@@ -85,10 +85,10 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
         {
             // The roots move this preview's own state directory while they are set,
             // which is why they point somewhere real that the scope puts back.
-            var value = key == AgentIsolation.AgentGroupEnvVar
+            var value = key == AgentIsolation.AgentGroupEnvVar || key == AgentIsolation.SharedGroupEnvVar
                 ? "outer-group"
                 : Path.Combine(_outerRoot, key);
-            if (key != AgentIsolation.AgentGroupEnvVar)
+            if (!(key == AgentIsolation.AgentGroupEnvVar || key == AgentIsolation.SharedGroupEnvVar))
                 Directory.CreateDirectory(value);
 
             _environment.Set(key, value);

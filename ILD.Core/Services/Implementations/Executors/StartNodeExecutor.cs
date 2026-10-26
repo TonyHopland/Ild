@@ -39,9 +39,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         }
 
         var remoteProvider = await providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
-        var gitAuth = remoteProvider is null
-            ? null
-            : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
+        var gitAuth = new GitAuthOptions(repo.CloneUrl, remoteProvider?.ApiKey, remoteProvider?.Type);
 
         yield return new NodeOutcome.NodeStarting(
             System.Text.Json.JsonSerializer.Serialize(new { nodeType = "Start", message = "initialized" }));
