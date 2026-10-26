@@ -8,6 +8,7 @@ import {
   type AiToolDefinition,
   type ConditionCase,
   type NodeOutput,
+  type VariableAssignment,
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
 import { AiProviderTagField } from "../../../components/AiProviderTagField";
@@ -72,6 +73,7 @@ interface NodeSettingsModalProps {
   conditionCases: ConditionCase[];
   conditionDefaultEdge: string;
   conditionOutput: string;
+  assignments: VariableAssignment[];
   aiProviders: AiProvider[];
   availableAiTools: AiToolDefinition[];
   /** Existing global variables, offered by every prompt field. */
@@ -102,6 +104,7 @@ interface NodeSettingsModalProps {
   onConditionCasesChange: (value: ConditionCase[]) => void;
   onConditionDefaultEdgeChange: (value: string) => void;
   onConditionOutputChange: (value: string) => void;
+  onAssignmentsChange: (value: VariableAssignment[]) => void;
 }
 
 /** Titled group of related fields inside the node settings body. */
@@ -713,6 +716,74 @@ function ConditionCasesEditor({
   );
 }
 
+/**
+ * The loop variables a Set Variable node writes, in order: each row is a name
+ * and the template its value is rendered from.
+ */
+function AssignmentsEditor({
+  assignments,
+  globalNames,
+  onChange,
+}: {
+  assignments: VariableAssignment[];
+  globalNames: string[];
+  onChange: (value: VariableAssignment[]) => void;
+}) {
+  const update = (index: number, patch: Partial<VariableAssignment>) =>
+    onChange(
+      assignments.map((existing, i) => (i === index ? { ...existing, ...patch } : existing)),
+    );
+
+  return (
+    <div className="config-field">
+      <label>Assignments</label>
+      <small className="config-help-text">
+        Each value is rendered once, against the variables as they were before this node ran, and
+        stored exactly as rendered. No AI, command, or worktree access; the node passes its input on
+        unchanged.
+      </small>
+      {assignments.map((assignment, index) => (
+        <div key={index} className="condition-case-row">
+          <div className="match-rule-row">
+            <input
+              type="text"
+              aria-label={`Assignment ${index + 1} name`}
+              value={assignment.name}
+              onChange={(event) => update(index, { name: event.target.value })}
+              placeholder="Variable name"
+            />
+            <button
+              type="button"
+              className="match-rule-remove"
+              aria-label={`Remove assignment ${index + 1}`}
+              onClick={() => onChange(assignments.filter((_, i) => i !== index))}
+            >
+              ×
+            </button>
+          </div>
+          <label htmlFor={`set-variable-value-${index}`} className="sr-only">
+            Assignment {index + 1} value
+          </label>
+          <PromptEditor
+            globalNames={globalNames}
+            id={`set-variable-value-${index}`}
+            rows={2}
+            value={assignment.value}
+            onChange={(value) => update(index, { value })}
+          />
+        </div>
+      ))}
+      <button
+        type="button"
+        className="match-rule-add"
+        onClick={() => onChange([...assignments, { name: "", value: "" }])}
+      >
+        + Add assignment
+      </button>
+    </div>
+  );
+}
+
 export function NodeSettingsModal({
   selectedNode,
   labelError,
@@ -743,6 +814,7 @@ export function NodeSettingsModal({
   conditionCases,
   conditionDefaultEdge,
   conditionOutput,
+  assignments,
   aiProviders,
   availableAiTools,
   globalNames,
@@ -772,6 +844,7 @@ export function NodeSettingsModal({
   onConditionCasesChange,
   onConditionDefaultEdgeChange,
   onConditionOutputChange,
+  onAssignmentsChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
   const typeStyle = nodeStyleOf(selectedNodeType);
@@ -1076,6 +1149,14 @@ export function NodeSettingsModal({
                 onChange={onPromptNodePromptChange}
               />
             </div>
+          )}
+
+          {selectedNodeType === NodeType.SetVariable && (
+            <AssignmentsEditor
+              assignments={assignments}
+              globalNames={globalNames}
+              onChange={onAssignmentsChange}
+            />
           )}
 
           {selectedNodeType === NodeType.PR && (

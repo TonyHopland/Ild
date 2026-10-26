@@ -1192,6 +1192,16 @@ export interface ConditionCase {
   edgeName: string;
 }
 
+/**
+ * One loop variable a Set Variable node writes: its name and the template its
+ * value is rendered from. Stored on a Set Variable node's config, in order, as
+ * `assignments`.
+ */
+export interface VariableAssignment {
+  name: string;
+  value: string;
+}
+
 export interface ApiError {
   status: number;
   message: string;
