@@ -51,6 +51,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
             "  pre-push|reference-transaction) cat > /dev/null ;;\n" +
             "esac\n" +
             "exit 0\n");
+        File.SetUnixFileMode(_probe, (UnixFileMode)0b111_101_101);
 
         foreach (var key in AgentIsolation.SecretEnvironmentKeys) SetEnvironment(key, "sentinel-" + key);
         SetEnvironment("GIT_AUTHOR_NAME", "Seed Author");
