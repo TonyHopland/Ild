@@ -221,6 +221,15 @@ public interface IWorkItemManager
     Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null);
 
     /// <summary>
+    /// Answer the execution <paramref name="runNodeId"/> of the parked node with
+    /// the output a button of that name sends: OnSuccess as approve, OnFailure as
+    /// reject, any other name as that custom edge, each with
+    /// <paramref name="input"/>. Refused like the answers above, and also when
+    /// the waiting execution is a different one.
+    /// </summary>
+    Task<bool> SubmitHumanFeedbackAnswerAsync(string workItemId, Guid runId, Guid runNodeId, string output, string input);
+
+    /// <summary>
     /// Merge the pull request linked to the work item's current run on the
     /// remote provider and, when <paramref name="deleteBranch"/> is set, delete
     /// the source branch afterwards (best effort). On a successful merge the

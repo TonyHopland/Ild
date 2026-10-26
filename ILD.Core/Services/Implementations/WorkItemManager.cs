@@ -1442,7 +1442,21 @@ public class WorkItemManager : IWorkItemManager
 
     public Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null)
         => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Reject("Rejected by user", input),
-            string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}", edgeName: null);
+            RejectionFeedback(input), edgeName: null);
+
+    private static string RejectionFeedback(string? input)
+        => string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}";
+
+    public Task<bool> SubmitHumanFeedbackAnswerAsync(string workItemId, Guid runId, Guid runNodeId, string output, string input)
+        => output switch
+        {
+            nameof(EdgeType.OnSuccess) => DeliverHumanFeedbackAsync(
+                workItemId, runId, NodeSignal.Success(input), input, edgeName: null, runNodeId),
+            nameof(EdgeType.OnFailure) => DeliverHumanFeedbackAsync(
+                workItemId, runId, NodeSignal.Reject("Rejected by user", input), RejectionFeedback(input), edgeName: null, runNodeId),
+            _ => DeliverHumanFeedbackAsync(
+                workItemId, runId, NodeSignal.Custom(output, input), input, output, runNodeId),
+        };
 
     public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input)
         => SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input);
@@ -1454,10 +1468,13 @@ public class WorkItemManager : IWorkItemManager
     /// Hand an answer to the node it answers, which only the work item's active
     /// run can have, and only while that run waits on a person. The answer names
     /// the run the person was looking at, so one sent to a run that has since
-    /// ended or been replaced is refused rather than landing on another.
+    /// ended or been replaced is refused rather than landing on another. When
+    /// <paramref name="expectedRunNodeId"/> is given, only that execution of the
+    /// node may be the one waiting: an answer to one visit never lands on a later one.
     /// </summary>
     private async Task<bool> DeliverHumanFeedbackAsync(
-        string workItemId, Guid runId, NodeSignal signal, string feedback, string? edgeName)
+        string workItemId, Guid runId, NodeSignal signal, string feedback, string? edgeName,
+        Guid? expectedRunNodeId = null)
     {
         if (await GetWorkItemAsync(workItemId) is null) return false;
 
@@ -1469,25 +1486,16 @@ public class WorkItemManager : IWorkItemManager
             throw new HumanFeedbackRefusedException("The run is busy, not waiting for an answer.");
         if (active.IsHalted)
             throw new HumanFeedbackRefusedException("The run is halted, not waiting for an answer; resume it instead.");
-        var waiting = FindWaitingHumanNode(await _loopRunStore.GetRunNodesAsync(runId), active.CurrentNodeId)
+        var waiting = ParkedNode.WaitingVisit(await _loopRunStore.GetRunNodesAsync(runId), active.CurrentNodeId)
             ?? throw new HumanFeedbackRefusedException("The run has no question waiting for an answer.");
+        if (expectedRunNodeId is { } expected && waiting.Id != expected)
+            throw new HumanFeedbackRefusedException("The question this answer is for is no longer open.");
         if (_engine is null)
             throw new HumanFeedbackRefusedException("No loop engine is running to deliver this answer.");
 
         await _engine.DeliverHumanFeedbackAsync(runId, waiting.Id, signal, feedback, edgeName);
         return true;
     }
-
-    /// <summary>
-    /// The execution waiting at the node the run is parked at. Only that one: an
-    /// execution left waiting at another node (a retry moved the run on) asks a
-    /// question the run no longer is at.
-    /// </summary>
-    private static LoopRunNode? FindWaitingHumanNode(IReadOnlyList<LoopRunNode> nodes, Guid? currentNodeId)
-        => nodes
-            .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman && n.LoopNodeId == currentNodeId)
-            .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-            .FirstOrDefault();
 
     private async Task<bool> IsPrNodeAsync(LoopRun run, Guid loopNodeId)
     {

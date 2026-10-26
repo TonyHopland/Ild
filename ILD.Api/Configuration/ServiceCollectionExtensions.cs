@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
+        services.AddScoped<IHumanInputProposalService, HumanInputProposalService>();
         services.AddSingleton<IRepositoryManager>(sp =>
         {
             var runner = sp.GetRequiredService<IProcessRunner>();
