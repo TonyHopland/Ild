@@ -49,7 +49,7 @@ public sealed class LoopTools
         => _ild.GetRawAsync($"api/v1/agent/current-loop/nodes/{Uri.EscapeDataString(nodeId)}");
 
     [McpServerTool(Name = "edit_loop_node_field")]
-    [Description("Targeted find-and-replace on ONE node config field's decoded text (the primary way to tweak a prompt). Text fields only: to change outputs, matchRules, cases or toolAllowlist, use set_loop_node_field with the whole array as JSON. Give old_string as the plain text to replace — you never handle JSON escaping, the server re-encodes. old_string must match EXACTLY ONCE: zero matches or more than one match change nothing and report the count. Returns { applied, matchCount, validationErrors }; if the resulting graph is invalid the edit is rejected and the canvas is left untouched. On success the live canvas updates immediately (still transient — human Save persists).")]
+    [Description("Targeted find-and-replace on ONE node config field's decoded text (the primary way to tweak a prompt). Text fields only: to change outputs, matchRules, cases, toolAllowlist or assignments, use set_loop_node_field with the whole array as JSON. Give old_string as the plain text to replace — you never handle JSON escaping, the server re-encodes. old_string must match EXACTLY ONCE: zero matches or more than one match change nothing and report the count. Returns { applied, matchCount, validationErrors }; if the resulting graph is invalid the edit is rejected and the canvas is left untouched. On success the live canvas updates immediately (still transient — human Save persists).")]
     public Task<string> EditLoopNodeField(
         [Description("The id of the node to edit.")] string nodeId,
         [Description("The config field to edit, e.g. 'prompt', 'command', 'prDescriptionTemplate', 'output'.")] string field,
@@ -60,11 +60,11 @@ public sealed class LoopTools
             new { field, oldString, newString });
 
     [McpServerTool(Name = "set_loop_node_field")]
-    [Description("Overwrite ONE node config field wholesale with a new value (the intentional replace-all path — use this instead of edit_loop_node_field when you want to replace the whole field, e.g. a fresh prompt). The field is created if it does not exist. The structured fields outputs, matchRules, cases and toolAllowlist take the whole new array as JSON (e.g. outputs: [{\"name\":\"approve\"},{\"name\":\"reject\",\"visible\":false}]) — this is how you add, rename or change an output: declare it in outputs first, then wire a Custom edge from it (edit_loop_file), and only then refer to it from matchRules/cases, since a rule or case routing to an output with no edge is rejected; a value that is not a JSON array changes nothing. Returns { applied, matchCount, validationErrors }; a resulting invalid graph is rejected and the canvas is left untouched. Transient client state only.")]
+    [Description("Overwrite ONE node config field wholesale with a new value (the intentional replace-all path — use this instead of edit_loop_node_field when you want to replace the whole field, e.g. a fresh prompt). The field is created if it does not exist. The structured fields outputs, matchRules, cases, toolAllowlist and assignments take the whole new array as JSON (e.g. outputs: [{\"name\":\"approve\"},{\"name\":\"reject\",\"visible\":false}]) — this is how you add, rename or change an output: declare it in outputs first, then wire a Custom edge from it (edit_loop_file), and only then refer to it from matchRules/cases, since a rule or case routing to an output with no edge is rejected; a value that is not a JSON array changes nothing. Returns { applied, matchCount, validationErrors }; a resulting invalid graph is rejected and the canvas is left untouched. Transient client state only.")]
     public Task<string> SetLoopNodeField(
         [Description("The id of the node to edit.")] string nodeId,
-        [Description("The config field to overwrite, e.g. 'prompt', 'command', or a structured field: 'outputs', 'matchRules', 'cases', 'toolAllowlist'.")] string field,
-        [Description("The new value: the field's text, or for outputs/matchRules/cases/toolAllowlist the whole array as JSON.")] string value)
+        [Description("The config field to overwrite, e.g. 'prompt', 'command', or a structured field: 'outputs', 'matchRules', 'cases', 'toolAllowlist', 'assignments'.")] string field,
+        [Description("The new value: the field's text, or for outputs/matchRules/cases/toolAllowlist/assignments the whole array as JSON.")] string value)
         => _ild.PostJsonAsync(
             $"api/v1/agent/current-loop/nodes/{Uri.EscapeDataString(nodeId)}/set-field",
             new { field, value });

@@ -294,4 +294,20 @@ public class LoopEngineSetVariableTests
             Assert.Equal(h.NodesById["set"].Id, e.NodeId);
         });
     }
+
+    [Fact]
+    public async Task A_write_whose_history_cannot_be_kept_fails_the_node_without_leaving_it_to_a_later_save()
+    {
+        using var h = Harness();
+        Graph(h, Assignments(("handoff", "{{Node.Input}}")), NodeType.Prompt, """{"prompt":"after"}""", fallback: true);
+        h.Db.Context.Database.ExecuteSqlRaw("DROP TABLE LoopRunVariableWrites");
+
+        await h.RunAsync();
+
+        var set = Assert.Single(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["set"].Id);
+        Assert.Equal(LoopRunNodeStatus.Failed, set.Status);
+        Assert.Contains("handoff", set.Error);
+        Assert.Contains(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["fallback"].Id);
+        Assert.Empty(await h.Services.GetRequiredService<ILoopRunStore>().GetVariablesAsync(h.RunId));
+    }
 }

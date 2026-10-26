@@ -281,6 +281,7 @@ public class LoopRunStore : ILoopRunStore
                 .Select(v => v.Value)
                 .FirstOrDefaultAsync();
 
+            LoopRunVariable? created = null;
             DbUpdateException? createFailure = null;
             bool applied;
             if (previousValue is not null)
@@ -293,17 +294,18 @@ public class LoopRunStore : ILoopRunStore
             }
             else
             {
-                var created = new LoopRunVariable { LoopRunId = runId, Name = name, Value = value };
+                created = new LoopRunVariable { LoopRunId = runId, Name = name, Value = value };
                 _db.LoopRunVariables.Add(created);
                 try
                 {
                     await _db.SaveChangesAsync();
                     applied = true;
                 }
-                catch (DbUpdateException ex)
+                catch (Exception ex)
                 {
                     _db.Entry(created).State = EntityState.Detached;
-                    createFailure = ex;
+                    if (ex is not DbUpdateException update) throw;
+                    createFailure = update;
                     applied = false;
                 }
             }
@@ -319,7 +321,7 @@ public class LoopRunStore : ILoopRunStore
                 continue;
             }
 
-            _db.LoopRunVariableWrites.Add(new LoopRunVariableWrite
+            var write = new LoopRunVariableWrite
             {
                 LoopRunId = runId,
                 RunNodeId = runningNodeId,
@@ -327,9 +329,21 @@ public class LoopRunStore : ILoopRunStore
                 Value = value,
                 PreviousValue = previousValue,
                 WrittenAt = DateTime.UtcNow,
-            });
-            await _db.SaveChangesAsync();
-            await tx.CommitAsync();
+            };
+            _db.LoopRunVariableWrites.Add(write);
+            try
+            {
+                await _db.SaveChangesAsync();
+                await tx.CommitAsync();
+            }
+            catch
+            {
+                // Rolled back: what this attempt added must not stay on a context the
+                // engine keeps for the whole run, or its next save writes it after all.
+                _db.Entry(write).State = EntityState.Detached;
+                if (created is not null) _db.Entry(created).State = EntityState.Detached;
+                throw;
+            }
             return previousValue is null ? VariableWriteEffect.Created
                 : previousValue == value ? VariableWriteEffect.Unchanged
                 : VariableWriteEffect.Changed;
