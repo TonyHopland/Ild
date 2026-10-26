@@ -188,7 +188,7 @@ describe("human input suggestions in the Action tab", () => {
 
     await waitFor(() => expect(cardOf("Green checks").textContent).toContain("Approved"));
     expect(calls.filter((c) => c.method === "POST").map((c) => c.path)).toEqual([
-      `${LIST}/hp-Green checks/approve`,
+      `${LIST}/hp-${encodeURIComponent("Green checks")}/approve`,
     ]);
     expect(reads().length).toBeGreaterThan(before);
     expect(within(cardOf("Green checks")).queryByRole("button", { name: "Approve" })).toBeNull();
