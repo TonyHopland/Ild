@@ -139,7 +139,7 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   credential helper, `core.sshCommand` and the `ext` transport. A mirror keeps no
   remote, URL or credential and is never writable by the agent: it is a read-only
   shared tree like the agent installs, closed to the agent while the orchestrator's git
-  writes to it and opened again only once the modes git wrote have been tightened.
+  writes to it and opened again only once the modes git wrote have been tightened and everything in it has been moved into the agent's group (ILD does that itself, for the store root, each mirror and what is in them, rather than relying on how the deployment made the store; it fails with a message if it cannot).
   Operations on one mirror are serialized, the agent's reads of it included. The price is a second
   copy of every repository and a first fetch per repository after upgrading; the
   worktree's `pre-push` hook is run by ILD as the agent, with git's own arguments and stdin, before

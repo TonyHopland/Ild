@@ -27,10 +27,10 @@ internal delegate Task<ProcessResult> OrchestratorGit(
 /// </para>
 ///
 /// <para>
-/// Who may read a mirror is the group of the store root: where uids are isolated the
-/// container entrypoint makes it a setgid, read-only tree of the shared group, so every
-/// directory below it is created in that group and the setgid bit is kept when modes
-/// are tightened.
+/// The agent reads a mirror through the agent group, and the mirror does not rely on the deployment
+/// having set that up: it moves the store root (setgid, so new mirrors are born in the group) and every
+/// mirror and entry in it into the group itself, before the mirror is opened to the agent. Where
+/// the group cannot be set it says so, rather than leaving the agent to fail on a mirror it cannot see.
 /// </para>
 /// </summary>
 internal sealed class GitMirror
@@ -238,7 +238,7 @@ internal sealed class GitMirror
                 if (entry.LinkTarget is not null) continue;
                 var directory = entry is DirectoryInfo;
                 var mode = File.GetUnixFileMode(entry.FullName);
-                var allowed = directory ? Readable | UnixFileMode.SetGroup : FileCeiling;
+                var allowed = directory ? Readable : FileCeiling;
                 // What the agent is to read, it can: in its group, and group-readable.
                 var wanted = (mode & allowed) | (!_sharedWithAgent ? 0 : directory ? Readable : UnixFileMode.GroupRead);
                 if (wanted != mode)

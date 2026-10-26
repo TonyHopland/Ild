@@ -262,6 +262,5 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
 
         var mirror = Assert.Single(Directory.GetDirectories(_mirrors));
         Assert.True(File.GetUnixFileMode(mirror).HasFlag(UnixFileMode.SetGroup));
-        Assert.True(File.GetUnixFileMode(Path.Combine(mirror, "objects")).HasFlag(UnixFileMode.SetGroup));
     }
 }
