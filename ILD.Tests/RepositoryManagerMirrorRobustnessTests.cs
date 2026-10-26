@@ -170,6 +170,80 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.False(await Task.Run(() => mgr.ValidateWorktreeHealthAsync(wt)).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
     }
 
+    private string PlantPrePush(string hooksDirectory, int exitCode)
+    {
+        var log = Path.Combine(_tmp, "pre-push.log");
+        Directory.CreateDirectory(hooksDirectory);
+        var hook = Path.Combine(hooksDirectory, "pre-push");
+        File.WriteAllText(hook, $"#!/bin/sh\n{{ echo \"args=$*\"; cat; }} >> '{log}'\necho \"rejected by the hook\" >&2\n[ {exitCode} -eq 0 ] && exit 0\nexit {exitCode}\n");
+        File.SetUnixFileMode(hook, (UnixFileMode)0b111_101_101);
+        return log;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_passing_pre_push_hook_runs_before_the_push_with_the_line_git_would_give_it(bool isolated)
+    {
+        const string branch = "ild/wi-35-run-1";
+        var mgr = NewManager(isolated);
+        var (remote, basePath, auth, wt) = await ClonedWithWorktreeAsync(mgr, branch);
+        var log = PlantPrePush(Path.Combine(basePath, ".git", "hooks"), 0);
+        var first = GitCli.Out(wt, "rev-parse", "HEAD");
+
+        var (ok, error) = await mgr.PushAsync(wt, branch, TestContext.Current.CancellationToken, auth);
+
+        Assert.True(ok, error);
+        Assert.Equal(first, GitCli.Out(remote, "rev-parse", $"refs/heads/{branch}"));
+        Assert.Equal($"args=origin {remote}\nrefs/heads/{branch} {first} refs/heads/{branch} {new string('0', first.Length)}\n", File.ReadAllText(log));
+
+        File.WriteAllText(Path.Combine(wt, "run.txt"), "second\n");
+        Assert.True(await mgr.CommitAsync(wt, "second"));
+        var second = GitCli.Out(wt, "rev-parse", "HEAD");
+        File.Delete(log);
+        Assert.True((await mgr.PushAsync(wt, branch, TestContext.Current.CancellationToken, auth)).Success);
+        Assert.Equal($"args=origin {remote}\nrefs/heads/{branch} {second} refs/heads/{branch} {first}\n", File.ReadAllText(log));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failing_pre_push_hook_stops_the_push_and_says_why(bool isolated)
+    {
+        const string branch = "ild/wi-36-run-1";
+        var mgr = NewManager(isolated);
+        var (remote, basePath, auth, wt) = await ClonedWithWorktreeAsync(mgr, branch);
+        PlantPrePush(Path.Combine(basePath, ".git", "hooks"), 1);
+        var before = AuditingRunner.BundleFilesUnderPrivateRoot();
+
+        var (ok, error) = await mgr.PushAsync(wt, branch, TestContext.Current.CancellationToken, auth);
+
+        Assert.False(ok);
+        Assert.Contains("pre-push hook failed", error);
+        Assert.Contains("rejected by the hook", error);
+        Assert.Equal("", GitCli.Out(remote, "for-each-ref", $"refs/heads/{branch}"));
+        Assert.Empty(AuditingRunner.BundleFilesUnderPrivateRoot().Except(before));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_pre_push_hook_found_through_core_hooksPath_runs(bool isolated)
+    {
+        const string branch = "ild/wi-37-run-1";
+        var mgr = NewManager(isolated);
+        var (remote, basePath, auth, wt) = await ClonedWithWorktreeAsync(mgr, branch);
+        GitCli.Run(basePath, "config", "core.hooksPath", ".husky");
+        var log = PlantPrePush(Path.Combine(wt, ".husky"), 1);
+
+        var (ok, error) = await mgr.PushAsync(wt, branch, TestContext.Current.CancellationToken, auth);
+
+        Assert.False(ok);
+        Assert.Contains("rejected by the hook", error);
+        Assert.StartsWith($"args=origin {remote}\n", File.ReadAllText(log));
+        Assert.Equal("", GitCli.Out(remote, "for-each-ref", $"refs/heads/{branch}"));
+    }
+
     [Fact]
     public async Task The_setgid_bit_the_store_root_hands_down_survives_the_mode_tightening()
     {

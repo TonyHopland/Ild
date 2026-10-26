@@ -363,6 +363,9 @@ public class RepositoryManager : IRepositoryManager
         if (code != 0 || !IsCommitSha(sha))
             return (false, string.IsNullOrWhiteSpace(stderr) ? $"branch '{branchName}' has no commit to push" : stderr);
 
+        if (await RunPrePushHookAsync(worktreePath, branchName, sha, auth, cancellationToken) is { } rejection)
+            return (false, rejection);
+
         var (mirror, openError) = await _mirrors.OpenAsync(auth.RemoteUrl, cancellationToken);
         if (mirror is null) return (false, openError);
         using (mirror)
@@ -386,6 +389,45 @@ public class RepositoryManager : IRepositoryManager
                 _logger?.LogWarning("Pushed {Branch}, but could not record origin/{Branch} as its upstream in {Worktree}", branchName, branchName, worktreePath);
             return (true, null);
         }
+    }
+
+    private const int HookOutputTail = 2000;
+
+    /// <summary>
+    /// The worktree's <c>pre-push</c> hook, run as the agent before anything is sent, as <c>git push</c>
+    /// would run it: with <c>origin</c> and the remote URL as arguments and the ref being pushed on stdin.
+    /// The push happens from the mirror, where no clone's hooks run, so this is the only place the hook
+    /// gets to object. Null when the hook accepts or there is none; otherwise why it did not. The hook has
+    /// no credentials, so one that needs the repository token fails here.
+    /// </summary>
+    private async Task<string?> RunPrePushHookAsync(
+        string worktreePath, string branchName, string sha, GitAuthOptions auth, CancellationToken ct)
+    {
+        if (TrustedRepositoryRoot(worktreePath) is null)
+            return $"{worktreePath} is not a git clone or worktree created by ILD";
+
+        var reference = $"refs/heads/{branchName}";
+        var (code, stdout, _) = await RunAsync(worktreePath, ["rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}^{{commit}}"], ct);
+        var remoteSha = code == 0 && IsCommitSha(stdout.Trim()) ? stdout.Trim() : new string('0', sha.Length);
+
+        // The line is written by a shell running as the agent, so the orchestrator never creates a file
+        // where the agent can reach it; every value arrives as an argument, never inside the script.
+        var script = """
+            wt="$1"; url="$2"; line="$3 $4 $3 $5"
+            file=$(mktemp) || exit 1
+            printf '%s\n' "$line" > "$file"
+            git -C "$wt" hook run --ignore-missing --to-stdin="$file" pre-push -- origin "$url"
+            status=$?
+            rm -f "$file"
+            exit $status
+            """;
+        var result = await _runner.RunAsync(
+            "/bin/sh", ["-c", script, "sh", Path.GetFullPath(worktreePath), WithoutUserInfo(auth.RemoteUrl), reference, sha, remoteSha],
+            "/", ct, null, _agentOptions);
+        if (result.Success) return null;
+
+        var output = (string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr).Trim();
+        return $"pre-push hook failed: {(output.Length > HookOutputTail ? output[^HookOutputTail..] : output)}";
     }
 
     public async Task<string?> GetDiffAsync(string worktreePath)

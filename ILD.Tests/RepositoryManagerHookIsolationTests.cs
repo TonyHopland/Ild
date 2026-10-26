@@ -153,7 +153,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         Assert.Contains("pre-commit", ran);
         Assert.Contains("filter", ran);
         Assert.Contains("textconv", ran);
-        Assert.DoesNotContain("pre-push", ran);
+        Assert.Contains("pre-push", ran);
     }
 
     [Theory]

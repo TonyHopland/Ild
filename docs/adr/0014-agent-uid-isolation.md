@@ -141,8 +141,10 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   shared tree like the agent installs, closed to the agent while the orchestrator's git
   writes to it and opened again only once the modes git wrote have been tightened.
   Operations on one mirror are serialized, the agent's reads of it included. The price is a second
-  copy of every repository and a first fetch per repository after upgrading; a
-  `pre-push` hook no longer runs, since nothing pushes from the clone. Before any
+  copy of every repository and a first fetch per repository after upgrading; the
+  worktree's `pre-push` hook is run by ILD as the agent, with git's own arguments and stdin, before
+  the mirror push and without credentials, and a failing hook stops the push. A hook that needs the
+  repository token, such as Git LFS's (not installed in the image), fails. Before any
   git command is started in a worktree, its `.git` must be a regular file naming
   `<repo>/.git/worktrees/<name>` with a real `<repo>/.git` directory and a
   back-pointer to that file (or a real `.git` directory, for a base clone); a link or
