@@ -283,6 +283,12 @@ public interface IWorkItemManager
     Task<IReadOnlyList<RemoteWorkItemEditProposal>> ListRequestedEditProposalsAsync(string workItemId, CancellationToken ct = default);
 
     /// <summary>
+    /// Delete the run row, as <see cref="ILD.Data.Stores.Interfaces.ILoopRunStore.DeleteAsync"/> does, and
+    /// mark the pending human input suggestions for its questions Stale. False when the run is not deleted.
+    /// </summary>
+    Task<bool> DeleteRunAsync(Guid runId);
+
+    /// <summary>
     /// Reject the loop run's still-pending edit proposals because the run is being
     /// deleted; decided ones stay as they are. Nothing to do when no WorkItem
     /// server is configured. Throws <see cref="HttpRequestException"/> when the

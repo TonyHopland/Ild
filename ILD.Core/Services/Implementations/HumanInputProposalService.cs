@@ -116,9 +116,9 @@ public sealed class HumanInputProposalService : IHumanInputProposalService
     private async Task<(LoopRun Run, LoopRunNode Visit, IReadOnlyList<string> Offered)?> ParkedVisitAsync(string workItemId)
     {
         if (await _runs.GetActiveByWorkItemAsync(workItemId) is not
-            { Status: LoopRunStatus.WaitingHuman, IsHalted: false, HumanFeedbackReason: HumanFeedbackReasons.HumanInputNeeded } run)
+            { HumanFeedbackReason: HumanFeedbackReasons.HumanInputNeeded } run)
             return null;
-        if (ParkedNode.WaitingVisit(await _runs.GetRunNodesAsync(run.Id), run.CurrentNodeId) is not { } visit)
+        if (ParkedNode.WaitingVisitOf(run, await _runs.GetRunNodesAsync(run.Id)) is not { } visit)
             return null;
         var node = (await _runs.GetNodesForVersionAsync(run.LoopTemplateVersionId)).FirstOrDefault(n => n.Id == run.CurrentNodeId);
         if (node is not { NodeType: NodeType.Human })

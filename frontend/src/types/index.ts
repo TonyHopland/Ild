@@ -658,6 +658,8 @@ export interface LoopRun {
   currentNodeId: string | null;
   isPaused: boolean;
   isHalted?: boolean;
+  /** The execution of the Human node the run waits on a person at; null when it is not waiting for one. */
+  waitingRunNodeId?: string | null;
   /** Who parked the run, when `isHalted`; absent/null for a human's Halt. */
   haltReason?: HaltReason | string | null;
   /** For a GlobalVariableMissing park, the ones still missing or empty now. */

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, cleanup, act, waitFor, within, fireEvent, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { LoopRun, LoopRunNodeStatus, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
+import { LoopRun, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
 import type { HumanInputProposal } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -46,7 +46,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
   };
 }
 
-/** run-1, parked at the Human node on its question "exec-1". */
+/** run-1, waiting at the Human node on its question "exec-1". */
 function makeRun(): LoopRun {
   return {
     id: "run-1",
@@ -55,24 +55,12 @@ function makeRun(): LoopRun {
     templateVersion: 1,
     status: LoopRunStatus.WaitingHuman,
     currentNodeId: "node-1",
+    waitingRunNodeId: "exec-1",
     isPaused: false,
     nodeExecutionCount: 1,
     startedAt: "2026-09-26T09:00:00Z",
     completedAt: null,
-    nodes: [
-      {
-        id: "exec-1",
-        nodeId: "node-1",
-        nodeLabel: "Ask",
-        status: LoopRunNodeStatus.WaitingHuman,
-        effectiveInput: null,
-        output: null,
-        error: null,
-        startedAt: "2026-09-26T09:05:00Z",
-        completedAt: null,
-        executionCount: 1,
-      },
-    ],
+    nodes: [],
   };
 }
 

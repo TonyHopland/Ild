@@ -35,6 +35,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly ILogger<WorkItemManager> _logger;
     private readonly RepositoryParallelismHolds _repositoryHolds;
     private readonly IFinishedRunCleaner? _finishedRunCleaner;
+    private readonly IHumanInputProposalStore? _humanInputProposals;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -52,8 +53,10 @@ public class WorkItemManager : IWorkItemManager
         IRemoteProvider? remoteProvider = null,
         ILogger<WorkItemManager>? logger = null,
         RepositoryParallelismHolds? repositoryHolds = null,
-        IFinishedRunCleaner? finishedRunCleaner = null)
+        IFinishedRunCleaner? finishedRunCleaner = null,
+        IHumanInputProposalStore? humanInputProposals = null)
     {
+        _humanInputProposals = humanInputProposals;
         _repoManager = repoManager;
         _providerStore = providerStore;
         _eventLog = eventLog;
@@ -1594,7 +1597,7 @@ public class WorkItemManager : IWorkItemManager
                 await WithdrawPendingProposalsOfRunAsync(actor, run.Id);
             }
             catch (HttpRequestException) { continue; }
-            await _loopRunStore.DeleteAsync(run.Id);
+            await DeleteRunAsync(run.Id);
         }
         return true;
     }
@@ -1743,6 +1746,15 @@ public class WorkItemManager : IWorkItemManager
             await HintRequestersAsync(workItemId, [proposal]);
         }
         return result with { Proposal = proposal };
+    }
+
+    public async Task<bool> DeleteRunAsync(Guid runId)
+    {
+        var workItemId = (await _loopRunStore.GetByIdAsync(runId))?.WorkItemId;
+        if (workItemId is null || !await _loopRunStore.DeleteAsync(runId)) return false;
+        if (_humanInputProposals is not null && await _humanInputProposals.StalePendingForRunAsync(runId, CancellationToken.None) > 0)
+            await _notifier.HumanInputProposalsChangedAsync(workItemId);
+        return true;
     }
 
     public async Task WithdrawPendingProposalsOfRunAsync(WorkItemActor actor, Guid runId, CancellationToken ct = default)

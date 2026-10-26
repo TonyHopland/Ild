@@ -212,6 +212,6 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
             return false;
         }
 
-        return await runStore.DeleteAsync(run.Id);
+        return await workItems.DeleteRunAsync(run.Id);
     }
 }
