@@ -63,7 +63,7 @@ public sealed class ProcessRunner : IProcessRunner
             foreach (var key in AgentGitEnvironmentKeys)
                 psi.Environment.Remove(key);
         }
-        else if (options?.InheritOrchestratorSecrets != true)
+        else
         {
             foreach (var key in AgentIsolation.SecretEnvironmentKeys)
                 psi.Environment.Remove(key);

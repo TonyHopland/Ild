@@ -175,7 +175,8 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         var log = Path.Combine(_tmp, "pre-push.log");
         Directory.CreateDirectory(hooksDirectory);
         var hook = Path.Combine(hooksDirectory, "pre-push");
-        File.WriteAllText(hook, $"#!/bin/sh\n{{ echo \"args=$*\"; cat; }} >> '{log}'\necho \"rejected by the hook\" >&2\n[ {exitCode} -eq 0 ] && exit 0\nexit {exitCode}\n");
+        var rejection = exitCode == 0 ? string.Empty : "echo \"rejected by the hook\" >&2\n";
+        File.WriteAllText(hook, $"#!/bin/sh\n{{ echo \"args=$*\"; cat; }} >> '{log}'\n{rejection}exit {exitCode}\n");
         File.SetUnixFileMode(hook, (UnixFileMode)0b111_101_101);
         return log;
     }

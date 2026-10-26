@@ -54,16 +54,6 @@ public class ProcessRunnerEnvironmentTests
     }
 
     [Fact]
-    public void A_caller_can_opt_in_to_inheriting_the_secrets()
-    {
-        var psi = ProcessRunner.BuildStartInfo(
-            "tool", [], null, null, new ProcessRunOptions(InheritOrchestratorSecrets: true), null, Inherited());
-
-        var env = Env(psi);
-        Assert.All(AgentIsolation.SecretEnvironmentKeys, key => Assert.Equal("secret-" + key, env[key]));
-    }
-
-    [Fact]
     public void A_clean_environment_holds_only_what_the_caller_passes()
     {
         var psi = ProcessRunner.BuildStartInfo(

@@ -105,10 +105,10 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   behavior; the container image sets the variable. A Cmd node's command still has
   the orchestrator environment stripped in single-uid mode (see the capability
   paragraph below).
-  `ProcessRunner` (npm, version checks) is deliberately **not** routed by default —
-  those are orchestrator operations and keep running as `ild`, with the secrets
-  `SecretEnvironmentKeys` names removed from what they inherit unless a caller
-  opts in. Git is the exception that is split by where it runs; see the next
+  `ProcessRunner` (npm, version checks) is deliberately **not** routed — those are
+  orchestrator operations and keep running as `ild`, always with the secrets
+  `SecretEnvironmentKeys` names removed from what they inherit (there is no way
+  to keep them). Git is the exception that is split by where it runs; see the next
   paragraph.
 
 - **git in a clone or worktree runs as the agent; the orchestrator runs git only in

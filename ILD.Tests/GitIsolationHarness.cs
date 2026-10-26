@@ -116,11 +116,7 @@ internal sealed class AuditingRunner : IProcessRunner
         var forwarded = environmentVariables is null
             ? new Dictionary<string, string?>(StringComparer.Ordinal)
             : new Dictionary<string, string?>(environmentVariables, StringComparer.Ordinal);
-        // An agent-scoped script (the pre-push hook runner) is held to the agent rules and tagged like git.
-        var agentScript = fileName != "git" && options?.AgentScoped == true;
-        if (agentScript)
-            AuditAgentScript(fileName, args, workingDirectory, environmentVariables, options);
-        if (_tagRoutes && (fileName == "git" || agentScript))
+        if (_tagRoutes && fileName == "git")
             forwarded[RouteVariable] = orchestrator ? "orchestrator" : "agent";
 
         var executed = options is null ? null : options with { AsAgent = null };
@@ -145,18 +141,7 @@ internal sealed class AuditingRunner : IProcessRunner
             AuditAgent(label, psi.FileName, argv, environment);
     }
 
-    private void AuditAgentScript(
-        string fileName, IReadOnlyList<string> args, string? cwd, IReadOnlyDictionary<string, string?>? env, ProcessRunOptions? options)
-    {
-        var psi = ProcessRunner.BuildStartInfo(fileName, args, cwd, env, options, Isolated ? Agent.User : null, Seed);
-        var environment = psi.Environment.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value!, StringComparer.Ordinal);
-        var label = $"{fileName} {string.Join(' ', args.Take(2))} (cwd={cwd ?? "<none>"})";
-        if (!Isolated && psi.FileName == Setpriv)
-            Violate($"{label}: setpriv used outside isolated mode");
-        AuditAgent(label, psi.FileName, psi.ArgumentList.ToList(), environment, fileName);
-    }
-
-    private void AuditAgent(string label, string file, List<string> argv, Dictionary<string, string> environment, string command = "git")
+    private void AuditAgent(string label, string file, List<string> argv, Dictionary<string, string> environment)
     {
         var banned = AgentIsolation.SecretEnvironmentKeys
             .Concat(AgentIsolation.OrchestratorTopologyEnvKeys)
@@ -175,7 +160,7 @@ internal sealed class AuditingRunner : IProcessRunner
         if (!Isolated) return;
 
         var dashDash = argv.IndexOf("--");
-        if (file != Setpriv || !argv.Contains($"--reuid={Agent.User}") || dashDash < 0 || dashDash + 1 >= argv.Count || argv[dashDash + 1] != command)
+        if (file != Setpriv || !argv.Contains($"--reuid={Agent.User}") || dashDash < 0 || dashDash + 1 >= argv.Count || argv[dashDash + 1] != "git")
             Violate($"{label}: not launched as the agent (start info: {file} {string.Join(' ', argv.Take(8))})");
     }
 
