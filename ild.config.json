@@ -6,11 +6,7 @@
         "install": [
           {
             "cwd": ".",
-            "command": "command -v vp \u003E/dev/null 2\u003E\u00261 || npm install -g vite-plus"
-          },
-          {
-            "cwd": "frontend",
-            "command": "vp install"
+            "command": "pnpm install --frozen-lockfile"
           },
           {
             "cwd": ".",
