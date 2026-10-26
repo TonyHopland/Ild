@@ -1,3 +1,4 @@
+using ILD.Api.Configuration;
 using ILD.Api.Hubs;
 using ILD.Core.Services.Remote;
 using Microsoft.AspNetCore.SignalR;
