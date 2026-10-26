@@ -1,0 +1,21 @@
+# ADR-0030: A human answers a parked Human node; agents only suggest the answer
+
+A work item parked at a **Human** node waits for a person to take one of the node's outputs, with optional input or context for the next node. Taking one moves the run on, so an agent that could take it would answer the question for the person. Agents (loop runs and chat sessions) therefore never answer. They **suggest** with `propose_human_input`; the suggestion, a **Human Input Proposal**, delivers nothing until a human approves it in the work item's Action tab, and only the human surface can. This follows [ADR-0022](./0022-agent-edits-are-human-approved-proposals.md), [ADR-0027](./0027-agents-suggest-global-variable-changes.md) and [ADR-0028](./0028-agents-propose-loop-template-changes.md), with these differences.
+
+- **A suggestion answers one visit, not the work item.** It records the run and the parked visit (`LoopRunNode`) of the Human node when it was made, and its output must be one the node offers, computed as the work item's `humanFeedbackActions` are: a custom edge by its name, otherwise OnSuccess or OnFailure. Only a run parked for "Human Input Needed" at a Human node takes one; a PR-awaiting-merge park, a failure park, a halted run and a work item with no active run are refused (409). A visit that comes round again, even of the same node, is a different question, so an approval for the earlier one finds it closed.
+- **Approving is the Action tab button.** OnSuccess is delivered as Approve is, OnFailure as Reject, any other output as that named output's button, each with the suggested text, through the same human feedback path. That path, pinned to the suggested visit, is the one place that decides whether the answer lands; the run's event log records the same `HumanFeedbackReceived` event a button press writes.
+- **Claim first, then deliver.** Approving is a compare-and-set from Pending to Approved, so of two approvals only one delivers; if the delivery is then refused (the visit is no longer open, the run was cancelled or deleted) the claim is given back as **Stale** and nothing was sent. Deciding after delivering could mark an answer that did land as Stale when two approvals race. The cost is a crash between the claim and the delivery, which leaves the suggestion Approved with nothing sent; the run is still parked and is answered normally.
+- **Any answer closes the visit's other suggestions.** Once an answer is delivered to a visit, by a button or an approval, every other pending suggestion for it goes Stale. Cancelling or deleting a run does not touch them; the next approve finds the visit closed and marks the suggestion Stale.
+- **One service decides, and takes who decided as a name.** `IHumanInputProposalService` holds the rules for suggesting, approving and rejecting; the controller passes the signed-in username. A later "Auto approve next step" on a work item can call the same approve with its own name as the decider, with no change to the rules, the record or the Action tab. It is not built: for now approval is a human click.
+- **Suggestions live on the ILD instance** ([ADR-0025](./0025-workitem-server-contract-is-tracker-mappable.md)) and only reference the run or chat that made them.
+
+## Considered options
+
+- **A field on `propose_workitem_edit`.** Rejected: that tool edits the item's own fields, and an answer has its own lifecycle (a visit, a delivery, Stale when answered).
+- **Deliver, then record the decision.** Rejected: see claim first, above.
+- **Edit the text before approving.** Not offered: the human approves exactly what they read, as for the other suggestion kinds.
+
+## Consequences
+
+- A source holds at most one pending suggestion per work item: a newer one supersedes the earlier, and the database enforces it.
+- The agent is not told the decision, and has no list tool; a refused suggestion's error names the outputs the node offers.
