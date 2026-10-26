@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 
@@ -10,6 +11,7 @@ namespace ILD.Tests;
 /// with something that blocks. Every test runs once per mode under <see cref="AuditingRunner"/>.
 /// </summary>
 [Collection("Git")]
+[SupportedOSPlatform("linux")]
 public class RepositoryManagerMirrorRobustnessTests : IDisposable
 {
     private readonly string _tmp = Path.Combine(Path.GetTempPath(), "ild-mirror-robust-" + Guid.NewGuid().ToString("N"));
@@ -243,6 +245,47 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.Contains("rejected by the hook", error);
         Assert.StartsWith($"args=origin {remote}\n", File.ReadAllText(log));
         Assert.Equal("", GitCli.Out(remote, "for-each-ref", $"refs/heads/{branch}"));
+    }
+
+    /// <summary>Notes, as each git call starts, whether the folder above the path it is about to create exists.</summary>
+    private sealed class ParentWatchingRunner(string clonesParent, string worktreesParent) : IProcessRunner
+    {
+        private readonly IProcessRunner _inner = new ProcessRunner();
+
+        public bool? CloneParentExisted { get; private set; }
+        public bool? WorktreeParentExisted { get; private set; }
+
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
+        {
+            if (fileName == "git" && options?.CleanEnvironment != true)
+            {
+                if (args.Contains("clone")) CloneParentExisted = Directory.Exists(clonesParent);
+                if (args.Contains("worktree") && args.Contains("add")) WorktreeParentExisted = Directory.Exists(worktreesParent);
+            }
+
+            return _inner.RunAsync(fileName, args, workingDirectory, ct, environmentVariables, options);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_folders_above_a_clone_and_a_worktree_are_made_by_the_agents_git_not_the_orchestrator(bool isolated)
+    {
+        var clonesParent = Path.Combine(_tmp, "store", "repos");
+        var watcher = new ParentWatchingRunner(clonesParent, Path.Combine(_worktrees, "ild"));
+        var mgr = NewManager(isolated, watcher);
+        var remote = GitCli.MakeRemote(_tmp, "remote");
+        var auth = new GitAuthOptions(remote, null);
+
+        var target = Path.Combine(clonesParent, "base");
+        var (ok, error) = await mgr.CloneAsync(remote, target, TestContext.Current.CancellationToken, auth);
+        Assert.True(ok, error);
+        var worktree = await mgr.CreateWorktreeAsync(target, "ild/wi-38-run-1");
+
+        Assert.False(watcher.CloneParentExisted);
+        Assert.False(watcher.WorktreeParentExisted);
+        Assert.True(Directory.Exists(worktree));
     }
 
     [Fact]

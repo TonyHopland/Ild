@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 
@@ -8,6 +9,7 @@ namespace ILD.Tests;
 /// The mirror hands itself to the agent's group: the agent reads it through that group, so it
 /// cannot depend on the store having been set up that way by the deployment.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public class GitMirrorGroupTests : IDisposable
 {
     private const string Remote = "https://forge.example.test/team/app.git";

@@ -74,9 +74,8 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
+        // git makes the folders above the clone, as the agent, so the agent owns what it writes into.
         var target = Path.GetFullPath(targetPath);
-        var parent = Path.GetDirectoryName(target);
-        if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
 
         var remote = (auth ?? new GitAuthOptions(cloneUrl, null)) with { RemoteUrl = cloneUrl };
         var (mirror, openError) = await _mirrors.OpenAsync(cloneUrl, cancellationToken);
@@ -105,10 +104,6 @@ public class RepositoryManager : IRepositoryManager
     {
         Directory.CreateDirectory(_worktreesRoot);
         var worktreePath = Path.GetFullPath(Path.Combine(_worktreesRoot, branchName));
-        var parent = Path.GetDirectoryName(worktreePath);
-        if (!string.IsNullOrEmpty(parent))
-            Directory.CreateDirectory(parent);
-
         await RunAsync(repoPath, "worktree", "prune");
 
         if (Directory.Exists(worktreePath))

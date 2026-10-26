@@ -61,13 +61,6 @@ internal sealed class GitMirror
         _logger = logger;
     }
 
-    private struct GroupEntry
-    {
-        public IntPtr Name;
-        public IntPtr Password;
-        public uint Id;
-    }
-
     [DllImport("libc", EntryPoint = "getgrnam")]
     private static extern IntPtr GetGroupByName(string name);
 
@@ -83,7 +76,8 @@ internal sealed class GitMirror
         lock (GroupLookup)
         {
             var entry = GetGroupByName(group);
-            return entry == IntPtr.Zero ? null : Marshal.PtrToStructure<GroupEntry>(entry).Id;
+            // struct group { char *gr_name; char *gr_passwd; gid_t gr_gid; ... }
+            return entry == IntPtr.Zero ? null : (uint)Marshal.ReadInt32(entry, 2 * IntPtr.Size);
         }
     }
 
@@ -174,7 +168,7 @@ internal sealed class GitMirror
         {
             // The agent reaches a mirror through the store's group: the root is in it, and hands it down.
             MoveToGroup(_root, root);
-            File.SetUnixFileMode(_root, File.GetUnixFileMode(_root) | UnixFileMode.SetGroup | UnixFileMode.GroupExecute);
+            AddMode(_root, UnixFileMode.SetGroup | UnixFileMode.GroupExecute);
         }
 
         if (File.Exists(Path.Combine(path, "HEAD")))
@@ -217,6 +211,12 @@ internal sealed class GitMirror
             Directory.CreateDirectory(path);
         else
             Directory.CreateDirectory(path, mode);
+    }
+
+    private static void AddMode(string directory, UnixFileMode bits)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.SetUnixFileMode(directory, File.GetUnixFileMode(directory) | bits);
     }
 
     /// <summary>Set the permission bits of a directory without losing the setgid bit it inherited.</summary>
