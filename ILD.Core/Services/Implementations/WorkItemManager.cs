@@ -1438,31 +1438,37 @@ public class WorkItemManager : IWorkItemManager
     // ──────────────────────────────────────────────────────────────────
 
     public Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input)
-        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Success(input), input, edgeName: null);
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Approval(input));
 
     public Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null)
-        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Reject("Rejected by user", input),
-            RejectionFeedback(input), edgeName: null);
-
-    private static string RejectionFeedback(string? input)
-        => string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}";
-
-    public Task<bool> SubmitHumanFeedbackAnswerAsync(string workItemId, Guid runId, Guid runNodeId, string output, string input)
-        => output switch
-        {
-            nameof(EdgeType.OnSuccess) => DeliverHumanFeedbackAsync(
-                workItemId, runId, NodeSignal.Success(input), input, edgeName: null, runNodeId),
-            nameof(EdgeType.OnFailure) => DeliverHumanFeedbackAsync(
-                workItemId, runId, NodeSignal.Reject("Rejected by user", input), RejectionFeedback(input), edgeName: null, runNodeId),
-            _ => DeliverHumanFeedbackAsync(
-                workItemId, runId, NodeSignal.Custom(output, input), input, output, runNodeId),
-        };
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Rejection(input));
 
     public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input)
         => SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input);
 
     public Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input)
-        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Custom(edgeName, input), input, edgeName);
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Edge(edgeName, input));
+
+    public Task<bool> SubmitHumanFeedbackAnswerAsync(string workItemId, Guid runId, Guid runNodeId, string output, string input)
+        => DeliverHumanFeedbackAsync(workItemId, runId, output switch
+        {
+            nameof(EdgeType.OnSuccess) => HumanAnswer.Approval(input),
+            nameof(EdgeType.OnFailure) => HumanAnswer.Rejection(input),
+            _ => HumanAnswer.Edge(output, input),
+        }, runNodeId);
+
+    /// <summary>What each answer button hands the engine: the node's signal, the feedback logged and the edge named.</summary>
+    private readonly record struct HumanAnswer(NodeSignal Signal, string Feedback, string? EdgeName)
+    {
+        public static HumanAnswer Approval(string input) => new(NodeSignal.Success(input), input, null);
+
+        public static HumanAnswer Rejection(string? input) => new(
+            NodeSignal.Reject("Rejected by user", input),
+            string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}",
+            null);
+
+        public static HumanAnswer Edge(string edgeName, string input) => new(NodeSignal.Custom(edgeName, input), input, edgeName);
+    }
 
     /// <summary>
     /// Hand an answer to the node it answers, which only the work item's active
@@ -1473,8 +1479,7 @@ public class WorkItemManager : IWorkItemManager
     /// node may be the one waiting: an answer to one visit never lands on a later one.
     /// </summary>
     private async Task<bool> DeliverHumanFeedbackAsync(
-        string workItemId, Guid runId, NodeSignal signal, string feedback, string? edgeName,
-        Guid? expectedRunNodeId = null)
+        string workItemId, Guid runId, HumanAnswer answer, Guid? expectedRunNodeId = null)
     {
         if (await GetWorkItemAsync(workItemId) is null) return false;
 
@@ -1493,7 +1498,7 @@ public class WorkItemManager : IWorkItemManager
         if (_engine is null)
             throw new HumanFeedbackRefusedException("No loop engine is running to deliver this answer.");
 
-        await _engine.DeliverHumanFeedbackAsync(runId, waiting.Id, signal, feedback, edgeName);
+        await _engine.DeliverHumanFeedbackAsync(runId, waiting.Id, answer.Signal, answer.Feedback, answer.EdgeName);
         return true;
     }
 
