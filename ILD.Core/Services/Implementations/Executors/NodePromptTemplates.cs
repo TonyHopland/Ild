@@ -47,6 +47,8 @@ public static class NodePromptTemplates
                 return [NodeConfig.Parse<NodeConfig.Human>(node.Config).Prompt];
             case NodeType.Prompt:
                 return [NodeConfig.Parse<NodeConfig.Prompt>(node.Config).Template];
+            case NodeType.SetVariable:
+                return (NodeConfig.Parse<NodeConfig.SetVariable>(node.Config).Assignments ?? []).Select(a => a.Value);
             case NodeType.PR:
                 var pr = NodeConfig.Parse<NodeConfig.Pr>(node.Config);
                 // The description is rendered only to open the pull request.

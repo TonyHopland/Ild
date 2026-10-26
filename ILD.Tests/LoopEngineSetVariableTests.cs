@@ -244,4 +244,31 @@ public class LoopEngineSetVariableTests
             new[] { ("doubled", "okok"), ("kept", "set"), ("seed", "ok") },
             (await store.GetVariablesAsync(h.RunId)).Select(v => (v.Name, v.Value)));
     }
+
+    [Fact]
+    public async Task A_missing_global_parks_before_it_and_after_the_global_is_set_Resume_stores_its_value()
+    {
+        using var h = Harness();
+        Graph(h, Assignments(("rules", "{{Global.Rules}}")), NodeType.Prompt, """{"prompt":"{{Var.rules}}"}""");
+
+        await h.RunAsync();
+
+        Assert.Equal(HaltReason.GlobalVariableMissing, h.ReloadRun().HaltReason);
+        Assert.Equal(h.NodesById["set"].Id, h.ReloadRun().CurrentNodeId);
+        Assert.DoesNotContain(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["set"].Id);
+
+        await h.Services.GetRequiredService<IGlobalVariableStore>().AddAsync(new GlobalVariable
+        {
+            Id = Guid.NewGuid(),
+            Name = "Rules",
+            NormalizedName = GlobalVariable.Normalize("Rules"),
+            Value = "be brief",
+            UpdatedAt = DateTime.UtcNow,
+        }, CancellationToken.None);
+        await h.Engine.ResumeFromHaltAsync(h.RunId, null);
+        await h.WaitUntilIdleAsync();
+
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+        Assert.Equal("be brief", Assert.Single(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["next"].Id).Output);
+    }
 }
