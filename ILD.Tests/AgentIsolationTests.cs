@@ -661,12 +661,13 @@ public class AgentIsolationTests
     }
 
     [Fact]
-    public void StripOrchestratorEnvironment_names_the_six_topology_variables()
+    public void StripOrchestratorEnvironment_names_the_seven_topology_variables()
     {
         Assert.Equal(new[]
         {
             AgentIsolation.AgentUserEnvVar,
             AgentIsolation.AgentGroupEnvVar,
+            AgentIsolation.SharedGroupEnvVar,
             AgentIsolation.AgentHomeEnvVar,
             AgentIsolation.ScratchRootEnvVar,
             AgentIsolation.PrivateRootEnvVar,

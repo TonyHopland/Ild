@@ -14,6 +14,9 @@ namespace ILD.Tests;
 [SupportedOSPlatform("linux")]
 public class RepositoryManagerMirrorRobustnessTests : IDisposable
 {
+    // Not a group this host knows, so the mirrors stay where they are made.
+    private const string SharedGroup = "agents";
+
     private readonly string _tmp = Path.Combine(Path.GetTempPath(), "ild-mirror-robust-" + Guid.NewGuid().ToString("N"));
     private readonly string _mirrors;
     private readonly string _worktrees;
@@ -40,7 +43,7 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         _runners.Add(runner);
-        return new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors);
+        return new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup);
     }
 
     private async Task<(string Remote, string Base, GitAuthOptions Auth, string Worktree)> ClonedWithWorktreeAsync(RepositoryManager mgr, string branch)

@@ -165,7 +165,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         _runners.Add(runner);
         runner.Forbid(Path.Combine(_tmp, "base"));
         runner.Forbid(Path.Combine(_tmp, "wt"));
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"));
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"), sharedGroup: "agents");
 
         await RunCycleAsync(mgr);
 
@@ -179,7 +179,8 @@ public class RepositoryManagerHookIsolationTests : IDisposable
     public async Task Planted_commands_run_under_the_agent_uid_not_the_orchestrators()
     {
         var user = Environment.GetEnvironmentVariable("ILD_TEST_AGENT_USER") ?? "agent";
-        var group = Environment.GetEnvironmentVariable("ILD_TEST_AGENT_GROUP") ?? "ild-agents";
+        var group = Environment.GetEnvironmentVariable("ILD_TEST_AGENT_GROUP") ?? "agent";
+        var sharedGroup = Environment.GetEnvironmentVariable("ILD_TEST_SHARED_GROUP") ?? "ild-agents";
         var home = Environment.GetEnvironmentVariable("ILD_TEST_AGENT_HOME") ?? "/home/agent";
         var ownUid = Capture("id", "-u");
         var agentUid = TryCapture("/usr/bin/setpriv", $"--reuid={user}", $"--regid={group}", "--init-groups", "id", "-u");
@@ -192,7 +193,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         File.SetUnixFileMode(_probe, (UnixFileMode)0b111_101_101);
         var worktrees = Directory.CreateDirectory(Path.Combine(_tmp, "wt")).FullName;
         File.SetUnixFileMode(worktrees, (UnixFileMode)0b111_111_111);
-        var mgr = new RepositoryManager(new ProcessRunner(), null, worktrees, new AgentIdentity(user, group, home), Path.Combine(_tmp, "mirrors"));
+        var mgr = new RepositoryManager(new ProcessRunner(), null, worktrees, new AgentIdentity(user, group, home), Path.Combine(_tmp, "mirrors"), sharedGroup);
 
         await RunCycleAsync(mgr);
 

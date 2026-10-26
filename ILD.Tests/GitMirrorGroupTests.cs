@@ -6,7 +6,7 @@ using ILD.Core.Services.Interfaces;
 namespace ILD.Tests;
 
 /// <summary>
-/// The mirror hands itself to the agent's group: the agent reads it through that group, so it
+/// The mirror hands itself to the shared group: the agent reads it through that group, so it
 /// cannot depend on the store having been set up that way by the deployment.
 /// </summary>
 [SupportedOSPlatform("linux")]
@@ -46,7 +46,7 @@ public class GitMirrorGroupTests : IDisposable
         return other;
     }
 
-    private GitMirror NewMirror(string root, string group)
+    private GitMirror NewMirror(string root, string? group)
     {
         var runner = new ProcessRunner();
         var environment = new Dictionary<string, string?>
@@ -57,7 +57,7 @@ public class GitMirrorGroupTests : IDisposable
             ["GIT_CONFIG_GLOBAL"] = "/dev/null",
         };
         return new GitMirror(
-            root, group,
+            root, group, sharedWithAgent: true,
             (directory, args, _, ct, _) => runner.RunAsync("git", args, directory, ct, environment, new ProcessRunOptions(CleanEnvironment: true)));
     }
 
@@ -123,5 +123,84 @@ public class GitMirrorGroupTests : IDisposable
 
         Assert.Null(session);
         Assert.Contains($"not in group {foreign}", error);
+    }
+
+    [Fact]
+    public async Task The_mirror_moves_into_the_shared_group_and_never_the_agents_primary_group()
+    {
+        var shared = OtherGroup();
+        var primary = Run("id", "-g");
+        var root = Path.Combine(_tmp, "mirrors");
+        Directory.CreateDirectory(root);
+        Run("chgrp", primary, root);
+        var mirror = NewMirror(root, shared);
+
+        var (session, error) = await mirror.OpenAsync(Remote, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(session);
+        using (session)
+        {
+            Assert.Null(error);
+            Assert.Equal(shared, GroupOf(root));
+            Assert.Equal(shared, GroupOf(session.Path));
+            Assert.NotEqual(primary, GroupOf(Path.Combine(session.Path, "HEAD")));
+        }
+    }
+
+    [Fact]
+    public async Task A_missing_shared_group_with_a_setgid_group_readable_root_works_without_changing_its_group()
+    {
+        var group = OtherGroup();
+        var root = Path.Combine(_tmp, "mirrors");
+        Directory.CreateDirectory(root);
+        Run("chgrp", group, root);
+        Run("chmod", "2750", root);
+
+        var (session, error) = await NewMirror(root, null).OpenAsync(Remote, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(session);
+        using (session)
+        {
+            Assert.Null(error);
+            Assert.Equal(group, GroupOf(root));
+            Assert.Equal(group, GroupOf(session.Path));
+            Assert.Equal(group, GroupOf(Path.Combine(session.Path, "HEAD")));
+        }
+    }
+
+    [Fact]
+    public async Task A_missing_shared_group_with_a_root_that_is_not_setgid_names_SHARED_GROUP()
+    {
+        if (!OperatingSystem.IsLinux()) Assert.Skip("groups are a Linux filesystem behaviour");
+        var root = Path.Combine(_tmp, "mirrors");
+        Directory.CreateDirectory(root);
+        Run("chmod", "750", root);
+
+        var (session, error) = await NewMirror(root, null).OpenAsync(Remote, TestContext.Current.CancellationToken);
+
+        Assert.Null(session);
+        Assert.Contains("SHARED_GROUP", error);
+        Assert.Contains("ILD_SHARED_GROUP", error);
+    }
+
+    [Fact]
+    public void The_entrypoint_exports_the_group_it_gives_the_mirror_root()
+    {
+        var root = RepositoryRoot();
+        var entrypoint = File.ReadAllText(Path.Combine(root, "entrypoint.sh"));
+        var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
+
+        Assert.Contains("export ILD_SHARED_GROUP=\"$SHARED_GROUP\"", entrypoint);
+        Assert.DoesNotContain("export ILD_SHARED_GROUP=\"$AGENT_GROUP\"", entrypoint);
+        // The group ensure_shared_ro gives each SHARED_RO_DIRS entry is SHARED_GROUP, and the mirror root is one.
+        Assert.Contains("chgrp -R \"$SHARED_GROUP\" \"$path\"", entrypoint[entrypoint.IndexOf("ensure_shared_ro() {", StringComparison.Ordinal)..]);
+        Assert.Matches("ENV SHARED_RO_DIRS=\"[^\"]*/data/git-mirrors", dockerfile);
+    }
+
+    private static string RepositoryRoot()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "ILD.sln"))) return dir.FullName;
+        throw new InvalidOperationException($"no ILD.sln above {AppContext.BaseDirectory}");
     }
 }
