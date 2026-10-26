@@ -39,6 +39,7 @@ public sealed class ProcessRunner : IProcessRunner
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = options?.StandardInputFrom is not null,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
@@ -103,16 +104,22 @@ public sealed class ProcessRunner : IProcessRunner
         using var proc = Process.Start(
             BuildStartInfo(fileName, args, workingDirectory, environmentVariables, options, AgentIsolation.AgentUser, null))!;
         var stdoutTask = options?.StandardOutputTo is { } sink
-            ? CopyToAsync(proc.StandardOutput.BaseStream, sink, ct)
+            ? CopyStandardOutputAsync(proc, sink, ct)
             : proc.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = proc.StandardError.ReadToEndAsync(ct);
+        var stdinTask = options?.StandardInputFrom is { } source ? FeedStandardInputAsync(proc, source, ct) : Task.CompletedTask;
         try
         {
             await proc.WaitForExitAsync(ct);
         }
         catch (OperationCanceledException)
         {
-            try { proc.Kill(entireProcessTree: true); }
+            try
+            {
+                proc.Kill(entireProcessTree: true);
+                // Nothing it started may still be writing once this returns.
+                await proc.WaitForExitAsync(CancellationToken.None);
+            }
             catch (InvalidOperationException) { /* already exited */ }
             catch (Exception ex) { _logger?.LogWarning(ex, "kill failed for {File}", fileName); }
             throw;
@@ -123,6 +130,7 @@ public sealed class ProcessRunner : IProcessRunner
         {
             stdout = await stdoutTask;
             stderr = await stderrTask;
+            await stdinTask;
         }
         catch (OperationCanceledException)
         {
@@ -133,10 +141,35 @@ public sealed class ProcessRunner : IProcessRunner
         return new ProcessResult(proc.ExitCode, stdout, stderr);
     }
 
-    private static async Task<string> CopyToAsync(Stream source, Stream sink, CancellationToken ct)
+    // A sink that cannot take more leaves the child blocked writing to a pipe nobody
+    // drains, so it is stopped rather than left to wait for a cancellation that may never come.
+    private static async Task<string> CopyStandardOutputAsync(Process proc, Stream sink, CancellationToken ct)
     {
-        await source.CopyToAsync(sink, ct);
-        await sink.FlushAsync(ct);
+        try
+        {
+            await proc.StandardOutput.BaseStream.CopyToAsync(sink, ct);
+            await sink.FlushAsync(ct);
+        }
+        catch
+        {
+            try { proc.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already exited */ }
+            throw;
+        }
         return string.Empty;
+    }
+
+    // A child that exits without reading all of its input closes the pipe on us; its exit
+    // code is the answer, not the broken pipe.
+    private static async Task FeedStandardInputAsync(Process proc, Stream source, CancellationToken ct)
+    {
+        try
+        {
+            await source.CopyToAsync(proc.StandardInput.BaseStream, ct);
+        }
+        catch (IOException) { }
+        finally
+        {
+            try { proc.StandardInput.Close(); } catch (IOException) { }
+        }
     }
 }

@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
@@ -49,7 +51,10 @@ public class RepositoryManager : IRepositoryManager
         _agent = agent ?? ConfiguredAgent();
         _agentOptions = new ProcessRunOptions(AsAgent: _agent, AgentScoped: true);
         _mirrors = new GitMirror(
-            mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"), _agent, runner, OrchestratorGitAsync, logger);
+            mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
+            sharedWithAgent: _agent is not null,
+            (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
+            logger);
     }
 
     // Test/back-compat constructor: spins up a local ProcessRunner.
@@ -212,13 +217,19 @@ public class RepositoryManager : IRepositoryManager
     }
 
     /// <summary>
-    /// Bring the clone's remote-tracking refs to what the mirror holds. The agent does this
-    /// without credentials, from the mirror's path rather than from any remote its config names.
+    /// Bring the clone's remote-tracking refs to what the mirror holds: every branch, pruning the ones the
+    /// remote no longer has, or just <paramref name="onlyBranch"/> when the mirror is known to hold no more
+    /// than that (a push to a mirror not fetched yet). The agent does this without credentials, from the
+    /// mirror's path rather than from any remote its config names.
     /// </summary>
-    private async Task<bool> SyncFromMirrorAsync(GitMirror.Session mirror, string worktreePath, string? defaultBranch, CancellationToken ct)
+    private async Task<bool> SyncFromMirrorAsync(
+        GitMirror.Session mirror, string worktreePath, string? defaultBranch, CancellationToken ct, string? onlyBranch = null)
     {
+        var refspec = onlyBranch is null
+            ? "+refs/heads/*:refs/remotes/origin/*"
+            : $"+refs/heads/{onlyBranch}:refs/remotes/origin/{onlyBranch}";
         var (code, _, _) = await mirror.ReadableByAgentAsync(
-            path => RunAsync(worktreePath, ["fetch", "--quiet", "--prune", "--", path, "+refs/heads/*:refs/remotes/origin/*"], ct), ct);
+            path => RunAsync(worktreePath, ["fetch", "--quiet", .. onlyBranch is null ? new[] { "--prune" } : [], "--", path, refspec], ct), ct);
         if (code != 0) return false;
 
         if (defaultBranch is not null)
@@ -366,7 +377,7 @@ public class RepositoryManager : IRepositoryManager
             if (!pushed.Ok)
                 return (false, pushed.Error);
 
-            if (!await SyncFromMirrorAsync(mirror, worktreePath, null, cancellationToken)
+            if (!await SyncFromMirrorAsync(mirror, worktreePath, null, cancellationToken, branchName)
                 || (await RunAsync(worktreePath, ["branch", "--set-upstream-to", $"origin/{branchName}", branchName], cancellationToken)).ExitCode != 0)
                 _logger?.LogWarning("Pushed {Branch}, but could not record origin/{Branch} as its upstream in {Worktree}", branchName, branchName, worktreePath);
             return (true, null);
@@ -978,11 +989,25 @@ public class RepositoryManager : IRepositoryManager
 
     private const int MaxPointerBytes = 4096;
 
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int OpenFile(string pathname, int flags);
+
+    // O_RDONLY | O_NONBLOCK | O_CLOEXEC. Opened without waiting, so a pipe the agent put where the
+    // file should be reads as empty instead of blocking the orchestrator until something writes to it.
+    private static readonly int OpenNonBlocking = OperatingSystem.IsMacOS() ? 0x4 | 0x1000000 : 0x800 | 0x80000;
+
+    /// <summary>The first <see cref="MaxPointerBytes"/> of a regular file, or null for anything else.</summary>
     private static string? ReadSmallText(string file)
     {
         try
         {
-            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (Storage.FileStatus.IsSupported
+                && (Storage.FileStatus.TryGet(file, out var status) != 0 || status.Kind != Storage.FileKind.File))
+                return null;
+
+            var descriptor = OpenFile(file, OpenNonBlocking);
+            if (descriptor < 0) return null;
+            using var stream = new FileStream(new SafeFileHandle(descriptor, ownsHandle: true), FileAccess.Read, bufferSize: 0);
             var buffer = new byte[MaxPointerBytes];
             var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
             return read == buffer.Length ? null : Encoding.UTF8.GetString(buffer, 0, read);
@@ -1043,16 +1068,14 @@ public class RepositoryManager : IRepositoryManager
         ("gc.autoDetach", "false"),
     ];
 
-    private Task<ProcessResult> OrchestratorGitAsync(string cwd, IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct)
-        => OrchestratorGitAsync(cwd, args, auth, ct, null);
-
     /// <summary>
     /// git as the orchestrator, for its own mirror and the remote. Nothing is inherited: not the
     /// orchestrator's environment, not the system or user configuration; only the credential
     /// when the caller has one.
     /// </summary>
     private async Task<ProcessResult> OrchestratorGitAsync(
-        string cwd, IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct, string? ceilingDirectories)
+        string cwd, IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct,
+        string? ceilingDirectories = null, Stream? standardInput = null)
     {
         var home = AgentIsolation.CreatePrivateDirectory("git-home");
         if (OperatingSystem.IsLinux())
@@ -1077,7 +1100,7 @@ public class RepositoryManager : IRepositoryManager
         foreach (var (key, value) in BuildGitEnvironment(auth) ?? new Dictionary<string, string?>())
             environment[key] = value;
 
-        var r = await _runner.RunAsync("git", args, cwd, ct, environment, new ProcessRunOptions(CleanEnvironment: true));
+        var r = await _runner.RunAsync("git", args, cwd, ct, environment, new ProcessRunOptions(CleanEnvironment: true, StandardInputFrom: standardInput));
         if (!r.Success)
             _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), r.ExitCode, r.StdErr);
         return r;

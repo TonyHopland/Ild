@@ -354,7 +354,9 @@ ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-se
 # to rewrite them — the orchestrator runs those same binaries as ild (version
 # checks, the provider terminal), so a writable install would be a way back
 # across the boundary. The orchestrator still installs/updates them as the owner.
-ENV SHARED_RO_DIRS=/data/agents
+# The git mirrors the orchestrator pushes and fetches through are read-only to the
+# agent the same way: it reads them to clone and fetch, and must never write them.
+ENV SHARED_RO_DIRS="/data/agents /data/git-mirrors"
 ENV DATA_TRAVERSE_DIRS=/data
 
 # Baseline ownership; the entrypoint finalizes modes + default ACLs on the

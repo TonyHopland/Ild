@@ -39,9 +39,11 @@ public sealed record AgentIdentity(string User, string Group, string Home);
 /// <param name="InheritOrchestratorSecrets">Keep the orchestrator's secrets in the inherited environment. No production caller sets it.</param>
 /// <param name="AgentScoped">The child works on agent-written input: it inherits neither the orchestrator's secrets, topology nor git credentials, whether or not the uid crosses.</param>
 /// <param name="StandardOutputTo">Receives stdout verbatim instead of <see cref="ProcessResult.StdOut"/>, for output that is not text.</param>
+/// <param name="StandardInputFrom">Read to its end into the child's stdin, which is then closed.</param>
 public sealed record ProcessRunOptions(
     AgentIdentity? AsAgent = null,
     bool CleanEnvironment = false,
     bool InheritOrchestratorSecrets = false,
     bool AgentScoped = false,
-    Stream? StandardOutputTo = null);
+    Stream? StandardOutputTo = null,
+    Stream? StandardInputFrom = null);
