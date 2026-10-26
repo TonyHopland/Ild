@@ -38,7 +38,7 @@ public static class ServiceCollectionExtensions
                 runner,
                 logger,
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot,
-                mirrorsRoot: BaseRepoPath.MirrorRoot(config));
+                mirrorsRoot: RepositoryManager.MirrorRoot(config));
         });
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();

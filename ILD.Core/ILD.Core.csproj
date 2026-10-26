@@ -29,7 +29,6 @@
          absolute setpriv path. Nothing production-facing is widened here;
          AgentIsolation itself stays public. -->
     <InternalsVisibleTo Include="ILD.Tests" />
-    <InternalsVisibleTo Include="ILD.Api" />
   </ItemGroup>
 
 </Project>

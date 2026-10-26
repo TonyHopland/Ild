@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Win32.SafeHandles;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -62,6 +63,9 @@ public class RepositoryManager : IRepositoryManager
         : this(new ProcessRunner(), logger, worktreesRoot)
     {
     }
+
+    /// <summary>Where the mirrors live for a deployment configured by <paramref name="config"/>.</summary>
+    public static string MirrorRoot(IConfiguration? config) => BaseRepoPath.MirrorRoot(config);
 
     private static AgentIdentity? ConfiguredAgent()
         => AgentIsolation.AgentUser is { } user
