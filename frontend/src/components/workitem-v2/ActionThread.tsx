@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { LoopRunStatus, TurnVariableChange, WorkItem } from "../../types";
 import { useEditProposals } from "../../hooks/useEditProposals";
 import { useGlobalVariableProposals } from "../../hooks/useGlobalVariableProposals";
+import { useHumanInputProposals } from "../../hooks/useHumanInputProposals";
 import { useLoopTemplateProposals } from "../../hooks/useLoopTemplateProposals";
 import { workItemService } from "../../services/auth";
 import EditProposalCard from "../EditProposalCard";
 import GlobalVariableProposalCard from "../GlobalVariableProposalCard";
+import HumanInputProposalCard from "../HumanInputProposalCard";
 import LoopTemplateProposalCard from "../LoopTemplateProposalCard";
 import { placeActionProposals } from "../editProposalPlacement";
 import MarkdownRenderer from "../MarkdownRenderer";
@@ -261,6 +263,7 @@ function RunThread({
   const { proposals, refresh } = useEditProposals({ requestedByWorkItemId: workItem.id });
   const suggestions = useGlobalVariableProposals({ workItemId: workItem.id });
   const loopProposals = useLoopTemplateProposals({ workItemId: workItem.id });
+  const humanInput = useHumanInputProposals(workItem.id);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const savedScrollTop = useRef(0);
@@ -337,6 +340,11 @@ function RunThread({
     })),
   ]);
   const cards = (list: { card: ReactNode }[] = []) => list.map((placed) => placed.card);
+  // About the question this run is parked on, so by the run they answer and not
+  // by the step that made them: shown just before the buttons that answer it.
+  const answerSuggestions = (humanInput.proposals ?? [])
+    .filter((proposal) => proposal.runId === runId)
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 
   const isEmpty =
     messages.length === 0 &&
@@ -346,7 +354,8 @@ function RunThread({
     !detail.movedOn &&
     !hasPrDetails(workItem, detail, runId) &&
     live.length === 0 &&
-    end.length === 0;
+    end.length === 0 &&
+    answerSuggestions.length === 0;
 
   // One keyed list, so a card that moves to a new slot (its step's turn
   // arriving) is moved rather than remounted, and keeps a decision in progress.
@@ -400,6 +409,13 @@ function RunThread({
       runId={runId}
       onOpen={revealFromTop}
     />,
+    ...answerSuggestions.map((proposal) => (
+      <HumanInputProposalCard
+        key={`hiproposal:${proposal.id}`}
+        proposal={proposal}
+        onSettled={humanInput.refresh}
+      />
+    )),
     <Bubble key="feedback" side="human">
       <FeedbackBanner
         workItem={workItem}

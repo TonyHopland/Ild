@@ -861,6 +861,32 @@ export interface GlobalVariable {
   usedBy: { id: string; name: string }[];
 }
 
+export type HumanInputProposalStatus = "Pending" | "Approved" | "Rejected" | "Stale" | "Superseded";
+
+/**
+ * An agent's suggested answer to the question a work item is parked on at a
+ * Human node: the output to take and the text to send with it, delivered only
+ * when a human approves it. It answers the one visit `runNodeId` of run `runId`.
+ */
+export interface HumanInputProposal {
+  id: string;
+  workItemId: string;
+  runId: string;
+  runNodeId: string;
+  /** An outgoing edge name of the node: OnSuccess, OnFailure or a custom edge's name. */
+  output: string;
+  /** Sent with the output; empty when the agent had nothing to add. */
+  text: string;
+  rationale: string;
+  status: HumanInputProposalStatus;
+  rejectionReason: string | null;
+  decidedBy: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  createdByLoopRunId: string | null;
+  createdByChatSessionId: string | null;
+}
+
 export type GlobalVariableProposalStatus =
   | "Pending"
   | "Approved"
@@ -1255,6 +1281,10 @@ export interface ChatEditProposalsChangedPayload {
 
 export interface GlobalVariableProposalsChangedPayload {
   name: string;
+}
+
+export interface HumanInputProposalsChangedPayload {
+  workItemId: string;
 }
 
 export interface ChatGlobalVariableProposalsChangedPayload {

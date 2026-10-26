@@ -16,6 +16,7 @@ import {
   PackageFeed,
   GlobalVariable,
   GlobalVariableProposal,
+  HumanInputProposal,
   GlobalVariableProposalStatus,
   LoopTemplateProposal,
   LoopTemplateProposalStatus,
@@ -841,6 +842,30 @@ export const globalVariableService = {
   rejectProposal: async (proposalId: string, reason?: string): Promise<GlobalVariableProposal> => {
     return api.post<GlobalVariableProposal>(
       `/global-variables/proposals/${proposalId}/reject`,
+      reason ? { reason } : {},
+    );
+  },
+};
+
+export const humanInputProposalService = {
+  /** Newest first. */
+  list: async (workItemId: string): Promise<HumanInputProposal[]> => {
+    return api.get<HumanInputProposal[]>(
+      `/human-input-proposals?workItemId=${encodeURIComponent(workItemId)}`,
+    );
+  },
+
+  /** Sends the suggested output and text exactly as they were made. */
+  approve: async (proposalId: string): Promise<{ proposal: HumanInputProposal }> => {
+    return api.post<{ proposal: HumanInputProposal }>(
+      `/human-input-proposals/${proposalId}/approve`,
+      {},
+    );
+  },
+
+  reject: async (proposalId: string, reason?: string): Promise<HumanInputProposal> => {
+    return api.post<HumanInputProposal>(
+      `/human-input-proposals/${proposalId}/reject`,
       reason ? { reason } : {},
     );
   },
