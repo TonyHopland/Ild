@@ -131,6 +131,13 @@ public abstract record NodeOutcome
     public sealed record SessionBound(string SessionPlaceholder, string SessionId) : NodeOutcome;
 
     /// <summary>
+    /// Set Variable node rendered its assignments. The engine writes them to the
+    /// run's loop variables, in order, while the node's execution is running; a
+    /// write that fails fails the node.
+    /// </summary>
+    public sealed record VariablesAssigned(IReadOnlyList<VariableAssignment> Assignments) : NodeOutcome;
+
+    /// <summary>
     /// Map a consumed external-action signal to the re-entry outcome every
     /// waitable node (Human, PR) shares. A reject fails on
     /// <see cref="EdgeType.OnFailure"/>; a non-empty <paramref name="edgeName"/>
@@ -152,6 +159,9 @@ public abstract record NodeOutcome
         return new Success(EdgeType.OnSuccess, result);
     }
 }
+
+/// <summary>One loop variable a Set Variable node writes, with its rendered value.</summary>
+public sealed record VariableAssignment(string Name, string Value);
 
 /// <summary>
 /// Slim execution context. The node resolves its own dependencies via the

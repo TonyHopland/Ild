@@ -447,6 +447,7 @@ export enum NodeType {
   AI = "AI",
   Human = "Human",
   Prompt = "Prompt",
+  SetVariable = "SetVariable",
   PR = "PR",
   Condition = "Condition",
   Cleanup = "Cleanup",

@@ -50,7 +50,7 @@ public class LoopTemplatesIntegrationTests
                     o.EnumerateObject().Any(p => string.Equals(p.Name, "reserved", StringComparison.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.True)))
                 .ToList();
 
-        foreach (var type in new[] { "Start", "Cmd", "AI", "Human", "Prompt" })
+        foreach (var type in new[] { "Start", "Cmd", "AI", "Human", "Prompt", "SetVariable" })
             Assert.Equal(new[] { ("OnFailure", false), ("OnSuccess", false) }, OutputsOf(map, type).OrderBy(o => o.Name, StringComparer.Ordinal));
         Assert.Equal(new[] { ("OnFailure", false) }, OutputsOf(map, "Condition"));
         Assert.Empty(OutputsOf(map, "Cleanup"));
@@ -60,6 +60,50 @@ public class LoopTemplatesIntegrationTests
         Assert.Equal(
             LoopOutputs.ReservedPr.Select(n => (n, true)).Append(("OnSuccess", false)).Append(("OnFailure", false)).OrderBy(o => o.Item1, StringComparer.Ordinal),
             pr.OrderBy(o => o.Name, StringComparer.Ordinal));
+    }
+
+    private static object SetVariableLoop(object assignments) => new
+    {
+        name = $"Keep the answer {Guid.NewGuid():N}",
+        description = "",
+        nodes = new object[]
+        {
+            new { id = "start", type = "Start", label = "Start", config = new { } },
+            new { id = "keep", type = "SetVariable", label = "Keep", config = new { assignments } },
+            new { id = "cleanup", type = "Cleanup", label = "Cleanup", config = new { } },
+        },
+        edges = new object[]
+        {
+            new { id = "e1", sourceNodeId = "start", targetNodeId = "keep", edgeType = "OnSuccess" },
+            new { id = "e2", sourceNodeId = "keep", targetNodeId = "cleanup", edgeType = "OnSuccess" },
+        },
+    };
+
+    [Fact]
+    public async Task A_set_variable_node_saves_and_loads_back_with_its_assignments_and_fixed_outputs()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var assignments = new object[]
+        {
+            new { name = "handoff", value = "{{Node.Input}}" },
+            new { name = "phase", value = "review" },
+        };
+
+        var created = await client.PostAsJsonAsync("/api/v1/looptemplates", SetVariableLoop(assignments), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = JsonDocument.Parse(await created.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("id").GetString();
+        var loaded = JsonDocument.Parse(await client.GetStringAsync($"/api/v1/looptemplates/{id}", TestContext.Current.CancellationToken)).RootElement;
+
+        var keep = loaded.GetProperty("nodes").EnumerateArray().Single(n => n.GetProperty("label").GetString() == "Keep");
+        Assert.Equal("SetVariable", keep.GetProperty("type").GetString());
+        var config = keep.GetProperty("config");
+        Assert.Equal(
+            new[] { ("handoff", "{{Node.Input}}"), ("phase", "review") },
+            config.GetProperty("assignments").EnumerateArray().Select(a => (a.GetProperty("name").GetString(), a.GetProperty("value").GetString())));
+        Assert.Equal(
+            new[] { "OnSuccess", "OnFailure" },
+            config.GetProperty("outputs").EnumerateArray().Select(o => o.GetProperty("name").GetString()));
     }
 
     private const string LegacyDocument =

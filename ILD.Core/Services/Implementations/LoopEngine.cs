@@ -991,6 +991,15 @@ public sealed class LoopEngine : ILoopEngine
                     outcome = new NodeOutcome.Fail(EdgeType.OnFailure, ex.Message);
                 }
 
+                // Writing the variables is the node's whole purpose, so a write
+                // that fails fails the node rather than being logged and dropped.
+                if (outcome is NodeOutcome.VariablesAssigned assigned)
+                {
+                    if (await TryAssignVariablesAsync(loopRunStore, run.Id, assigned) is not { } writeFailure)
+                        continue;
+                    outcome = writeFailure;
+                }
+
                 switch (outcome)
                 {
                     case NodeOutcome.NodeStarting ns:
@@ -1332,6 +1341,25 @@ public sealed class LoopEngine : ILoopEngine
     }
 
     private sealed class RunMovedOnException : Exception;
+
+    /// <summary>
+    /// Writes a Set Variable node's assignments in order while its execution is
+    /// running, so each write is recorded against it. Null when all were
+    /// written; otherwise the failure the node fails with.
+    /// </summary>
+    private static async Task<NodeOutcome.Fail?> TryAssignVariablesAsync(
+        ILoopRunStore store, Guid runId, NodeOutcome.VariablesAssigned assigned)
+    {
+        foreach (var assignment in assigned.Assignments)
+        {
+            try { await store.SetVariableAsync(runId, assignment.Name, assignment.Value); }
+            catch (Exception ex)
+            {
+                return new NodeOutcome.Fail(EdgeType.OnFailure, $"Could not set loop variable '{assignment.Name}': {ex.Message}");
+            }
+        }
+        return null;
+    }
 
     /// <summary>Human-readable name for a node's live-output transition marker,
     /// falling back to the node type when the template left the label blank.</summary>

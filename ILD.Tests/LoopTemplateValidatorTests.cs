@@ -254,6 +254,10 @@ public class LoopTemplateValidatorTests
         return node;
     }
 
+    /// <summary>Gives a Set Variable node the one assignment it needs to be valid; other nodes are returned as they are.</summary>
+    private static LoopNodeDto Valid(LoopNodeDto node)
+        => node.NodeType == "SetVariable" ? WithRawConfig(node, "assignments", """[{"name":"phase","value":"review"}]""") : node;
+
     /// <summary>Sets a config key to raw JSON, the way a request body or a loop document delivers it.</summary>
     private static LoopNodeDto WithRawConfig(LoopNodeDto node, string key, string json)
     {
@@ -262,11 +266,13 @@ public class LoopTemplateValidatorTests
         return node;
     }
 
-    [Fact]
-    public void Custom_edge_on_non_human_ai_pr_node_is_invalid()
+    [Theory]
+    [InlineData("Cmd")]
+    [InlineData("SetVariable")]
+    public void Custom_edge_on_non_human_ai_pr_node_is_invalid(string type)
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),
-            new() { Node("s", "Start"), Node("build", "Cmd"), Node("c", "Cleanup") },
+            new() { Node("s", "Start"), Valid(Node("build", type)), Node("c", "Cleanup") },
             new() { Edge("s", "build"), Edge("build", "c"), Edge("build", "c", "Custom", "Retry") });
         var errs = LoopTemplateValidator.Validate(g);
         Assert.Contains(errs, e => e.Contains("build") && e.Contains("Retry"));
@@ -629,7 +635,7 @@ public class LoopTemplateValidatorTests
 
     private static LoopTemplateGraph SingleStepGraph(string type, params string[] outputs)
     {
-        var node = Declare(Node("step", type, type == "Prompt" ? "go" : null), outputs);
+        var node = Declare(Valid(Node("step", type, type == "Prompt" ? "go" : null)), outputs);
         return type == "Start"
             ? new LoopTemplateGraph(Guid.NewGuid(), new() { node, Node("c", "Cleanup") }, new() { Edge("step", "c") })
             : new LoopTemplateGraph(Guid.NewGuid(),
@@ -640,6 +646,7 @@ public class LoopTemplateValidatorTests
     [Theory]
     [InlineData("Start")]
     [InlineData("Cmd")]
+    [InlineData("SetVariable")]
     [InlineData("Prompt")]
     public void Nodes_without_named_outputs_may_declare_success_and_failure(string type)
     {
@@ -649,6 +656,7 @@ public class LoopTemplateValidatorTests
     [Theory]
     [InlineData("Start")]
     [InlineData("Cmd")]
+    [InlineData("SetVariable")]
     [InlineData("Prompt")]
     public void Nodes_without_named_outputs_may_not_declare_one(string type)
     {
