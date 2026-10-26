@@ -495,6 +495,9 @@ public class HumanInputProposalApiTests
                     db.LoopRuns.Remove(run);
                     break;
                 case Moved.AnotherRun:
+                    run.Status = LoopRunStatus.Cancelled;
+                    run.CompletedAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync(Ct);
                     db.LoopRuns.Add(new LoopRun
                     {
                         Id = Guid.NewGuid(),
