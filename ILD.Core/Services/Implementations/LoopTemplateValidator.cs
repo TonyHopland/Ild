@@ -315,9 +315,14 @@ public static class LoopTemplateValidator
                 }
             }
 
+            var assignmentValues = string.Equals(node.NodeType, "SetVariable", StringComparison.OrdinalIgnoreCase)
+                ? AssignmentValues(node, errors)
+                : [];
+
             var templates = new[] { aiPrompt, prTemplate, humanPrompt, promptNodePrompt }
                 .Where(t => !string.IsNullOrEmpty(t))
                 .Concat(conditionTemplates ?? Enumerable.Empty<string>())
+                .Concat(assignmentValues)
                 .Where(t => !string.IsNullOrEmpty(t))
                 .ToList();
             if (templates.Count == 0) continue;
@@ -333,6 +338,53 @@ public static class LoopTemplateValidator
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// A Set Variable node's assignment values, for the placeholder scan. Reports
+    /// a missing, malformed or empty <c>assignments</c> list, a name that breaks the
+    /// loop-variable rule (untrimmed, as the engine stores it), a name repeated
+    /// ignoring case (as <c>{{Var.X}}</c> reads it), and a value that is not text.
+    /// </summary>
+    private static List<string> AssignmentValues(LoopNodeDto node, List<string> errors)
+    {
+        const string Example = "{ \"name\": \"phase\", \"value\": \"review\" }";
+        var values = new List<string>();
+        var config = JsonSerializer.SerializeToNode(node.Config) as JsonObject;
+        if (config?["assignments"] is not JsonArray assignments || assignments.Count == 0)
+        {
+            errors.Add($"SetVariable node {node.Id} must have at least one assignment in assignments, e.g. [{Example}].");
+            return values;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < assignments.Count; i++)
+        {
+            if (assignments[i] is not JsonObject assignment)
+            {
+                errors.Add($"SetVariable node {node.Id} assignment {i + 1} must be an object with a name and a value, e.g. {Example}.");
+                continue;
+            }
+
+            var name = assignment["name"] is JsonValue n && n.TryGetValue<string>(out var text) ? text : null;
+            if (name is null || !PromptPlaceholderRegistry.IsValidVariableName(name))
+                errors.Add($"SetVariable node {node.Id} assignment {i + 1} name '{name}' is not a valid loop variable name: a letter followed by up to 127 letters, digits or underscores.");
+            else if (!seen.Add(name))
+                errors.Add($"SetVariable node {node.Id} assignment {i + 1} sets '{name}' again; each variable may be assigned once per node (names ignore case).");
+
+            switch (assignment["value"])
+            {
+                case null:
+                    break;
+                case JsonValue v when v.TryGetValue<string>(out var value):
+                    values.Add(value);
+                    break;
+                default:
+                    errors.Add($"SetVariable node {node.Id} assignment {i + 1} value must be text.");
+                    break;
+            }
+        }
+        return values;
     }
 
     /// <summary>

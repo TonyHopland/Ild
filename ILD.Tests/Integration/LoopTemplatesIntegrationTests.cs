@@ -106,6 +106,22 @@ public class LoopTemplatesIntegrationTests
             config.GetProperty("outputs").EnumerateArray().Select(o => o.GetProperty("name").GetString()));
     }
 
+    [Fact]
+    public async Task Saving_a_set_variable_node_with_an_invalid_name_is_refused_with_the_reason()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var response = await client.PostAsJsonAsync("/api/v1/looptemplates",
+            SetVariableLoop(new object[] { new { name = "bad-name", value = "x" } }), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("error").GetString();
+        Assert.Contains("keep", error);
+        Assert.Contains("assignment 1", error);
+        Assert.Contains("bad-name", error);
+    }
+
     private const string LegacyDocument =
         "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Old\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
         "\"nodes\":[" +
