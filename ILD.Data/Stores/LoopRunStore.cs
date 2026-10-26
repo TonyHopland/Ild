@@ -279,14 +279,15 @@ public class LoopRunStore : ILoopRunStore
         // Each history row must name the value its write actually replaced, so a
         // replace is a compare-and-swap on the value read: a concurrent write to
         // the same variable in between makes it miss, and the whole batch is
-        // rolled back and tried again.
+        // rolled back and tried again. New rows are saved once, at the end, so a
+        // miss leaves nothing of this context flushed into the rolled-back work.
         for (var attempt = 0; attempt < 5; attempt++)
         {
             // Rolled back or committed, what an attempt added must not stay on a
             // context the engine keeps for the whole run: its next save would
             // write a rolled-back row after all.
             var added = new List<object>();
-            string? creating = null;
+            var created = new Dictionary<string, LoopRunVariable>(StringComparer.OrdinalIgnoreCase);
             await using var tx = await _db.Database.BeginTransactionAsync();
             try
             {
@@ -294,48 +295,56 @@ public class LoopRunStore : ILoopRunStore
                 foreach (var assignment in assignments)
                 {
                     var value = AppDbContext.WithoutNul(assignment.Value);
-                    // {{Var.X}} reads names ignoring case, so a write matches the
-                    // same way; lower() is translated on PostgreSQL and SQLite alike.
-                    var lowered = assignment.Name.ToLower();
-                    var existing = await _db.LoopRunVariables
-                        .AsNoTracking()
-                        .Where(v => v.LoopRunId == runId && v.Name.ToLower() == lowered)
-                        .OrderByDescending(v => v.UpdatedAt ?? v.CreatedAt)
-                        .Select(v => new { v.Name, v.Value })
-                        .FirstOrDefaultAsync();
-
-                    if (existing is not null)
+                    string? storedName = null;
+                    string? previousValue = null;
+                    if (created.TryGetValue(assignment.Name, out var pending))
                     {
-                        var swapped = await _db.LoopRunVariables
-                            .Where(v => v.LoopRunId == runId && v.Name == existing.Name && v.Value == existing.Value)
-                            .ExecuteUpdateAsync(s => s
-                                .SetProperty(v => v.Value, value)
-                                .SetProperty(v => v.UpdatedAt, DateTime.UtcNow)) == 1;
-                        if (!swapped) throw new VariableChangedUnderneathException();
+                        (storedName, previousValue) = (pending.Name, pending.Value);
+                        pending.Value = value;
                     }
                     else
                     {
-                        var created = new LoopRunVariable { LoopRunId = runId, Name = assignment.Name, Value = value };
-                        _db.LoopRunVariables.Add(created);
-                        added.Add(created);
-                        creating = assignment.Name;
-                        await _db.SaveChangesAsync();
-                        creating = null;
+                        // {{Var.X}} reads names ignoring case, so a write matches the
+                        // same way; lower() is translated on PostgreSQL and SQLite alike.
+                        var lowered = assignment.Name.ToLowerInvariant();
+                        var existing = await _db.LoopRunVariables
+                            .AsNoTracking()
+                            .Where(v => v.LoopRunId == runId && v.Name.ToLower() == lowered)
+                            .OrderByDescending(v => v.UpdatedAt ?? v.CreatedAt)
+                            .Select(v => new { v.Name, v.Value })
+                            .FirstOrDefaultAsync();
+                        if (existing is not null)
+                        {
+                            (storedName, previousValue) = (existing.Name, existing.Value);
+                            var swapped = await _db.LoopRunVariables
+                                .Where(v => v.LoopRunId == runId && v.Name == existing.Name && v.Value == existing.Value)
+                                .ExecuteUpdateAsync(s => s
+                                    .SetProperty(v => v.Value, value)
+                                    .SetProperty(v => v.UpdatedAt, DateTime.UtcNow)) == 1;
+                            if (!swapped) throw new VariableChangedUnderneathException();
+                        }
+                        else
+                        {
+                            var row = new LoopRunVariable { LoopRunId = runId, Name = assignment.Name, Value = value };
+                            _db.LoopRunVariables.Add(row);
+                            added.Add(row);
+                            created[assignment.Name] = row;
+                        }
                     }
 
                     var write = new LoopRunVariableWrite
                     {
                         LoopRunId = runId,
                         RunNodeId = runningNodeId,
-                        Name = existing?.Name ?? assignment.Name,
+                        Name = storedName ?? assignment.Name,
                         Value = value,
-                        PreviousValue = existing?.Value,
+                        PreviousValue = previousValue,
                         WrittenAt = DateTime.UtcNow,
                     };
                     _db.LoopRunVariableWrites.Add(write);
                     added.Add(write);
-                    effects.Add(existing is null ? VariableWriteEffect.Created
-                        : existing.Value == value ? VariableWriteEffect.Unchanged
+                    effects.Add(storedName is null ? VariableWriteEffect.Created
+                        : previousValue == value ? VariableWriteEffect.Unchanged
                         : VariableWriteEffect.Changed);
                 }
 
@@ -349,14 +358,14 @@ public class LoopRunStore : ILoopRunStore
                 Detach(added);
                 await tx.RollbackAsync();
             }
-            catch (DbUpdateException ex) when (creating is not null)
+            catch (DbUpdateException ex) when (created.Count > 0)
             {
                 Detach(added);
                 await tx.RollbackAsync();
                 // A create only loses to another write creating the same variable;
-                // if it still does not exist, the failure was something else.
-                var lowered = creating.ToLower();
-                if (!await _db.LoopRunVariables.AnyAsync(v => v.LoopRunId == runId && v.Name.ToLower() == lowered))
+                // if none of them exists now, the failure was something else.
+                var lowered = created.Keys.Select(n => n.ToLowerInvariant()).ToList();
+                if (!await _db.LoopRunVariables.AnyAsync(v => v.LoopRunId == runId && lowered.Contains(v.Name.ToLower())))
                     ExceptionDispatchInfo.Throw(ex);
             }
             catch
