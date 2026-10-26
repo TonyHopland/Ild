@@ -586,6 +586,9 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     # launches through setpriv without the caps or shared dirs to back it.
     export ILD_AGENT_USER="$AGENT_USER"
     export ILD_AGENT_GROUP="$AGENT_GROUP"
+    # The shared group, distinct from the agent's primary group above: the orchestrator is a
+    # member of it, and it is the group ensure_shared_ro gives the git mirror root.
+    export ILD_SHARED_GROUP="$SHARED_GROUP"
     export ILD_AGENT_HOME="$AGENT_HOME"
     export ILD_AGENT_SCRATCH_ROOT="$AGENT_SCRATCH_DIR"
     export ILD_ORCHESTRATOR_PRIVATE_ROOT="$ORCHESTRATOR_PRIVATE_DIR"

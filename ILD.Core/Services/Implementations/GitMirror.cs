@@ -27,7 +27,8 @@ internal delegate Task<ProcessResult> OrchestratorGit(
 /// </para>
 ///
 /// <para>
-/// The agent reads a mirror through the agent group, and the mirror does not rely on the deployment
+/// The agent reads a mirror through the shared group (the one the orchestrator and the agent are both
+/// members of, never the agent's primary group), and the mirror does not rely on the deployment
 /// having set that up: it moves the store root (setgid, so new mirrors are born in the group) and every
 /// mirror and entry in it into the group itself, before the mirror is opened to the agent. Where
 /// the group cannot be set it says so, rather than leaving the agent to fail on a mirror it cannot see.
@@ -43,20 +44,23 @@ internal sealed class GitMirror
     private static readonly SharedEntries<string, SemaphoreSlim> Locks = new(() => new SemaphoreSlim(1, 1));
 
     private readonly string _root;
-    private readonly string? _agentGroup;
+    private readonly string? _sharedGroup;
     private readonly bool _sharedWithAgent;
     private readonly OrchestratorGit _git;
     private readonly ILogger? _logger;
 
-    /// <param name="agentGroup">
-    /// The group, by name or number, the agent reads the mirrors through; null when the agent is not another uid.
+    /// <param name="sharedGroup">
+    /// The group, by name or number, the orchestrator and the agent share and the agent reads the mirrors through.
     /// The store root and every mirror in it are moved into it, so a mirror reads the same wherever the store sits.
+    /// Never the agent's primary group: the orchestrator is not a member of that one and cannot move files into it.
+    /// Null when it is not configured: the store root must then already be setgid and group-readable, and its group is used.
     /// </param>
-    public GitMirror(string root, string? agentGroup, OrchestratorGit git, ILogger? logger = null)
+    /// <param name="sharedWithAgent">Whether the agent is another uid that reads the mirrors.</param>
+    public GitMirror(string root, string? sharedGroup, bool sharedWithAgent, OrchestratorGit git, ILogger? logger = null)
     {
         _root = root;
-        _agentGroup = agentGroup;
-        _sharedWithAgent = agentGroup is not null;
+        _sharedGroup = sharedGroup;
+        _sharedWithAgent = sharedWithAgent;
         _git = git;
         _logger = logger;
     }
@@ -84,13 +88,22 @@ internal sealed class GitMirror
     /// <summary>
     /// The id of the group to hand the mirrors to, or null when they are not shared or the host does not know the
     /// group (a host without the deployment's groups: nothing to hand them to, and the agent cannot cross to it either).
+    /// Without a configured group, the store root's own group, if it is setgid and group-readable; otherwise this throws.
     /// </summary>
-    private uint? AgentGroupId()
+    private uint? SharedGroupId()
     {
-        if (_agentGroup is null || !OperatingSystem.IsLinux() || !FileStatus.IsSupported) return null;
-        var id = ResolveGroup(_agentGroup);
+        if (!_sharedWithAgent || !OperatingSystem.IsLinux() || !FileStatus.IsSupported) return null;
+        if (_sharedGroup is null)
+        {
+            if (FileStatus.TryGet(_root, out var status) == 0
+                && File.GetUnixFileMode(_root).HasFlag(UnixFileMode.SetGroup | UnixFileMode.GroupRead | UnixFileMode.GroupExecute))
+                return status.Gid;
+            throw new IOException(
+                $"the shared group is not configured (SHARED_GROUP / {AgentIsolation.SharedGroupEnvVar}) and the mirror path {_root} is not setgid and group-readable, so the agent cannot be given the mirrors");
+        }
+        var id = ResolveGroup(_sharedGroup);
         if (id is null)
-            _logger?.LogWarning("The agent group {Group} is not known on this host; the git mirrors are left in the group they were made in", _agentGroup);
+            _logger?.LogWarning("The shared group {Group} is not known on this host; the git mirrors are left in the group they were made in", _sharedGroup);
         return id;
     }
 
@@ -100,7 +113,7 @@ internal sealed class GitMirror
         if (FileStatus.TryGet(path, out var status) == 0 && status.Gid == group) return;
         if (ChangeOwner(path, uint.MaxValue, group) != 0)
             throw new IOException(
-                $"the mirror path {path} is not in group {_agentGroup} and could not be moved to it: {new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()).Message}");
+                $"the mirror path {path} is not in group {_sharedGroup} and could not be moved to it: {new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()).Message}");
     }
 
     /// <summary>Where the mirror of <paramref name="cloneUrl"/> lives, keyed by the URL without credentials.</summary>
@@ -163,7 +176,7 @@ internal sealed class GitMirror
     {
         if (!Directory.Exists(_root))
             CreateDirectory(_root, _sharedWithAgent ? Readable : Closed);
-        var group = AgentGroupId();
+        var group = SharedGroupId();
         if (group is { } root)
         {
             // The agent reaches a mirror through the store's group: the root is in it, and hands it down.
@@ -230,7 +243,7 @@ internal sealed class GitMirror
     private void Sanitize(string path)
     {
         if (OperatingSystem.IsWindows()) return;
-        var group = AgentGroupId();
+        var group = SharedGroupId();
         foreach (var entry in new DirectoryInfo(path).EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
         {
             try

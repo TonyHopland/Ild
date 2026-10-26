@@ -55,8 +55,17 @@ public static class AgentIsolation
     /// <summary>When set, the OS user the agent CLI is dropped to (e.g. <c>agent</c>).</summary>
     public const string AgentUserEnvVar = "ILD_AGENT_USER";
 
-    /// <summary>Group for the drop's <c>--regid</c>; defaults to the agent user's name.</summary>
+    /// <summary>
+    /// The agent's PRIMARY group, for the drop's <c>--regid</c>; defaults to the agent user's name.
+    /// The orchestrator is not a member of it. For the group both uids share, see <see cref="SharedGroupEnvVar"/>.
+    /// </summary>
     public const string AgentGroupEnvVar = "ILD_AGENT_GROUP";
+
+    /// <summary>
+    /// The group the orchestrator and the agent are both members of (the entrypoint's <c>SHARED_GROUP</c>).
+    /// Files the agent only reads, such as the git mirrors, are handed to it. Never use it for <c>--regid</c>.
+    /// </summary>
+    public const string SharedGroupEnvVar = "ILD_SHARED_GROUP";
 
     /// <summary>
     /// <c>HOME</c> to set for the agent process so it resolves its own CLI config
@@ -169,6 +178,9 @@ public static class AgentIsolation
     /// case the crossing defaults it to the agent user's own name).
     /// </summary>
     public static string? AgentGroup => NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar));
+
+    /// <summary>The group shared by the orchestrator and the agent, or <c>null</c> when unset. Not the group for <c>--regid</c>.</summary>
+    public static string? SharedGroup => NonEmpty(Environment.GetEnvironmentVariable(SharedGroupEnvVar));
 
     /// <summary>
     /// The configured agent home, or <c>null</c> when unset. Callers deciding what a
@@ -331,6 +343,7 @@ public static class AgentIsolation
     [
         AgentUserEnvVar,
         AgentGroupEnvVar,
+        SharedGroupEnvVar,
         AgentHomeEnvVar,
         ScratchRootEnvVar,
         PrivateRootEnvVar,
