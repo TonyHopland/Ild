@@ -776,16 +776,12 @@ public class LoopRunStore : ILoopRunStore
         if (eventLogs.Count > 0)
             _db.EventLogs.RemoveRange(eventLogs);
 
-        // Nothing can deliver a suggestion for a question of a run that is gone.
-        var now = DateTime.UtcNow;
-        await _db.HumanInputProposals
-            .Where(p => p.RunId == runId && p.Status == HumanInputProposalStatus.Pending)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.Status, HumanInputProposalStatus.Stale)
-                .SetProperty(p => p.DecidedAt, now));
-
         _db.LoopRuns.Remove(run);
         await _db.SaveChangesAsync();
+
+        // Nothing can deliver a suggestion for a question of a run that is gone.
+        await new AgentProposals<HumanInputProposal, HumanInputProposalStatus>(_db)
+            .StalePendingAsync(p => p.RunId == runId, DateTime.UtcNow, CancellationToken.None);
         return true;
     }
 
