@@ -35,7 +35,7 @@ const nodeStyles: Record<string, NodeStyle> = {
   [NodeType.SetVariable]: {
     bg: "#1a2e05",
     border: "#84cc16",
-    icon: "≔",
+    icon: "\u2254",
   },
   [NodeType.PR]: {
     bg: "#0c4a6e",

@@ -743,8 +743,8 @@ function AssignmentsEditor({
         unchanged.
       </small>
       {assignments.map((assignment, index) => (
-        <div key={index} className="condition-case-row">
-          <div className="match-rule-row">
+        <div key={index} className="assignment-row">
+          <div className="assignment-name">
             <input
               type="text"
               aria-label={`Assignment ${index + 1} name`}
@@ -754,7 +754,7 @@ function AssignmentsEditor({
             />
             <button
               type="button"
-              className="match-rule-remove"
+              className="assignment-remove"
               aria-label={`Remove assignment ${index + 1}`}
               onClick={() => onChange(assignments.filter((_, i) => i !== index))}
             >
@@ -775,7 +775,7 @@ function AssignmentsEditor({
       ))}
       <button
         type="button"
-        className="match-rule-add"
+        className="assignment-add"
         onClick={() => onChange([...assignments, { name: "", value: "" }])}
       >
         + Add assignment
