@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -41,17 +43,70 @@ internal sealed class GitMirror
     private static readonly SharedEntries<string, SemaphoreSlim> Locks = new(() => new SemaphoreSlim(1, 1));
 
     private readonly string _root;
+    private readonly string? _agentGroup;
     private readonly bool _sharedWithAgent;
     private readonly OrchestratorGit _git;
     private readonly ILogger? _logger;
 
-    /// <param name="sharedWithAgent">Whether another uid, the agent, is to read the mirrors.</param>
-    public GitMirror(string root, bool sharedWithAgent, OrchestratorGit git, ILogger? logger = null)
+    /// <param name="agentGroup">
+    /// The group, by name or number, the agent reads the mirrors through; null when the agent is not another uid.
+    /// The store root and every mirror in it are moved into it, so a mirror reads the same wherever the store sits.
+    /// </param>
+    public GitMirror(string root, string? agentGroup, OrchestratorGit git, ILogger? logger = null)
     {
         _root = root;
-        _sharedWithAgent = sharedWithAgent;
+        _agentGroup = agentGroup;
+        _sharedWithAgent = agentGroup is not null;
         _git = git;
         _logger = logger;
+    }
+
+    private struct GroupEntry
+    {
+        public IntPtr Name;
+        public IntPtr Password;
+        public uint Id;
+    }
+
+    [DllImport("libc", EntryPoint = "getgrnam")]
+    private static extern IntPtr GetGroupByName(string name);
+
+    [DllImport("libc", EntryPoint = "chown", SetLastError = true)]
+    private static extern int ChangeOwner(string path, uint owner, uint group);
+
+    private static readonly object GroupLookup = new();
+
+    /// <summary>The numeric id of <paramref name="group"/>, or null when there is no such group on this host.</summary>
+    private static uint? ResolveGroup(string group)
+    {
+        if (uint.TryParse(group, out var number)) return number;
+        lock (GroupLookup)
+        {
+            var entry = GetGroupByName(group);
+            return entry == IntPtr.Zero ? null : Marshal.PtrToStructure<GroupEntry>(entry).Id;
+        }
+    }
+
+    /// <summary>
+    /// The id of the group to hand the mirrors to, or null when they are not shared or the host does not know the
+    /// group (a host without the deployment's groups: nothing to hand them to, and the agent cannot cross to it either).
+    /// </summary>
+    private uint? AgentGroupId()
+    {
+        if (_agentGroup is null || !OperatingSystem.IsLinux() || !FileStatus.IsSupported) return null;
+        var id = ResolveGroup(_agentGroup);
+        if (id is null)
+            _logger?.LogWarning("The agent group {Group} is not known on this host; the git mirrors are left in the group they were made in", _agentGroup);
+        return id;
+    }
+
+    /// <summary>Put <paramref name="path"/> in group <paramref name="group"/>; the orchestrator is a member of it, so this needs no privilege.</summary>
+    private void MoveToGroup(string path, uint group)
+    {
+        if (FileStatus.TryGet(path, out var status) == 0 && status.Gid == group) return;
+        if (ChangeOwner(path, uint.MaxValue, group) != 0)
+            throw new IOException(
+                $"the mirror path {path} is not in group {_agentGroup} and could not be moved to it: {new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()).Message}");
     }
 
     /// <summary>Where the mirror of <paramref name="cloneUrl"/> lives, keyed by the URL without credentials.</summary>
@@ -114,10 +169,19 @@ internal sealed class GitMirror
     {
         if (!Directory.Exists(_root))
             CreateDirectory(_root, _sharedWithAgent ? Readable : Closed);
+        var group = AgentGroupId();
+        if (group is { } root)
+        {
+            // The agent reaches a mirror through the store's group: the root is in it, and hands it down.
+            MoveToGroup(_root, root);
+            File.SetUnixFileMode(_root, File.GetUnixFileMode(_root) | UnixFileMode.SetGroup | UnixFileMode.GroupExecute);
+        }
 
         if (File.Exists(Path.Combine(path, "HEAD")))
         {
             SetMode(path, Closed);
+            if (group is { } existing)
+                MoveToGroup(path, existing);
             return null;
         }
 
@@ -135,6 +199,8 @@ internal sealed class GitMirror
             if (!init.Success)
                 return init.StdErr;
             Directory.Move(building, path);
+            if (group is { } created)
+                MoveToGroup(path, created);
         }
         finally
         {
@@ -161,18 +227,24 @@ internal sealed class GitMirror
     }
 
     /// <summary>Strip the mode of everything git wrote to what the agent may read, never write.</summary>
-    private static void Sanitize(string path)
+    private void Sanitize(string path)
     {
         if (OperatingSystem.IsWindows()) return;
+        var group = AgentGroupId();
         foreach (var entry in new DirectoryInfo(path).EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
         {
             try
             {
                 if (entry.LinkTarget is not null) continue;
+                var directory = entry is DirectoryInfo;
                 var mode = File.GetUnixFileMode(entry.FullName);
-                var allowed = entry is DirectoryInfo ? Readable | UnixFileMode.SetGroup : FileCeiling;
-                if ((mode & ~allowed) != 0)
-                    File.SetUnixFileMode(entry.FullName, mode & allowed);
+                var allowed = directory ? Readable | UnixFileMode.SetGroup : FileCeiling;
+                // What the agent is to read, it can: in its group, and group-readable.
+                var wanted = (mode & allowed) | (!_sharedWithAgent ? 0 : directory ? Readable : UnixFileMode.GroupRead);
+                if (wanted != mode)
+                    File.SetUnixFileMode(entry.FullName, wanted);
+                if (group is { } id)
+                    MoveToGroup(entry.FullName, id);
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
@@ -372,7 +444,7 @@ internal sealed class GitMirror
         {
             if (_dirty)
             {
-                Sanitize(Path);
+                _owner.Sanitize(Path);
                 _dirty = false;
             }
 
@@ -389,7 +461,7 @@ internal sealed class GitMirror
             try
             {
                 if (_dirty)
-                    Sanitize(Path);
+                    _owner.Sanitize(Path);
                 if (_owner._sharedWithAgent && !_open)
                 {
                     SetMode(Path, Readable);

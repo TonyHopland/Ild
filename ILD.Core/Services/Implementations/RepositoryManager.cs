@@ -53,7 +53,7 @@ public class RepositoryManager : IRepositoryManager
         _agentOptions = new ProcessRunOptions(AsAgent: _agent, AgentScoped: true);
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
-            sharedWithAgent: _agent is not null,
+            agentGroup: _agent?.Group,
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
             logger);
     }
@@ -88,9 +88,16 @@ public class RepositoryManager : IRepositoryManager
 
             // A full copy of its own: no hardlinks and no alternates, so the clone
             // stays whole whatever happens to the mirror.
-            var (code, _, stderr) = await mirror.ReadableByAgentAsync(
-                path => AgentGitAsync(["clone", "--quiet", "--no-local", "--", path, target], cancellationToken), cancellationToken);
-            return code == 0 ? (true, null) : (false, stderr);
+            try
+            {
+                var (code, _, stderr) = await mirror.ReadableByAgentAsync(
+                    path => AgentGitAsync(["clone", "--quiet", "--no-local", "--", path, target], cancellationToken), cancellationToken);
+                return code == 0 ? (true, null) : (false, stderr);
+            }
+            catch (IOException ex)
+            {
+                return (false, ex.Message);
+            }
         }
     }
 
@@ -232,8 +239,17 @@ public class RepositoryManager : IRepositoryManager
         var refspec = onlyBranch is null
             ? "+refs/heads/*:refs/remotes/origin/*"
             : $"+refs/heads/{onlyBranch}:refs/remotes/origin/{onlyBranch}";
-        var (code, _, _) = await mirror.ReadableByAgentAsync(
-            path => RunAsync(worktreePath, ["fetch", "--quiet", .. onlyBranch is null ? new[] { "--prune" } : [], "--", path, refspec], ct), ct);
+        int code;
+        try
+        {
+            (code, _, _) = await mirror.ReadableByAgentAsync(
+                path => RunAsync(worktreePath, ["fetch", "--quiet", .. onlyBranch is null ? new[] { "--prune" } : [], "--", path, refspec], ct), ct);
+        }
+        catch (IOException ex)
+        {
+            _logger?.LogWarning(ex, "Could not open the mirror to the agent for {Worktree}", worktreePath);
+            return false;
+        }
         if (code != 0) return false;
 
         if (defaultBranch is not null)

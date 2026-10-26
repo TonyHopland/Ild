@@ -11,7 +11,7 @@ internal enum FileKind
 }
 
 /// <summary>What the disk holds for one directory entry, the entry itself and never what a link points at.</summary>
-internal readonly record struct FileStatusInfo(ulong Device, ulong Inode, uint Links, long AllocatedBytes, FileKind Kind)
+internal readonly record struct FileStatusInfo(ulong Device, ulong Inode, uint Links, long AllocatedBytes, FileKind Kind, uint Gid = 0)
 {
     public (ulong Device, ulong Inode) Id => (Device, Inode);
 }
@@ -46,6 +46,7 @@ internal static class FileStatus
     {
         [FieldOffset(0)] public uint Mask;
         [FieldOffset(16)] public uint Nlink;
+        [FieldOffset(24)] public uint Gid;
         [FieldOffset(28)] public ushort Mode;
         [FieldOffset(32)] public ulong Ino;
         [FieldOffset(48)] public ulong Blocks;
@@ -100,7 +101,8 @@ internal static class FileStatus
             buffer.Ino,
             buffer.Nlink,
             checked((long)buffer.Blocks * 512),
-            kind);
+            kind,
+            buffer.Gid);
         return 0;
     }
 }
