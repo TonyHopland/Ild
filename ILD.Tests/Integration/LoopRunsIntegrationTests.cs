@@ -201,8 +201,18 @@ public class LoopRunsIntegrationTests
             .GetProperty("hasLocalGitState").GetBoolean());
     }
 
-    [Fact]
-    public async Task A_run_parked_for_missing_globals_names_those_still_missing_now()
+    public static TheoryData<NodeType, string> NodesUsingThreeGlobals => new()
+    {
+        { NodeType.AI, "{\"prompt\":\"{{Global.Alpha}} {{Global.Beta}} {{Global.Gamma}}\"}" },
+        {
+            NodeType.SetVariable,
+            "{\"assignments\":[{\"name\":\"a\",\"value\":\"{{Global.Alpha}}\"},{\"name\":\"b\",\"value\":\"{{Global.Beta}} {{Global.Gamma}}\"}]}"
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(NodesUsingThreeGlobals))]
+    public async Task A_run_parked_for_missing_globals_names_those_still_missing_now(NodeType type, string config)
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
@@ -217,9 +227,9 @@ public class LoopRunsIntegrationTests
             {
                 Id = Guid.NewGuid(),
                 LoopTemplateVersionId = version.Id,
-                NodeType = NodeType.AI,
+                NodeType = type,
                 Label = "Writer",
-                Config = "{\"prompt\":\"{{Global.Alpha}} {{Global.Beta}} {{Global.Gamma}}\"}",
+                Config = config,
             };
             db.LoopTemplates.Add(template);
             db.LoopTemplateVersions.Add(version);

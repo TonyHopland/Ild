@@ -301,12 +301,16 @@ public class LoopRunStore : ILoopRunStore
                     await _db.SaveChangesAsync();
                     applied = true;
                 }
-                catch (Exception ex)
+                catch (DbUpdateException ex)
                 {
                     _db.Entry(created).State = EntityState.Detached;
-                    if (ex is not DbUpdateException update) throw;
-                    createFailure = update;
+                    createFailure = ex;
                     applied = false;
+                }
+                catch
+                {
+                    _db.Entry(created).State = EntityState.Detached;
+                    throw;
                 }
             }
 
