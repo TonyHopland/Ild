@@ -975,7 +975,7 @@ public class RepositoryManager : IRepositoryManager
 
         var worktrees = Path.GetDirectoryName(entry);
         var gitDir = worktrees is null ? null : Path.GetDirectoryName(worktrees);
-        if (gitDir is null || Path.GetFileName(worktrees) != "worktrees" || Path.GetFileName(gitDir) != ".git") return null;
+        if (worktrees is null || gitDir is null || Path.GetFileName(worktrees) != "worktrees" || Path.GetFileName(gitDir) != ".git") return null;
         var repository = Path.GetDirectoryName(gitDir);
         if (repository is null) return null;
 

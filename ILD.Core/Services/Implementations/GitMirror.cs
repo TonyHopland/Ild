@@ -118,7 +118,7 @@ internal sealed class GitMirror
     private async Task<string?> EnsureAsync(string path, CancellationToken ct)
     {
         if (!Directory.Exists(_root))
-            Directory.CreateDirectory(_root, _sharedWithAgent ? Readable : Closed);
+            CreateDirectory(_root, _sharedWithAgent ? Readable : Closed);
 
         if (File.Exists(Path.Combine(path, "HEAD")))
         {
@@ -135,7 +135,7 @@ internal sealed class GitMirror
         var building = $"{path}.building-{Guid.NewGuid():N}";
         try
         {
-            Directory.CreateDirectory(building, Closed);
+            CreateDirectory(building, Closed);
             var init = await _git(_root, ["init", "--quiet", "--bare", "--template=", "--initial-branch=main", building], null, ct);
             if (!init.Success)
                 return init.StdErr;
@@ -150,13 +150,25 @@ internal sealed class GitMirror
         return null;
     }
 
+    private static void CreateDirectory(string path, UnixFileMode mode)
+    {
+        if (OperatingSystem.IsWindows())
+            Directory.CreateDirectory(path);
+        else
+            Directory.CreateDirectory(path, mode);
+    }
+
     /// <summary>Set the permission bits of a directory without losing the setgid bit it inherited.</summary>
     private static void SetMode(string directory, UnixFileMode mode)
-        => File.SetUnixFileMode(directory, mode | (File.GetUnixFileMode(directory) & UnixFileMode.SetGroup));
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.SetUnixFileMode(directory, mode | (File.GetUnixFileMode(directory) & UnixFileMode.SetGroup));
+    }
 
     /// <summary>Strip the mode of everything git wrote to what the agent may read, never write.</summary>
     private static void Sanitize(string path)
     {
+        if (OperatingSystem.IsWindows()) return;
         foreach (var entry in new DirectoryInfo(path).EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
         {
             try
@@ -263,13 +275,10 @@ internal sealed class GitMirror
                 try
                 {
                     ProcessResult written;
-                    await using (var sink = new FileStream(file, new FileStreamOptions
-                    {
-                        Mode = FileMode.CreateNew,
-                        Access = FileAccess.Write,
-                        Share = FileShare.None,
-                        UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
-                    }))
+                    var create = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+                    if (!OperatingSystem.IsWindows())
+                        create.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                    await using (var sink = new FileStream(file, create))
                     {
                         written = await createBundle(incremental, sink);
                     }
