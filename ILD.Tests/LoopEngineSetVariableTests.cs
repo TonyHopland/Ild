@@ -200,4 +200,48 @@ public class LoopEngineSetVariableTests
             (await h.Services.GetRequiredService<ILoopRunStore>().GetVariablesAsync(h.RunId)).Select(v => (v.Name, v.Value)));
         Assert.DoesNotContain(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["next"].Id);
     }
+
+    private const string Doubled = """{"assignments":[{"name":"kept","value":"set"},{"name":"doubled","value":"{{Var.seed}}{{Var.seed}}"}]}""";
+
+    [Fact]
+    public async Task A_value_too_long_for_a_loop_variable_takes_the_failure_edge_and_sets_nothing()
+    {
+        using var h = Harness();
+        Graph(h, Doubled, NodeType.Prompt, """{"prompt":"after"}""", fallback: true);
+        var store = h.Services.GetRequiredService<ILoopRunStore>();
+        await store.SetVariableAsync(h.RunId, "seed", new string('x', 5000));
+
+        await h.RunAsync();
+
+        var set = Assert.Single(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["set"].Id);
+        Assert.Equal(LoopRunNodeStatus.Failed, set.Status);
+        Assert.Contains("10000", set.Error);
+        Assert.Contains(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["fallback"].Id);
+        Assert.Equal(new[] { "seed" }, (await store.GetVariablesAsync(h.RunId)).Select(v => v.Name));
+    }
+
+    [Fact]
+    public async Task Without_a_failure_edge_a_value_too_long_parks_the_run_and_Retry_renders_it_again()
+    {
+        using var h = Harness();
+        Graph(h, Doubled, NodeType.Prompt, """{"prompt":"after"}""");
+        var store = h.Services.GetRequiredService<ILoopRunStore>();
+        await store.SetVariableAsync(h.RunId, "seed", new string('x', 5000));
+
+        await h.RunAsync();
+
+        Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
+        Assert.Equal(h.NodesById["set"].Id, h.ReloadRun().CurrentNodeId);
+        Assert.Equal(new[] { "seed" }, (await store.GetVariablesAsync(h.RunId)).Select(v => v.Name));
+
+        await store.SetVariableAsync(h.RunId, "seed", "ok");
+        var failed = Assert.Single(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["set"].Id);
+        await h.Engine.RetryFromNodeAsync(h.RunId, failed.Id);
+        await h.WaitUntilIdleAsync();
+
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+        Assert.Equal(
+            new[] { ("doubled", "okok"), ("kept", "set"), ("seed", "ok") },
+            (await store.GetVariablesAsync(h.RunId)).Select(v => (v.Name, v.Value)));
+    }
 }

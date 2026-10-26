@@ -1,3 +1,4 @@
+using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Stores.Interfaces;
@@ -9,7 +10,8 @@ namespace ILD.Core.Services.Implementations.Executors;
 /// Assigns loop variables from templated values. It never invokes AI, runs a
 /// command, or touches the worktree. Every value is rendered before the engine
 /// writes any of them, so all of them see the variables as they were before the
-/// node ran. Its Output is its input, unchanged.
+/// node ran, and either all of them are assigned or, when one is too long for a
+/// loop variable, none is and the node fails. Its Output is its input, unchanged.
 /// </summary>
 public sealed class SetVariableNodeExecutor : INodeExecutor
 {
@@ -36,6 +38,14 @@ public sealed class SetVariableNodeExecutor : INodeExecutor
             if (rendering is not null)
                 value = await rendering.RenderAsync(value, ctx.Run.Id, wi, input);
             assignments.Add(new VariableAssignment(a.Name ?? string.Empty, value));
+        }
+
+        if (assignments.FirstOrDefault(a => a.Value.Length > LoopRunVariable.MaxValueLength) is { } tooLong)
+        {
+            yield return new NodeOutcome.Fail(EdgeType.OnFailure,
+                $"The value for loop variable '{tooLong.Name}' is {tooLong.Value.Length} characters long; " +
+                $"a loop variable holds at most {LoopRunVariable.MaxValueLength}. Nothing was set.");
+            yield break;
         }
 
         yield return new NodeOutcome.VariablesAssigned(assignments);

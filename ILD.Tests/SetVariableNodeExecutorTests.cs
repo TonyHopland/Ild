@@ -86,4 +86,34 @@ public class SetVariableNodeExecutorTests
         Assert.Equal(EdgeType.OnFailure, fail.Edge);
         Assert.Contains("WorkItem not found", fail.Reason);
     }
+
+    [Fact]
+    public async Task A_value_longer_than_8192_characters_fails_the_node_and_assigns_none_of_them()
+    {
+        var node = Node(new[]
+        {
+            new { name = "short", value = "fine" },
+            new { name = "log", value = "{{Node.Input}}" },
+        });
+
+        var outcomes = await RunAsync(node, new string('x', 8193));
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.VariablesAssigned);
+        var fail = Assert.IsType<NodeOutcome.Fail>(outcomes[^1]);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("'log'", fail.Reason);
+        Assert.Contains("8193", fail.Reason);
+        Assert.Contains("8192", fail.Reason);
+    }
+
+    [Fact]
+    public async Task A_value_of_exactly_8192_characters_is_assigned_whole()
+    {
+        var input = new string('x', 8192);
+
+        var outcomes = await RunAsync(Node(new[] { new { name = "log", value = "{{Node.Input}}" } }), input);
+
+        var assigned = Assert.Single(outcomes.OfType<NodeOutcome.VariablesAssigned>());
+        Assert.Equal(input, Assert.Single(assigned.Assignments).Value);
+    }
 }
