@@ -63,12 +63,13 @@ public sealed class HumanInputProposalService : IHumanInputProposalService
         if (await _proposals.ClaimApprovalAsync(id, decidedBy, ct) == 0)
             return await RefusedAsync(id, ct);
 
+        // The claim is held, so what follows does not stop for a caller that went away.
         var delivered = await DeliverAsync(proposal);
         if (!delivered)
-            await _proposals.RevertToStaleAsync(id, ct);
+            await _proposals.RevertToStaleAsync(id, CancellationToken.None);
         await _notifier.HumanInputProposalsChangedAsync(proposal.WorkItemId);
         return new(delivered ? HumanInputDecisionOutcome.Approved : HumanInputDecisionOutcome.Stale,
-            await _proposals.GetAsync(id, ct));
+            await _proposals.GetAsync(id, CancellationToken.None));
     }
 
     public async Task<HumanInputProposalDecision> RejectAsync(Guid id, string? reason, string decidedBy, CancellationToken ct)
