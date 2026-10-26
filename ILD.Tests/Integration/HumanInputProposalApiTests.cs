@@ -44,12 +44,22 @@ public class HumanInputProposalApiTests
     internal sealed class ClaimRace : DbCommandInterceptor
     {
         private static readonly Regex ProposalUpdate = new(@"^\s*UPDATE\s+""?HumanInputProposals""?[\s(]", RegexOptions.IgnoreCase);
+        private static readonly Regex RunUpdate = new(@"^\s*UPDATE\s+""?LoopRuns""?[\s(]", RegexOptions.IgnoreCase);
         private bool _armed;
+        private bool _failDelivery;
 
         public void Arm() => _armed = true;
 
+        /// <summary>The next write to a run, which is the answer being delivered, fails.</summary>
+        public void ArmDeliveryFailure() => _failDelivery = true;
+
         private void RaceIfClaim(DbCommand command)
         {
+            if (_failDelivery && RunUpdate.IsMatch(command.CommandText))
+            {
+                _failDelivery = false;
+                throw new InvalidOperationException("The database went away while the answer was delivered.");
+            }
             if (!ProposalUpdate.IsMatch(command.CommandText) || !_armed) return;
             _armed = false;
             using var race = command.Connection!.CreateCommand();
@@ -573,6 +583,24 @@ public class HumanInputProposalApiTests
         Assert.Equal(LoopRunStatus.WaitingHuman, (await RunAsync(host, parked.RunId)).Status);
     }
 
+    [Fact]
+    public async Task A_delivery_that_fails_unexpectedly_leaves_the_suggestion_stale_not_approved()
+    {
+        await using var host = await StartHostAsync();
+        var parked = await SeedParkedAsync(host);
+        var id = await ProposeOkAsync(host.Agent(await SeedRunAsync(host.Factory)), parked.WorkItemId, "OnSuccess");
+        host.ClearHints();
+        host.Race.ArmDeliveryFailure();
+
+        try { Assert.Equal(HttpStatusCode.InternalServerError, (await ApproveAsync(host.Human, id)).StatusCode); }
+        catch (InvalidOperationException) { }
+
+        Assert.Equal("Stale", await StatusOfAsync(host, parked.WorkItemId, id));
+        Assert.Empty(await AnswersAsync(host, parked.RunId));
+        Assert.Equal(LoopRunStatus.WaitingHuman, (await RunAsync(host, parked.RunId)).Status);
+        Assert.True(host.Hints(parked.WorkItemId) >= 1, "the board was not hinted");
+    }
+
     // ── Rejecting ─────────────────────────────────────────────────────────
 
     [Theory]
@@ -637,6 +665,37 @@ public class HumanInputProposalApiTests
         Assert.Equal(0, host.Hints(other.WorkItemId));
         Assert.Equal("Stale", Status(await ConflictProposalAsync(await ApproveAsync(host.Human, byRun), "approving after the button")));
         Assert.Single(await AnswersAsync(host, parked.RunId));
+    }
+
+    public enum Left { Cancelled, Retried, Deleted }
+
+    [Theory]
+    [InlineData(Left.Cancelled)]
+    [InlineData(Left.Retried)]
+    [InlineData(Left.Deleted)]
+    public async Task A_run_that_leaves_the_question_unanswered_makes_its_pending_suggestions_stale(Left left)
+    {
+        await using var host = await StartHostAsync();
+        var parked = await SeedParkedAsync(host);
+        var other = await SeedParkedAsync(host);
+        var byRun = await ProposeOkAsync(host.Agent(await SeedRunAsync(host.Factory)), parked.WorkItemId, "OnSuccess");
+        var byChat = await ProposeOkAsync(host.Agent(chatSessionId: await SeedChatSessionAsync(host.Factory)), parked.WorkItemId, Rework);
+        var elsewhere = await ProposeOkAsync(host.Agent(await SeedRunAsync(host.Factory)), other.WorkItemId, "OnSuccess");
+        host.ClearHints();
+
+        var resp = left switch
+        {
+            Left.Cancelled => await host.Human.PostAsync($"/api/v1/loopruns/{parked.RunId}/cancel", null, Ct),
+            Left.Retried => await host.Human.PostAsync($"/api/v1/loopruns/{parked.RunId}/nodes/{parked.RunNodeId}/retry", null, Ct),
+            _ => await host.Human.DeleteAsync($"/api/v1/loopruns/{parked.RunId}", Ct),
+        };
+
+        Assert.True(resp.IsSuccessStatusCode, $"{left}: {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        Assert.Equal("Stale", await StatusOfAsync(host, parked.WorkItemId, byRun));
+        Assert.Equal("Stale", await StatusOfAsync(host, parked.WorkItemId, byChat));
+        Assert.Equal("Pending", await StatusOfAsync(host, other.WorkItemId, elsewhere));
+        if (left != Left.Deleted)
+            Assert.True(host.Hints(parked.WorkItemId) >= 1, "the board was not hinted");
     }
 
     [Fact]

@@ -64,7 +64,17 @@ public sealed class HumanInputProposalService : IHumanInputProposalService
             return await RefusedAsync(id, ct);
 
         // The claim is held, so what follows does not stop for a caller that went away.
-        var delivered = await DeliverAsync(proposal);
+        bool delivered;
+        try
+        {
+            delivered = await DeliverAsync(proposal);
+        }
+        catch
+        {
+            await _proposals.RevertToStaleAsync(id, CancellationToken.None);
+            await _notifier.HumanInputProposalsChangedAsync(proposal.WorkItemId);
+            throw;
+        }
         if (!delivered)
             await _proposals.RevertToStaleAsync(id, CancellationToken.None);
         await _notifier.HumanInputProposalsChangedAsync(proposal.WorkItemId);

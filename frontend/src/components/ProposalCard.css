@@ -66,6 +66,12 @@
   font-style: italic;
 }
 
+.proposal-empty {
+  margin: 0;
+  color: #a0a0b0;
+  font-style: italic;
+}
+
 .proposal-reason {
   margin: 0.5rem 0 0;
   color: #c0c0d0;

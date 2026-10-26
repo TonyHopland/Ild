@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { LoopRunStatus, TurnVariableChange, WorkItem } from "../../types";
+import {
+  LoopRun,
+  LoopRunNodeStatus,
+  LoopRunStatus,
+  TurnVariableChange,
+  WorkItem,
+} from "../../types";
 import { useEditProposals } from "../../hooks/useEditProposals";
 import { useGlobalVariableProposals } from "../../hooks/useGlobalVariableProposals";
 import { useHumanInputProposals } from "../../hooks/useHumanInputProposals";
@@ -102,6 +108,19 @@ function TurnVariables({ variables }: { variables: TurnVariableChange[] }) {
           </div>
         ))}
     </div>
+  );
+}
+
+/**
+ * The execution of the Human node the run is waiting on right now, or null when
+ * the run is not read yet or waits on no one: the one question a suggestion can answer.
+ */
+function waitingVisitOf(run: LoopRun | null) {
+  if (!run || run.status !== LoopRunStatus.WaitingHuman || run.isHalted) return null;
+  return (
+    run.nodes
+      .filter((n) => n.status === LoopRunNodeStatus.WaitingHuman && n.nodeId === run.currentNodeId)
+      .sort((a, b) => Date.parse(b.startedAt ?? "") - Date.parse(a.startedAt ?? ""))[0] ?? null
   );
 }
 
@@ -342,6 +361,7 @@ function RunThread({
   const cards = (list: { card: ReactNode }[] = []) => list.map((placed) => placed.card);
   // About the question this run is parked on, so by the run they answer and not
   // by the step that made them: shown just before the buttons that answer it.
+  const parkedVisitId = waitingVisitOf(view.run)?.id ?? null;
   const answerSuggestions = (humanInput.proposals ?? [])
     .filter((proposal) => proposal.runId === runId)
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
@@ -413,6 +433,7 @@ function RunThread({
       <HumanInputProposalCard
         key={`hiproposal:${proposal.id}`}
         proposal={proposal}
+        decidable={proposal.runNodeId === parkedVisitId}
         onSettled={humanInput.refresh}
       />
     )),

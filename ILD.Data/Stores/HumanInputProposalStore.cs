@@ -50,6 +50,9 @@ public sealed class HumanInputProposalStore : IHumanInputProposalStore
     public Task<int> RejectAsync(Guid id, string? reason, string decidedBy, CancellationToken ct)
         => _proposals.RejectAsync(id, reason, s => s.SetProperty(p => p.DecidedBy, decidedBy), ct);
 
+    public async Task<int> StalePendingForRunAsync(Guid runId, CancellationToken ct)
+        => (await _proposals.StalePendingAsync(p => p.RunId == runId, DateTime.UtcNow, ct)).Count;
+
     public async Task<int> StalePendingForVisitAsync(Guid runNodeId, CancellationToken ct)
         => (await _proposals.StalePendingAsync(p => p.RunNodeId == runNodeId, DateTime.UtcNow, ct)).Count;
 }

@@ -8,6 +8,12 @@ import "./ProposalCard.css";
 interface HumanInputProposalCardProps {
   proposal: HumanInputProposal;
   /**
+   * Whether the question it answers is the one the run waits on right now.
+   * Approve and Reject are offered only then; a pending suggestion for a question
+   * the run has left is shown without them.
+   */
+  decidable?: boolean;
+  /**
    * Called once an approve or reject has settled, whatever its outcome, so the
    * owner re-reads; with the server's reason when it was refused (the question
    * moved on, or it was decided first).
@@ -23,6 +29,7 @@ interface HumanInputProposalCardProps {
  */
 export default function HumanInputProposalCard({
   proposal,
+  decidable = true,
   onSettled,
 }: HumanInputProposalCardProps) {
   const status = proposal.status.toLowerCase();
@@ -31,21 +38,25 @@ export default function HumanInputProposalCard({
     <div className={`proposal-card proposal-card--${status}`} data-testid="proposal-card">
       <div className="proposal-header">
         <span className="proposal-heading">
-          Suggested answer: <strong>{outputLabel(proposal.output)}</strong>{" "}
+          Suggested answer: <strong>{outputLabel(proposal.output)}</strong>.
         </span>
         <span className={`proposal-status proposal-status--${status}`}>{proposal.status}</span>
       </div>
 
       <p className="proposal-rationale">{proposal.rationale}</p>
 
-      <div>{proposal.text ? <MarkdownRenderer content={proposal.text} /> : "No comment"}</div>
+      {proposal.text ? (
+        <MarkdownRenderer content={proposal.text} />
+      ) : (
+        <p className="proposal-empty">No comment</p>
+      )}
 
       {proposal.status === "Rejected" && proposal.rejectionReason && (
         <p className="proposal-reason">Reason: {proposal.rejectionReason}</p>
       )}
 
       <ProposalDecision
-        pending={proposal.status === "Pending"}
+        pending={proposal.status === "Pending" && decidable}
         approve={() => humanInputProposalService.approve(proposal.id)}
         reject={(reason) => humanInputProposalService.reject(proposal.id, reason)}
         onSettled={onSettled}

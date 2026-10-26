@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, cleanup, act, waitFor, within, fireEvent, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { LoopRun, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
+import { LoopRun, LoopRunNodeStatus, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
 import type { HumanInputProposal } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -46,19 +46,33 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
   };
 }
 
+/** run-1, parked at the Human node on its question "exec-1". */
 function makeRun(): LoopRun {
   return {
     id: "run-1",
     workItemId: "wi-1",
     loopTemplateId: "tmpl-1",
     templateVersion: 1,
-    status: LoopRunStatus.Completed,
-    currentNodeId: null,
+    status: LoopRunStatus.WaitingHuman,
+    currentNodeId: "node-1",
     isPaused: false,
-    nodeExecutionCount: 0,
+    nodeExecutionCount: 1,
     startedAt: "2026-09-26T09:00:00Z",
     completedAt: null,
-    nodes: [],
+    nodes: [
+      {
+        id: "exec-1",
+        nodeId: "node-1",
+        nodeLabel: "Ask",
+        status: LoopRunNodeStatus.WaitingHuman,
+        effectiveInput: null,
+        output: null,
+        error: null,
+        startedAt: "2026-09-26T09:05:00Z",
+        completedAt: null,
+        executionCount: 1,
+      },
+    ],
   };
 }
 
@@ -210,6 +224,27 @@ describe("human input suggestions in the Action tab", () => {
     await waitFor(() => expect(cardOf("Green checks").textContent).toContain("Stale"));
     expect(action().textContent).not.toContain("The request failed");
     expect(action().textContent).not.toContain("no longer open");
+  });
+
+  test("a pending suggestion for a question the run is no longer waiting on offers no decision", async () => {
+    mockServices();
+    stubSuggestions({
+      list: [
+        suggestion("Current question"),
+        suggestion("Earlier question", { runNodeId: "exec-0" }),
+      ],
+    });
+
+    await openAction();
+
+    await waitFor(() => expect(action().textContent).toContain("Earlier question"));
+    expect(
+      within(cardOf("Current question")).getByRole("button", { name: "Approve" }),
+    ).toBeTruthy();
+    expect(
+      within(cardOf("Earlier question")).queryByRole("button", { name: "Approve" }),
+    ).toBeNull();
+    expect(within(cardOf("Earlier question")).queryByRole("button", { name: "Reject" })).toBeNull();
   });
 
   test("a hint for this work item re-reads the list and brings in a new card; a hint for another does not", async () => {

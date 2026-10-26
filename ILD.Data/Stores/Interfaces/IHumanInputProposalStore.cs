@@ -33,4 +33,7 @@ public interface IHumanInputProposalStore
 
     /// <summary>Every pending suggestion for the visit goes Stale. The rows written.</summary>
     Task<int> StalePendingForVisitAsync(Guid runNodeId, CancellationToken ct);
+
+    /// <summary>Every pending suggestion for any question of the run goes Stale. The rows written.</summary>
+    Task<int> StalePendingForRunAsync(Guid runId, CancellationToken ct);
 }
