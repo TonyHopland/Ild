@@ -366,8 +366,8 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
     "profiles": {
       "app": {
         "install": [
-          { "cwd": ".", "command": "pnpm install --frozen-lockfile" },
-          { "cwd": ".", "command": "dotnet restore ILD.sln" }
+          { "cwd": ".", "command": "command -v vp >/dev/null 2>&1 || npm install -g vite-plus" },
+          { "cwd": "frontend", "command": "[ -d node_modules ] || vp install" }
         ],
         "services": [
           {
