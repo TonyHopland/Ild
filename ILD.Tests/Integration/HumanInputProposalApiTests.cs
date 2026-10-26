@@ -694,8 +694,7 @@ public class HumanInputProposalApiTests
         Assert.Equal("Stale", await StatusOfAsync(host, parked.WorkItemId, byRun));
         Assert.Equal("Stale", await StatusOfAsync(host, parked.WorkItemId, byChat));
         Assert.Equal("Pending", await StatusOfAsync(host, other.WorkItemId, elsewhere));
-        if (left != Left.Deleted)
-            Assert.True(host.Hints(parked.WorkItemId) >= 1, "the board was not hinted");
+        Assert.True(host.Hints(parked.WorkItemId) >= 1, "the board was not hinted");
     }
 
     [Fact]

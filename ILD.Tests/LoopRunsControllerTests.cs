@@ -134,11 +134,15 @@ public class LoopRunsControllerTests
 
     private static LoopRunsController BuildController(
         Mock<ILoopRunStore> store, Mock<IRunReclaimer> reclaimer, IAdapterSessionSnapshotStore? snapshots = null)
-        => TestActors.SignedIn(new LoopRunsController(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
+    {
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(w => w.DeleteRunAsync(It.IsAny<Guid>())).Returns<Guid>(store.Object.DeleteAsync);
+        return TestActors.SignedIn(new LoopRunsController(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
             snapshots ?? new Mock<IAdapterSessionSnapshotStore>().Object,
             new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
-            reclaimer.Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(),
+            reclaimer.Object, workItems.Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(),
             Mock.Of<ISchedulerSettingsService>(), claudeProjects: TestClaudeProjectFolders.Instance));
+    }
 
     [Fact]
     public async Task GetEvents_includes_runNodeId_in_response()
