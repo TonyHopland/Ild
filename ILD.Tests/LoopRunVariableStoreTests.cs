@@ -169,6 +169,21 @@ public class LoopRunVariableStoreTests
     }
 
     [Fact]
+    public async Task A_write_whose_name_differs_only_in_case_overwrites_the_existing_variable()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "build");
+        var effect = await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "Phase", "review");
+
+        Assert.Equal(VariableWriteEffect.Changed, effect);
+        var variable = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariablesAsync(run.Id));
+        Assert.Equal("review", variable.Value);
+        Assert.Equal(new string?[] { null, "build" }, (await WritesAsync(db, run.WorkItemId)).Select(w => w.PreviousValue));
+    }
+
+    [Fact]
     public async Task A_variable_set_before_history_was_kept_is_recorded_as_changed_not_created()
     {
         using var db = new TestDb();

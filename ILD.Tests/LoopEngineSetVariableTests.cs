@@ -310,4 +310,23 @@ public class LoopEngineSetVariableTests
         Assert.Contains(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["fallback"].Id);
         Assert.Empty(await h.Services.GetRequiredService<ILoopRunStore>().GetVariablesAsync(h.RunId));
     }
+
+    [Fact]
+    public async Task A_write_refused_partway_through_fails_the_node_and_leaves_no_variable_history_or_event()
+    {
+        using var h = Harness();
+        Graph(h, Assignments(("first", "one"), ("second", "two")), NodeType.Prompt, """{"prompt":"after"}""", fallback: true);
+        h.Db.Context.Database.ExecuteSqlRaw(
+            "CREATE TRIGGER refuse_second BEFORE INSERT ON LoopRunVariables WHEN NEW.Name = 'second' BEGIN SELECT RAISE(ABORT, 'refused'); END");
+
+        await h.RunAsync();
+
+        var set = Assert.Single(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["set"].Id);
+        Assert.Equal(LoopRunNodeStatus.Failed, set.Status);
+        Assert.Contains(h.ReloadRunNodes(), rn => rn.LoopNodeId == h.NodesById["fallback"].Id);
+        var store = h.Services.GetRequiredService<ILoopRunStore>();
+        Assert.Empty(await store.GetVariablesAsync(h.RunId));
+        Assert.Empty(await store.GetTurnVariableChangesForWorkItemAsync(h.WorkItemId));
+        Assert.DoesNotContain(h.ReloadEvents(), e => e.EventType == EventType.VariableSet);
+    }
 }

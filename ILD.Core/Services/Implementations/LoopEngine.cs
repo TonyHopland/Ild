@@ -1343,26 +1343,27 @@ public sealed class LoopEngine : ILoopEngine
     private sealed class RunMovedOnException : Exception;
 
     /// <summary>
-    /// Writes a Set Variable node's assignments in order while its execution is
-    /// running, so each write is recorded against it, and logs a VariableSet
-    /// event per write. Null when all were written; otherwise the failure the
-    /// node fails with.
+    /// Writes a Set Variable node's assignments in order, in one transaction,
+    /// while its execution is running, so each write is recorded against it; once
+    /// they are committed, logs a VariableSet event per write. Null when all were
+    /// written; otherwise the failure the node fails with, and none was written.
     /// </summary>
     private async Task<NodeOutcome.Fail?> TryAssignVariablesAsync(ILoopRunStore store, IEventLogService? eventLog,
         Guid runId, Guid nodeId, Guid? runNodeId, NodeOutcome.VariablesAssigned assigned)
     {
-        foreach (var assignment in assigned.Assignments)
+        IReadOnlyList<VariableWriteEffect> effects;
+        try { effects = await store.SetVariablesAsync(runId, assigned.Assignments); }
+        catch (Exception ex)
         {
-            VariableWriteEffect effect;
-            try { effect = await store.SetVariableAsync(runId, assignment.Name, assignment.Value); }
-            catch (Exception ex)
-            {
-                return new NodeOutcome.Fail(EdgeType.OnFailure, $"Could not set loop variable '{assignment.Name}': {ex.Message}");
-            }
-            if (eventLog is not null)
-                await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.VariableSet,
-                    $"{assignment.Name} ({EffectLabel(effect)})", nodeId, runNodeId: runNodeId));
+            var names = string.Join(", ", assigned.Assignments.Select(a => $"'{a.Name}'"));
+            return new NodeOutcome.Fail(EdgeType.OnFailure, $"Could not set loop variables {names}; none was set: {ex.Message}");
         }
+        if (eventLog is not null)
+            for (var i = 0; i < effects.Count; i++)
+            {
+                var entry = $"{assigned.Assignments[i].Name} ({EffectLabel(effects[i])})";
+                await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.VariableSet, entry, nodeId, runNodeId: runNodeId));
+            }
         return null;
     }
 

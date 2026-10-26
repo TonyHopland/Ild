@@ -1,3 +1,4 @@
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Core.Services.Interfaces;
@@ -10,8 +11,9 @@ namespace ILD.Core.Services.Implementations.Executors;
 /// Assigns loop variables from templated values. It never invokes AI, runs a
 /// command, or touches the worktree. Every value is rendered before the engine
 /// writes any of them, so all of them see the variables as they were before the
-/// node ran, and either all of them are assigned or, when one is too long for a
-/// loop variable, none is and the node fails. Its Output is its input, unchanged.
+/// node ran; the engine then writes all of them in one transaction, so either all
+/// are assigned or none is and the node fails (one too long for a loop variable
+/// fails here, before any write). Its Output is its input, unchanged.
 /// </summary>
 public sealed class SetVariableNodeExecutor : INodeExecutor
 {

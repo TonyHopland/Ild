@@ -1,4 +1,5 @@
 using ILD.Data.Enums;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 
 namespace ILD.Core.Services.Interfaces;
@@ -132,8 +133,8 @@ public abstract record NodeOutcome
 
     /// <summary>
     /// Set Variable node rendered its assignments. The engine writes them to the
-    /// run's loop variables, in order, while the node's execution is running; a
-    /// write that fails fails the node.
+    /// run's loop variables, in order and in one transaction, while the node's
+    /// execution is running; if any write fails, none is written and the node fails.
     /// </summary>
     public sealed record VariablesAssigned(IReadOnlyList<VariableAssignment> Assignments) : NodeOutcome;
 
@@ -159,9 +160,6 @@ public abstract record NodeOutcome
         return new Success(EdgeType.OnSuccess, result);
     }
 }
-
-/// <summary>One loop variable a Set Variable node writes, with its rendered value.</summary>
-public sealed record VariableAssignment(string Name, string Value);
 
 /// <summary>
 /// Slim execution context. The node resolves its own dependencies via the

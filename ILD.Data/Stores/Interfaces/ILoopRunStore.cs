@@ -141,21 +141,30 @@ public interface ILoopRunStore
     Task UpsertSessionBindingAsync(Guid runId, string adapterName, string placeholderId, string sessionId);
 
     /// <summary>
-    /// All loop variables for a run, ordered by name. Returns an empty list when
-    /// the run has none. Backs <c>{{Var.&lt;name&gt;}}</c> placeholder rendering and
+    /// All loop variables for a run, ordered by name, one per name ignoring case
+    /// (the most recently updated, should older rows differ only in case).
+    /// Returns an empty list when the run has none. Backs <c>{{Var.&lt;name&gt;}}</c> placeholder rendering and
     /// the agent variable-listing endpoint.
     /// </summary>
     Task<IReadOnlyList<LoopRunVariable>> GetVariablesAsync(Guid runId);
 
     /// <summary>
-    /// Create or overwrite a single loop variable by (runId, name), touching only
-    /// that row so concurrent writes to other variables / control-plane columns
-    /// are never clobbered. Also appends the write to the run's variable history,
+    /// Create or overwrite a single loop variable by run and name (matched ignoring
+    /// case), touching only that row so concurrent writes to other variables /
+    /// control-plane columns are never clobbered. Also appends the write to the run's variable history,
     /// attributed to whichever node execution is running at the time. Reports
     /// whether the write created the variable, changed it, or stored the value it
     /// already had.
     /// </summary>
     Task<VariableWriteEffect> SetVariableAsync(Guid runId, string name, string value);
+
+    /// <summary>
+    /// <see cref="SetVariableAsync"/> for several variables at once, in order and
+    /// in one transaction: either every variable and its history row is written,
+    /// or, when any write fails, none is. A name matches an existing variable
+    /// ignoring case and overwrites it. Returns what each write did, in order.
+    /// </summary>
+    Task<IReadOnlyList<VariableWriteEffect>> SetVariablesAsync(Guid runId, IReadOnlyList<VariableAssignment> assignments);
 
     /// <summary>
     /// The node execution of the run that is running now, the most recently
