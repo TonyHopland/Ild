@@ -27,7 +27,7 @@ public class ConnectionTesterRedactionTests
 
     private sealed class StderrRunner(Func<IReadOnlyDictionary<string, string?>, string> stderr) : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
             => Task.FromResult(new ProcessResult(128, string.Empty, stderr(environmentVariables ?? new Dictionary<string, string?>())));
     }
 

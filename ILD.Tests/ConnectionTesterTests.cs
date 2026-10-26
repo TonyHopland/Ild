@@ -62,7 +62,7 @@ public class ConnectionTesterTests : IDisposable
         public static ScriptedRunner Exit(int code, string stderr = "")
             => new(_ => Task.FromResult(new ProcessResult(code, string.Empty, stderr)));
 
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
         {
             Calls.Add((args, workingDirectory, new Dictionary<string, string?>(environmentVariables ?? new Dictionary<string, string?>()), ct));
             return _respond(ct);
@@ -665,14 +665,16 @@ public class ConnectionTesterTests : IDisposable
         const string cloneUrl = "https://ci-bot@git.example.com/team/app.git";
         var provider = Provider("Forgejo", "https://git.example.com", Key);
         var runner = ScriptedRunner.Exit(0);
-        var mgr = new RepositoryManager(runner);
+        var mgr = new RepositoryManager(runner, mirrorsRoot: Path.Combine(_tmp, "mirrors"));
         var tester = new ConnectionTester(Adapters(), mgr, new HttpClient(ScriptedHandler.Answer(HttpStatusCode.OK)));
+        var clone = Directory.CreateDirectory(Path.Combine(_tmp, "clone")).FullName;
+        Directory.CreateDirectory(Path.Combine(clone, ".git"));
 
         await tester.TestRepositoryAsync(Repo(cloneUrl, "main", provider.Id), provider, CancellationToken.None);
-        await mgr.FetchAsync(_tmp, auth: new GitAuthOptions(cloneUrl, Key, "Forgejo"), cancellationToken: TestContext.Current.CancellationToken);
+        await mgr.FetchAsync(clone, auth: new GitAuthOptions(cloneUrl, Key, "Forgejo"), cancellationToken: TestContext.Current.CancellationToken);
 
         var probe = runner.Calls[0];
-        var fetch = runner.Calls[1];
+        var fetch = runner.Calls.Single(c => c.Args.Contains("fetch") && c.Environment.ContainsKey("ILD_GIT_PASSWORD"));
         Assert.Contains(cloneUrl, probe.Args);
         Assert.Equal(Key, fetch.Environment["ILD_GIT_PASSWORD"]);
         foreach (var (name, value) in fetch.Environment)

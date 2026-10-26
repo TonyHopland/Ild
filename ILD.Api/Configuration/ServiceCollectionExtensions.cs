@@ -37,7 +37,8 @@ public static class ServiceCollectionExtensions
             return new RepositoryManager(
                 runner,
                 logger,
-                string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot);
+                string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot,
+                mirrorsRoot: RepositoryManager.MirrorRoot(config));
         });
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();

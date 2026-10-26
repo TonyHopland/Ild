@@ -58,7 +58,8 @@ public class ManagedAgentServiceTests : IDisposable
             IReadOnlyList<string> args,
             string? workingDirectory = null,
             CancellationToken ct = default,
-            IReadOnlyDictionary<string, string?>? environmentVariables = null)
+            IReadOnlyDictionary<string, string?>? environmentVariables = null,
+            ProcessRunOptions? options = null)
         {
             lock (Calls) Calls.Add([fileName, .. args]);
 

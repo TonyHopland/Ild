@@ -27,7 +27,8 @@ memory or its private files by virtue of being the same user.
     `/home/ild/.agent-config`: group-owned by `ild-agents`, `setgid` (new entries
     inherit the group), plus a default POSIX ACL granting `g:ild-agents:rwx` so a
     file created by either uid stays read/write for the other.
-  - **read-only** — `/data/agents`, the npm-installed CLIs. The agent execs them
+  - **read-only** — `/data/agents`, the npm-installed CLIs, and `/data/git-mirrors`,
+    the orchestrator's git mirrors (below). The agent execs the CLIs
     but must not rewrite them, because the orchestrator runs those same binaries
     as `ild` (version checks, the provider terminal); a writable install would be
     a way straight back across the boundary. Mode `2750` with a `g:ild-agents:r-x`
@@ -104,9 +105,51 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   behavior; the container image sets the variable. A Cmd node's command still has
   the orchestrator environment stripped in single-uid mode (see the capability
   paragraph below).
-  `ProcessRunner` (git, npm) is deliberately **not** routed — those are
-  orchestrator operations and must keep running as `ild`.
+  `ProcessRunner` (npm, version checks) is deliberately **not** routed — those are
+  orchestrator operations and keep running as `ild`, always with the secrets
+  `SecretEnvironmentKeys` names removed from what they inherit (there is no way
+  to keep them). Git is the exception that is split by where it runs; see the next
+  paragraph.
 
+- **git in a clone or worktree runs as the agent; the orchestrator runs git only in
+  its own mirror.** The base clones under `/data/repos` and every run worktree have
+  an agent-writable `.git/config`, `.git/hooks` and `.gitattributes`, so anything git
+  executes there — a hook, `core.fsmonitor`, a `filter=`/`diff=` driver named by a
+  `.gitattributes` and defined in the config — runs with the privileges of whoever
+  ran git. `RepositoryManager` therefore runs every git command in a clone or
+  worktree (worktree add/remove, add, commit, diff, rebase, reset, status, log, …)
+  as the agent through `ProcessRunner`'s `AsAgent` option, from `/` and addressing the
+  repository with `-C`, with the orchestrator's secrets, topology and git credentials
+  stripped from its environment (`GIT_AUTHOR_*`/`GIT_COMMITTER_*` are kept, so
+  authorship is unchanged). The repository's own hooks keep running — as the agent.
+  What reaches a remote goes through a persistent bare **mirror** per remote
+  (`{DataPath}/git-mirrors/<hash of the clone URL without credentials>`), owned by the
+  orchestrator: a fetch brings the remote's branches into the mirror, and the agent
+  then fetches from the mirror's path (or clones from it with `--no-local`, a full
+  copy) without credentials. A push is the agent writing a `git bundle` of the branch
+  to its stdout, the orchestrator holding that stream in an owner-only file and
+  indexing it into the mirror with its objects checked (`index-pack --fsck-objects`;
+  git before 2.46 does not apply `transfer.fsckObjects` to a bundle), and the orchestrator
+  pushing `<sha>:refs/heads/<branch>` from the mirror to the clone URL the caller
+  passed — never a URL read from a clone's config. The orchestrator's git there, and
+  its `ls-remote` probes, run with an environment built from scratch (`PATH`, an
+  empty owner-only `HOME`, `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM`,
+  `GIT_CONFIG_GLOBAL=/dev/null`, and the askpass credential only when there is one)
+  and `GIT_CONFIG_*` entries that switch off `core.hooksPath`, `core.fsmonitor`, the
+  credential helper, `core.sshCommand` and the `ext` transport. A mirror keeps no
+  remote, URL or credential and is never writable by the agent: it is a read-only
+  shared tree like the agent installs, closed to the agent while the orchestrator's git
+  writes to it and opened again only once the modes git wrote have been tightened and everything in it has been moved into the agent's group (ILD does that itself, for the store root, each mirror and what is in them, rather than relying on how the deployment made the store; it fails with a message if it cannot).
+  Operations on one mirror are serialized, the agent's reads of it included. The price is a second
+  copy of every repository and a first fetch per repository after upgrading; the
+  worktree's `pre-push` hook is run by ILD as the agent, with git's own arguments and stdin, before
+  the mirror push and without credentials, and a failing hook stops the push. A hook that needs the
+  repository token, such as Git LFS's (not installed in the image), fails. Before any
+  git command is started in a worktree, its `.git` must be a regular file naming
+  `<repo>/.git/worktrees/<name>` with a real `<repo>/.git` directory and a
+  back-pointer to that file (or a real `.git` directory, for a base clone); a link or
+  a redirected pointer is refused. The exclude file the secrets are listed in is
+  written by a shell running as the agent, which never writes through a link.
 - **The login terminal runs as the agent too, because file modes decide.** The
   agent CLIs' login state (`~/.claude`, `~/.opencode`, …) lives in the
   `/home/ild/.agent-config` volume, symlinked into **both** home directories. But
@@ -121,9 +164,10 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   under the container's `umask 002`, so they stay group-readable.
   `agent` still cannot read `/data`'s private secrets or the orchestrator's memory.
 
-- **git needs `safe.directory` set system-wide.** `git worktree add` runs as the
-  orchestrator, so the worktree, its `.git` file and the gitdir under
-  `/data/repos/<repo>/.git/worktrees/<name>` are owned by `ild` — and since 2.35.2
+- **git needs `safe.directory` set system-wide.** The worktree, its `.git` file and
+  the gitdir under `/data/repos/<repo>/.git/worktrees/<name>` can be owned by `ild`
+  (clones made before git ran as the agent, and the mirror the agent reads) — and
+  since 2.35.2
   git refuses to operate on a repository whose owner's uid differs from
   `geteuid()`, regardless of group and mode. Without `git config --system --add
 safe.directory '*'` in the image, every git command the agent runs (the review
@@ -215,9 +259,15 @@ has indirect routes across the boundary. These are known and accepted for now
 rather than overlooked:
 
 - **`/data/repos` is writable by the agent** and has to be — a git worktree commits
-  into the base repo's object store. That also puts each base repo's
-  `.git/config` and `.git/hooks` in reach, and the orchestrator's own git runs
-  against those as `ild` on every worktree add/fetch.
+  into the base repo's object store. That puts each base repo's `.git/config`,
+  `.git/hooks` and `.gitattributes` in the agent's reach, which is why git runs there
+  as the agent (see above) rather than as `ild`. What stays is narrower: the
+  orchestrator still reads and writes agent-controlled paths without git in
+  `CreateWorktreeAsync` (creating the worktrees root), `ReadWorktreeFileAsync` and
+  `WriteWorktreeFileAsync`; the mirror's push input is a bundle the agent wrote
+  (checked object by object, but an agent can still push whatever it likes to the
+  branch it was given); and the orchestrator's git resolves `PATH` from its own
+  environment.
 - **The shared credential store is writable by the agent**, so it can write e.g.
   `.claude/settings.json` hooks, which then execute as `ild` when a human opens
   the provider login terminal. ILD's own handling of the session transcripts kept
@@ -232,7 +282,7 @@ rather than overlooked:
   the files added for it fall under this same limit rather than adding a new one.
 
 Narrowing these is follow-up work: per-run uids/groups, and treating the shared
-git/credential state as attacker-controlled input on the orchestrator side.
+credential state as attacker-controlled input on the orchestrator side.
 Per-run user ids are the real fix for the shared-user limit — file modes would
 then enforce run-to-run separation the way they now enforce the agent/orchestrator
 split — and they are deliberately not planned now.
@@ -263,7 +313,7 @@ rules.
   would have _raised_ the ceiling of a successful escape while lowering its
   everyday reach. Every orchestrator-side spawn that can reach agent-authored
   input therefore goes through `AgentIsolation.DropInheritedCapabilities` —
-  `ProcessRunner` (git, npm) — which wraps it in
+  `ProcessRunner` (the orchestrator's git in its mirror, npm) — which wraps it in
   `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
   privilege). A Cmd node's command runs in a worktree the agent has just written —
   its builds, test suites and scripts — so it goes further. It always loses the
@@ -295,8 +345,8 @@ rules.
   side. The list therefore has to name XDG locations explicitly (e.g. opencode's
   `.config/opencode` and `.local/share/opencode`, which is where it keeps auth),
   and adding an adapter means checking where its CLI stores credentials.
-- The residual cross-boundary routes above (`/data/repos`, the credential store,
-  the shared group) are the follow-up backlog; changes there should keep the
+- The residual cross-boundary routes above (the credential store, the shared
+  group, the paths `/data/repos` still has the orchestrator read) are the follow-up backlog; changes there should keep the
   group/ACL scheme rather than re-hardcoding single-owner ownership.
 - `WorkItemServer` keeps its original single-uid `gosu` drop — it spawns no agent
   and needs no split (the entrypoint's split path only activates when `AGENT_USER`

@@ -591,7 +591,7 @@ public class ChatRepositoryCloneApiTests
         private Host()
         {
             Directory.CreateDirectory(_root);
-            Git = RecordingRepositoryManager.Around(new RepositoryManager(worktreesRoot: Path.Combine(_root, "worktrees")));
+            Git = RecordingRepositoryManager.Around(new RepositoryManager(new ProcessRunner(), null, Path.Combine(_root, "worktrees"), null, Path.Combine(_root, "mirrors")));
             var database = SqliteDatabaseFile.Create(Path.Combine(_root, "db"));
             Factory = new ApiFactory(configureServices: services =>
             {
@@ -827,7 +827,9 @@ public class ChatRepositoryCloneApiTests
                     return Gated((string)args[1]!, () => _inner.CloneAsync((string)args[0]!, (string)args[1]!, (CancellationToken)args[2]!, auth));
                 case nameof(IRepositoryManager.FetchAsync):
                     Calls.Enqueue((method.Name, (string)args[0]!, auth, strings));
-                    return Gated((string)args[0]!, () => _inner.FetchAsync((string)args[0]!, (CancellationToken)args[1]!, auth));
+                    // The fetch goes to the URL it is given, so the stand-in remote is substituted as for a clone.
+                    var reachable = auth is not null && Urls.TryGetValue(auth.RemoteUrl, out var bare) ? auth with { RemoteUrl = bare } : auth;
+                    return Gated((string)args[0]!, () => _inner.FetchAsync((string)args[0]!, (CancellationToken)args[1]!, reachable));
             }
 
             Calls.Enqueue((method.Name, strings.FirstOrDefault(), auth, strings));
