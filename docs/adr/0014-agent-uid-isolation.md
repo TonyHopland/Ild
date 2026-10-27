@@ -132,9 +132,10 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   git before 2.46 does not apply `transfer.fsckObjects` to a bundle), and the orchestrator
   pushing `<sha>:refs/heads/<branch>` from the mirror to the clone URL the caller
   passed — never a URL read from a clone's config. The orchestrator's git there, and
-  its `ls-remote` probes, run with an environment built from scratch (`PATH`, the orchestrator's own proxy variables when set, an
+  its `ls-remote` probes, run with an environment built from scratch (`PATH`, an
   empty owner-only `HOME`, `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM`,
-  `GIT_CONFIG_GLOBAL=/dev/null`, and the askpass credential only when there is one)
+  `GIT_CONFIG_GLOBAL=/dev/null`, the orchestrator's own proxy variables when set, and
+  the askpass credential only when there is one)
   and `GIT_CONFIG_*` entries that switch off `core.hooksPath`, `core.fsmonitor`, the
   credential helper, `core.sshCommand` and the `ext` transport. A mirror keeps no
   remote, URL or credential and is never writable by the agent: it is a read-only

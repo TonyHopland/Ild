@@ -18,15 +18,15 @@ namespace ILD.Core.Services.Implementations;
 /// whatever they make git execute must only ever have the agent's privileges. The
 /// orchestrator runs git only in its own per-remote mirror (<see cref="GitMirror"/>)
 /// and for <c>ls-remote</c>, each with a clean configuration and an environment
-/// built from scratch (plus the orchestrator's own proxy variables). The remote's URL always comes from the caller, never from
-/// the clone's config.
+/// built from scratch (plus the orchestrator's own proxy variables). The remote's
+/// URL always comes from the caller, never from the clone's config.
 /// </para>
 /// </summary>
 public class RepositoryManager : IRepositoryManager
 {
     private const int RefusedExitCode = 128;
 
-    private static readonly string[] ProxyEnvironmentKeys =
+    internal static readonly string[] ProxyEnvironmentKeys =
         ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
 
     private static readonly string AskPassScriptPath = EnsureAskPassScript();
@@ -1141,9 +1141,9 @@ public class RepositoryManager : IRepositoryManager
     ];
 
     /// <summary>
-    /// git as the orchestrator, for its own mirror and the remote. Nothing is inherited but the orchestrator's own proxy variables: not the
-    /// rest of its environment, not the system or user configuration; only the credential
-    /// when the caller has one.
+    /// git as the orchestrator, for its own mirror and the remote. Nothing is inherited but
+    /// the orchestrator's own proxy variables: not the rest of its environment, not the
+    /// system or user configuration; only the credential when the caller has one.
     /// </summary>
     private async Task<ProcessResult> OrchestratorGitAsync(
         string cwd, IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct,

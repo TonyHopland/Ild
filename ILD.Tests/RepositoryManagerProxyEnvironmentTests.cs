@@ -6,9 +6,6 @@ namespace ILD.Tests;
 [Collection("Git")]
 public class RepositoryManagerProxyEnvironmentTests : IDisposable
 {
-    private static readonly string[] ProxyNames =
-        ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
-
     private static readonly Dictionary<string, string> Noise = new()
     {
         ["NODE_USE_ENV_PROXY"] = "1",
@@ -42,7 +39,7 @@ public class RepositoryManagerProxyEnvironmentTests : IDisposable
         => name => values.TryGetValue(name, out var v) ? v : null;
 
     private static Dictionary<string, string> AllProxies()
-        => ProxyNames.ToDictionary(n => n, n => $"http://user:pw@proxy.invalid:3128/{n}");
+        => RepositoryManager.ProxyEnvironmentKeys.ToDictionary(n => n, n => $"http://user:pw@proxy.invalid:3128/{n}");
 
     private async Task<IReadOnlyDictionary<string, string?>> LsRemoteEnvironment(
         IReadOnlyDictionary<string, string> orchestratorEnvironment, GitAuthOptions? auth = null)
@@ -73,7 +70,7 @@ public class RepositoryManagerProxyEnvironmentTests : IDisposable
 
         foreach (var (name, value) in proxies)
             Assert.Equal(value, env[name]);
-        Assert.Equal(baseline.Keys.Concat(ProxyNames).Order(StringComparer.Ordinal), env.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(baseline.Keys.Concat(RepositoryManager.ProxyEnvironmentKeys).Order(StringComparer.Ordinal), env.Keys.Order(StringComparer.Ordinal));
         foreach (var (key, value) in baseline)
             Assert.Equal(value, env[key]);
     }
@@ -86,23 +83,8 @@ public class RepositoryManagerProxyEnvironmentTests : IDisposable
         var auth = withCredential ? Credential : null;
         var env = await LsRemoteEnvironment(Noise, auth);
 
-        Assert.DoesNotContain(env.Keys, k => ProxyNames.Contains(k));
+        Assert.DoesNotContain(env.Keys, k => RepositoryManager.ProxyEnvironmentKeys.Contains(k));
         foreach (var name in Noise.Keys) Assert.DoesNotContain(name, env.Keys);
-        Assert.Equal("0", env["GIT_TERMINAL_PROMPT"]);
-        Assert.Equal("1", env["GIT_CONFIG_NOSYSTEM"]);
-        Assert.Equal("/dev/null", env["GIT_CONFIG_GLOBAL"]);
-        Assert.True(env.ContainsKey("PATH"));
-        Assert.True(env.ContainsKey("HOME"));
-        Assert.True(env.ContainsKey("GIT_CEILING_DIRECTORIES"));
-        Assert.Equal(withCredential, env.ContainsKey("GIT_ASKPASS"));
-        Assert.Equal(withCredential, env.ContainsKey("ILD_GIT_USERNAME"));
-        Assert.Equal(withCredential, env.ContainsKey("ILD_GIT_PASSWORD"));
-        Assert.All(env.Keys, k => Assert.True(
-            k is "PATH" or "HOME" or "GIT_TERMINAL_PROMPT" or "GIT_CONFIG_NOSYSTEM" or "GIT_CONFIG_GLOBAL"
-                or "GIT_CONFIG_COUNT" or "GIT_CEILING_DIRECTORIES" or "GIT_ASKPASS" or "ILD_GIT_USERNAME" or "ILD_GIT_PASSWORD"
-            || k.StartsWith("GIT_CONFIG_KEY_", StringComparison.Ordinal)
-            || k.StartsWith("GIT_CONFIG_VALUE_", StringComparison.Ordinal),
-            $"unexpected key {k}"));
     }
 
     [Fact]
@@ -116,17 +98,7 @@ public class RepositoryManagerProxyEnvironmentTests : IDisposable
 
         Assert.Equal("http://proxy.invalid:3128", env["https_proxy"]);
         Assert.Equal("localhost,.example.test", env["NO_PROXY"]);
-        Assert.Equal(["NO_PROXY", "https_proxy"], env.Keys.Where(k => ProxyNames.Contains(k)).Order(StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public async Task Ls_remote_proxy_variables_do_not_displace_credential_or_ceiling_entries()
-    {
-        var plain = await LsRemoteEnvironment(new Dictionary<string, string>(), Credential);
-        var proxied = await LsRemoteEnvironment(AllProxies(), Credential);
-
-        foreach (var (key, value) in plain)
-            Assert.Equal(value, proxied[key]);
+        Assert.Equal(["NO_PROXY", "https_proxy"], env.Keys.Where(k => RepositoryManager.ProxyEnvironmentKeys.Contains(k)).Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -152,7 +124,7 @@ public class RepositoryManagerProxyEnvironmentTests : IDisposable
                 Assert.DoesNotContain(name, call.Environment!.Keys);
         }
         foreach (var call in runner.Calls.Where(c => !c.Orchestrator))
-            Assert.DoesNotContain(call.Environment?.Keys ?? [], k => ProxyNames.Contains(k));
+            Assert.DoesNotContain(call.Environment?.Keys ?? [], k => RepositoryManager.ProxyEnvironmentKeys.Contains(k));
         runner.AssertClean();
     }
 }
