@@ -90,14 +90,31 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         }
     }
 
-    /// <summary>A loopback port nothing is using, as far as the kernel just said.</summary>
+    // Below the ephemeral range, which the kernel hands to every other test's
+    // listeners and outgoing connections: a port probed free there can be taken
+    // before the forwarder binds it, which is what an ephemeral probe allowed.
+    private const int FirstForwardPort = 20000;
+    private const int ForwardPortCount = 10000;
+    private static int _nextForwardPort = Random.Shared.Next(ForwardPortCount);
+
+    /// <summary>A loopback port nothing is using, never handed out twice in this process.</summary>
     private static int FreePort()
     {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
+        while (true)
+        {
+            var port = FirstForwardPort + (int)((uint)Interlocked.Increment(ref _nextForwardPort) % ForwardPortCount);
+            var probe = new TcpListener(IPAddress.Loopback, port);
+            try
+            {
+                probe.Start();
+            }
+            catch (SocketException)
+            {
+                continue;
+            }
+            probe.Stop();
+            return port;
+        }
     }
 
     private async Task SetModeAsync(NetworkMode mode)
