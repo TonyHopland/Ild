@@ -45,11 +45,7 @@ public sealed class PackageFeedAgentLaunchTests : IDisposable
     {
         var path = Path.Combine(_dir, "fake-agent.sh");
         File.WriteAllText(path, "#!/bin/sh\n" + body);
-        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(path);
-        using var chmod = Process.Start(psi)!;
-        chmod.WaitForExit();
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return path;
     }
 

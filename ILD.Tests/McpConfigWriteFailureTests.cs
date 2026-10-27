@@ -326,11 +326,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
             "#!/bin/sh\n" +
             $"printf '%s\\n' \"$@\" > '{worktree}/argv.txt'\n" +
             "echo 'done'\n");
-        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(script);
-        using var chmod = Process.Start(psi)!;
-        chmod.WaitForExit();
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
     }
 

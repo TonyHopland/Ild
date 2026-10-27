@@ -26,9 +26,6 @@ public sealed class WorkItemFileRawNameTests : IDisposable
         _tmp = Path.Combine(Path.GetTempPath(), "ild-raw-name-" + Guid.NewGuid().ToString("N"));
         _worktree = Path.Combine(_tmp, "wt");
         Directory.CreateDirectory(Path.Combine(_worktree, "site"));
-        var git = Process.Start(new ProcessStartInfo("git", ["init", "-q", _worktree]) { UseShellExecute = false })!;
-        git.WaitForExit();
-        Assert.Equal(0, git.ExitCode);
         File.WriteAllText(Path.Combine(_worktree, "site", "page.html"), "<p>hi</p>");
     }
 

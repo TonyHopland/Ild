@@ -109,11 +109,7 @@ public sealed class PiAdapterToolListTests : IDisposable
             "cat >/dev/null\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-tools\",\"cwd\":\"/w\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        var chmod = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        chmod.ArgumentList.Add("+x");
-        chmod.ArgumentList.Add(script);
-        using var process = Process.Start(chmod)!;
-        process.WaitForExit();
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
     }
 }

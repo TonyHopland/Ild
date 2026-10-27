@@ -18,15 +18,18 @@ namespace ILD.Tests;
 /// away, what the cloner keeps in memory per chat, how a clone is found again,
 /// and what an agent-installed hook can do to an update.
 /// </summary>
-public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
+public sealed class ChatRepositoryClonerLifecycleTests : IDisposable, IClassFixture<ChatRepositoryClonerLifecycleTests.Remote>
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("ild-clone-lifecycle-").FullName;
     private readonly TestDb _db = new();
     private readonly ChatCloneCoordinator _chatClones = new();
     private readonly ServiceProvider _services;
 
-    public ChatRepositoryClonerLifecycleTests()
+    private readonly Remote _remote;
+
+    public ChatRepositoryClonerLifecycleTests(Remote remote)
     {
+        _remote = remote;
         _services = new ServiceCollection().AddScoped(_ => _db.OnOwnConnection()).BuildServiceProvider();
     }
 
@@ -59,7 +62,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task Deleting_the_chat_stops_its_clone_and_the_scratch_folder_stays_gone()
     {
-        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(_remote.Url);
         var real = RealGit;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -90,7 +93,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task A_call_that_checked_the_chat_just_before_it_was_deleted_is_refused_and_leaves_nothing_behind()
     {
-        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(_remote.Url);
         var lookedUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var deleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var providers = new Mock<IProviderStore>();
@@ -119,7 +122,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task Finished_calls_leave_nothing_of_the_chat_in_memory()
     {
-        var (chatId, _, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var (chatId, _, repo) = await SeedScheduledChatAsync(_remote.Url);
         var cloner = Cloner();
 
         var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
@@ -160,7 +163,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task A_renamed_repository_is_updated_in_the_folder_it_was_cloned_into()
     {
-        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(_remote.Url);
         var cloner = Cloner();
         var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
         File.WriteAllText(Path.Combine(scratch, cloned.Path!, "NOTES.md"), "the agent's own work");
@@ -177,7 +180,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task Copies_and_worktrees_of_the_clone_are_not_taken_for_it()
     {
-        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(_remote.Url);
         var cloner = Cloner();
         var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
         var repos = Path.Combine(scratch, "repos");
@@ -202,7 +205,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task A_second_repository_that_cleans_to_the_same_name_gets_a_folder_named_after_its_id()
     {
-        var remote = CreateRemote();
+        var remote = _remote.Url;
         var (chatId, _, repo) = await SeedScheduledChatAsync(remote);
         var lookalike = new Repository
         {
@@ -228,7 +231,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task A_branch_with_local_commits_ahead_of_its_remote_is_switched_back_to_as_it_is()
     {
-        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(_remote.Url);
         var cloner = Cloner();
         var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
         var folder = Path.Combine(scratch, cloned.Path!);
@@ -253,7 +256,10 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task A_failing_hook_in_the_clone_neither_runs_nor_turns_a_switch_into_a_refusal()
     {
-        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        // The test pushes to its remote, so it cannot share the class's.
+        var ownRemote = Path.Combine(_dir, "own-remote");
+        Directory.CreateDirectory(ownRemote);
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(RemoteBuilder.Build(ownRemote));
         var cloner = Cloner();
         var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
         var folder = Path.Combine(scratch, cloned.Path!);
@@ -268,7 +274,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
 
         var switched = await cloner.CloneAsync(chatId, repo.Id.ToString(), "feature", Ct);
         var back = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
-        PushCommit("main", "CHANGES.md");
+        RemoteBuilder.PushCommit(ownRemote, "main", "CHANGES.md");
         var merged = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
 
         Assert.Equal(ChatRepositoryCloneOutcome.Updated, switched.Outcome);
@@ -310,7 +316,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     [Fact]
     public async Task A_killed_clone_into_an_empty_folder_that_was_already_there_leaves_nothing_and_the_next_clone_succeeds()
     {
-        var repo = new Repository { Id = Guid.NewGuid(), Name = "widgets", CloneUrl = CreateRemote() };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "widgets", CloneUrl = _remote.Url };
         var target = BaseRepoPath.Fallback(repo.Id, Config);
         Directory.CreateDirectory(target);
         var real = RealGit;
@@ -407,32 +413,52 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         return (chat.Id, chat.ScratchPath, repo);
     }
 
-    /// <summary>A local bare repository with <c>main</c> and <c>feature</c>.</summary>
-    private string CreateRemote()
+    /// <summary>
+    /// A local bare repository with <c>main</c> and <c>feature</c>, built once for the class. Tests that
+    /// only read from it share it; a test that pushes builds its own with <see cref="RemoteBuilder"/>.
+    /// </summary>
+    public sealed class Remote : IDisposable
     {
-        var bare = Path.Combine(_dir, "remote.git");
-        var work = Path.Combine(_dir, "remote-work");
-        Git(_dir, "init", "-q", "--bare", "-b", "main", bare);
-        Git(_dir, "clone", "-q", bare, work);
-        File.WriteAllText(Path.Combine(work, "README.md"), "widgets");
-        Git(work, "add", "README.md");
-        Git(work, "commit", "-q", "-m", "first");
-        Git(work, "push", "-q", "origin", "main");
-        Git(work, "checkout", "-q", "-b", "feature");
-        File.WriteAllText(Path.Combine(work, "README.md"), "widgets on feature");
-        Git(work, "commit", "-q", "-am", "feature");
-        Git(work, "push", "-q", "origin", "feature");
-        return bare;
+        private readonly string _root = Directory.CreateTempSubdirectory("ild-clone-lifecycle-remote-").FullName;
+
+        public Remote() => Url = RemoteBuilder.Build(_root);
+
+        public string Url { get; }
+
+        public void Dispose()
+        {
+            try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
+        }
     }
 
-    private void PushCommit(string branch, string file)
+    private static class RemoteBuilder
     {
-        var work = Path.Combine(_dir, "remote-work");
-        Git(work, "checkout", "-q", branch);
-        File.WriteAllText(Path.Combine(work, file), file);
-        Git(work, "add", file);
-        Git(work, "commit", "-q", "-m", file);
-        Git(work, "push", "-q", "origin", branch);
+        public static string Build(string root)
+        {
+            var bare = Path.Combine(root, "remote.git");
+            var work = Path.Combine(root, "remote-work");
+            Git(root, "init", "-q", "--bare", "-b", "main", bare);
+            Git(root, "clone", "-q", bare, work);
+            File.WriteAllText(Path.Combine(work, "README.md"), "widgets");
+            Git(work, "add", "README.md");
+            Git(work, "commit", "-q", "-m", "first");
+            Git(work, "push", "-q", "origin", "main");
+            Git(work, "checkout", "-q", "-b", "feature");
+            File.WriteAllText(Path.Combine(work, "README.md"), "widgets on feature");
+            Git(work, "commit", "-q", "-am", "feature");
+            Git(work, "push", "-q", "origin", "feature");
+            return bare;
+        }
+
+        public static void PushCommit(string root, string branch, string file)
+        {
+            var work = Path.Combine(root, "remote-work");
+            Git(work, "checkout", "-q", branch);
+            File.WriteAllText(Path.Combine(work, file), file);
+            Git(work, "add", file);
+            Git(work, "commit", "-q", "-m", file);
+            Git(work, "push", "-q", "origin", branch);
+        }
     }
 
     private static void CopyDirectory(string from, string to)

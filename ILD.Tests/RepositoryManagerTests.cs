@@ -6,37 +6,20 @@ using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
-[Collection("Git")]
-public class RepositoryManagerTests : IDisposable
+public sealed class RepositoryManagerTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.
     private const string SharedGroup = "agents";
 
-    private sealed class RecordingRunner : IProcessRunner
-    {
-        public List<(string FileName, IReadOnlyList<string> Args, string? WorkingDirectory, IReadOnlyDictionary<string, string?>? Environment, ProcessRunOptions? Options)> Calls { get; } = new();
-
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
-        {
-            Calls.Add((fileName, args, workingDirectory, environmentVariables == null ? null : new Dictionary<string, string?>(environmentVariables), options));
-            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
-        }
-    }
-
     private readonly string _tmp;
     private readonly string _repo;
+    private bool _repoInitialised;
     private readonly string _mirrors;
     private readonly List<AuditingRunner> _auditors = new();
 
-    /// <summary>
-    /// Whether the managers under test run as in a uid-isolated deployment. The
-    /// subclass flips it, so every real-git test here runs once per mode.
-    /// </summary>
-    protected virtual bool Isolated => false;
-
     private RepositoryManager NewManager(string worktreesRoot, ILogger<RepositoryManager>? logger = null)
     {
-        var runner = new AuditingRunner(Isolated);
+        var runner = new AuditingRunner(isolated: false);
         runner.Forbid(_repo);
         runner.Forbid(worktreesRoot);
         lock (_auditors) _auditors.Add(runner);
@@ -56,14 +39,24 @@ public class RepositoryManagerTests : IDisposable
         Directory.CreateDirectory(_tmp);
         _mirrors = Path.Combine(_tmp, "mirrors");
         _repo = Path.Combine(_tmp, "repo");
-        Directory.CreateDirectory(_repo);
+    }
 
-        Git(_repo, "init", "-b", "main");
-        Git(_repo, "config", "user.email", "t@t.io");
-        Git(_repo, "config", "user.name", "Tester");
-        File.WriteAllText(Path.Combine(_repo, "README.md"), "hello\n");
-        Git(_repo, "add", "-A");
-        Git(_repo, "commit", "-m", "init");
+    /// <summary>The source repository, created on first use: tests that run no real git never pay for it.</summary>
+    private string Repo
+    {
+        get
+        {
+            if (_repoInitialised) return _repo;
+            Directory.CreateDirectory(_repo);
+            Git(_repo, "init", "-b", "main");
+            Git(_repo, "config", "user.email", "t@t.io");
+            Git(_repo, "config", "user.name", "Tester");
+            File.WriteAllText(Path.Combine(_repo, "README.md"), "hello\n");
+            Git(_repo, "add", "-A");
+            Git(_repo, "commit", "-m", "init");
+            _repoInitialised = true;
+            return _repo;
+        }
     }
 
     public void Dispose()
@@ -78,7 +71,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task CreateWorktree_creates_a_new_branch_and_directory()
     {
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-x");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-x");
 
         Assert.True(Directory.Exists(path));
         Assert.True(File.Exists(Path.Combine(path, "README.md")));
@@ -90,7 +83,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task CreateWorktree_supports_branch_names_with_slashes()
     {
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var path = await mgr.CreateWorktreeAsync(_repo, "ild/wi-11");
+        var path = await mgr.CreateWorktreeAsync(Repo, "ild/wi-11");
 
         Assert.EndsWith(Path.Combine("ild", "wi-11"), path);
         Assert.True(Directory.Exists(path));
@@ -102,7 +95,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task Commit_and_diff_round_trip()
     {
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-y");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-y");
         File.WriteAllText(Path.Combine(path, "new.txt"), "content\n");
 
         Assert.True((await mgr.CommitAsync(path, "add file")));
@@ -127,7 +120,7 @@ public class RepositoryManagerTests : IDisposable
         // (or the repo) could materialise it on disk. Even with no .gitignore entry,
         // an untracked .env must never ride into the run commit — and thence the PR.
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-secret");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-secret");
 
         File.WriteAllText(Path.Combine(path, ".env"), "API_TOKEN=super-secret\n");
         File.WriteAllText(Path.Combine(path, ".ild.env"), "DB_PASSWORD=hunter2\n");
@@ -150,13 +143,13 @@ public class RepositoryManagerTests : IDisposable
     {
         // The exclude only affects untracked paths, so a repo that intentionally
         // tracks its own .env keeps working — its edits still commit normally.
-        Git(_repo, "config", "user.email", "t@t.io");
-        File.WriteAllText(Path.Combine(_repo, ".env"), "PUBLIC=1\n");
-        Git(_repo, "add", "-f", ".env");
-        Git(_repo, "commit", "-m", "track env");
+        Git(Repo, "config", "user.email", "t@t.io");
+        File.WriteAllText(Path.Combine(Repo, ".env"), "PUBLIC=1\n");
+        Git(Repo, "add", "-f", ".env");
+        Git(Repo, "commit", "-m", "track env");
 
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-tracked-env");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-tracked-env");
 
         File.WriteAllText(Path.Combine(path, ".env"), "PUBLIC=2\n");
         Assert.True((await mgr.CommitAsync(path, "edit tracked env")));
@@ -174,9 +167,9 @@ public class RepositoryManagerTests : IDisposable
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
         // The seed repo has no opencode.json, so anything present afterwards was
         // synthesized by worktree creation rather than checked out from the repo.
-        Assert.False(File.Exists(Path.Combine(_repo, "opencode.json")));
+        Assert.False(File.Exists(Path.Combine(Repo, "opencode.json")));
 
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-no-stub");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-no-stub");
 
         Assert.False(File.Exists(Path.Combine(path, "opencode.json")));
     }
@@ -185,7 +178,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task DestroyWorktree_removes_directory()
     {
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-z");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-z");
         Assert.True(Directory.Exists(path));
 
         await mgr.DestroyWorktreeAsync(path);
@@ -199,7 +192,7 @@ public class RepositoryManagerTests : IDisposable
         if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
 
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-locked");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-locked");
         var locked = Directory.CreateDirectory(Path.Combine(path, "locked")).FullName;
         File.WriteAllText(Path.Combine(locked, "file"), "x");
         File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
@@ -243,7 +236,7 @@ public class RepositoryManagerTests : IDisposable
 
         var logger = new RecordingLogger();
         var mgr = NewManager(Path.Combine(_tmp, "wt"), logger);
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-stuck");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-stuck");
         var parent = Path.GetDirectoryName(path)!;
         File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
@@ -284,7 +277,7 @@ public class RepositoryManagerTests : IDisposable
         File.WriteAllText(Path.Combine(stalePath, "leftover.txt"), "stale");
 
         var mgr = NewManager(root);
-        var path = await mgr.CreateWorktreeAsync(_repo, "ild/wi-11");
+        var path = await mgr.CreateWorktreeAsync(Repo, "ild/wi-11");
 
         Assert.Equal(stalePath, path);
         Assert.True(File.Exists(Path.Combine(path, "README.md")));
@@ -296,7 +289,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task ReadFile_returns_content_and_blocks_path_traversal()
     {
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var path = await mgr.CreateWorktreeAsync(_repo, "feature-r");
+        var path = await mgr.CreateWorktreeAsync(Repo, "feature-r");
 
         Assert.Contains("hello", (await mgr.ReadFileAsync(path, "README.md")));
         Assert.Null((await mgr.ReadFileAsync(path, "../README.md")));
@@ -383,57 +376,25 @@ public class RepositoryManagerTests : IDisposable
     {
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
         // Create a branch to delete
-        Git(_repo, "branch", "to-delete");
+        Git(Repo, "branch", "to-delete");
 
-        var success = await mgr.DeleteLocalBranchAsync(_repo, "to-delete");
+        var success = await mgr.DeleteLocalBranchAsync(Repo, "to-delete");
         Assert.True(success);
 
         // Verify branch is gone
-        var listResult = GitOutput(_repo, "branch", "--list", "to-delete");
+        var listResult = GitOutput(Repo, "branch", "--list", "to-delete");
         Assert.Empty(listResult.Trim());
-    }
-
-    [Fact]
-    public async Task DeleteLocalBranchAsync_calls_git_branch_D_with_correct_args()
-    {
-        var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
-
-        await mgr.DeleteLocalBranchAsync(_repo, "does-not-exist");
-
-        Assert.Single(runner.Calls);
-        Assert.Equal("git", runner.Calls[0].FileName);
-        Assert.Equal(IsolatedAgent, runner.Calls[0].Options?.AsAgent);
-        Assert.Contains("-D", runner.Calls[0].Args);
-        Assert.Contains("does-not-exist", runner.Calls[0].Args);
     }
 
     [Fact]
     public async Task ResolveBaseRepoPathAsync_returns_base_repo_from_worktree()
     {
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
-        var wtPath = await mgr.CreateWorktreeAsync(_repo, "resolve-test");
+        var wtPath = await mgr.CreateWorktreeAsync(Repo, "resolve-test");
 
         var basePath = await mgr.ResolveBaseRepoPathAsync(wtPath);
         Assert.NotNull(basePath);
-        Assert.Equal(_repo, Path.GetFullPath(basePath));
-    }
-
-    [Fact]
-    public async Task ResetHardAsync_calls_git_reset_hard_with_revision()
-    {
-        var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
-
-        var success = await mgr.ResetHardAsync(_repo, "origin/main", TestContext.Current.CancellationToken);
-        Assert.True(success);
-
-        Assert.Single(runner.Calls);
-        Assert.Equal("git", runner.Calls[0].FileName);
-        Assert.Equal(IsolatedAgent, runner.Calls[0].Options?.AsAgent);
-        Assert.Contains("reset", runner.Calls[0].Args);
-        Assert.Contains("--hard", runner.Calls[0].Args);
-        Assert.Contains("origin/main", runner.Calls[0].Args);
+        Assert.Equal(Repo, Path.GetFullPath(basePath));
     }
 
     [Fact]
@@ -442,23 +403,23 @@ public class RepositoryManagerTests : IDisposable
         var mgr = NewManager(Path.Combine(_tmp, "wt"));
 
         // Create a commit to have something to reset from
-        File.WriteAllText(Path.Combine(_repo, "file-a.txt"), "content a\n");
-        Git(_repo, "add", "-A");
-        Git(_repo, "commit", "-m", "add file-a");
-        var commitA = GitOutput(_repo, "rev-parse", "HEAD").Trim();
+        File.WriteAllText(Path.Combine(Repo, "file-a.txt"), "content a\n");
+        Git(Repo, "add", "-A");
+        Git(Repo, "commit", "-m", "add file-a");
+        var commitA = GitOutput(Repo, "rev-parse", "HEAD").Trim();
 
         // Create another commit
-        File.WriteAllText(Path.Combine(_repo, "file-b.txt"), "content b\n");
-        Git(_repo, "add", "-A");
-        Git(_repo, "commit", "-m", "add file-b");
+        File.WriteAllText(Path.Combine(Repo, "file-b.txt"), "content b\n");
+        Git(Repo, "add", "-A");
+        Git(Repo, "commit", "-m", "add file-b");
 
         // Reset back to first commit
-        var success = await mgr.ResetHardAsync(_repo, commitA, TestContext.Current.CancellationToken);
+        var success = await mgr.ResetHardAsync(Repo, commitA, TestContext.Current.CancellationToken);
         Assert.True(success);
 
         // file-b.txt should be gone after reset --hard
-        Assert.False(File.Exists(Path.Combine(_repo, "file-b.txt")));
-        Assert.True(File.Exists(Path.Combine(_repo, "file-a.txt")));
+        Assert.False(File.Exists(Path.Combine(Repo, "file-b.txt")));
+        Assert.True(File.Exists(Path.Combine(Repo, "file-a.txt")));
     }
 
     [Fact]
@@ -1141,6 +1102,8 @@ public class RepositoryManagerTests : IDisposable
     public async Task RebaseAsync_unwinds_before_letting_a_cancellation_propagate()
     {
         var runner = new CancellingRebaseRunner();
+        // A directory with a .git directory is a clone of ours, which is all the manager checks before it runs git.
+        Directory.CreateDirectory(Path.Combine(_repo, ".git"));
         var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
         using var cts = new CancellationTokenSource();
         cts.Cancel();

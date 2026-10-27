@@ -10,7 +10,6 @@ namespace ILD.Tests;
 /// is not what it claims, a mirror that is lost or half built, a pointer the agent replaced
 /// with something that blocks. Every test runs once per mode under <see cref="AuditingRunner"/>.
 /// </summary>
-[Collection("Git")]
 [SupportedOSPlatform("linux")]
 public class RepositoryManagerMirrorRobustnessTests : IDisposable
 {

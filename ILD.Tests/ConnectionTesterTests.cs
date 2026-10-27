@@ -11,7 +11,6 @@ using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
-[Collection("Git")]
 public class ConnectionTesterTests : IDisposable
 {
     private const string Key = "sekrit-KEY-9f3a";

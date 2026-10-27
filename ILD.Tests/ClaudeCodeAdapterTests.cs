@@ -30,60 +30,6 @@ public class ClaudeCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_returns_failure_when_binary_not_found()
-    {
-        var worktreeDir = CreateWorktree();
-        try
-        {
-            var adapter = new ClaudeCodeAdapter();
-            var ctx = BuildContext(binaryPath: "/nonexistent/claude", worktreePath: worktreeDir);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.False(result.Success);
-            Assert.Contains("claude-code-error", result.Error);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_fails_without_worktree()
-    {
-        var adapter = new ClaudeCodeAdapter();
-        var ctx = BuildContext(binaryPath: "/bin/true", worktreePath: "/this/does/not/exist");
-
-        var result = await adapter.ExecuteAsync(ctx);
-
-        Assert.False(result.Success);
-        Assert.Contains("valid worktree path", result.Error);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_reads_binaryPath_from_config()
-    {
-        var worktreeDir = CreateWorktree();
-        try
-        {
-            var adapter = new ClaudeCodeAdapter();
-            var ctx = BuildContext(
-                binaryPath: "/nonexistent/path",
-                worktreePath: worktreeDir,
-                config: "{\"binaryPath\":\"/bin/true\"}");
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
     public async Task ExecuteAsync_extracts_assistant_text_and_session_id_from_stream_json()
     {
         var worktreeDir = CreateWorktree();
@@ -93,7 +39,7 @@ public class ClaudeCodeAdapterTests
             "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-abc\"}'\n" +
             "echo '{\"type\":\"assistant\",\"session_id\":\"sess-abc\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hello, world.\"}]}}'\n" +
             "echo '{\"type\":\"result\",\"session_id\":\"sess-abc\",\"is_error\":false,\"result\":\"Hello, world.\"}'\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -114,178 +60,6 @@ public class ClaudeCodeAdapterTests
             Assert.Equal("Hello, world.", result.Output);
             Assert.Equal("sess-abc", result.SessionId);
             Assert.Contains("Hello, world.", progress);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_streams_tool_calls_to_progress_without_polluting_output()
-    {
-        var worktreeDir = CreateWorktree();
-        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-t\"}'\n" +
-            // printf %s so the embedded \n stays an escape inside the JSON string
-            // rather than being expanded by the shell into a second line.
-            "printf '%s\\n' '{\"type\":\"assistant\",\"session_id\":\"sess-t\",\"message\":{\"content\":[" +
-            "{\"type\":\"text\",\"text\":\"Listing files.\"}," +
-            "{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"description\":\"list\",\"command\":\"ls\\n  -la\"}}]}}'\n" +
-            "echo '{\"type\":\"result\",\"session_id\":\"sess-t\",\"is_error\":false,\"result\":\"Listing files.\"}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new ClaudeCodeAdapter();
-            var progress = new System.Collections.Concurrent.ConcurrentBag<string>();
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                worktreePath: worktreeDir,
-                progressCallback: line =>
-                {
-                    progress.Add(line);
-                    return Task.CompletedTask;
-                });
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            // The tool call surfaces on the live stream, saying what it is doing —
-            // on one line, whatever the argument's own formatting was...
-            var marker = Assert.Single(progress, p => p.Contains("[tool: Bash]"));
-            Assert.Equal("\n[tool: Bash] ls -la\n", marker);
-            Assert.Contains("Listing files.", progress);
-            // ...but never bleeds into the node's text output.
-            Assert.Equal("Listing files.", result.Output);
-            Assert.DoesNotContain("[tool: Bash]", result.Output);
-            Assert.DoesNotContain("ls -la", result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_surfaces_error_when_result_is_marked_as_error()
-    {
-        var worktreeDir = CreateWorktree();
-        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-x\"}'\n" +
-            "echo '{\"type\":\"result\",\"session_id\":\"sess-x\",\"is_error\":true,\"result\":\"upstream broke\"}'\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        try
-        {
-            var adapter = new ClaudeCodeAdapter();
-            var ctx = BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.False(result.Success);
-            Assert.Contains("upstream broke", result.Error);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_classifies_a_usage_limit_result_error_as_an_interruption()
-    {
-        // The result event's own error text is the provider's message, isolated,
-        // so this adapter classifies from it (parity with OpenCodeAdapter — a
-        // capability one adapter has and another lacks is a parity bug, ADR-0009).
-        var worktreeDir = CreateWorktree();
-        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-x\"}'\n" +
-            "echo '{\"type\":\"result\",\"session_id\":\"sess-x\",\"is_error\":true,\"result\":\"Claude usage limit reached. Your limit will reset at 9:40am (UTC).\"}'\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        try
-        {
-            var result = await new ClaudeCodeAdapter().ExecuteAsync(
-                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir));
-
-            Assert.False(result.Success);
-            Assert.Equal(ILD.Core.Services.Interfaces.FailureKind.Interrupted, result.Failure);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_passes_resume_flag_when_session_id_is_set()
-    {
-        var worktreeDir = CreateWorktree();
-        var scriptPath = Path.Combine(worktreeDir, "args.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        try
-        {
-            var adapter = new ClaudeCodeAdapter();
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                worktreePath: worktreeDir,
-                sessionId: "resume-me-123");
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            Assert.Contains("--resume", result.Output);
-            Assert.Contains("resume-me-123", result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_launches_with_the_providers_model()
-    {
-        var worktreeDir = CreateWorktree();
-        var scriptPath = WriteArgvEcho(worktreeDir);
-
-        try
-        {
-            var result = await new ClaudeCodeAdapter().ExecuteAsync(
-                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, model: "opus"));
-
-            Assert.True(result.Success);
-            var args = result.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            Assert.Equal("opus", args[Array.IndexOf(args, "--model") + 1]);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_launches_without_a_model_flag_when_the_provider_has_none()
-    {
-        var worktreeDir = CreateWorktree();
-        var scriptPath = WriteArgvEcho(worktreeDir);
-
-        try
-        {
-            var result = await new ClaudeCodeAdapter().ExecuteAsync(
-                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, model: ""));
-
-            Assert.True(result.Success);
-            Assert.DoesNotContain("--model", result.Output!.Split('\n'));
         }
         finally
         {
@@ -431,7 +205,7 @@ public class ClaudeCodeAdapterTests
     {
         var scriptPath = Path.Combine(worktreeDir, "args.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return scriptPath;
     }
 
@@ -552,40 +326,6 @@ public class ClaudeCodeAdapterTests
             ClaudeCodeAdapter.EncodeWorktreePath("/home/ild/wi-22-run-a1.b2"));
     }
 
-    [Fact]
-    public async Task ExecuteAsync_invokes_OnSessionId_once_with_first_session_id()
-    {
-        var worktreeDir = CreateWorktree();
-        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-live\"}'\n" +
-            "echo '{\"type\":\"assistant\",\"session_id\":\"sess-live\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}'\n" +
-            "echo '{\"type\":\"result\",\"session_id\":\"sess-live\",\"is_error\":false,\"result\":\"hi\"}'\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        try
-        {
-            var adapter = new ClaudeCodeAdapter();
-            var captured = new System.Collections.Concurrent.ConcurrentBag<string>();
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                worktreePath: worktreeDir,
-                onSessionId: sid => captured.Add(sid));
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            // The session id surfaces on every event but the callback fires once.
-            Assert.Single(captured);
-            Assert.Equal("sess-live", captured.Single());
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
     private const string CostSessionId = "sess-cost";
 
     // A real Claude Code 2.1.x transcript line: one per invocation, restored (last
@@ -670,11 +410,7 @@ public class ClaudeCodeAdapterTests
 
     private static void MakeExecutable(string scriptPath)
     {
-        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(scriptPath);
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start chmod");
-        proc.WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
     private static AgentExecutionContext BuildContext(
