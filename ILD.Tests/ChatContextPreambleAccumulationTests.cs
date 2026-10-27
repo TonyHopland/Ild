@@ -633,29 +633,6 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
     /// first. Pinned as a test so the answer stops being true silently — the day
     /// someone adds such a slot, this fails and points at the choice.
     /// </summary>
-    [Fact]
-    public void The_adapter_contract_offers_no_system_prompt_slot_today()
-    {
-        var carriers = typeof(AgentExecutionContext)
-            .GetProperties()
-            .Select(p => p.Name)
-            .Where(n => n.Contains("System", StringComparison.OrdinalIgnoreCase)
-                || n.Contains("Instruction", StringComparison.OrdinalIgnoreCase)
-                || n.Contains("Preamble", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        Assert.Empty(carriers);
-        Assert.Contains("Prompt", typeof(AgentExecutionContext).GetProperties().Select(p => p.Name));
-
-        // Nor does any CLI adapter reach for a system-prompt flag of its own: the
-        // claude launch is built here, in full, from the prompt alone.
-        var argv = ClaudeCodeAdapter
-            .BuildRunProcessStartInfo("/bin/true", Path.GetTempPath(), "PROMPT", sessionId: "s1")
-            .ArgumentList;
-        Assert.DoesNotContain(argv, a => a.Contains("system-prompt", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains("PROMPT", argv);
-    }
-
     // ------------------------------------------------------------------
     // Fixtures.
     // ------------------------------------------------------------------

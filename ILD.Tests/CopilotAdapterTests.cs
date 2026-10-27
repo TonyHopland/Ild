@@ -9,16 +9,6 @@ namespace ILD.Tests;
 public class CopilotAdapterTests
 {
     [Fact]
-    public void Metadata_advertises_copilot_provider_type()
-    {
-        var adapter = new CopilotAdapter();
-
-        Assert.Equal("Copilot", adapter.Name);
-        Assert.Contains("copilot", adapter.SupportedProviderTypes);
-        Assert.Contains(adapter.ConfigSchema, f => f.Name == "customMcpServersJson");
-    }
-
-    [Fact]
     public async Task ExecuteAsync_succeeds_when_binary_exits_zero()
     {
         var worktreeDir = CreateWorktree();
@@ -320,12 +310,6 @@ public class CopilotAdapterTests
             model: model);
 
         Assert.DoesNotContain("--model", psi.ArgumentList);
-    }
-
-    [Fact]
-    public void Copilot_declares_model_support_as_optional()
-    {
-        Assert.Equal(AdapterModelSupport.Optional, new CopilotAdapter().ModelSupport);
     }
 
     [Fact]

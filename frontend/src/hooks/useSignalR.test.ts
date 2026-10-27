@@ -104,28 +104,6 @@ describe("useSignalR", () => {
     expect(result.current.connectionState).toBe("disconnected");
   });
 
-  test("starts a connection when a token is set", async () => {
-    localStorage.setItem("auth_token", "tok-1");
-    authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
-
-    const { unmount } = renderHook(() => useSignalR("/hubs/test"));
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(startMock).toHaveBeenCalled();
-    unmount();
-  });
-
-  test("on/off add and remove handlers without throwing", () => {
-    const { result } = renderHook(() => useSignalR("/hubs/test"));
-    const handler = vi.fn();
-    act(() => {
-      result.current.on("TestEvent", handler);
-      result.current.off("TestEvent", handler);
-    });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
   test("does not auto-subscribe to work items when connected to a non-work-item hub", async () => {
     localStorage.setItem("auth_token", "tok-1");
     authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");

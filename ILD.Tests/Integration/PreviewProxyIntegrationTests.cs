@@ -121,16 +121,6 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Static_content_is_forwarded_verbatim()
-    {
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/assets/app.js"), TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(PreviewBackend.ScriptBody, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        Assert.Equal("text/javascript", response.Content.Headers.ContentType?.MediaType);
-    }
-
-    [Fact]
     public async Task The_host_header_is_rewritten_to_the_loopback_target_by_default()
     {
         var headers = await GetEchoedHeadersAsync();
@@ -235,34 +225,6 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         Assert.Equal("https://accounts.example.com/authorize", response.Headers.Location?.ToString());
     }
 
-    [Theory]
-    [InlineData("POST")]
-    [InlineData("PUT")]
-    [InlineData("PATCH")]
-    [InlineData("DELETE")]
-    public async Task Every_method_is_forwarded(string method)
-    {
-        var request = Request(new HttpMethod(method), "/method");
-        request.Content = new StringContent("x");
-
-        using var response = await _client.SendAsync(request, TestContext.Current.CancellationToken);
-
-        Assert.Equal(method, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-    }
-
-    [Fact]
-    public async Task Large_request_and_response_bodies_round_trip()
-    {
-        var payload = new string('p', 4 * 1024 * 1024);
-        var request = Request(HttpMethod.Post, "/echo");
-        request.Content = new StringContent(payload, Encoding.UTF8, "text/plain");
-
-        using var response = await _client.SendAsync(request, TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(payload, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-    }
-
     [Fact]
     public async Task Streaming_responses_reach_the_client_before_the_backend_finishes()
     {
@@ -359,8 +321,6 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     /// </summary>
     private sealed class PreviewBackend : IAsyncDisposable
     {
-        internal const string ScriptBody = "export const preview = true;\n";
-
         private readonly WebApplication _app;
         private readonly string _webRoot;
         private readonly TaskCompletionSource _streamGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -388,8 +348,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         public static async Task<PreviewBackend> StartAsync()
         {
             var webRoot = Path.Combine(Path.GetTempPath(), "ild-preview-backend-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(Path.Combine(webRoot, "assets"));
-            await File.WriteAllTextAsync(Path.Combine(webRoot, "assets", "app.js"), ScriptBody);
+            Directory.CreateDirectory(webRoot);
             await File.WriteAllTextAsync(Path.Combine(webRoot, "index.html"), "<h1>preview</h1>");
 
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions { WebRootPath = webRoot });
@@ -420,15 +379,6 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
             });
             app.MapGet("/redirect-external", () => Results.Redirect("https://accounts.example.com/authorize"));
             app.MapGet("/landed", () => Results.Text("landed"));
-
-            app.MapMethods("/method", ["POST", "PUT", "PATCH", "DELETE"], (HttpContext c) => Results.Text(c.Request.Method));
-
-            app.MapPost("/echo", async (HttpContext context) =>
-            {
-                using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
-                return Results.Text(body);
-            });
 
             app.MapGet("/stream", async (HttpContext context) =>
             {

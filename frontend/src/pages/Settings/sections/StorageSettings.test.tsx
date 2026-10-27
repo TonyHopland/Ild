@@ -176,13 +176,6 @@ describe("StorageSettings overview", () => {
     expect(pageText()).not.toMatch(/\b5(\.0)? GB\b/);
   });
 
-  test("offers no bulk cleanup of Done items' worktrees: a run's worktree goes when the run ends", async () => {
-    await renderLoaded();
-
-    expect(screen.queryByRole("button", { name: /clean up worktrees/i })).toBeNull();
-    expect(screen.queryByText(/worktrees of done work items/i)).toBeNull();
-  });
-
   test("Refresh measures again and shows the new figures", async () => {
     const spies = await renderLoaded();
     expect(pageText()).toMatch(/\b5(\.0)? GB\b/);

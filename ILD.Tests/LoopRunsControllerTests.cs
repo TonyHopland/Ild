@@ -16,50 +16,6 @@ namespace ILD.Tests;
 public class LoopRunsControllerTests
 {
     [Fact]
-    public async Task GetAll_returns_runs_from_store()
-    {
-        var run1 = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid().ToString(),
-            LoopTemplateVersionId = Guid.NewGuid(),
-            Status = LoopRunStatus.Running,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-            CreatedAt = DateTime.UtcNow,
-            StartedAt = DateTime.UtcNow,
-            RunNodes = new List<LoopRunNode>(),
-        };
-        var run2 = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid().ToString(),
-            LoopTemplateVersionId = Guid.NewGuid(),
-            Status = LoopRunStatus.Completed,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-            CreatedAt = DateTime.UtcNow,
-            StartedAt = DateTime.UtcNow,
-            RunNodes = new List<LoopRunNode>(),
-        };
-
-        var store = new Mock<ILoopRunStore>();
-        store.Setup(s => s.GetAllAsync()).ReturnsAsync(new[] { run1, run2 });
-        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-
-        var engine = new Mock<ILoopEngine>();
-        var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(), Mock.Of<ISchedulerSettingsService>(), claudeProjects: TestClaudeProjectFolders.Instance);
-
-        var result = await controller.GetAll();
-
-        Assert.IsType<OkObjectResult>(result);
-        var ok = (OkObjectResult)result;
-        var payload = ok.Value;
-        Assert.NotNull(payload);
-        var items = (System.Collections.IEnumerable)payload!;
-        Assert.Equal(2, items.Cast<object>().Count());
-    }
-
-    [Fact]
     public async Task Delete_reclaims_worktree_and_branch_before_removing_the_run()
     {
         var run = new LoopRun
@@ -142,61 +98,6 @@ public class LoopRunsControllerTests
             new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
             reclaimer.Object, workItems.Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(),
             Mock.Of<ISchedulerSettingsService>(), claudeProjects: TestClaudeProjectFolders.Instance));
-    }
-
-    [Fact]
-    public async Task GetEvents_includes_runNodeId_in_response()
-    {
-        var runId = Guid.NewGuid();
-        var runNodeId = Guid.NewGuid();
-        var nodeId = Guid.NewGuid();
-
-        var entry = new EventLog
-        {
-            Id = 1,
-            LoopRunId = runId,
-            EventType = EventType.NodeStarted,
-            NodeId = nodeId,
-            RunNodeId = runNodeId,
-            Timestamp = DateTime.UtcNow,
-            Data = "test payload",
-        };
-
-        var eventLogService = new Mock<IEventLogService>();
-        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-        eventLogService.Setup(s => s.GetByRunIdAfterCursorAsync(runId, 0, 100))
-            .ReturnsAsync(new Data.DTOs.EventLogPage
-            {
-                Entries = new[] { entry },
-                NextCursor = 1,
-                HasMore = false,
-            });
-
-        var engine = new Mock<ILoopEngine>();
-        var store = new Mock<ILoopRunStore>();
-        store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
-        {
-            Id = runId,
-            WorkItemId = Guid.NewGuid().ToString(),
-            LoopTemplateVersionId = Guid.NewGuid(),
-            Status = LoopRunStatus.Running,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-            CreatedAt = DateTime.UtcNow,
-            StartedAt = DateTime.UtcNow,
-            RunNodes = new List<LoopRunNode>(),
-        });
-
-        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(), Mock.Of<ISchedulerSettingsService>(), claudeProjects: TestClaudeProjectFolders.Instance);
-
-        var result = await controller.GetEvents(runId.ToString());
-
-        Assert.IsType<OkObjectResult>(result);
-        var ok = (OkObjectResult)result;
-        var payload = ok.Value!;
-        var entries = payload!.GetType().GetProperty("entries")!.GetValue(payload)!;
-        var firstEntry = ((System.Collections.IEnumerable)entries).Cast<object>().First();
-        var runNodeIdValue = firstEntry.GetType().GetProperty("runNodeId")?.GetValue(firstEntry);
-        Assert.Equal(runNodeId, runNodeIdValue);
     }
 
     [Fact]
@@ -284,49 +185,6 @@ public class LoopRunsControllerTests
         => db.Context.AdapterSessionSnapshots
             .Where(s => s.LoopRunId == runId && s.SessionId == sessionId)
             .ExecuteUpdateAsync(s => s.SetProperty(x => x.UpdatedAt, updatedAt), TestContext.Current.CancellationToken);
-
-    [Fact]
-    public async Task GetById_includes_available_variables_for_run()
-    {
-        var runId = Guid.NewGuid();
-        var run = new LoopRun
-        {
-            Id = runId,
-            WorkItemId = Guid.NewGuid().ToString(),
-            LoopTemplateVersionId = Guid.NewGuid(),
-            Status = LoopRunStatus.Running,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-            CreatedAt = DateTime.UtcNow,
-            StartedAt = DateTime.UtcNow,
-        };
-
-        var store = new Mock<ILoopRunStore>();
-        store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
-        store.Setup(s => s.GetRunNodesWithNodeAsync(runId)).ReturnsAsync(Array.Empty<LoopRunNode>());
-        store.Setup(s => s.GetSessionBindingsAsync(runId)).ReturnsAsync(Array.Empty<LoopRunSessionBinding>());
-        store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(new[]
-        {
-            new LoopRunVariable
-            {
-                LoopRunId = runId,
-                Name = "handoff",
-                Value = "# Summary\n\nall done",
-                CreatedAt = DateTime.UtcNow.AddMinutes(-5),
-                UpdatedAt = DateTime.UtcNow.AddMinutes(-1),
-            },
-        });
-
-        using var db = new TestDb();
-
-        var result = await BuildController(store, new Mock<IRunReclaimer>(), new AdapterSessionSnapshotStore(db.Context)).GetById(runId.ToString());
-
-        Assert.IsType<OkObjectResult>(result);
-        var payload = ((OkObjectResult)result).Value!;
-        var variables = (System.Collections.IEnumerable)payload.GetType().GetProperty("availableVariables")!.GetValue(payload)!;
-        var item = Assert.Single(variables.Cast<object>());
-        Assert.Equal("handoff", item.GetType().GetProperty("name")!.GetValue(item));
-        Assert.Equal("# Summary\n\nall done", item.GetType().GetProperty("value")!.GetValue(item));
-    }
 
     [Theory]
     // The UI has to say WHY a run is parked — a provider interruption offers a

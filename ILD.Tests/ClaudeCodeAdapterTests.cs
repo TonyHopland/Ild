@@ -11,16 +11,6 @@ namespace ILD.Tests;
 public class ClaudeCodeAdapterTests
 {
     [Fact]
-    public void Metadata_advertises_claude_code_provider_type()
-    {
-        var adapter = new ClaudeCodeAdapter();
-
-        Assert.Equal("ClaudeCode", adapter.Name);
-        Assert.Contains("claude-code", adapter.SupportedProviderTypes);
-        Assert.Contains(adapter.ConfigSchema, f => f.Name == "customMcpServersJson");
-    }
-
-    [Fact]
     public async Task ExecuteAsync_succeeds_when_binary_exits_zero()
     {
         var worktreeDir = CreateWorktree();

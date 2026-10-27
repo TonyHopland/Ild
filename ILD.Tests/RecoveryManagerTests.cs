@@ -152,103 +152,6 @@ public class RecoveryManagerTests
     }
 
     [Fact]
-    public async Task ValidateWorktreeHealthAsync_returns_true_when_repo_validates_path()
-    {
-        var (mgr, wiMgr, runStore, _, _, repo, _) = Build();
-        var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid().ToString();
-        runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
-        {
-            Id = runId,
-            WorkItemId = wiId,
-            Status = LoopRunStatus.Running,
-            WorktreePath = "/tmp/wt",
-        });
-        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItemView
-        {
-            Id = wiId,
-            Title = "t",
-            Description = "d",
-        });
-        repo.Setup(r => r.ValidateWorktreeHealthAsync("/tmp/wt")).ReturnsAsync(true);
-
-        Assert.True((await mgr.ValidateWorktreeHealthAsync(runId)));
-    }
-
-    [Fact]
-    public async Task ValidateWorktreeHealthAsync_returns_false_when_repo_reports_corrupted()
-    {
-        var (mgr, wiMgr, runStore, _, _, repo, _) = Build();
-        var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid().ToString();
-        runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
-        {
-            Id = runId,
-            WorkItemId = wiId,
-            Status = LoopRunStatus.Running,
-            WorktreePath = "/tmp/wt",
-        });
-        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItemView
-        {
-            Id = wiId,
-            Title = "t",
-            Description = "d",
-        });
-        repo.Setup(r => r.ValidateWorktreeHealthAsync("/tmp/wt")).ReturnsAsync(false);
-
-        Assert.False((await mgr.ValidateWorktreeHealthAsync(runId)));
-    }
-
-    [Fact]
-    public async Task ValidateWorktreeHealthAsync_returns_false_when_no_worktree_path()
-    {
-        var (mgr, wiMgr, runStore, _, _, _, _) = Build();
-        var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid().ToString();
-        runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
-        {
-            Id = runId,
-            WorkItemId = wiId,
-            Status = LoopRunStatus.Running,
-            WorktreePath = null,
-        });
-        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItemView
-        {
-            Id = wiId,
-            Title = "t",
-            Description = "d",
-        });
-
-        Assert.False((await mgr.ValidateWorktreeHealthAsync(runId)));
-    }
-
-    [Fact]
-    public async Task GetRecoveryPolicyAsync_returns_template_policy_when_template_exists()
-    {
-        var (mgr, _, _, _, tmpl, _, _) = Build();
-        var tid = Guid.NewGuid();
-        tmpl.Setup(s => s.GetByIdAsync(tid)).ReturnsAsync(new LoopTemplate
-        {
-            Id = tid,
-            Name = "n",
-            Description = "d",
-            RecoveryPolicy = RecoveryPolicy.Cancel,
-        });
-
-        Assert.Equal(RecoveryPolicy.Cancel, (await mgr.GetRecoveryPolicyAsync(tid)));
-    }
-
-    [Fact]
-    public async Task GetRecoveryPolicyAsync_defaults_to_AutoResume_when_template_missing()
-    {
-        var (mgr, _, _, _, tmpl, _, _) = Build();
-        var tid = Guid.NewGuid();
-        tmpl.Setup(s => s.GetByIdAsync(tid)).ReturnsAsync((LoopTemplate?)null);
-
-        Assert.Equal(RecoveryPolicy.AutoResume, (await mgr.GetRecoveryPolicyAsync(tid)));
-    }
-
-    [Fact]
     public async Task RecoverRunAsync_with_AutoResume_and_WaitingHuman_node_does_not_resume()
     {
         var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
@@ -430,25 +333,5 @@ public class RecoveryManagerTests
         var ids = (await mgr.GetRecoverableRunIdsAsync()).ToList();
 
         Assert.Equal(new[] { crashed.Id, drained.Id }, ids);
-    }
-
-    [Fact]
-    public async Task SetRecoveryPolicyAsync_persists_policy_via_template_store()
-    {
-        var (mgr, _, _, _, tmpl, _, _) = Build();
-        var tid = Guid.NewGuid();
-        var template = new LoopTemplate
-        {
-            Id = tid,
-            Name = "n",
-            Description = "d",
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-        };
-        tmpl.Setup(s => s.GetByIdAsync(tid)).ReturnsAsync(template);
-
-        await mgr.SetRecoveryPolicyAsync(tid, RecoveryPolicy.NeedsReview);
-
-        Assert.Equal(RecoveryPolicy.NeedsReview, template.RecoveryPolicy);
-        tmpl.Verify(s => s.UpdateTemplateAsync(template), Times.Once);
     }
 }

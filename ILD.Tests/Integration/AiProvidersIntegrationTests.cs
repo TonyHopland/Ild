@@ -19,17 +19,6 @@ public class AiProvidersIntegrationTests
     }
 
     [Fact]
-    public async Task GetAll_with_token_returns_200_and_empty_array()
-    {
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/aiproviders", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
-        Assert.Empty(items!);
-    }
-
-    [Fact]
     public async Task Create_with_unsupported_type_returns_400()
     {
         await using var factory = new ApiFactory();

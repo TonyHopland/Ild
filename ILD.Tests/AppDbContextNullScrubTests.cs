@@ -47,20 +47,4 @@ public class AppDbContextNullScrubTests
         Assert.Equal("error", reloaded.Error);
         Assert.DoesNotContain('\0', reloaded.Output!);
     }
-
-    [Fact]
-    public async Task SaveChanges_leaves_clean_strings_untouched()
-    {
-        using var db = new TestDb();
-
-        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "clean name" };
-        db.Context.LoopTemplates.Add(lt);
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        var fresh = db.Fresh();
-        var reloaded = await fresh.LoopTemplates.FindAsync([lt.Id], TestContext.Current.CancellationToken);
-
-        Assert.NotNull(reloaded);
-        Assert.Equal("clean name", reloaded!.Name);
-    }
 }

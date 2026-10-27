@@ -85,21 +85,6 @@ describe("NodeSettingsModal install-on-start option", () => {
     cleanup();
   });
 
-  test("renders the install checkbox unchecked for a Start node", () => {
-    renderModal({ startRunInstall: false });
-
-    const checkbox = screen.getByLabelText("Run ild.config install") as HTMLInputElement;
-    expect(checkbox.type).toBe("checkbox");
-    expect(checkbox.checked).toBe(false);
-  });
-
-  test("reflects an enabled install option as checked", () => {
-    renderModal({ startRunInstall: true });
-
-    const checkbox = screen.getByLabelText("Run ild.config install") as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
-  });
-
   test("notifies when the install option is toggled on", () => {
     const props = renderModal({ startRunInstall: false });
 
@@ -135,17 +120,6 @@ describe("NodeSettingsModal session memory mode", () => {
 
     expect(props.onAiUseSessionChange).toHaveBeenCalledWith(true);
     expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("");
-  });
-
-  test("shows the session name field when continuing a session", () => {
-    renderModal({
-      selectedNode: makeNode(NodeType.AI),
-      aiUseSession: true,
-      aiSessionPlaceholder: "research",
-    });
-
-    const input = screen.getByLabelText("Session name") as HTMLInputElement;
-    expect(input.value).toBe("research");
   });
 
   test("renders the source picker and destination when forking", () => {

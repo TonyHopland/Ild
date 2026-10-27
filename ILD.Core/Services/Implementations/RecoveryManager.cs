@@ -12,7 +12,6 @@ public class RecoveryManager : IRecoveryManager
 {
     private readonly IWorkItemManager _workItems;
     private readonly ILoopRunStore _loopRunStore;
-    private readonly ILoopTemplateStore _templateStore;
     private readonly IRepositoryManager _repo;
     private readonly ILoopEngine _engine;
     private readonly IEventLogService _eventLog;
@@ -26,7 +25,6 @@ public class RecoveryManager : IRecoveryManager
         _logger = logger ?? NullLogger<RecoveryManager>.Instance;
         _workItems = workItems;
         _loopRunStore = loopRunStore;
-        _templateStore = templateStore;
         _repo = repo;
         _engine = engine;
     }
@@ -104,30 +102,6 @@ public class RecoveryManager : IRecoveryManager
         catch (Exception ex) { _logger.LogWarning(ex, "Could not record recovery of run {RunId}", run.Id); }
         await _workItems.TransitionAsync(_actor, run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.RecoveryRequiresReview, currentLoopRunId: run.Id);
-    }
-
-    public async Task<bool> ValidateWorktreeHealthAsync(Guid runId)
-    {
-        var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run == null) return false;
-        var wi = await _workItems.GetWorkItemAsync(run.WorkItemId);
-        if (wi == null || string.IsNullOrEmpty(run.WorktreePath)) return false;
-        return await _repo.ValidateWorktreeHealthAsync(run.WorktreePath);
-    }
-
-    public async Task<RecoveryPolicy> GetRecoveryPolicyAsync(Guid templateId)
-    {
-        var template = await _templateStore.GetByIdAsync(templateId);
-        return template?.RecoveryPolicy ?? RecoveryPolicy.AutoResume;
-    }
-
-    public async Task SetRecoveryPolicyAsync(Guid templateId, RecoveryPolicy policy)
-    {
-        var template = await _templateStore.GetByIdAsync(templateId);
-        if (template == null) return;
-        template.RecoveryPolicy = policy;
-        template.UpdatedAt = DateTime.UtcNow;
-        await _templateStore.UpdateTemplateAsync(template);
     }
 
     public Task ClearRecoveryStateAsync(Guid runId) => Task.CompletedTask;

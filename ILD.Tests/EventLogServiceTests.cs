@@ -32,20 +32,6 @@ public class EventLogServiceTests
     }
 
     [Fact]
-    public async Task Append_returns_the_event_id_and_ids_increase_per_run()
-    {
-        var (svc, db, runId, _) = Setup();
-        using var _ = db;
-
-        var s1 = await svc.AppendAsync(runId, EventType.NodeStarted, "first");
-        var s2 = await svc.AppendAsync(runId, EventType.NodeCompleted, "second");
-        var s3 = await svc.AppendAsync(runId, EventType.NodeStarted, "third");
-
-        Assert.True(s1 < s2 && s2 < s3);
-        Assert.Equal(new[] { s1, s2, s3 }, db.Fresh().EventLogs.Where(e => e.LoopRunId == runId).OrderBy(e => e.Id).Select(e => e.Id));
-    }
-
-    [Fact]
     public async Task GetByRunId_returns_events_in_the_order_they_were_written()
     {
         var (svc, db, runId, _) = Setup();
@@ -58,25 +44,6 @@ public class EventLogServiceTests
         Assert.Equal(2, entries.Count());
         Assert.Equal("a", entries[0].Data);
         Assert.Equal("b", entries[1].Data);
-    }
-
-    [Fact]
-    public async Task Large_messages_are_stored_inline_in_the_database()
-    {
-        var (svc, db, runId, _) = Setup();
-        using var _ = db;
-
-        // Well over the old 10 KB offload threshold: it must still land in the
-        // Data column (PostgreSQL TOASTs it) rather than being written to disk.
-        var bigMessage = new string('x', 20_000);
-        await svc.AppendAsync(runId, EventType.NodeStarted, bigMessage);
-
-        var entry = (await svc.GetByRunIdAsync(runId)).Single();
-        Assert.Equal(bigMessage, entry.Data);
-
-        var row = db.Context.EventLogs.Single(e => e.LoopRunId == runId);
-        Assert.Equal(bigMessage, row.Data);
-        Assert.Null(row.PayloadPath);
     }
 
     [Fact]

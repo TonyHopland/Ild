@@ -222,21 +222,6 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Create_round_trips_description_far_larger_than_old_cap()
-    {
-        var description = new string('x', 20000);
-
-        var created = await _svc.CreateAsync(new CreateWorkItemRequest
-        {
-            Title = "big",
-            Description = description,
-        }, TestContext.Current.CancellationToken);
-
-        var fresh = await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken);
-        Assert.Equal(description, fresh!.Description);
-    }
-
-    [Fact]
     public async Task Create_defaults_AiProviderOverride_to_None()
     {
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);

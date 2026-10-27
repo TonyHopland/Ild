@@ -22,7 +22,6 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Serilog.Sinks.InMemory" Version="2.0.0" />
     <!--
       Microsoft.Data.Sqlite.Core drags in SQLitePCLRaw 2.1.11, whose bundled
       e_sqlite3 build carries GHSA-2m69-gcr7-jv3q and has no patched 2.x. The
