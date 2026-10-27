@@ -28,6 +28,7 @@ internal sealed class AuditingRunner : IProcessRunner
         "PATH", "HOME", "GIT_TERMINAL_PROMPT", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL",
         "GIT_CONFIG_COUNT", "GIT_ASKPASS", "ILD_GIT_USERNAME", "ILD_GIT_PASSWORD",
         "GIT_CEILING_DIRECTORIES", RouteVariable,
+        "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
     };
 
     private readonly IProcessRunner _inner;
