@@ -18,13 +18,16 @@ namespace ILD.Core.Services.Implementations;
 /// whatever they make git execute must only ever have the agent's privileges. The
 /// orchestrator runs git only in its own per-remote mirror (<see cref="GitMirror"/>)
 /// and for <c>ls-remote</c>, each with a clean configuration and an environment
-/// built from scratch. The remote's URL always comes from the caller, never from
-/// the clone's config.
+/// built from scratch (plus the orchestrator's own proxy variables). The remote's
+/// URL always comes from the caller, never from the clone's config.
 /// </para>
 /// </summary>
 public class RepositoryManager : IRepositoryManager
 {
     private const int RefusedExitCode = 128;
+
+    internal static readonly string[] ProxyEnvironmentKeys =
+        ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
 
     private static readonly string AskPassScriptPath = EnsureAskPassScript();
     private readonly ILogger<RepositoryManager>? _logger;
@@ -33,6 +36,7 @@ public class RepositoryManager : IRepositoryManager
     private readonly AgentIdentity? _agent;
     private readonly GitMirror _mirrors;
     private readonly ProcessRunOptions _agentOptions;
+    private readonly Func<string, string?> _readEnvironment;
 
     /// <param name="agent">
     /// Who git runs as in clones and worktrees; null reads <see cref="AgentIsolation"/>'s configuration,
@@ -50,9 +54,11 @@ public class RepositoryManager : IRepositoryManager
         string? worktreesRoot = null,
         AgentIdentity? agent = null,
         string? mirrorsRoot = null,
-        string? sharedGroup = null)
+        string? sharedGroup = null,
+        Func<string, string?>? readEnvironment = null)
     {
         _runner = runner;
+        _readEnvironment = readEnvironment ?? Environment.GetEnvironmentVariable;
         _logger = logger;
         _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
         _agent = agent ?? ConfiguredAgent();
@@ -1135,9 +1141,9 @@ public class RepositoryManager : IRepositoryManager
     ];
 
     /// <summary>
-    /// git as the orchestrator, for its own mirror and the remote. Nothing is inherited: not the
-    /// orchestrator's environment, not the system or user configuration; only the credential
-    /// when the caller has one.
+    /// git as the orchestrator, for its own mirror and the remote. Nothing is inherited but
+    /// the orchestrator's own proxy variables: not the rest of its environment, not the
+    /// system or user configuration; only the credential when the caller has one.
     /// </summary>
     private async Task<ProcessResult> OrchestratorGitAsync(
         string cwd, IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct,
@@ -1161,6 +1167,9 @@ public class RepositoryManager : IRepositoryManager
             environment[$"GIT_CONFIG_KEY_{i}"] = OrchestratorGitConfig[i].Key;
             environment[$"GIT_CONFIG_VALUE_{i}"] = OrchestratorGitConfig[i].Value;
         }
+        foreach (var key in ProxyEnvironmentKeys)
+            if (_readEnvironment(key) is { } proxy)
+                environment[key] = proxy;
         if (ceilingDirectories is not null)
             environment["GIT_CEILING_DIRECTORIES"] = ceilingDirectories;
         foreach (var (key, value) in BuildGitEnvironment(auth) ?? new Dictionary<string, string?>())
