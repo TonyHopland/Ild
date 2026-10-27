@@ -189,6 +189,7 @@ public class LoopRunsController : ControllerBase
             currentNodeId = run.CurrentNodeId,
             isPaused = run.IsPaused,
             isHalted = run.IsHalted,
+            waitingRunNodeId = ParkedNode.WaitingVisitOf(run, runNodes)?.Id,
             haltReason = run.HaltReason?.ToString(),
             // Read now, not at the park, so it drops each one a person has set since.
             missingGlobalVariables = missingGlobals,
@@ -368,7 +369,7 @@ public class LoopRunsController : ControllerBase
             return StatusCode(503, new { error = "WorkItemServer unreachable: the run's pending edit proposals could not be withdrawn, so the run was not deleted. Retry later.", detail = ex.Message });
         }
 
-        var deleted = await _loopRunStore.DeleteAsync(guid);
+        var deleted = await _workItemManager.DeleteRunAsync(guid);
         return deleted ? NoContent() : NotFound();
     }
 

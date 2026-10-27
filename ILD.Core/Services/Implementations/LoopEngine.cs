@@ -298,6 +298,7 @@ public sealed class LoopEngine : ILoopEngine
         run.CompletedAt ??= DateTime.UtcNow;
         run.HumanFeedbackReason = reason;
         await loopRunStore.UpdateRunAsync(run);
+        await StaleHumanInputProposalsAsync(scope.ServiceProvider, run, runNodeId: null);
         _progressBuffer.Clear(runId);
         if (scope.ServiceProvider.GetService<IEventLogService>() is { } eventLog)
             await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.LoopRunCancelled, reason));
@@ -612,6 +613,7 @@ public sealed class LoopEngine : ILoopEngine
             });
 
         await _notifier.RunStateChangedAsync(runId, LoopRunStatus.WaitingHuman, LoopRunStatus.Running);
+        await StaleHumanInputProposalsAsync(sp, run, runNodeId);
         try
         {
             await sp.GetRequiredService<IWorkItemManager>().TransitionAsync(
@@ -626,6 +628,30 @@ public sealed class LoopEngine : ILoopEngine
                 runId, run.WorkItemId);
         }
         _ = LaunchAfterAwaitAsync(runId);
+    }
+
+    /// <summary>
+    /// The pending suggestions for a question the run has left can no longer be
+    /// delivered: those of the answered visit <paramref name="runNodeId"/>, or of
+    /// every question of the run when it is null (cancelled, retried). Best
+    /// effort: the move is committed, and an approval that finds one still
+    /// pending is refused and marks it stale itself.
+    /// </summary>
+    private async Task StaleHumanInputProposalsAsync(IServiceProvider sp, LoopRun run, Guid? runNodeId)
+    {
+        try
+        {
+            if (sp.GetService<IHumanInputProposalStore>() is not { } proposals) return;
+            var staled = runNodeId is { } visit
+                ? await proposals.StalePendingForVisitAsync(visit, CancellationToken.None)
+                : await proposals.StalePendingForRunAsync(run.Id, CancellationToken.None);
+            if (staled > 0)
+                await _workItemNotifier.HumanInputProposalsChangedAsync(run.WorkItemId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Run {RunId} left a question unanswered, but its pending human input suggestions could not be marked stale", run.Id);
+        }
     }
 
     /// <summary>
@@ -697,6 +723,7 @@ public sealed class LoopEngine : ILoopEngine
             PrepareRetry(run, target, prevOutput);
             await loopRunStore.UpdateRunAsync(run);
         }
+        await StaleHumanInputProposalsAsync(scope.ServiceProvider, run, runNodeId: null);
         try
         {
             await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
@@ -1171,11 +1198,7 @@ public sealed class LoopEngine : ILoopEngine
                         var outEdges = await loopRunStore.GetEdgesForNodeIdsAsync(new[] { node.Id });
                         // Custom edges surface by their name (the Human node's button
                         // labels); default/fallback edges surface by their role name.
-                        var actions = string.Join(",", outEdges
-                            .Where(e => e.SourceNodeId == node.Id)
-                            .Select(e => e.EdgeType == EdgeType.Custom ? e.Name : e.EdgeType.ToString())
-                            .Where(s => !string.IsNullOrEmpty(s))
-                            .Distinct());
+                        var actions = string.Join(",", ParkedNode.Outputs(node.Id, outEdges));
                         // The item waits on a person before the run will take an
                         // answer, so an answer's move back to Running always lands
                         // after this one.

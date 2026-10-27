@@ -1887,6 +1887,54 @@ public class AgentController : ControllerBase
         }));
     }
 
+    // -- Human Input Proposals (ADR-0030) -------------------------------------
+    //
+    // Agents suggest the answer for a work item parked at a Human node. Approving
+    // and rejecting are human-only and live on HumanInputProposalsController.
+
+    [HttpPost("workitems/{id}/human-input-proposals")]
+    public async Task<IActionResult> ProposeHumanInput(
+        string id,
+        [FromBody] AgentHumanInputProposalRequest request,
+        [FromServices] IHumanInputProposalService proposals,
+        CancellationToken cancellationToken)
+    {
+        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        if (sessionError is not null)
+            return sessionError;
+
+        var output = AppDbContext.WithoutNul(request.Output ?? string.Empty).Trim();
+        if (output.Length == 0)
+            return BadRequest(new { error = "Name the output to take: OnSuccess, OnFailure or the name of one of the node's outputs." });
+        // Checked as they will be stored: the save drops NUL characters.
+        var text = AppDbContext.WithoutNul(request.Text ?? string.Empty);
+        if (text.Length > HumanInputProposal.MaxTextLength)
+            return BadRequest(new { error = $"The text is {text.Length:N0} / {HumanInputProposal.MaxTextLength:N0} characters; shorten it and suggest it again." });
+        var rationale = AppDbContext.WithoutNul(request.Rationale ?? string.Empty).Trim();
+        if (rationale.Length == 0)
+            return BadRequest(new { error = "Give a rationale: why this is the answer." });
+        if (rationale.Length > HumanInputProposal.MaxRationaleLength)
+            return BadRequest(new { error = $"The rationale is {rationale.Length:N0} / {HumanInputProposal.MaxRationaleLength:N0} characters; shorten it." });
+
+        var result = await proposals.ProposeAsync(id, output, text, rationale, runId, chatSessionId, cancellationToken);
+        return result.Outcome switch
+        {
+            HumanInputProposalOutcome.Created => StatusCode(StatusCodes.Status201Created, new
+            {
+                id = result.Proposal!.Id,
+                workItemId = result.Proposal.WorkItemId,
+                output = result.Proposal.Output,
+                status = result.Proposal.Status.ToString(),
+            }),
+            HumanInputProposalOutcome.NotFound => NotFound(),
+            HumanInputProposalOutcome.NotParked => Conflict(new { error = "This work item is not waiting for human input at a Human node." }),
+            _ => BadRequest(new
+            {
+                error = $"The node does not offer the output '{output}'. It offers: {string.Join(", ", result.OfferedOutputs!)}.",
+            }),
+        };
+    }
+
     // -- Loop Template Proposals (ADR-0028) ----------------------------------
     //
     // Agents propose a whole new document, or an Edit List, for a saved template

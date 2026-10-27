@@ -662,6 +662,33 @@
       "rationale"
     ]
   },
+  "propose_human_input": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "The work item waiting for human input.",
+        "type": "string"
+      },
+      "output": {
+        "description": "The output to take: OnSuccess, OnFailure or a named output of the Human node.",
+        "type": "string"
+      },
+      "text": {
+        "description": "The input or context to send with the output (up to 8192 chars). May be empty.",
+        "type": "string"
+      },
+      "rationale": {
+        "description": "Why this is the answer (up to 2000 chars), shown to the human deciding.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "output",
+      "text",
+      "rationale"
+    ]
+  },
   "propose_loop_template_change": {
     "type": "object",
     "properties": {

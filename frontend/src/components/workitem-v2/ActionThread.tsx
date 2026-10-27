@@ -2,12 +2,14 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { LoopRunStatus, TurnVariableChange, WorkItem } from "../../types";
 import { useEditProposals } from "../../hooks/useEditProposals";
 import { useGlobalVariableProposals } from "../../hooks/useGlobalVariableProposals";
+import { useHumanInputProposals } from "../../hooks/useHumanInputProposals";
 import { useLoopTemplateProposals } from "../../hooks/useLoopTemplateProposals";
 import { workItemService } from "../../services/auth";
 import EditProposalCard from "../EditProposalCard";
 import GlobalVariableProposalCard from "../GlobalVariableProposalCard";
+import HumanInputProposalCard from "../HumanInputProposalCard";
 import LoopTemplateProposalCard from "../LoopTemplateProposalCard";
-import { placeActionProposals } from "../editProposalPlacement";
+import { placeActionProposals, placeHumanInputProposals } from "../editProposalPlacement";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
 import HaltSteerControls from "./HaltSteerControls";
@@ -261,6 +263,7 @@ function RunThread({
   const { proposals, refresh } = useEditProposals({ requestedByWorkItemId: workItem.id });
   const suggestions = useGlobalVariableProposals({ workItemId: workItem.id });
   const loopProposals = useLoopTemplateProposals({ workItemId: workItem.id });
+  const humanInput = useHumanInputProposals(workItem.id);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const savedScrollTop = useRef(0);
@@ -337,6 +340,24 @@ function RunThread({
     })),
   ]);
   const cards = (list: { card: ReactNode }[] = []) => list.map((placed) => placed.card);
+  // About a question of this run, so by the run they answer and not by the step that made them.
+  const answers = placeHumanInputProposals(
+    messages,
+    (humanInput.proposals ?? [])
+      .filter((proposal) => proposal.runId === runId)
+      .map((proposal) => ({
+        ...proposal,
+        card: (
+          <HumanInputProposalCard
+            key={`hiproposal:${proposal.id}`}
+            proposal={proposal}
+            decidable={proposal.runNodeId === view.run?.waitingRunNodeId}
+            onSettled={humanInput.refresh}
+          />
+        ),
+      })),
+    view.run?.waitingRunNodeId,
+  );
 
   const isEmpty =
     messages.length === 0 &&
@@ -346,11 +367,14 @@ function RunThread({
     !detail.movedOn &&
     !hasPrDetails(workItem, detail, runId) &&
     live.length === 0 &&
-    end.length === 0;
+    end.length === 0 &&
+    answers.head.length === 0 &&
+    answers.open.length === 0 &&
+    answers.afterTurn.size === 0;
 
   // One keyed list, so a card that moves to a new slot (its step's turn
   // arriving) is moved rather than remounted, and keeps a decision in progress.
-  const entries: ReactNode[] = [];
+  const entries: ReactNode[] = [...cards(answers.head)];
   messages.forEach((m, i) => {
     if (m.role === "system") {
       entries.push(
@@ -372,7 +396,7 @@ function RunThread({
         </Bubble>,
       );
     }
-    entries.push(...cards(afterTurn.get(i)));
+    entries.push(...cards(afterTurn.get(i)), ...cards(answers.afterTurn.get(i)));
   });
   // Halt, steer and cleanup act on this run, and wait for any other action on
   // it, wherever in the dialog that was started.
@@ -400,6 +424,7 @@ function RunThread({
       runId={runId}
       onOpen={revealFromTop}
     />,
+    ...cards(answers.open),
     <Bubble key="feedback" side="human">
       <FeedbackBanner
         workItem={workItem}

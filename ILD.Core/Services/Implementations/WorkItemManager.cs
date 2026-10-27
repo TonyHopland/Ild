@@ -35,6 +35,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly ILogger<WorkItemManager> _logger;
     private readonly RepositoryParallelismHolds _repositoryHolds;
     private readonly IFinishedRunCleaner? _finishedRunCleaner;
+    private readonly IHumanInputProposalStore? _humanInputProposals;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -52,8 +53,10 @@ public class WorkItemManager : IWorkItemManager
         IRemoteProvider? remoteProvider = null,
         ILogger<WorkItemManager>? logger = null,
         RepositoryParallelismHolds? repositoryHolds = null,
-        IFinishedRunCleaner? finishedRunCleaner = null)
+        IFinishedRunCleaner? finishedRunCleaner = null,
+        IHumanInputProposalStore? humanInputProposals = null)
     {
+        _humanInputProposals = humanInputProposals;
         _repoManager = repoManager;
         _providerStore = providerStore;
         _eventLog = eventLog;
@@ -1438,26 +1441,48 @@ public class WorkItemManager : IWorkItemManager
     // ──────────────────────────────────────────────────────────────────
 
     public Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input)
-        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Success(input), input, edgeName: null);
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Approval(input));
 
     public Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null)
-        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Reject("Rejected by user", input),
-            string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}", edgeName: null);
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Rejection(input));
 
     public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input)
         => SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input);
 
     public Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input)
-        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Custom(edgeName, input), input, edgeName);
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Edge(edgeName, input));
+
+    public Task<bool> SubmitHumanFeedbackAnswerAsync(string workItemId, Guid runId, Guid runNodeId, string output, string input)
+        => DeliverHumanFeedbackAsync(workItemId, runId, output switch
+        {
+            nameof(EdgeType.OnSuccess) => HumanAnswer.Approval(input),
+            nameof(EdgeType.OnFailure) => HumanAnswer.Rejection(input),
+            _ => HumanAnswer.Edge(output, input),
+        }, runNodeId);
+
+    /// <summary>What each answer button hands the engine: the node's signal, the feedback logged and the edge named.</summary>
+    private readonly record struct HumanAnswer(NodeSignal Signal, string Feedback, string? EdgeName)
+    {
+        public static HumanAnswer Approval(string input) => new(NodeSignal.Success(input), input, null);
+
+        public static HumanAnswer Rejection(string? input) => new(
+            NodeSignal.Reject("Rejected by user", input),
+            string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}",
+            null);
+
+        public static HumanAnswer Edge(string edgeName, string input) => new(NodeSignal.Custom(edgeName, input), input, edgeName);
+    }
 
     /// <summary>
     /// Hand an answer to the node it answers, which only the work item's active
     /// run can have, and only while that run waits on a person. The answer names
     /// the run the person was looking at, so one sent to a run that has since
-    /// ended or been replaced is refused rather than landing on another.
+    /// ended or been replaced is refused rather than landing on another. When
+    /// <paramref name="expectedRunNodeId"/> is given, only that execution of the
+    /// node may be the one waiting: an answer to one visit never lands on a later one.
     /// </summary>
     private async Task<bool> DeliverHumanFeedbackAsync(
-        string workItemId, Guid runId, NodeSignal signal, string feedback, string? edgeName)
+        string workItemId, Guid runId, HumanAnswer answer, Guid? expectedRunNodeId = null)
     {
         if (await GetWorkItemAsync(workItemId) is null) return false;
 
@@ -1469,25 +1494,16 @@ public class WorkItemManager : IWorkItemManager
             throw new HumanFeedbackRefusedException("The run is busy, not waiting for an answer.");
         if (active.IsHalted)
             throw new HumanFeedbackRefusedException("The run is halted, not waiting for an answer; resume it instead.");
-        var waiting = FindWaitingHumanNode(await _loopRunStore.GetRunNodesAsync(runId), active.CurrentNodeId)
+        var waiting = ParkedNode.WaitingVisit(await _loopRunStore.GetRunNodesAsync(runId), active.CurrentNodeId)
             ?? throw new HumanFeedbackRefusedException("The run has no question waiting for an answer.");
+        if (expectedRunNodeId is { } expected && waiting.Id != expected)
+            throw new HumanFeedbackRefusedException("The question this answer is for is no longer open.");
         if (_engine is null)
             throw new HumanFeedbackRefusedException("No loop engine is running to deliver this answer.");
 
-        await _engine.DeliverHumanFeedbackAsync(runId, waiting.Id, signal, feedback, edgeName);
+        await _engine.DeliverHumanFeedbackAsync(runId, waiting.Id, answer.Signal, answer.Feedback, answer.EdgeName);
         return true;
     }
-
-    /// <summary>
-    /// The execution waiting at the node the run is parked at. Only that one: an
-    /// execution left waiting at another node (a retry moved the run on) asks a
-    /// question the run no longer is at.
-    /// </summary>
-    private static LoopRunNode? FindWaitingHumanNode(IReadOnlyList<LoopRunNode> nodes, Guid? currentNodeId)
-        => nodes
-            .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman && n.LoopNodeId == currentNodeId)
-            .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-            .FirstOrDefault();
 
     private async Task<bool> IsPrNodeAsync(LoopRun run, Guid loopNodeId)
     {
@@ -1581,7 +1597,7 @@ public class WorkItemManager : IWorkItemManager
                 await WithdrawPendingProposalsOfRunAsync(actor, run.Id);
             }
             catch (HttpRequestException) { continue; }
-            await _loopRunStore.DeleteAsync(run.Id);
+            await DeleteRunAsync(run.Id);
         }
         return true;
     }
@@ -1730,6 +1746,15 @@ public class WorkItemManager : IWorkItemManager
             await HintRequestersAsync(workItemId, [proposal]);
         }
         return result with { Proposal = proposal };
+    }
+
+    public async Task<bool> DeleteRunAsync(Guid runId)
+    {
+        var workItemId = (await _loopRunStore.GetByIdAsync(runId))?.WorkItemId;
+        if (workItemId is null || !await _loopRunStore.DeleteAsync(runId)) return false;
+        if (_humanInputProposals is not null && await _humanInputProposals.StalePendingForRunAsync(runId, CancellationToken.None) > 0)
+            await _notifier.HumanInputProposalsChangedAsync(workItemId);
+        return true;
     }
 
     public async Task WithdrawPendingProposalsOfRunAsync(WorkItemActor actor, Guid runId, CancellationToken ct = default)

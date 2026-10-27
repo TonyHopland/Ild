@@ -53,6 +53,10 @@ interface FeedbackActionsProps {
 // success/failure roles; everything else names one of the node's outputs.
 const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
 
+/** The label of the button for an output: the role's verb for the two defaults, otherwise the output's own name. */
+export const outputLabel = (name: string) =>
+  name === "OnSuccess" ? "Approve" : name === "OnFailure" ? "Reject" : name;
+
 // The PR merge in the list of buttons. It holds a comma, which no output name
 // can, as the actions string is split on commas: an output called "Merge" is
 // its own button.
@@ -125,9 +129,6 @@ export default function FeedbackActions({
     return color ? ({ "--output-color": color } as CSSProperties) : undefined;
   };
 
-  const labelOf = (name: string) =>
-    name === "OnSuccess" ? "Approve" : name === "OnFailure" ? "Reject" : name;
-
   const sendOf = (name: string) =>
     name === "OnSuccess" ? onApprove : name === "OnFailure" ? onReject : () => onEdge(name);
 
@@ -135,7 +136,7 @@ export default function FeedbackActions({
     const send = sendOf(name);
     if (needsConfirm?.(name))
       setAsked({
-        label: labelOf(name),
+        label: outputLabel(name),
         tone: name === "OnFailure" ? "btn-danger" : "btn-primary",
         style: styleOf(name),
         send,
@@ -210,7 +211,7 @@ export default function FeedbackActions({
         aria-keyshortcuts={enterTarget === name ? "Enter" : undefined}
       >
         {style && <span className="output-color-dot" aria-hidden="true" />}
-        {labelOf(name)}
+        {outputLabel(name)}
         {name === enterTarget && (
           <kbd className="feedback-enter-mark" aria-hidden="true">
             ⏎

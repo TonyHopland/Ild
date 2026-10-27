@@ -55,6 +55,12 @@ public interface IWorkItemNotifier
     /// and the template list's counts re-read them. A hint only: listeners re-fetch.
     /// </summary>
     Task LoopTemplateProposalsChangedAsync(Guid templateId);
+
+    /// <summary>
+    /// Signals that the human input suggestions for a work item changed — one was
+    /// made, decided, or went stale — so its Action tab re-reads them. A hint only: listeners re-fetch.
+    /// </summary>
+    Task HumanInputProposalsChangedAsync(string workItemId);
 }
 
 public sealed class NoopWorkItemNotifier : IWorkItemNotifier
@@ -70,4 +76,5 @@ public sealed class NoopWorkItemNotifier : IWorkItemNotifier
     public Task WorkItemEditProposalsChangedAsync(string workItemId) => Task.CompletedTask;
     public Task GlobalVariableProposalsChangedAsync(string name) => Task.CompletedTask;
     public Task LoopTemplateProposalsChangedAsync(Guid templateId) => Task.CompletedTask;
+    public Task HumanInputProposalsChangedAsync(string workItemId) => Task.CompletedTask;
 }

@@ -273,6 +273,7 @@ public class WorktreeRetentionSweeperTests
         {
             var store = sp.GetRequiredService<ILoopRunStore>();
             var m = new Mock<IWorkItemManager>();
+            m.Setup(x => x.DeleteRunAsync(It.IsAny<Guid>())).Returns<Guid>(store.DeleteAsync);
             m.Setup(x => x.GetWorkItemAsync(workItemId)).Returns(async () =>
             {
                 await store.GetAllByWorkItemAsync(workItemId);
@@ -529,6 +530,7 @@ public class WorktreeRetentionSweeperTests
         settings.Setup(s => s.GetRunRetentionDaysAsync(It.IsAny<CancellationToken>())).ReturnsAsync(retentionDays);
         var engine = new Mock<ILoopEngine>();
         engine.Setup(e => e.GetActiveRunIdsAsync()).ReturnsAsync(engineOwned);
+        Mock.Get(workItems).Setup(x => x.DeleteRunAsync(It.IsAny<Guid>())).Returns<Guid>(db.LoopRuns.DeleteAsync);
 
         var services = new ServiceCollection();
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);

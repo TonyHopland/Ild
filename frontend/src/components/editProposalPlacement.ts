@@ -118,3 +118,42 @@ export function placeActionProposals<P extends PlacedProposal>(
   sortSlots(afterTurn);
   return { afterTurn, live: live.sort(byCreation), end: end.sort(byCreation) };
 }
+
+export interface HumanInputPlacement<P extends PlacedProposal> {
+  /** The cards made before the first turn: before the thread. */
+  head: P[];
+  /** The cards that follow each conversation turn, by its index. */
+  afterTurn: Map<number, P[]>;
+  /** The card for the question the run waits on now: just before the buttons that answer it. */
+  open: P[];
+}
+
+/**
+ * Where the suggested answers for the questions of a run go among its
+ * conversation `messages`. The suggestion for the question the run waits on
+ * (`waitingRunNodeId`) goes in `open`, wherever it was made. Every other one
+ * stays where it was made, after the last turn at or before it.
+ */
+export function placeHumanInputProposals<P extends PlacedProposal & { runNodeId: string }>(
+  messages: RunConversationMessage[],
+  proposals: P[],
+  waitingRunNodeId: string | null | undefined,
+): HumanInputPlacement<P> {
+  const head: P[] = [];
+  const afterTurn = new Map<number, P[]>();
+  const open: P[] = [];
+  for (const proposal of proposals) {
+    if (proposal.runNodeId === waitingRunNodeId) {
+      open.push(proposal);
+      continue;
+    }
+    const turn = lastIndexWhere(
+      messages,
+      (m) => compareCreatedAt(m.timestamp, proposal.createdAt) <= 0,
+    );
+    if (turn >= 0) push(afterTurn, turn, proposal);
+    else head.push(proposal);
+  }
+  sortSlots(afterTurn);
+  return { head: head.sort(byCreation), afterTurn, open: open.sort(byCreation) };
+}

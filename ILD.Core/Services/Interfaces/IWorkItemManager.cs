@@ -221,6 +221,15 @@ public interface IWorkItemManager
     Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null);
 
     /// <summary>
+    /// Answer the execution <paramref name="runNodeId"/> of the parked node with
+    /// the output a button of that name sends: OnSuccess as approve, OnFailure as
+    /// reject, any other name as that custom edge, each with
+    /// <paramref name="input"/>. Refused like the answers above, and also when
+    /// the waiting execution is a different one.
+    /// </summary>
+    Task<bool> SubmitHumanFeedbackAnswerAsync(string workItemId, Guid runId, Guid runNodeId, string output, string input);
+
+    /// <summary>
     /// Merge the pull request linked to the work item's current run on the
     /// remote provider and, when <paramref name="deleteBranch"/> is set, delete
     /// the source branch afterwards (best effort). On a successful merge the
@@ -272,6 +281,12 @@ public interface IWorkItemManager
     /// are made from its Action tab.
     /// </summary>
     Task<IReadOnlyList<RemoteWorkItemEditProposal>> ListRequestedEditProposalsAsync(string workItemId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Delete the run row, as <see cref="ILD.Data.Stores.Interfaces.ILoopRunStore.DeleteAsync"/> does, and
+    /// mark the pending human input suggestions for its questions Stale. False when the run is not deleted.
+    /// </summary>
+    Task<bool> DeleteRunAsync(Guid runId);
 
     /// <summary>
     /// Reject the loop run's still-pending edit proposals because the run is being
