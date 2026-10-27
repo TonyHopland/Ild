@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Testing and cloning a repository works when ILD reaches the network through a proxy.**
 - **A person answering a run parked at the PR node while the PR heartbeat is checking it no longer leaves the run stuck.**
 - **ILD's auto-merge only merges the commit whose CI it checked.** If the branch moves first, it waits for CI on the new commit.
 - **Board cards keep their PR status current.** After a push the card shows no PR badge until the forge reports CI for the new commit, then follows it as CI and reviews change.
