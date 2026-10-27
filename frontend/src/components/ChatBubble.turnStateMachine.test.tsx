@@ -263,24 +263,22 @@ const CASES: Case[] = [
     ],
     ends: "working",
   },
-  {
-    name: "the same read answering with the turn being replaced is what would break it",
-    // Why that rule is the server's to keep rather than something this client can
-    // recover from: the same sequence, with the read answering the outgoing turn,
-    // puts the client back on a turn that is ending, and t1's completion then takes
-    // the controls away under t2, which is still running. Nothing arrives to put
-    // them back — the start of t2 has already been and gone.
-    resumeWith: "t1",
-    steps: [
-      { start: "t2", shows: "working" },
-      { holdRead: true },
-      { reconnect: true },
-      { answerHeldRead: "t1", shows: "working" },
-      { complete: "t1", shows: "idle" },
-    ],
-    ends: "idle",
-  },
 ];
+
+const REPLACED_TURN_COMPLETION: Case = {
+  name: "the same read answering with the turn being replaced is what would break it",
+  // The server must not answer a read with the outgoing turn, but if it does, t1's completion
+  // takes the controls away under t2, which is still running. Known bug: follow-up work item 468.
+  resumeWith: "t1",
+  steps: [
+    { start: "t2", shows: "working" },
+    { holdRead: true },
+    { reconnect: true },
+    { answerHeldRead: "t1", shows: "working" },
+    { complete: "t1", shows: "working" },
+  ],
+  ends: "working",
+};
 
 function emit<E extends keyof ChatHubEvents>(event: E, payload: ChatHubEvents[E]) {
   act(() => {
@@ -309,7 +307,7 @@ afterEach(() => {
 });
 
 describe("ChatBubble turn state machine", () => {
-  test.each(CASES)("$name", async ({ resumeWith, steps, ends }) => {
+  async function runCase({ resumeWith, steps, ends }: Case) {
     chatService.listHistory.mockResolvedValue([summary()]);
     aiProviderService.getAll.mockResolvedValue([]);
     chatService.sendMessage.mockResolvedValue(undefined);
@@ -456,5 +454,10 @@ describe("ChatBubble turn state machine", () => {
     }
 
     await waitFor(() => expect(shown()).toBe(ends));
-  });
+  }
+
+  test.each(CASES)("$name", runCase);
+
+  // Known bug, follow-up work item 468: expected to fail until it is fixed.
+  test.fails(REPLACED_TURN_COMPLETION.name, () => runCase(REPLACED_TURN_COMPLETION));
 });

@@ -51,17 +51,6 @@ function submitForm() {
   fireEvent.click(buttons[buttons.length - 1]);
 }
 
-/** Answers a confirmation, if deleting asks for one. */
-function confirmIfAsked() {
-  const dialog = screen.queryByRole("dialog");
-  const scope = dialog ? within(dialog) : screen;
-  const confirm = scope.queryAllByRole("button", { name: /^(confirm|delete|yes|remove)/i });
-  if (dialog || confirm.length > 0) {
-    const last = confirm[confirm.length - 1];
-    if (last) fireEvent.click(last);
-  }
-}
-
 describe("Package feeds settings", () => {
   test("lists each feed with its URL and masked PAT, never the PAT itself", async () => {
     vi.spyOn(services.packageFeedService, "list").mockResolvedValue([company, tools] as any);
@@ -155,9 +144,9 @@ describe("Package feeds settings", () => {
     render(<PackageFeedsSettings />);
 
     fireEvent.click((await rowOf("company")).getByRole("button", { name: /^delete$/i }));
-    confirmIfAsked();
 
-    await waitFor(() => expect(remove).toHaveBeenCalledWith("f1"));
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    expect(remove).toHaveBeenCalledWith("f1");
     await waitFor(() => expect(screen.queryByText("company")).toBeNull());
   });
 

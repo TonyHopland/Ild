@@ -18,13 +18,8 @@ public class LoopRunsIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/looprins", TestContext.Current.CancellationToken);
-        // Path is /api/v1/[controller] -> /api/v1/loopruns
-        // Use the correct route below
-        Assert.Contains(response.StatusCode, new[] { HttpStatusCode.NotFound, HttpStatusCode.Unauthorized });
-
-        var actual = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, actual.StatusCode);
+        var response = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]

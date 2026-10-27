@@ -253,8 +253,7 @@ public class PackageFeedsApiTests
 
         var response = await client.PutAsJsonAsync($"/api/v1/package-feeds/{id}", new { name = "renamed", feedUrl = CompanyUrl }, Ct);
 
-        Assert.True(response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.BadRequest,
-            $"unexpected {(int)response.StatusCode}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("company", Assert.Single(await ListFeedsAsync(client)).GetProperty("name").GetString());
     }
 

@@ -297,6 +297,7 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest { Title = "b", ForceStatus = RemoteWorkItemStatus.Ready }, TestActors.Human, TestContext.Current.CancellationToken);
 
         var ready = await _client.ListAsync(_opts, RemoteWorkItemStatus.Ready, null, TestContext.Current.CancellationToken);
+        Assert.NotEmpty(ready);
         Assert.All(ready, w => Assert.Equal(RemoteWorkItemStatus.Ready, w.Status));
     }
 

@@ -151,7 +151,7 @@ public sealed class WorkItemFileRawApiTests : IDisposable
         agent.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer", factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
         var asAgent = await agent.GetAsync(Raw(ItemWithWorktree, "a.txt"), Ct);
-        Assert.Contains(asAgent.StatusCode, new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden });
+        Assert.Equal(HttpStatusCode.Forbidden, asAgent.StatusCode);
         Assert.DoesNotContain("worktree-bytes", await asAgent.Content.ReadAsStringAsync(Ct));
     }
 }
