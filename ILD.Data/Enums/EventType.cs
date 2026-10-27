@@ -64,4 +64,10 @@ public enum EventType
     /// node. Ending events before it no longer close the run's conversation.
     /// </summary>
     RunReopened = 23,
+
+    /// <summary>
+    /// A Set Variable node wrote a loop variable. Names the variable and whether
+    /// the write made it new, changed it or left it unchanged; never the value.
+    /// </summary>
+    VariableSet = 24,
 }

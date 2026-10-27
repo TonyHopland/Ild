@@ -164,6 +164,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INodeExecutor, AINodeExecutor>();
         services.AddSingleton<INodeExecutor, HumanNodeExecutor>();
         services.AddSingleton<INodeExecutor, PromptNodeExecutor>();
+        services.AddSingleton<INodeExecutor, SetVariableNodeExecutor>();
         services.AddSingleton<INodeExecutor, PRNodeExecutor>();
         services.AddSingleton<INodeExecutor, ConditionNodeExecutor>();
         services.AddSingleton<INodeExecutor, CleanupNodeExecutor>();

@@ -27,7 +27,11 @@ public readonly record struct ProcessResult(int ExitCode, string StdOut, string 
     public bool Success => ExitCode == 0;
 }
 
-/// <summary>The unprivileged user a child crosses to (see <c>AgentIsolation.Route</c>).</summary>
+/// <summary>
+/// The unprivileged user a child crosses to (see <c>AgentIsolation.Route</c>). <paramref name="Group"/> is the
+/// agent's PRIMARY group, for <c>setpriv --regid</c> only; the orchestrator is not a member of it. The group
+/// both uids share (<c>AgentIsolation.SharedGroup</c>) is a different one, and is not carried here.
+/// </summary>
 public sealed record AgentIdentity(string User, string Group, string Home);
 
 /// <summary>

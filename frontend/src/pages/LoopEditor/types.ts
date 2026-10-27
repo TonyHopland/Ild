@@ -1,4 +1,4 @@
-import type { AiMatchRule, ConditionCase } from "../../types";
+import type { AiMatchRule, ConditionCase, VariableAssignment } from "../../types";
 import type { OutputRow } from "../../utils/nodeOutputs";
 
 /** Per-file outcome shown after a (possibly multi-file) template import. */
@@ -35,6 +35,7 @@ export interface NodeSettingsSnapshot {
   conditionCases: ConditionCase[];
   conditionDefaultEdge: string;
   conditionOutput: string;
+  assignments: VariableAssignment[];
 }
 
 export interface LoopTemplateVersion {

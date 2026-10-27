@@ -40,6 +40,7 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     conditionCases: [],
     conditionDefaultEdge: "false",
     conditionOutput: "{{Node.Input}}",
+    assignments: [],
     aiProviders: [],
     globalNames: [],
     availableAiTools: [],
@@ -72,6 +73,7 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     onConditionCasesChange: vi.fn(),
     onConditionDefaultEdgeChange: vi.fn(),
     onConditionOutputChange: vi.fn(),
+    onAssignmentsChange: vi.fn(),
     ...overrides,
   };
   render(<NodeSettingsModal {...props} />);

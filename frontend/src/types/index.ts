@@ -447,6 +447,7 @@ export enum NodeType {
   AI = "AI",
   Human = "Human",
   Prompt = "Prompt",
+  SetVariable = "SetVariable",
   PR = "PR",
   Condition = "Condition",
   Cleanup = "Cleanup",
@@ -1217,6 +1218,16 @@ export interface ConditionCase {
   pattern: string;
   tag: string;
   edgeName: string;
+}
+
+/**
+ * One loop variable a Set Variable node writes: its name and the template its
+ * value is rendered from. Stored on a Set Variable node's config, in order, as
+ * `assignments`.
+ */
+export interface VariableAssignment {
+  name: string;
+  value: string;
 }
 
 export interface ApiError {

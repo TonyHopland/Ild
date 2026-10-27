@@ -12,6 +12,7 @@ import {
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { EdgeType, NodeType, RecoveryPolicy } from "../../types";
+import { nodeStyleOf } from "../../utils/nodeStyles";
 
 // A node declares each of its outputs once, as an object in config.outputs. The
 // editor lists a Human or PR node's outputs, derives an AI or Condition node's
@@ -50,6 +51,7 @@ const NODE_OUTPUTS = {
   AI: SUCCESS_AND_FAILURE,
   Human: SUCCESS_AND_FAILURE,
   Prompt: SUCCESS_AND_FAILURE,
+  SetVariable: SUCCESS_AND_FAILURE,
   PR: [...SUCCESS_AND_FAILURE, ...RESERVED.map((name) => ({ name, reserved: true }))],
   Condition: [{ name: "OnFailure" }],
   Cleanup: [],
@@ -61,6 +63,7 @@ interface Server {
   template?: unknown;
   nodeOutputsFail?: boolean;
   upgradedDocument?: string;
+  saveError?: string;
 }
 
 function respond(status: number, json: unknown) {
@@ -99,6 +102,7 @@ function serve(server: Server) {
       return respond(200, { id: "tpl-new" });
     }
     if (method === "PUT" && path.startsWith("/looptemplates/")) {
+      if (server.saveError) return respond(400, { error: server.saveError });
       return respond(200, server.template);
     }
     return respond(200, null);
@@ -2136,5 +2140,128 @@ describe("Loop Editor — button colour", () => {
 
     expect(squares(dialog)).toHaveLength(0);
     expect(colorInputs()).toHaveLength(0);
+  });
+});
+
+describe("Loop Editor — Set Variable node", () => {
+  const keeper = (config: Record<string, unknown>): TemplateNode => ({
+    id: "n-keep",
+    type: NodeType.SetVariable,
+    label: "Keep",
+    config: { outputs: SUCCESS_AND_FAILURE, ...config },
+  });
+
+  const twoAssignments = () =>
+    keeper({
+      assignments: [
+        { name: "handoff", value: "{{Node.Input}}" },
+        { name: "phase", value: "review" },
+      ],
+    });
+
+  function rowValues(dialog: HTMLElement) {
+    const rows: [string, string][] = [];
+    for (let i = 1; within(dialog).queryByLabelText(`Assignment ${i} name`); i++) {
+      rows.push([
+        (within(dialog).getByLabelText(`Assignment ${i} name`) as HTMLInputElement).value,
+        (within(dialog).getByLabelText(`Assignment ${i} value`) as HTMLTextAreaElement).value,
+      ]);
+    }
+    return rows;
+  }
+
+  test("the palette offers a Set Variable node", async () => {
+    serve({ template: templateWith(twoAssignments()) });
+    renderEditor("/loop-editor/tpl-1");
+    const item = await screen.findByText("Set Variable");
+    const setData = vi.fn();
+
+    fireEvent.dragStart(item, { dataTransfer: { setData, effectAllowed: "" } });
+
+    expect(setData).toHaveBeenCalledWith("application/loop-node-type", NodeType.SetVariable);
+  });
+
+  test("a node with no assignments yet opens with one empty row", async () => {
+    const { dialog } = await openNode({ template: templateWith(keeper({})) }, "Keep");
+
+    expect(rowValues(dialog)).toEqual([["", ""]]);
+  });
+
+  test("a saved node opens with its rows, and adding and removing rows saves them in order", async () => {
+    const { calls, dialog } = await openNode({ template: templateWith(twoAssignments()) }, "Keep");
+    expect(rowValues(dialog)).toEqual([
+      ["handoff", "{{Node.Input}}"],
+      ["phase", "review"],
+    ]);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /add assignment/i }));
+    fireEvent.change(within(dialog).getByLabelText("Assignment 3 name"), {
+      target: { value: "ticket" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Assignment 3 value"), {
+      target: { value: "T-7" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove assignment 1" }));
+    fireEvent.change(within(dialog).getByLabelText("Assignment 1 value"), {
+      target: { value: "done" },
+    });
+    const saved = await saveLoop(dialog, calls);
+
+    expect(configOf(saved, "n-keep").assignments).toEqual([
+      { name: "phase", value: "done" },
+      { name: "ticket", value: "T-7" },
+    ]);
+    expect(outputsOf(saved, "n-keep")).toEqual(SUCCESS_AND_FAILURE);
+  });
+
+  test("a save the server refuses for a bad assignment shows its reason", async () => {
+    const reason = "SetVariable node n-keep assignment 1 name '' is not a valid loop variable name";
+    const { calls, dialog } = await openNode(
+      { template: templateWith(keeper({})), saveError: reason },
+      "Keep",
+    );
+    fireEvent.click(within(dialog).getByText("Save"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
+
+    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
+
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+    expect(await screen.findByText(new RegExp(reason))).toBeTruthy();
+  });
+
+  test("cancelling the settings keeps the rows the node had", async () => {
+    const { dialog } = await openNode({ template: templateWith(twoAssignments()) }, "Keep");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove assignment 1" }));
+    fireEvent.change(within(dialog).getByLabelText("Assignment 1 name"), {
+      target: { value: "renamed" },
+    });
+
+    fireEvent.click(dialog.querySelector(".node-settings-btn-cancel") as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
+    fireEvent.click(screen.getByText("Keep"));
+    const reopened = await screen.findByRole("dialog", { name: "Node Settings" });
+
+    expect(rowValues(reopened)).toEqual([
+      ["handoff", "{{Node.Input}}"],
+      ["phase", "review"],
+    ]);
+  });
+
+  test("on the canvas the node has a look of its own and success and failure outlets only", async () => {
+    serve({ template: templateWith(twoAssignments()) });
+    renderEditor("/loop-editor/tpl-1");
+    const node = (await screen.findByText("Keep")).closest(".loop-node") as HTMLElement;
+
+    const unknownType = render(
+      <div style={{ border: `2px solid ${nodeStyleOf("Unknown").border}` }} />,
+    );
+    expect(node.style.border).not.toBe(
+      (unknownType.container.firstChild as HTMLElement).style.border,
+    );
+
+    expect(within(node).getByTestId("source-handle-success")).toBeTruthy();
+    expect(within(node).getByTestId("source-handle-fail")).toBeTruthy();
+    expect(within(node).queryByTestId("source-handle-respond")).toBeNull();
   });
 });

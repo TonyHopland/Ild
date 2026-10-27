@@ -69,7 +69,11 @@ public sealed class PromptRenderingService : IPromptRenderingService
             if (vars.Count > 0)
                 variables = vars.ToDictionary(v => v.Name, v => v.Value, StringComparer.OrdinalIgnoreCase);
         }
-        catch { /* loop variables are best-effort, like the event log */ }
+        catch (Exception ex)
+        {
+            // Best-effort, like the event log, but never silent.
+            _logger?.LogWarning(ex, "Run {RunId}: loop variables could not be read; Var placeholders render empty", runId);
+        }
 
         // Not best-effort: rendering a global as empty because the read failed
         // would hand the node a prompt missing the rules it was written around.

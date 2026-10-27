@@ -39,12 +39,18 @@ public class RepositoryManager : IRepositoryManager
     /// and git then runs as the orchestrator itself when no agent user is configured.
     /// </param>
     /// <param name="mirrorsRoot">Where the per-remote mirrors live.</param>
+    /// <param name="sharedGroup">
+    /// The group the orchestrator and the agent share, which the mirrors are handed to; null reads
+    /// <see cref="AgentIsolation.SharedGroup"/>. Not <see cref="AgentIdentity.Group"/>, which is the agent's
+    /// primary group, only for <c>setpriv --regid</c>, and which the orchestrator is not a member of.
+    /// </param>
     public RepositoryManager(
         IProcessRunner runner,
         ILogger<RepositoryManager>? logger = null,
         string? worktreesRoot = null,
         AgentIdentity? agent = null,
-        string? mirrorsRoot = null)
+        string? mirrorsRoot = null,
+        string? sharedGroup = null)
     {
         _runner = runner;
         _logger = logger;
@@ -53,7 +59,8 @@ public class RepositoryManager : IRepositoryManager
         _agentOptions = new ProcessRunOptions(AsAgent: _agent, AgentScoped: true);
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
-            agentGroup: _agent?.Group,
+            sharedGroup ?? AgentIsolation.SharedGroup,
+            sharedWithAgent: _agent is not null,
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
             logger);
     }

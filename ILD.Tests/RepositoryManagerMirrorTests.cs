@@ -13,6 +13,9 @@ namespace ILD.Tests;
 [Collection("Git")]
 public class RepositoryManagerMirrorTests : IDisposable
 {
+    // Not a group this host knows, so the mirrors stay where they are made.
+    private const string SharedGroup = "agents";
+
     private readonly string _tmp = Path.Combine(Path.GetTempPath(), "ild-mirror-tests-" + Guid.NewGuid().ToString("N"));
     private readonly string _mirrors;
     private readonly string _worktrees;
@@ -39,7 +42,7 @@ public class RepositoryManagerMirrorTests : IDisposable
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         _runners.Add(runner);
-        return (new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors), runner);
+        return (new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup), runner);
     }
 
     private static GitAuthOptions Auth(string remote) => new(remote, "tok-" + Guid.NewGuid().ToString("N"), "Forgejo");

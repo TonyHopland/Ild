@@ -9,6 +9,9 @@ namespace ILD.Tests;
 [Collection("Git")]
 public class RepositoryManagerTests : IDisposable
 {
+    // Not a group this host knows, so the mirrors stay where they are made.
+    private const string SharedGroup = "agents";
+
     private sealed class RecordingRunner : IProcessRunner
     {
         public List<(string FileName, IReadOnlyList<string> Args, string? WorkingDirectory, IReadOnlyDictionary<string, string?>? Environment, ProcessRunOptions? Options)> Calls { get; } = new();
@@ -37,7 +40,7 @@ public class RepositoryManagerTests : IDisposable
         runner.Forbid(_repo);
         runner.Forbid(worktreesRoot);
         lock (_auditors) _auditors.Add(runner);
-        return new RepositoryManager(runner, logger, worktreesRoot, runner.ManagerAgent, _mirrors);
+        return new RepositoryManager(runner, logger, worktreesRoot, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup);
     }
 
     private static readonly AgentIdentity IsolatedAgent = new("agent", "agents", "/home/agent");
@@ -394,7 +397,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task DeleteLocalBranchAsync_calls_git_branch_D_with_correct_args()
     {
         var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors);
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
 
         await mgr.DeleteLocalBranchAsync(_repo, "does-not-exist");
 
@@ -420,7 +423,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task ResetHardAsync_calls_git_reset_hard_with_revision()
     {
         var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors);
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
 
         var success = await mgr.ResetHardAsync(_repo, "origin/main", TestContext.Current.CancellationToken);
         Assert.True(success);
@@ -1138,7 +1141,7 @@ public class RepositoryManagerTests : IDisposable
     public async Task RebaseAsync_unwinds_before_letting_a_cancellation_propagate()
     {
         var runner = new CancellingRebaseRunner();
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors);
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 

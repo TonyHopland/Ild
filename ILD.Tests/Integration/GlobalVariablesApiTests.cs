@@ -290,6 +290,24 @@ public class GlobalVariablesApiTests
         return template.Id;
     }
 
+    /// <summary>A one-version template whose Set Variable node assigns <paramref name="value"/>.</summary>
+    private static Guid SeedSetVariableTemplate(ApiFactory factory, string name, string value)
+    {
+        var templateId = SeedTemplate(factory, name, archived: false, promptPerVersion: [null]);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        db.LoopNodes.Add(new LoopNode
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateVersionId = db.LoopTemplateVersions.Single(v => v.LoopTemplateId == templateId).Id,
+            NodeType = NodeType.SetVariable,
+            Label = "Seed",
+            Config = JsonSerializer.Serialize(new { assignments = new[] { new { name = "rules", value } } }),
+        });
+        db.SaveChanges();
+        return templateId;
+    }
+
     private static (string Id, string Name)[] UsedBy(JsonElement variable)
         => variable.GetProperty("usedBy").EnumerateArray()
             .Select(t => (t.GetProperty("id").GetString()!, t.GetProperty("name").GetString()!))
@@ -314,6 +332,7 @@ public class GlobalVariablesApiTests
         SeedTemplate(factory, "m-archived", archived: true, "Follow {{Global.Rules}}");
         SeedTemplate(factory, "m-loop-variable", archived: false, "Follow {{Var.Rules}}");
         SeedTemplate(factory, "m-longer-name", archived: false, "Follow {{Global.Rules2}}");
+        var assigned = SeedSetVariableTemplate(factory, "m-set-variable", "{{Global.Rules}}");
         var last = SeedTemplate(factory, "zz-last", archived: false, "Follow {{Global.Rules}}");
 
         var listed = await ListAsync(client);
@@ -322,6 +341,7 @@ public class GlobalVariablesApiTests
         Assert.Equal(new[]
         {
             (exact.ToString(), "m-exact"),
+            (assigned.ToString(), "m-set-variable"),
             (spaced.ToString(), "m-spaced-other-case"),
             (nowUses.ToString(), "m-uses-only-latest"),
             (last.ToString(), "zz-last"),

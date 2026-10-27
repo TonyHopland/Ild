@@ -184,10 +184,10 @@ public static class LoopDocumentEditor
     /// <summary>
     /// Config fields that hold a JSON array rather than text. <see cref="SetNodeField"/>
     /// parses the value it is given for these, so an agent can replace a node's
-    /// outputs, rules, cases or tool list in one call.
+    /// outputs, rules, cases, tool list or Set Variable assignments in one call.
     /// </summary>
     private static readonly HashSet<string> StructuredFields =
-        new(StringComparer.Ordinal) { "outputs", "matchRules", "cases", "toolAllowlist" };
+        new(StringComparer.Ordinal) { "outputs", "matchRules", "cases", "toolAllowlist", "assignments" };
 
     /// <summary>
     /// Overwrite a node config field wholesale with <paramref name="value"/> (the

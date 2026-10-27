@@ -1018,6 +1018,15 @@ public sealed class LoopEngine : ILoopEngine
                     outcome = new NodeOutcome.Fail(EdgeType.OnFailure, ex.Message);
                 }
 
+                // Writing the variables is the node's whole purpose, so a write
+                // that fails fails the node rather than being logged and dropped.
+                if (outcome is NodeOutcome.VariablesAssigned assigned)
+                {
+                    if (await TryAssignVariablesAsync(loopRunStore, eventLog, run.Id, node.Id, runNodeId, assigned) is not { } writeFailure)
+                        continue;
+                    outcome = writeFailure;
+                }
+
                 switch (outcome)
                 {
                     case NodeOutcome.NodeStarting ns:
@@ -1355,6 +1364,38 @@ public sealed class LoopEngine : ILoopEngine
     }
 
     private sealed class RunMovedOnException : Exception;
+
+    /// <summary>
+    /// Writes a Set Variable node's assignments in order, in one transaction,
+    /// while its execution is running, so each write is recorded against it; once
+    /// they are committed, logs a VariableSet event per write. Null when all were
+    /// written; otherwise the failure the node fails with, and none was written.
+    /// </summary>
+    private async Task<NodeOutcome.Fail?> TryAssignVariablesAsync(ILoopRunStore store, IEventLogService? eventLog,
+        Guid runId, Guid nodeId, Guid? runNodeId, NodeOutcome.VariablesAssigned assigned)
+    {
+        IReadOnlyList<VariableWriteEffect> effects;
+        try { effects = await store.SetVariablesAsync(runId, assigned.Assignments); }
+        catch (Exception ex)
+        {
+            var names = string.Join(", ", assigned.Assignments.Select(a => $"'{a.Name}'"));
+            return new NodeOutcome.Fail(EdgeType.OnFailure, $"Could not set loop variables {names}; none was set: {ex.Message}");
+        }
+        if (eventLog is not null)
+            for (var i = 0; i < effects.Count; i++)
+            {
+                var entry = $"{assigned.Assignments[i].Name} ({EffectLabel(effects[i])})";
+                await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.VariableSet, entry, nodeId, runNodeId: runNodeId));
+            }
+        return null;
+    }
+
+    private static string EffectLabel(VariableWriteEffect effect) => effect switch
+    {
+        VariableWriteEffect.Created => "new",
+        VariableWriteEffect.Changed => "changed",
+        _ => "unchanged",
+    };
 
     /// <summary>Human-readable name for a node's live-output transition marker,
     /// falling back to the node type when the template left the label blank.</summary>

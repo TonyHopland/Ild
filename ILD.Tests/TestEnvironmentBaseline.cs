@@ -43,6 +43,7 @@ internal static class TestEnvironmentBaseline
         // unit tests, any single-uid deployment".
         Environment.SetEnvironmentVariable(AgentIsolation.AgentUserEnvVar, null);
         Environment.SetEnvironmentVariable(AgentIsolation.AgentGroupEnvVar, null);
+        Environment.SetEnvironmentVariable(AgentIsolation.SharedGroupEnvVar, null);
         Environment.SetEnvironmentVariable(AgentIsolation.AgentHomeEnvVar, null);
         Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, null);
 

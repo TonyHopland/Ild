@@ -9,5 +9,6 @@ public enum NodeType
     Prompt = 4,
     PR = 5,
     Condition = 6,
-    Cleanup = 10
+    Cleanup = 10,
+    SetVariable = 11
 }

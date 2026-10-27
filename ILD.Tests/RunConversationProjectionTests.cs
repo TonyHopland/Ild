@@ -71,4 +71,15 @@ public class RunConversationProjectionTests
         Assert.Equal(events.Count, messages.Count);
         Assert.All(messages, m => Assert.DoesNotContain(m.Name, Enum.GetNames<EventType>()));
     }
+
+    [Fact]
+    public async Task A_variable_a_Set_Variable_node_set_is_not_a_message()
+    {
+        using var db = new TestDb();
+        var run = RunTimeline.SeedRun(db, "WI-1", RunTimeline.SeedVersion(db), LoopRunStatus.Running);
+        var events = new[] { new EventLog { Id = 1, LoopRunId = run.Id, EventType = EventType.VariableSet, Data = "phase (changed)", Timestamp = DateTime.UtcNow } };
+
+        Assert.Empty(await new RunConversationService(db.EventLogs, db.LoopRuns).ProjectAsync(run.Id, events));
+        Assert.False(RunConversationEvents.Contains(EventType.VariableSet, fromAiNode: false));
+    }
 }
