@@ -15,7 +15,6 @@ public class RecoveryManagerTests
         Mock<IWorkItemManager> wiMgr,
         Mock<ILoopRunStore> runStore,
         Mock<IProviderStore> provStore,
-        Mock<ILoopTemplateStore> tmplStore,
         Mock<IRepositoryManager> repo,
         Mock<ILoopEngine> engine
     ) Build()
@@ -23,16 +22,15 @@ public class RecoveryManagerTests
         var wi = new Mock<IWorkItemManager>();
         var rn = new Mock<ILoopRunStore>();
         var pr = new Mock<IProviderStore>();
-        var ts = new Mock<ILoopTemplateStore>();
         var rp = new Mock<IRepositoryManager>();
         var en = new Mock<ILoopEngine>();
-        return (new RecoveryManager(wi.Object, rn.Object, pr.Object, ts.Object, rp.Object, en.Object, new Mock<IEventLogService>().Object, TestActors.Instance), wi, rn, pr, ts, rp, en);
+        return (new RecoveryManager(wi.Object, rn.Object, pr.Object, rp.Object, en.Object, new Mock<IEventLogService>().Object, TestActors.Instance), wi, rn, pr, rp, en);
     }
 
     [Fact]
     public async Task RecoverRunAsync_with_Cancel_policy_calls_CancelRunAsync()
     {
-        var (mgr, _, runStore, _, _, _, engine) = Build();
+        var (mgr, _, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
         {
@@ -50,7 +48,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_with_NeedsReview_marks_work_item_HumanFeedback()
     {
-        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
+        var (mgr, wiMgr, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         var wiId = Guid.NewGuid().ToString();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
@@ -73,7 +71,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_with_AutoResume_uses_engine_ResumeRecoveredRunAsync()
     {
-        var (mgr, _, runStore, _, _, _, engine) = Build();
+        var (mgr, _, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
         {
@@ -91,7 +89,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_with_AutoResume_and_unhealthy_worktree_marks_work_item_HumanFeedback()
     {
-        var (mgr, wiMgr, runStore, _, _, repo, engine) = Build();
+        var (mgr, wiMgr, runStore, _, repo, engine) = Build();
         var runId = Guid.NewGuid();
         var wiId = Guid.NewGuid().ToString();
         const string worktreePath = "/tmp/wt";
@@ -128,7 +126,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_returns_false_when_run_missing()
     {
-        var (mgr, _, runStore, _, _, _, _) = Build();
+        var (mgr, _, runStore, _, _, _) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync((LoopRun?)null);
 
@@ -138,7 +136,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_returns_false_when_run_is_not_Running()
     {
-        var (mgr, _, runStore, _, _, _, engine) = Build();
+        var (mgr, _, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
         {
@@ -154,7 +152,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_with_AutoResume_and_WaitingHuman_node_does_not_resume()
     {
-        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
+        var (mgr, wiMgr, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         var wiId = Guid.NewGuid().ToString();
         var currentNodeId = Guid.NewGuid();
@@ -212,7 +210,7 @@ public class RecoveryManagerTests
         // Not ResumeRecoveredRunAsync: that re-drives the AI node cold and throws
         // away the agent session the park exists to keep. A null note is what
         // makes the executor continue that session.
-        var (mgr, _, runStore, _, _, _, engine) = Build();
+        var (mgr, _, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId))
             .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.Shutdown));
@@ -228,7 +226,7 @@ public class RecoveryManagerTests
     {
         // The whole point of discriminating the two halts: a person is waiting to
         // steer this run, and a restart is not their cue to have it taken away.
-        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
+        var (mgr, wiMgr, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId))
             .ReturnsAsync(HaltedRun(runId, "wi-1", haltReason: null));
@@ -248,7 +246,7 @@ public class RecoveryManagerTests
         // auto-resuming it on startup is exactly the blanket auto-resume that was
         // considered and declined, and it would fire the run straight back into a
         // limit that has not reset yet.
-        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
+        var (mgr, wiMgr, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId))
             .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.Throttled));
@@ -267,7 +265,7 @@ public class RecoveryManagerTests
         // Only a person setting the variable can make this park go anywhere, so a
         // restart resuming it would just park it again, or run on with a value
         // nobody has looked at.
-        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
+        var (mgr, wiMgr, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId))
             .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.GlobalVariableMissing));
@@ -285,7 +283,7 @@ public class RecoveryManagerTests
     {
         // "The restart was a tidy one" is not grounds to overrule an operator's
         // explicit statement about what a restart should do to their runs.
-        var (mgr, _, runStore, _, _, _, engine) = Build();
+        var (mgr, _, runStore, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId))
             .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.Shutdown, RecoveryPolicy.Cancel));
@@ -299,7 +297,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_still_checks_worktree_health_for_a_shutdown_halt()
     {
-        var (mgr, wiMgr, runStore, _, _, repo, engine) = Build();
+        var (mgr, wiMgr, runStore, _, repo, engine) = Build();
         var runId = Guid.NewGuid();
         const string worktreePath = "/tmp/wt";
         runStore.Setup(s => s.GetByIdAsync(runId))
@@ -321,7 +319,7 @@ public class RecoveryManagerTests
         // something about: a Running run left by a crash, and a run the drain
         // parked. A human halt, a throttle park, and a genuine Human/PR-node park
         // all stay out — each of those is waiting on a person, not on a restart.
-        var (mgr, _, runStore, _, _, _, _) = Build();
+        var (mgr, _, runStore, _, _, _) = Build();
         var crashed = new LoopRun { Id = Guid.NewGuid(), Status = LoopRunStatus.Running };
         var drained = HaltedRun(Guid.NewGuid(), "wi-2", HaltReason.Shutdown);
         var humanHalted = HaltedRun(Guid.NewGuid(), "wi-3", haltReason: null);

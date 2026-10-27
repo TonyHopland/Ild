@@ -18,7 +18,7 @@ public class RecoveryManager : IRecoveryManager
     private readonly ILogger<RecoveryManager> _logger;
     private readonly WorkItemActor _actor;
 
-    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog, BootstrapCredentials instance, ILogger<RecoveryManager>? logger = null)
+    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog, BootstrapCredentials instance, ILogger<RecoveryManager>? logger = null)
     {
         _actor = WorkItemActor.System(instance.Username, "recovery");
         _eventLog = eventLog;
