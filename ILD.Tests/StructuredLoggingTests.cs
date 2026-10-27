@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Serilog.Core;
 using Serilog.Events;
-using System.Text.Json;
 
 namespace ILD.Tests;
 

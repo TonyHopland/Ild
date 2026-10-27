@@ -1,6 +1,5 @@
 using ILD.Api.Controllers;
 using ILD.Core.Services.Interfaces;
-using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
@@ -9,9 +8,6 @@ namespace ILD.Tests;
 
 public class ManagedAgentsControllerTests
 {
-    private static ManagedAgentStatus Status(string key, bool updateAvailable = true)
-        => new(key, key, $"{key}-pkg", "1.0.0", "1.0.1", updateAvailable, null);
-
     [Fact]
     public async Task Update_returns_404_for_unknown_agent()
     {
