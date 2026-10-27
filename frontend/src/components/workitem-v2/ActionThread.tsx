@@ -340,11 +340,28 @@ function RunThread({
     })),
   ]);
   const cards = (list: { card: ReactNode }[] = []) => list.map((placed) => placed.card);
-  // About the question this run is parked on, so by the run they answer and not
-  // by the step that made them: shown just before the buttons that answer it.
+  // About a question of this run, so by the run they answer and not by the step
+  // that made them: each stays where it was made, after the last turn before it,
+  // and the one for the open question ends up just before the buttons that answer it.
   const answerSuggestions = (humanInput.proposals ?? [])
     .filter((proposal) => proposal.runId === runId)
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  const suggestionsAfterTurn = new Map<number, ReactNode[]>();
+  const openSuggestions: ReactNode[] = [];
+  for (const proposal of answerSuggestions) {
+    const card = (
+      <HumanInputProposalCard
+        key={`hiproposal:${proposal.id}`}
+        proposal={proposal}
+        decidable={proposal.runNodeId === view.run?.waitingRunNodeId}
+        onSettled={humanInput.refresh}
+      />
+    );
+    const created = Date.parse(proposal.createdAt);
+    const turn = messages.filter((m) => Date.parse(m.timestamp) <= created).length - 1;
+    if (turn < 0 || turn === messages.length - 1) openSuggestions.push(card);
+    else suggestionsAfterTurn.set(turn, [...(suggestionsAfterTurn.get(turn) ?? []), card]);
+  }
 
   const isEmpty =
     messages.length === 0 &&
@@ -381,7 +398,7 @@ function RunThread({
         </Bubble>,
       );
     }
-    entries.push(...cards(afterTurn.get(i)));
+    entries.push(...cards(afterTurn.get(i)), ...(suggestionsAfterTurn.get(i) ?? []));
   });
   // Halt, steer and cleanup act on this run, and wait for any other action on
   // it, wherever in the dialog that was started.
@@ -409,14 +426,7 @@ function RunThread({
       runId={runId}
       onOpen={revealFromTop}
     />,
-    ...answerSuggestions.map((proposal) => (
-      <HumanInputProposalCard
-        key={`hiproposal:${proposal.id}`}
-        proposal={proposal}
-        decidable={proposal.runNodeId === view.run?.waitingRunNodeId}
-        onSettled={humanInput.refresh}
-      />
-    )),
+    ...openSuggestions,
     <Bubble key="feedback" side="human">
       <FeedbackBanner
         workItem={workItem}

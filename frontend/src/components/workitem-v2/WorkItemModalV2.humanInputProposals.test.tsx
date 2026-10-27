@@ -3,10 +3,10 @@ import { render, cleanup, act, waitFor, within, fireEvent, screen } from "@testi
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import { LoopRun, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
-import type { HumanInputProposal } from "../../types";
+import type { HumanInputProposal, RunConversationMessage } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
-import { fakeHub, reply, stubFetch } from "../../test-support";
+import { documentOrder, fakeHub, reply, stubFetch } from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
@@ -105,7 +105,17 @@ function stubSuggestions(
   return { calls, reads };
 }
 
-function mockServices() {
+/** A turn of run-1's conversation, made at `timestamp`. */
+function turn(
+  id: number,
+  role: "ai" | "human",
+  text: string,
+  timestamp: string,
+): RunConversationMessage {
+  return { id, runId: "run-1", runNodeId: "exec-1", role, name: "Coder", text, timestamp };
+}
+
+function mockServices(turns: RunConversationMessage[] = []) {
   const hub = fakeHub();
   vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
@@ -117,7 +127,11 @@ function mockServices() {
   vi.spyOn(authServices.workItemService, "getTurnVariables").mockResolvedValue([]);
   vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(makeRun());
   vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(
-    async (runId: string) => ({ runId, messages: [], lastEventId: null }),
+    async (runId: string) => ({
+      runId,
+      messages: turns,
+      lastEventId: turns[turns.length - 1]?.id ?? null,
+    }),
   );
   vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
     entries: [],
@@ -212,6 +226,35 @@ describe("human input suggestions in the Action tab", () => {
     await waitFor(() => expect(cardOf("Green checks").textContent).toContain("Stale"));
     expect(action().textContent).not.toContain("The request failed");
     expect(action().textContent).not.toContain("no longer open");
+  });
+
+  test("a suggestion stays where it was made among the turns, not at the end", async () => {
+    mockServices([
+      turn(1, "ai", "First question", "2026-10-01T09:00:00Z"),
+      turn(2, "human", "First answer", "2026-10-01T11:00:00Z"),
+      turn(3, "ai", "Second question", "2026-10-01T12:00:00Z"),
+    ]);
+    stubSuggestions({
+      list: [
+        suggestion("About the first", { status: "Stale", createdAt: "2026-10-01T10:00:00Z" }),
+        suggestion("About the second", { createdAt: "2026-10-01T12:30:00Z" }),
+      ],
+    });
+
+    await openAction();
+
+    await waitFor(() => expect(action().textContent).toContain("About the second"));
+    const order = documentOrder(
+      ["First question", "About the first", "First answer", "Second question", "About the second"],
+      action(),
+    );
+    expect(order).toEqual([
+      "First question",
+      "About the first",
+      "First answer",
+      "Second question",
+      "About the second",
+    ]);
   });
 
   test("a pending suggestion for a question the run is no longer waiting on offers no decision", async () => {
