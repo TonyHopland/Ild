@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { settingsService, workItemService } from "./auth";
 

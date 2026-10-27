@@ -50,10 +50,16 @@ export default defineConfig({
     },
   },
   test: {
-    environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
     exclude: ["**/node_modules/**", "dist/**"],
+    // .ts tests run in node; one that needs a DOM opts in with a "// @vitest-environment jsdom" docblock.
+    projects: [
+      {
+        extends: true,
+        test: { name: "jsdom", environment: "jsdom", include: ["src/**/*.test.tsx"] },
+      },
+      { extends: true, test: { name: "node", environment: "node", include: ["src/**/*.test.ts"] } },
+    ],
   },
 });

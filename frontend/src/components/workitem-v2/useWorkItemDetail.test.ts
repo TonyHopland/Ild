@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { useWorkItemDetail } from "./useWorkItemDetail";
