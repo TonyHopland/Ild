@@ -157,6 +157,33 @@ public class LoopRunVariableStoreTests
     }
 
     [Fact]
+    public async Task Each_write_reports_whether_it_created_the_variable_changed_it_or_left_it_as_it_was()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+
+        Assert.Equal(VariableWriteEffect.Created, await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "build"));
+        Assert.Equal(VariableWriteEffect.Changed, await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "review"));
+        Assert.Equal(VariableWriteEffect.Unchanged, await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "review"));
+        Assert.Equal(VariableWriteEffect.Changed, await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "Review"));
+    }
+
+    [Fact]
+    public async Task A_write_whose_name_differs_only_in_case_overwrites_the_existing_variable()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "phase", "build");
+        var effect = await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "Phase", "review");
+
+        Assert.Equal(VariableWriteEffect.Changed, effect);
+        var variable = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariablesAsync(run.Id));
+        Assert.Equal("review", variable.Value);
+        Assert.Equal(new string?[] { null, "build" }, (await WritesAsync(db, run.WorkItemId)).Select(w => w.PreviousValue));
+    }
+
+    [Fact]
     public async Task A_variable_set_before_history_was_kept_is_recorded_as_changed_not_created()
     {
         using var db = new TestDb();

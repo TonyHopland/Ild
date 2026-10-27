@@ -40,7 +40,7 @@ const PLACEHOLDERS = [
   {
     key: "Var.",
     label: "Var.<name>",
-    desc: "A loop variable read/written by AI nodes",
+    desc: "A loop variable, written by a Set Variable node or an AI node",
   },
   {
     key: "Global.",

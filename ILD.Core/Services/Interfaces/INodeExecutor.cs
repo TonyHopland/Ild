@@ -1,4 +1,5 @@
 using ILD.Data.Enums;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 
 namespace ILD.Core.Services.Interfaces;
@@ -129,6 +130,13 @@ public abstract record NodeOutcome
     /// AI node bound a session. The engine persists the binding.
     /// </summary>
     public sealed record SessionBound(string SessionPlaceholder, string SessionId) : NodeOutcome;
+
+    /// <summary>
+    /// Set Variable node rendered its assignments. The engine writes them to the
+    /// run's loop variables, in order and in one transaction, while the node's
+    /// execution is running; if any write fails, none is written and the node fails.
+    /// </summary>
+    public sealed record VariablesAssigned(IReadOnlyList<VariableAssignment> Assignments) : NodeOutcome;
 
     /// <summary>
     /// Map a consumed external-action signal to the re-entry outcome every

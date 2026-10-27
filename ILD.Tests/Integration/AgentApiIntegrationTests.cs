@@ -594,6 +594,10 @@ public class AgentApiIntegrationTests
         Assert.Equal(1, arr.GetArrayLength());
         Assert.Equal("handoff", arr[0].GetProperty("name").GetString());
         Assert.Equal("ready for review", arr[0].GetProperty("value").GetString());
+
+        // Only a Set Variable node's writes are logged as events; an agent's are not.
+        var events = JsonDocument.Parse(await client.GetStringAsync($"/api/v1/loopruns/{runId}/events", TestContext.Current.CancellationToken)).RootElement;
+        Assert.DoesNotContain(events.GetProperty("entries").EnumerateArray(), e => e.GetProperty("eventType").GetString() == nameof(EventType.VariableSet));
     }
 
     [Fact]

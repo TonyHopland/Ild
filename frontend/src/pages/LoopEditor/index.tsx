@@ -83,6 +83,7 @@ import {
   type LoopTemplate,
   type LoopTemplateExport,
   type ChatLoopUpdatePayload,
+  type VariableAssignment,
   EdgeType,
   NodeType,
   RecoveryPolicy,
@@ -136,6 +137,7 @@ const paletteItems = [
   { type: NodeType.AI, label: "AI" },
   { type: NodeType.Human, label: "Human" },
   { type: NodeType.Prompt, label: "Prompt" },
+  { type: NodeType.SetVariable, label: "Set Variable" },
   { type: NodeType.PR, label: "PR" },
   { type: NodeType.Condition, label: "Condition" },
   { type: NodeType.Cleanup, label: "Cleanup" },
@@ -213,6 +215,21 @@ function readConditionCases(config: Record<string, unknown>): ConditionCase[] {
 }
 
 /**
+ * Reads a Set Variable node's assignments. A node with none yet opens with one
+ * empty row to fill in.
+ */
+function readAssignments(config: Record<string, unknown>): VariableAssignment[] {
+  const raw = config.assignments;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw.map((a) => ({
+      name: String((a as VariableAssignment)?.name ?? ""),
+      value: String((a as VariableAssignment)?.value ?? ""),
+    }));
+  }
+  return [{ name: "", value: "" }];
+}
+
+/**
  * Reads a Condition switch's default output. A missing one reads as blank,
  * which the settings show as an error to fix rather than filling in a guess.
  */
@@ -286,6 +303,7 @@ export default function LoopEditor() {
   const [conditionCases, setConditionCases] = useState<ConditionCase[]>([]);
   const [conditionDefaultEdge, setConditionDefaultEdge] = useState("");
   const [conditionOutput, setConditionOutput] = useState(CONDITION_DEFAULT_TEMPLATE);
+  const [assignments, setAssignments] = useState<VariableAssignment[]>([]);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -1028,6 +1046,7 @@ export default function LoopEditor() {
       setConditionCases(readConditionCases(config));
       setConditionDefaultEdge(readConditionDefaultEdge(config));
       setConditionOutput((config.output as string) ?? CONDITION_DEFAULT_TEMPLATE);
+      setAssignments(readAssignments(config));
 
       setOriginalNodeConfig({
         label: data.label || "",
@@ -1049,6 +1068,7 @@ export default function LoopEditor() {
         conditionCases: readConditionCases(config),
         conditionDefaultEdge: readConditionDefaultEdge(config),
         conditionOutput: (config.output as string) ?? CONDITION_DEFAULT_TEMPLATE,
+        assignments: readAssignments(config),
       });
       setShowNodeSettingsModal(true);
     },
@@ -1182,6 +1202,8 @@ export default function LoopEditor() {
       config.subject = undefined;
       config.pattern = undefined;
       config.tag = undefined;
+    } else if (selectedNodeType === NodeType.SetVariable) {
+      config.assignments = assignments.map(({ name, value }) => ({ name, value }));
     }
 
     setNodes((currentNodes) =>
@@ -1231,6 +1253,7 @@ export default function LoopEditor() {
     conditionCases,
     conditionDefaultEdge,
     conditionOutput,
+    assignments,
     setNodes,
     setEdges,
     startCreateWorktree,
@@ -1258,6 +1281,7 @@ export default function LoopEditor() {
       setConditionCases(originalNodeConfig.conditionCases);
       setConditionDefaultEdge(originalNodeConfig.conditionDefaultEdge);
       setConditionOutput(originalNodeConfig.conditionOutput);
+      setAssignments(originalNodeConfig.assignments);
     }
 
     setSelectedNode(null);
@@ -1697,6 +1721,7 @@ export default function LoopEditor() {
                       conditionCases={conditionCases}
                       conditionDefaultEdge={conditionDefaultEdge}
                       conditionOutput={conditionOutput}
+                      assignments={assignments}
                       aiProviders={aiProviders}
                       availableAiTools={availableAiTools}
                       globalNames={globalNames}
@@ -1730,6 +1755,7 @@ export default function LoopEditor() {
                       onConditionCasesChange={setConditionCases}
                       onConditionDefaultEdgeChange={setConditionDefaultEdge}
                       onConditionOutputChange={setConditionOutput}
+                      onAssignmentsChange={setAssignments}
                     />
                   )}
 

@@ -521,7 +521,7 @@ public sealed class ChatService : IChatService
         + "{ applied, matchCount, validationErrors }: use get_loop_node + edit_loop_node_field for a "
         + "prompt/config tweak (plain-text find-and-replace, the server handles JSON escaping; "
         + "old_string must match exactly once), set_loop_node_field to overwrite a whole field "
-        + "(outputs, matchRules, cases and toolAllowlist take a JSON array), and "
+        + "(outputs, matchRules, cases, toolAllowlist and assignments take a JSON array), and "
         + "edit_loop_file for structural nudges (edges, ids). update_current_loop (full replacement) "
         + "is a last resort. Every edit applies to the live canvas immediately but is transient — only "
         + "the human can save. The authoring guide below is sent once for this session; call "

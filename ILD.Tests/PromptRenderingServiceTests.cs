@@ -44,6 +44,13 @@ public class PromptRenderingServiceTests
 
         public Task SetLoopVariable(string name, string value) => _db.LoopRuns.SetVariableAsync(Id, name, value);
 
+        /// <summary>A variable row written directly, as a build that stored names case-sensitively could leave it.</summary>
+        public void SeedLegacyVariable(string name, string value, DateTime updatedAt)
+        {
+            _db.Context.LoopRunVariables.Add(new LoopRunVariable { LoopRunId = Id, Name = name, Value = value, CreatedAt = updatedAt, UpdatedAt = updatedAt });
+            _db.Context.SaveChanges();
+        }
+
         /// <summary>Creates or changes a global variable, as the Global Variables page does.</summary>
         public void SetGlobal(string name, string value)
         {
@@ -170,5 +177,16 @@ public class PromptRenderingServiceTests
         run.SetGlobal("Rules", "Mention {{WorkItem.Title}} and {{Global.Rules}}");
 
         Assert.Equal("Mention {{WorkItem.Title}} and {{Global.Rules}}", await run.RenderAsync("{{Global.Rules}}"));
+    }
+
+    [Fact]
+    public async Task A_run_holding_names_that_differ_only_in_case_renders_the_most_recently_updated_value()
+    {
+        using var run = new Run();
+        run.SeedLegacyVariable("Phase", "build", new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        run.SeedLegacyVariable("phase", "review", new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+        run.SeedLegacyVariable("PHASE", "plan", new DateTime(2025, 12, 31, 0, 0, 0, DateTimeKind.Utc));
+
+        Assert.Equal("review|review", await run.RenderAsync("{{Var.phase}}|{{Var.Phase}}"));
     }
 }

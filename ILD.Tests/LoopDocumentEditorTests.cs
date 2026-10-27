@@ -320,11 +320,13 @@ public class LoopDocumentEditorTests
         "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Live\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
         "\"nodes\":[" +
         "{\"id\":\"start\",\"type\":\"Start\",\"label\":\"Start\",\"config\":{}}," +
+        "{\"id\":\"keep\",\"type\":\"SetVariable\",\"label\":\"Keep\",\"config\":{\"assignments\":[{\"name\":\"phase\",\"value\":\"build\"}]}}," +
         "{\"id\":\"ai\",\"type\":\"AI\",\"label\":\"Reviewer\",\"config\":{\"prompt\":\"Review it\",\"outputs\":[{\"name\":\"reject\"}]}}," +
         "{\"id\":\"gate\",\"type\":\"Condition\",\"label\":\"Gate\",\"config\":{\"cases\":[{\"variant\":\"PrExists\",\"edgeName\":\"has-pr\"}],\"defaultEdge\":\"otherwise\",\"outputs\":[{\"name\":\"has-pr\"},{\"name\":\"otherwise\"}]}}," +
         "{\"id\":\"cleanup\",\"type\":\"Cleanup\",\"label\":\"Cleanup\",\"config\":{}}]," +
         "\"edges\":[" +
-        "{\"id\":\"e1\",\"sourceNodeId\":\"start\",\"targetNodeId\":\"ai\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
+        "{\"id\":\"e1\",\"sourceNodeId\":\"start\",\"targetNodeId\":\"keep\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
+        "{\"id\":\"e0\",\"sourceNodeId\":\"keep\",\"targetNodeId\":\"ai\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
         "{\"id\":\"e2\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"gate\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
         "{\"id\":\"e3\",\"sourceNodeId\":\"gate\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"has-pr\"}," +
         "{\"id\":\"e4\",\"sourceNodeId\":\"gate\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"otherwise\"}," +
@@ -335,6 +337,7 @@ public class LoopDocumentEditorTests
     [InlineData("ai", "matchRules", "[{\"pattern\":\"REJECT\",\"edgeName\":\"reject\"}]")]
     [InlineData("ai", "toolAllowlist", "[\"read\",\"write\"]")]
     [InlineData("gate", "cases", "[{\"variant\":\"HasTag\",\"tag\":\"urgent\",\"edgeName\":\"has-pr\"}]")]
+    [InlineData("keep", "assignments", "[{\"name\":\"phase\",\"value\":\"review\"}]")]
     public void SetNodeField_stores_a_structured_field_as_json(string nodeId, string field, string value)
     {
         var result = LoopDocumentEditor.SetNodeField(StructuredDocument, nodeId, field, value);

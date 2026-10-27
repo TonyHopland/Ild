@@ -92,6 +92,18 @@ internal static class NodeConfig
         public string? Template { get; init; }
     }
 
+    /// <summary>One loop variable a Set Variable node writes: its name and a templated value.</summary>
+    public sealed record Assignment
+    {
+        public string? Name { get; init; }
+        public string? Value { get; init; }
+    }
+
+    public sealed record SetVariable
+    {
+        public List<Assignment>? Assignments { get; init; }
+    }
+
     public sealed record Pr
     {
         public string? Prompt { get; init; }

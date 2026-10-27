@@ -233,20 +233,25 @@ public class LoopRunStore : ILoopRunStore
     }
 
     public async Task<IReadOnlyList<LoopRunVariable>> GetVariablesAsync(Guid runId)
+    {
         // AsNoTracking so a long-lived engine context (reused across every node
         // in a run, see LoopEngine) reads fresh column values from the row each
         // time instead of EF identity resolution handing back an already-tracked
         // instance with a stale in-memory Value — the set_loop_variable MCP tool
         // writes variables from a separate scope/process. This mirrors ReloadAsync's
-        // guard for LoopRun. Assumes all variable writes happen out-of-scope (via
-        // SetVariableAsync's own tracked path); if a future in-engine node ever
-        // writes a variable and reads it back before SaveChanges, this read would
-        // miss that pending change.
-        => await _db.LoopRunVariables
+        // guard for LoopRun.
+        var rows = await _db.LoopRunVariables
             .AsNoTracking()
             .Where(v => v.LoopRunId == runId)
-            .OrderBy(v => v.Name)
             .ToListAsync();
+        // A run written before names were matched ignoring case can hold names
+        // that differ only in case; the most recently updated one is the variable.
+        return rows
+            .GroupBy(v => v.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.MaxBy(v => v.UpdatedAt ?? v.CreatedAt)!)
+            .OrderBy(v => v.Name, StringComparer.Ordinal)
+            .ToList();
+    }
 
     public Task<Guid?> GetRunningNodeIdAsync(Guid runId)
         => _db.LoopRunNodes
@@ -264,78 +269,123 @@ public class LoopRunStore : ILoopRunStore
             .Select(rn => (Guid?)rn.LoopNodeId)
             .FirstOrDefaultAsync();
 
-    public async Task SetVariableAsync(Guid runId, string name, string value)
+    public async Task<VariableWriteEffect> SetVariableAsync(Guid runId, string name, string value)
+        => (await SetVariablesAsync(runId, [new VariableAssignment(name, value)]))[0];
+
+    public async Task<IReadOnlyList<VariableWriteEffect>> SetVariablesAsync(Guid runId, IReadOnlyList<VariableAssignment> assignments)
     {
-        value = AppDbContext.WithoutNul(value);
         var runningNodeId = await GetRunningNodeIdAsync(runId);
 
-        // The history row must name the value this write actually replaced, so
-        // the replace is a compare-and-swap on the value read: a concurrent write
-        // to the same variable in between makes it miss, and it re-reads.
+        // Each history row must name the value its write actually replaced, so a
+        // replace is a compare-and-swap on the value read: a concurrent write to
+        // the same variable in between makes it miss, and the whole batch is
+        // rolled back and tried again. New rows are saved once, at the end, so a
+        // miss leaves nothing of this context flushed into the rolled-back work.
         for (var attempt = 0; attempt < 5; attempt++)
         {
+            // Rolled back or committed, what an attempt added must not stay on a
+            // context the engine keeps for the whole run: its next save would
+            // write a rolled-back row after all.
+            var added = new List<object>();
+            var created = new Dictionary<string, LoopRunVariable>(StringComparer.OrdinalIgnoreCase);
             await using var tx = await _db.Database.BeginTransactionAsync();
-            var previousValue = await _db.LoopRunVariables
-                .AsNoTracking()
-                .Where(v => v.LoopRunId == runId && v.Name == name)
-                .Select(v => v.Value)
-                .FirstOrDefaultAsync();
-
-            DbUpdateException? createFailure = null;
-            bool applied;
-            if (previousValue is not null)
+            try
             {
-                applied = await _db.LoopRunVariables
-                    .Where(v => v.LoopRunId == runId && v.Name == name && v.Value == previousValue)
-                    .ExecuteUpdateAsync(s => s
-                        .SetProperty(v => v.Value, value)
-                        .SetProperty(v => v.UpdatedAt, DateTime.UtcNow)) == 1;
-            }
-            else
-            {
-                var created = new LoopRunVariable { LoopRunId = runId, Name = name, Value = value };
-                _db.LoopRunVariables.Add(created);
-                try
+                var effects = new List<VariableWriteEffect>();
+                foreach (var assignment in assignments)
                 {
-                    await _db.SaveChangesAsync();
-                    applied = true;
-                }
-                catch (DbUpdateException ex)
-                {
-                    _db.Entry(created).State = EntityState.Detached;
-                    createFailure = ex;
-                    applied = false;
-                }
-            }
+                    var value = AppDbContext.WithoutNul(assignment.Value);
+                    string? storedName = null;
+                    string? previousValue = null;
+                    if (created.TryGetValue(assignment.Name, out var pending))
+                    {
+                        (storedName, previousValue) = (pending.Name, pending.Value);
+                        pending.Value = value;
+                    }
+                    else
+                    {
+                        // {{Var.X}} reads names ignoring case, so a write matches the
+                        // same way; lower() is translated on PostgreSQL and SQLite alike.
+                        var lowered = assignment.Name.ToLowerInvariant();
+                        var existing = await _db.LoopRunVariables
+                            .AsNoTracking()
+                            .Where(v => v.LoopRunId == runId && v.Name.ToLower() == lowered)
+                            .OrderByDescending(v => v.UpdatedAt ?? v.CreatedAt)
+                            .Select(v => new { v.Name, v.Value })
+                            .FirstOrDefaultAsync();
+                        if (existing is not null)
+                        {
+                            (storedName, previousValue) = (existing.Name, existing.Value);
+                            var swapped = await _db.LoopRunVariables
+                                .Where(v => v.LoopRunId == runId && v.Name == existing.Name && v.Value == existing.Value)
+                                .ExecuteUpdateAsync(s => s
+                                    .SetProperty(v => v.Value, value)
+                                    .SetProperty(v => v.UpdatedAt, DateTime.UtcNow)) == 1;
+                            if (!swapped) throw new VariableChangedUnderneathException();
+                        }
+                        else
+                        {
+                            var row = new LoopRunVariable { LoopRunId = runId, Name = assignment.Name, Value = value };
+                            _db.LoopRunVariables.Add(row);
+                            added.Add(row);
+                            created[assignment.Name] = row;
+                        }
+                    }
 
-            if (!applied)
+                    var write = new LoopRunVariableWrite
+                    {
+                        LoopRunId = runId,
+                        RunNodeId = runningNodeId,
+                        Name = storedName ?? assignment.Name,
+                        Value = value,
+                        PreviousValue = previousValue,
+                        WrittenAt = DateTime.UtcNow,
+                    };
+                    _db.LoopRunVariableWrites.Add(write);
+                    added.Add(write);
+                    effects.Add(storedName is null ? VariableWriteEffect.Created
+                        : previousValue == value ? VariableWriteEffect.Unchanged
+                        : VariableWriteEffect.Changed);
+                }
+
+                await _db.SaveChangesAsync();
+                await tx.CommitAsync();
+                Detach(added);
+                return effects;
+            }
+            catch (VariableChangedUnderneathException)
             {
+                Detach(added);
+                await tx.RollbackAsync();
+            }
+            catch (DbUpdateException ex) when (created.Count > 0)
+            {
+                Detach(added);
                 await tx.RollbackAsync();
                 // A create only loses to another write creating the same variable;
-                // if it still does not exist, the failure was something else.
-                if (createFailure is not null
-                    && !await _db.LoopRunVariables.AnyAsync(v => v.LoopRunId == runId && v.Name == name))
-                    ExceptionDispatchInfo.Throw(createFailure);
-                continue;
+                // if none of them exists now, the failure was something else.
+                var lowered = created.Keys.Select(n => n.ToLowerInvariant()).ToList();
+                if (!await _db.LoopRunVariables.AnyAsync(v => v.LoopRunId == runId && lowered.Contains(v.Name.ToLower())))
+                    ExceptionDispatchInfo.Throw(ex);
             }
-
-            _db.LoopRunVariableWrites.Add(new LoopRunVariableWrite
+            catch
             {
-                LoopRunId = runId,
-                RunNodeId = runningNodeId,
-                Name = name,
-                Value = value,
-                PreviousValue = previousValue,
-                WrittenAt = DateTime.UtcNow,
-            });
-            await _db.SaveChangesAsync();
-            await tx.CommitAsync();
-            return;
+                Detach(added);
+                throw;
+            }
         }
 
         throw new InvalidOperationException(
-            $"Variable '{name}' kept changing underneath this write; giving up after 5 attempts.");
+            $"Variables {string.Join(", ", assignments.Select(a => $"'{a.Name}'"))} kept changing underneath this write; giving up after 5 attempts.");
     }
+
+    private void Detach(IEnumerable<object> entities)
+    {
+        foreach (var entity in entities)
+            _db.Entry(entity).State = EntityState.Detached;
+    }
+
+    private sealed class VariableChangedUnderneathException : Exception;
 
     public async Task<IReadOnlyList<TurnVariableChange>> GetTurnVariableChangesForWorkItemAsync(string workItemId)
     {

@@ -254,6 +254,10 @@ public class LoopTemplateValidatorTests
         return node;
     }
 
+    /// <summary>Gives a Set Variable node the one assignment it needs to be valid; other nodes are returned as they are.</summary>
+    private static LoopNodeDto Valid(LoopNodeDto node)
+        => node.NodeType == "SetVariable" ? WithRawConfig(node, "assignments", """[{"name":"phase","value":"review"}]""") : node;
+
     /// <summary>Sets a config key to raw JSON, the way a request body or a loop document delivers it.</summary>
     private static LoopNodeDto WithRawConfig(LoopNodeDto node, string key, string json)
     {
@@ -262,11 +266,39 @@ public class LoopTemplateValidatorTests
         return node;
     }
 
-    [Fact]
-    public void Custom_edge_on_non_human_ai_pr_node_is_invalid()
+    [Theory]
+    [InlineData(null, "at least one assignment")]
+    [InlineData("\"phase\"", "at least one assignment")]
+    [InlineData("[]", "at least one assignment")]
+    [InlineData("[\"phase\"]", "assignment 1")]
+    [InlineData("""[{"value":"x"}]""", "assignment 1")]
+    [InlineData("""[{"name":"ok","value":"x"},{"name":"9lives","value":"x"}]""", "assignment 2")]
+    [InlineData("""[{"name":" phase","value":"x"}]""", "assignment 1")]
+    [InlineData("""[{"name":"bad-name","value":"x"}]""", "assignment 1")]
+    [InlineData("""[{"name":"a12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678","value":"x"}]""", "assignment 1")]
+    [InlineData("""[{"name":"Phase","value":"a"},{"name":"phase","value":"b"}]""", "assignment 2")]
+    [InlineData("""[{"name":"phase","value":"{{Bogus.Thing}}"}]""", "Bogus.Thing")]
+    [InlineData("""[{"name":"ok"},{"name":"phase","value":3}]""", "assignment 2")]
+    public void A_set_variable_node_with_invalid_assignments_is_refused(string? assignments, string named)
+    {
+        var keep = Node("keep", "SetVariable");
+        if (assignments is not null) WithRawConfig(keep, "assignments", assignments);
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), keep, Node("c", "Cleanup") },
+            new() { Edge("s", "keep"), Edge("keep", "c") });
+
+        var errs = LoopTemplateValidator.Validate(g);
+
+        Assert.Contains(errs, e => e.Contains("keep") && e.Contains(named));
+    }
+
+    [Theory]
+    [InlineData("Cmd")]
+    [InlineData("SetVariable")]
+    public void Custom_edge_on_non_human_ai_pr_node_is_invalid(string type)
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),
-            new() { Node("s", "Start"), Node("build", "Cmd"), Node("c", "Cleanup") },
+            new() { Node("s", "Start"), Valid(Node("build", type)), Node("c", "Cleanup") },
             new() { Edge("s", "build"), Edge("build", "c"), Edge("build", "c", "Custom", "Retry") });
         var errs = LoopTemplateValidator.Validate(g);
         Assert.Contains(errs, e => e.Contains("build") && e.Contains("Retry"));
@@ -629,7 +661,7 @@ public class LoopTemplateValidatorTests
 
     private static LoopTemplateGraph SingleStepGraph(string type, params string[] outputs)
     {
-        var node = Declare(Node("step", type, type == "Prompt" ? "go" : null), outputs);
+        var node = Declare(Valid(Node("step", type, type == "Prompt" ? "go" : null)), outputs);
         return type == "Start"
             ? new LoopTemplateGraph(Guid.NewGuid(), new() { node, Node("c", "Cleanup") }, new() { Edge("step", "c") })
             : new LoopTemplateGraph(Guid.NewGuid(),
@@ -640,6 +672,7 @@ public class LoopTemplateValidatorTests
     [Theory]
     [InlineData("Start")]
     [InlineData("Cmd")]
+    [InlineData("SetVariable")]
     [InlineData("Prompt")]
     public void Nodes_without_named_outputs_may_declare_success_and_failure(string type)
     {
@@ -649,6 +682,7 @@ public class LoopTemplateValidatorTests
     [Theory]
     [InlineData("Start")]
     [InlineData("Cmd")]
+    [InlineData("SetVariable")]
     [InlineData("Prompt")]
     public void Nodes_without_named_outputs_may_not_declare_one(string type)
     {

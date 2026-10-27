@@ -725,7 +725,7 @@
               ]
             },
             "value": {
-              "description": "The field's whole new value as text; a JSON array as text for outputs, matchRules, cases and toolAllowlist (setNodeField).",
+              "description": "The field's whole new value as text; a JSON array as text for outputs, matchRules, cases, toolAllowlist and assignments (setNodeField).",
               "type": [
                 "string",
                 "null"
@@ -920,11 +920,11 @@
         "type": "string"
       },
       "field": {
-        "description": "The config field to overwrite, e.g. 'prompt', 'command', or a structured field: 'outputs', 'matchRules', 'cases', 'toolAllowlist'.",
+        "description": "The config field to overwrite, e.g. 'prompt', 'command', or a structured field: 'outputs', 'matchRules', 'cases', 'toolAllowlist', 'assignments'.",
         "type": "string"
       },
       "value": {
-        "description": "The new value: the field's text, or for outputs/matchRules/cases/toolAllowlist the whole array as JSON.",
+        "description": "The new value: the field's text, or for outputs/matchRules/cases/toolAllowlist/assignments the whole array as JSON.",
         "type": "string"
       }
     },

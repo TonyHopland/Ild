@@ -90,6 +90,7 @@ public class LoopEngineGlobalVariableHaltTests
         { NodeType.AI, """{"prompt":"Follow {{Global.Rules}}"}""" },
         { NodeType.Human, """{"prompt":"Check against {{Global.Rules}}"}""" },
         { NodeType.Prompt, """{"prompt":"{{Global.Rules}}"}""" },
+        { NodeType.SetVariable, """{"assignments":[{"name":"rules","value":"seeded from {{Global.Rules}}"}]}""" },
         { NodeType.PR, """{"prompt":"Review with {{Global.Rules}}"}""" },
         { NodeType.PR, """{"prompt":"Open it","prDescriptionTemplate":"Written per {{Global.Rules}}"}""" },
         { NodeType.Condition, """{"output":"{{ Global.rules }}","cases":[],"defaultEdge":"Default"}""" },

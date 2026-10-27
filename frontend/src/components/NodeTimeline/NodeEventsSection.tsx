@@ -13,6 +13,7 @@ const eventTypeColors: Record<string, string> = {
   HumanFeedbackRequested: "#f59e0b",
   HumanFeedbackReceived: "#22c55e",
   RecoveryTriggered: "#f59e0b",
+  VariableSet: "#06b6d4",
   Error: "#ef4444",
 };
 
