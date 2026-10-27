@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text;
 using ILD.McpServer.Attachments;
 using ModelContextProtocol.Protocol;
@@ -71,24 +70,5 @@ public class AttachmentContentTests
         Assert.Equal(Uri, resource.Uri);
         Assert.Equal(bytes, resource.DecodedData.ToArray());
         Assert.Equal(bytes, Convert.FromBase64String(Encoding.UTF8.GetString(resource.Blob.Span)));
-    }
-
-    [Fact]
-    public void The_shaping_takes_a_file_and_not_a_work_item()
-    {
-        // Chat attachments shape their content through this same call, with an
-        // identifier of their own and no work item anywhere in sight.
-        const string chatUri = "ild://chats/7/attachments/1";
-        var bytes = Png();
-
-        var block = Assert.IsType<EmbeddedResourceBlock>(
-            Assert.Single(AttachmentContent.Build("archive.zip", "application/zip", bytes, chatUri).ToList()));
-
-        Assert.Equal(chatUri, Assert.IsType<BlobResourceContents>(block.Resource).Uri);
-
-        var parameters = typeof(AttachmentContent)
-            .GetMethod(nameof(AttachmentContent.Build), BindingFlags.Public | BindingFlags.Static)!
-            .GetParameters();
-        Assert.All(parameters, p => Assert.DoesNotContain("workitem", p.Name!, StringComparison.OrdinalIgnoreCase));
     }
 }

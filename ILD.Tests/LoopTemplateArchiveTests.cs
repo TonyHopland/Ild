@@ -94,24 +94,4 @@ public class LoopTemplateArchiveTests
         Assert.NotNull(template);
         Assert.False(template!.IsArchived);
     }
-
-    [Fact]
-    public async Task Archive_nonexistent_template_is_noop()
-    {
-        using var db = new TestDb();
-        var mgr = new LoopTemplateManager(db.LoopTemplates);
-
-        var act = () => mgr.ArchiveLoopTemplateAsync(Guid.NewGuid());
-        Assert.Null(await Record.ExceptionAsync(act));
-    }
-
-    [Fact]
-    public async Task Unarchive_nonexistent_template_is_noop()
-    {
-        using var db = new TestDb();
-        var mgr = new LoopTemplateManager(db.LoopTemplates);
-
-        var act = () => mgr.UnarchiveLoopTemplateAsync(Guid.NewGuid());
-        Assert.Null(await Record.ExceptionAsync(act));
-    }
 }

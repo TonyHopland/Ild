@@ -65,7 +65,7 @@ public sealed class InteractiveShellSessionPackageFeedTests : IDisposable
     [Fact]
     public async Task The_shell_gets_the_feeds_and_their_file_goes_with_the_session()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux()) Assert.Skip("needs a Linux shell session");
         var feeds = new[]
         {
             PackageFeedCredentialFilesTests.Feed("company", "https://example-org.pkgs.visualstudio.com/_packaging/company", "shellPAT-44dd"),
@@ -84,7 +84,7 @@ public sealed class InteractiveShellSessionPackageFeedTests : IDisposable
     [Fact]
     public async Task Without_feeds_the_shell_sees_no_feed_variable()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux()) Assert.Skip("needs a Linux shell session");
 
         var output = await RunShellAsync([]);
 

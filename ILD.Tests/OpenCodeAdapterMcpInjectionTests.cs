@@ -112,17 +112,13 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
     }
 
     [Fact]
-    public void BuildIldMcpEntry_returns_null_when_no_dll_can_be_found()
+    public void BuildIldMcpEntry_without_a_run_context_is_a_local_entry_carrying_no_run_id()
     {
         _environment.Set("ILD_MCP_SERVER_DLL", "/nonexistent/path/ild-mcp-server.dll");
 
-        // We can't easily defeat the upward-walk fallback in a real repo, but
-        // the override path being non-existent should at least drop the value.
-        // The fallback may still find a real build artifact; in that case the
-        // entry is returned and we just verify it has the right shape.
         var entry = OpenCodeAdapter.BuildIldMcpEntry(runContext: null, environment: _environment);
-        if (entry == null) return; // No build artifact present anywhere — acceptable.
 
+        Assert.NotNull(entry);
         Assert.Equal("local", entry["type"]);
         var env = (Dictionary<string, object?>)entry["environment"]!;
         Assert.False(env.ContainsKey("ILD_LOOP_RUN_ID"));

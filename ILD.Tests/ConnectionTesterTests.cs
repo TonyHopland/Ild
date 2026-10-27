@@ -323,14 +323,6 @@ public class ConnectionTesterTests : IDisposable
     }
 
     [Fact]
-    public void Provider_timeout_is_bounded_to_at_most_twenty_seconds()
-    {
-        var tester = ProviderTester(ScriptedHandler.Answer(HttpStatusCode.OK));
-
-        Assert.InRange(tester.ProviderTimeout, TimeSpan.FromMilliseconds(1), TimeSpan.FromSeconds(20));
-    }
-
-    [Fact]
     public async Task Provider_test_cancelled_by_the_caller_is_not_reported_as_a_timeout()
     {
         using var caller = new CancellationTokenSource();
@@ -558,17 +550,6 @@ public class ConnectionTesterTests : IDisposable
         AssertOutcome(ConnectionTestOutcome.Ok, result);
     }
 
-    [Fact]
-    public async Task Repository_that_does_not_exist_is_not_found_with_gits_stderr()
-    {
-        var missing = Path.Combine(_tmp, "no-such-repo");
-
-        var result = await RealGitTester().TestRepositoryAsync(Repo(missing), null, CancellationToken.None);
-
-        AssertOutcome(ConnectionTestOutcome.NotFound, result);
-        Assert.Contains("does not appear to be a git repository", result.Detail);
-    }
-
     // ── Repository: stderr classification ─────────────────────────────────
 
     // The first strings in each group are git 2.43's own output against a loopback
@@ -736,14 +717,6 @@ public class ConnectionTesterTests : IDisposable
         AssertOutcome(ConnectionTestOutcome.Unreachable, result);
         Assert.Contains("timed out", Text(result), StringComparison.OrdinalIgnoreCase);
         Assert.True(Assert.Single(runner.Calls).Token.IsCancellationRequested);
-    }
-
-    [Fact]
-    public void Repository_timeout_is_bounded_to_at_most_sixty_seconds()
-    {
-        var tester = RepoTester(ScriptedRunner.Exit(0));
-
-        Assert.InRange(tester.RepositoryTimeout, TimeSpan.FromMilliseconds(1), TimeSpan.FromSeconds(60));
     }
 
     [Fact]

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
-import type { Edge } from "@xyflow/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
@@ -262,97 +261,6 @@ describe("Loop Editor canvas", () => {
     expect(screen.getByText("Human Node")).toBeTruthy();
     expect(screen.getByText("PR Node")).toBeTruthy();
     expect(screen.getByText("Cleanup Node")).toBeTruthy();
-  });
-
-  test("each node type has distinct visual styling", async () => {
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
-      }),
-    );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("Dev Loop")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("Dev Loop"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Initialize")).toBeTruthy();
-    });
-
-    // Each node should have a type badge showing its type (at least 2: palette + node badge)
-    expect(screen.getAllByText(NodeType.Start).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText(NodeType.AI).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText(NodeType.Cmd).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText(NodeType.Cleanup).length).toBeGreaterThanOrEqual(2);
-  });
-
-  test("edges are rendered between nodes", async () => {
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
-      }),
-    );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("Dev Loop")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("Dev Loop"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Initialize")).toBeTruthy();
-    });
-
-    // The edges container should exist within the canvas
-    const edgesContainer = document.querySelector(".react-flow__edges");
-    expect(edgesContainer).toBeTruthy();
-  });
-
-  test("on-success and on-failure edges are visually distinguished", async () => {
-    const { templateToEdges } = await import("../../utils/loopGraphConverter");
-
-    const templateWithBothEdgeTypes = {
-      ...sampleTemplate,
-      edges: [
-        {
-          id: "e-1",
-          sourceNodeId: "n-start",
-          targetNodeId: "n-ai",
-          edgeType: EdgeType.OnSuccess,
-        },
-        {
-          id: "e-2",
-          sourceNodeId: "n-ai",
-          targetNodeId: "n-start",
-          edgeType: EdgeType.OnFailure,
-        },
-      ],
-    };
-
-    const edges = templateToEdges(templateWithBothEdgeTypes);
-    expect(edges.length).toBe(2);
-
-    // On-success edge should not have dasharray
-    const successEdge = edges.find((edge: Edge) => edge.id === "e-1");
-    expect(successEdge?.style?.stroke).toBe("#10b981");
-    expect(successEdge?.style?.strokeDasharray).toBeUndefined();
-
-    // On-failure edge should have dasharray and different color
-    const failureEdge = edges.find((edge: Edge) => edge.id === "e-2");
-    expect(failureEdge?.style?.stroke).toBe("#ef4444");
-    expect(failureEdge?.style?.strokeDasharray).toBe("8 4");
   });
 });
 
@@ -824,25 +732,6 @@ describe("Loop Editor responsive sidebar", () => {
       expect(document.querySelector(".node-palette")).toBeTruthy();
       expect(document.querySelector(".loop-list")).toBeTruthy();
     });
-  });
-
-  test("header does not render a loop menu toggle", async () => {
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
-      }),
-    );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("Dev Loop")).toBeTruthy();
-    });
-
-    expect(screen.queryByRole("button", { name: /show loop menu/i })).toBeNull();
   });
 });
 

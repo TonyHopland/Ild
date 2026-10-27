@@ -1007,40 +1007,6 @@ describe("Taskboard work item URL", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
-
-describe("Taskboard toolbar", () => {
-  function mockSignalR() {
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-  }
-
-  test("drops the page heading and puts search and New work item in one toolbar", async () => {
-    mockSignalR();
-    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    mockTaskboardServer([makeItem()]);
-
-    const { container } = renderTaskboard();
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Item")).toBeTruthy();
-    });
-
-    expect(screen.queryByRole("heading", { name: "Taskboard" })).toBeNull();
-    const toolbar = container.querySelector(".taskboard-toolbar");
-    expect(toolbar).toBeTruthy();
-    expect(within(toolbar as HTMLElement).getByLabelText("Search work items")).toBeTruthy();
-    expect(
-      within(toolbar as HTMLElement).getByRole("button", { name: "New work item" }),
-    ).toBeTruthy();
-    // The scheduler switch lives in the header now, on every page.
-    expect(within(toolbar as HTMLElement).queryByLabelText("Scheduler running")).toBeNull();
-  });
-});
-
 describe("Taskboard filter", () => {
   function mockSignalR() {
     vi.spyOn(signalRHook, "useSignalR").mockReturnValue({

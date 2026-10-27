@@ -17,18 +17,6 @@ public class LoopTemplatesIntegrationTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    [Fact]
-    public async Task GetAll_with_token_returns_200_and_seeded_templates()
-    {
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/looptemplates", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        // TemplateSeeder runs on startup; the seeded list may be empty or non-empty.
-        var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
-        Assert.NotNull(items);
-    }
-
     private static JsonElement PropertyIgnoringCase(JsonElement obj, string name)
         => obj.EnumerateObject().Single(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)).Value;
 

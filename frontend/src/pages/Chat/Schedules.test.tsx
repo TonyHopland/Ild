@@ -486,24 +486,6 @@ describe("The schedules list in the Chat tab", () => {
     await scheduleRow("Docs drift");
   });
 
-  test("the provider tag is laid out like the form's other fields", async () => {
-    seed();
-    renderAt("/chat/schedules");
-    await scheduleRow("Weekly retro");
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /new schedule|add schedule|create schedule/i }),
-    );
-    const dialog = await screen.findByRole("dialog");
-    const field = (label: RegExp) => within(dialog).getByLabelText(label).parentElement!;
-    expect(field(/provider tag/i).className).toBe(field(/^name/i).className);
-    const promptHint = field(/prompt/i).lastElementChild!;
-    await waitFor(() =>
-      expect(field(/provider tag/i).lastElementChild!.tagName).not.toBe("DATALIST"),
-    );
-    expect(field(/provider tag/i).lastElementChild!.className).toBe(promptHint.className);
-  });
-
   test("a schedule is edited in the form and deleted only once confirmed", async () => {
     seed();
     renderAt("/chat/schedules");

@@ -38,6 +38,8 @@ public class LoopRunStoreGetByIdTests
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
             StartedAt = DateTime.UtcNow,
+            WorktreePath = "/tmp/worktrees/test",
+            BranchName = "feature/branch",
         };
         await db.LoopRuns.CreateRunAsync(run);
 
@@ -45,7 +47,10 @@ public class LoopRunStoreGetByIdTests
         var result = await freshStore.GetByIdAsync(run.Id);
 
         Assert.NotNull(result);
-        Assert.NotNull(result!.LoopTemplateVersion);
+        Assert.Equal(wi, result!.WorkItemId);
+        Assert.Equal("/tmp/worktrees/test", result.WorktreePath);
+        Assert.Equal("feature/branch", result.BranchName);
+        Assert.NotNull(result.LoopTemplateVersion);
         Assert.Equal(ltv.Id, result.LoopTemplateVersion!.Id);
         Assert.Equal(1, result.LoopTemplateVersion.VersionNumber);
     }

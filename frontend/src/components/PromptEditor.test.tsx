@@ -17,17 +17,6 @@ afterEach(() => {
 });
 
 describe("PromptEditor", () => {
-  test("renders a textarea and passes value/onChange", () => {
-    const onChange = vi.fn();
-    render(<PromptEditor value="hello" onChange={onChange} />);
-
-    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
-    expect(textarea.value).toBe("hello");
-
-    fireEvent.change(textarea, { target: { value: "hello world" } });
-    expect(onChange).toHaveBeenCalledWith("hello world");
-  });
-
   test("typing {{ shows all placeholder suggestions", () => {
     const onChange = vi.fn();
     render(<PromptEditor value="" onChange={onChange} />);

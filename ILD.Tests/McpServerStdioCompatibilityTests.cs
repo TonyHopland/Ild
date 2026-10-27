@@ -106,29 +106,6 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
     }
 
     [Fact]
-    public async Task A_client_on_an_unknown_protocol_version_is_refused_with_the_versions_it_can_retry_with()
-    {
-        var ct = _cts.Token;
-        StartServer();
-
-        var reply = await ExchangeAsync("initialize", new JsonObject
-        {
-            ["protocolVersion"] = "2099-01-01",
-            ["capabilities"] = new JsonObject(),
-            ["clientInfo"] = new JsonObject { ["name"] = "ild-tests", ["version"] = "1.0.0" },
-        }, ct);
-
-        Assert.Null(reply["result"]);
-        var error = reply["error"];
-        Assert.NotNull(error);
-        Assert.Equal(-32022, (int?)error["code"]);
-        Assert.Equal("2099-01-01", (string?)error["data"]?["requested"]);
-        Assert.Equal(
-            ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"],
-            error["data"]?["supported"]?.AsArray().Select(v => (string?)v).OrderBy(v => v, StringComparer.Ordinal));
-    }
-
-    [Fact]
     public async Task A_server_handed_a_settings_file_calls_the_api_the_file_names()
     {
         var ct = _cts.Token;

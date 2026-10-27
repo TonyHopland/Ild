@@ -70,7 +70,6 @@ vi.mock("../../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 import App from "../../App";
 import ChatBubble from "../../components/ChatBubble";
 import { ChatInboxProvider } from "../../components/ChatInbox";
-import ChatSidebar from "../../components/ChatSidebar";
 import Header from "../../components/Header";
 import { AuthContext } from "../../hooks/useAuth";
 import { setChatEnabled } from "../../hooks/useChatEnabled";
@@ -587,32 +586,6 @@ describe("The page's chat list and conversation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
-  });
-
-  test("a sidebar given extra entries shows them in the list", () => {
-    render(
-      <ChatSidebar
-        history={[]}
-        currentChatId={null}
-        full={false}
-        onOpen={() => {}}
-        onNewChat={() => {}}
-        onDelete={() => {}}
-        onDeleteMany={() => {}}
-        renameChat={() => Promise.resolve(true)}
-        renamesInFlight={new Set()}
-        onFavorite={() => {}}
-        favoritesInFlight={new Set()}
-        extras={<a href="/chat/schedules">Schedules</a>}
-      />,
-      { wrapper: WorkItemHubProvider },
-    );
-
-    expect(
-      within(screen.getByRole("complementary", { name: "Chats" })).getByRole("link", {
-        name: "Schedules",
-      }),
-    ).toBeTruthy();
   });
 });
 

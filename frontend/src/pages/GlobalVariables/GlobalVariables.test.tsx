@@ -225,8 +225,8 @@ describe("Global Variables page", () => {
     renderPage();
 
     const before = open(within(await rowOf("review_rules")).getByRole("button", { name: /edit/i }));
-    const name = screen.queryByLabelText(/name/i) as HTMLInputElement | null;
-    if (name) expect(name.readOnly || name.disabled).toBe(true);
+    const name = screen.getByLabelText(/name/i) as HTMLInputElement;
+    expect(name.readOnly).toBe(true);
     const value = screen.getByLabelText(/value/i) as HTMLTextAreaElement;
     expect(value.value).toBe(rules.value);
     fireEvent.change(value, { target: { value: "Shorter." } });

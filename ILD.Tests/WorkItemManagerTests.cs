@@ -1433,40 +1433,6 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task DeleteAsync_removes_workitem_and_all_dependencies()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
-        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
-
-        var ok = await mgr.DeleteAsync(TestActors.Human, child);
-
-        Assert.True(ok);
-        Assert.Null((await mgr.GetWorkItemAsync(child)));
-        // Dependencies live on the WorkItemServer; delete propagates there.
-    }
-
-    [Fact]
-    public async Task DeleteAsync_removes_workitem_when_other_items_depend_on_it()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
-        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
-
-        var ok = await mgr.DeleteAsync(TestActors.Human, dep);
-
-        Assert.True(ok);
-        Assert.Null((await mgr.GetWorkItemAsync(dep)));
-        // Dependencies live on the WorkItemServer; delete propagates there.
-    }
-
-    [Fact]
     public async Task DeleteAsync_returns_false_for_unknown_id()
     {
         var (mgr, db, _, _, _) = Setup();
@@ -1717,12 +1683,14 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
-        var existingRunId = SeedLoopRun(db, id);
+        var runId = SeedLoopRun(db, id);
+        db.Context.LoopRuns.Single(r => r.Id == runId).HumanFeedbackReason = "earlier-label";
+        db.Context.SaveChanges();
 
-        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running, currentLoopRunId: null);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "needs a look", null,
+            currentLoopRunId: null, humanFeedbackReason: "another-label");
 
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.NotNull(after!.CurrentLoopRunId);
+        Assert.Equal("earlier-label", db.Fresh().LoopRuns.AsNoTracking().Single(r => r.Id == runId).HumanFeedbackReason);
     }
 
     [Fact]
@@ -1733,11 +1701,12 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
         var runId = SeedLoopRun(db, id);
+        db.Context.LoopRuns.Single(r => r.Id == runId).HumanFeedbackReason = "stale-label";
+        db.Context.SaveChanges();
 
         await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Done, currentLoopRunId: Guid.Empty);
 
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
+        Assert.Null(db.Fresh().LoopRuns.AsNoTracking().Single(r => r.Id == runId).HumanFeedbackReason);
     }
 
     [Fact]

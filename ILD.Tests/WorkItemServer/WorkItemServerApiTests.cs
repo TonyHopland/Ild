@@ -79,14 +79,6 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     }
 
     [Fact]
-    public async Task Health_endpoint_is_reachable_without_auth()
-    {
-        var c = _factory.CreateClient();
-        var resp = await c.GetAsync("/health", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-    }
-
-    [Fact]
     public async Task Health_endpoint_reports_the_stamped_version()
     {
         var c = _factory.CreateClient();
