@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { act, renderHook } from "@testing-library/react";
 import * as authServices from "../../services/auth";

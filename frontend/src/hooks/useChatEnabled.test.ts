@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, test } from "vite-plus/test";
 import { renderHook, act } from "@testing-library/react";
 import { isChatEnabled, setChatEnabled, useChatEnabled } from "./useChatEnabled";

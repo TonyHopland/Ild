@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, test } from "vite-plus/test";
 import { act, renderHook } from "@testing-library/react";
 import { WorkItemStatus } from "../types";

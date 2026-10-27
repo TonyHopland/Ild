@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act } from "@testing-library/react";
 import { useMediaQuery } from "./useMediaQuery";

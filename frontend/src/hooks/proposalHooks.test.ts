@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi, type MockInstance } from "vite-plus/test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useGlobalVariableProposals } from "./useGlobalVariableProposals";

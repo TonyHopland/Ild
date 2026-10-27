@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import {
   clampFabPosition,
