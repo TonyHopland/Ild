@@ -228,7 +228,7 @@ describe("human input suggestions in the Action tab", () => {
     expect(action().textContent).not.toContain("no longer open");
   });
 
-  test("a suggestion stays where it was made among the turns, not at the end", async () => {
+  test("renders the head, per-turn and open slots of the placement in thread order", async () => {
     mockServices([
       turn(1, "ai", "First question", "2026-10-01T09:00:00Z"),
       turn(2, "human", "First answer", "2026-10-01T11:00:00Z"),
@@ -236,8 +236,17 @@ describe("human input suggestions in the Action tab", () => {
     ]);
     stubSuggestions({
       list: [
-        suggestion("About the first", { status: "Stale", createdAt: "2026-10-01T10:00:00Z" }),
-        suggestion("About the second", { createdAt: "2026-10-01T12:30:00Z" }),
+        suggestion("Before all", {
+          status: "Stale",
+          runNodeId: "exec-0",
+          createdAt: "2026-10-01T08:00:00Z",
+        }),
+        suggestion("About the first", {
+          status: "Stale",
+          runNodeId: "exec-0",
+          createdAt: "2026-10-01T10:00:00Z",
+        }),
+        suggestion("About the second", { createdAt: "2026-10-01T11:30:00Z" }),
       ],
     });
 
@@ -245,10 +254,18 @@ describe("human input suggestions in the Action tab", () => {
 
     await waitFor(() => expect(action().textContent).toContain("About the second"));
     const order = documentOrder(
-      ["First question", "About the first", "First answer", "Second question", "About the second"],
+      [
+        "Before all",
+        "First question",
+        "About the first",
+        "First answer",
+        "Second question",
+        "About the second",
+      ],
       action(),
     );
     expect(order).toEqual([
+      "Before all",
       "First question",
       "About the first",
       "First answer",
