@@ -4,6 +4,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
 using ILD.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Moq;

@@ -32,6 +32,11 @@ public class PrFindingPutBackTests
         => new("review", id, $"PRRT_{id}", "r1", "src/A.cs", 10, body, "Copilot", Head,
             new DateTime(2026, 9, 21, 12, 0, 0, DateTimeKind.Utc), false, false);
 
+    private static RemotePrReviewLedger Fetched(params RemotePrReviewItem[] items)
+        => new(
+            new[] { new RemotePrReviewSummary("r1", "COMMENTED", "body", Head, DateTime.UtcNow, "Copilot", false) },
+            items, Head, null);
+
     private sealed class Harness : IDisposable
     {
         public TestDb Db { get; } = new();
@@ -70,7 +75,6 @@ public class PrFindingPutBackTests
             => Db.Fresh().LoopRuns.AsNoTracking().Where(r => r.Id == Run.Id).Select(column).Single();
 
         public void Dispose() => Db.Dispose();
-    }
     }
 
     [Fact]

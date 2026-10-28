@@ -76,7 +76,7 @@ public class PrQueuedWriteDrainTests
 
         public static async Task<Fixture> CreateAsync(IReadOnlyList<PrQueuedWrite> queued, string? ledger = null)
         {
-            using var f = await Fixture.CreateAsync();
+            var f = new Fixture();
             await f.InitAsync(queued, ledger);
             return f;
         }

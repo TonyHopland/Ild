@@ -60,7 +60,7 @@ public class PrOwnQueuedWriteTests
 
         public static async Task<Harness> CreateAsync()
         {
-            using var h = await Harness.CreateAsync();
+            var h = new Harness();
             h.Run = await h.AddRunAsync("wi-1");
             return h;
         }
@@ -529,6 +529,7 @@ public class PrOwnQueuedWriteTests
             DeliveredIds = new[] { PrCommentLedger.KeyFor("review", "11") },
             DeliveredHashes = new[] { hash },
         }));
+        var queued = await h.Service.ReplyAsync("wi-1", "11", "an answer to take back", h.Run.Id);
         Assert.Contains(hash, PrCommentLedgerJson.TryParse(h.LedgerJson)!.DeliveredHashes);
 
         Assert.True((await h.Service.WithdrawAsync("wi-1", queued.Id!, h.Run.Id, null)).Ok);
