@@ -1011,7 +1011,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var longBody = "First line of the body.\n" + new string('x', 400);
         var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
         {
-            title = "triage me",
+            title = $"triage me {repoId:N}",
             description = longBody,
             repositoryId = repoId.ToString(),
             tags = new[] { "backend-loop" },
@@ -1019,7 +1019,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         create.EnsureSuccessStatusCode();
 
         var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        var row = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
+        var row = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"triage me {repoId:N}");
 
         // No full body by default; a single-line, truncated preview stands in for it.
         Assert.Equal(JsonValueKind.Null, row.GetProperty("description").ValueKind);
@@ -1037,7 +1037,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
 
         // Opt back in to the full body for backward compatibility.
         var withBody = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems?includeDescription=true", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        var full = withBody.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
+        var full = withBody.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"triage me {repoId:N}");
         Assert.Equal(longBody, full.GetProperty("description").GetString());
     }
 
@@ -1088,10 +1088,10 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
-        var depId = await CreateAsync(client, "dep", null, repoId);
+        var depId = await CreateAsync(client, $"dep {repoId:N}", null, repoId);
         var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
         {
-            title = "child",
+            title = $"child {repoId:N}",
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = new[] { depId.ToString() },
@@ -1099,8 +1099,8 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         create.EnsureSuccessStatusCode();
 
         var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        var child = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "child");
-        var dep = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "dep");
+        var child = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"child {repoId:N}");
+        var dep = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"dep {repoId:N}");
 
         Assert.Equal(1, child.GetProperty("blockedByCount").GetInt32());
         Assert.Equal(depId, child.GetProperty("blockedBy")[0].GetString());
@@ -1118,11 +1118,11 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         const int depCount = 51;
         var depIds = new List<string>();
         for (var i = 0; i < depCount; i++)
-            depIds.Add(await CreateAsync(client, $"dep-{i}", null, repoId));
+            depIds.Add(await CreateAsync(client, $"dep-{i}-{repoId:N}", null, repoId));
 
         var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
         {
-            title = "hub",
+            title = $"hub {repoId:N}",
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = depIds,
@@ -1130,7 +1130,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         create.EnsureSuccessStatusCode();
 
         var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        var hub = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "hub");
+        var hub = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"hub {repoId:N}");
 
         Assert.Equal(depCount, hub.GetProperty("blockedByCount").GetInt32());
         Assert.Equal(50, hub.GetProperty("blockedBy").GetArrayLength()); // capped
