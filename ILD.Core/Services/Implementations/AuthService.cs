@@ -23,6 +23,10 @@ namespace ILD.Core.Services.Implementations;
 public class AuthService : IAuthService
 {
     private const int Pbkdf2Iterations = 100_000;
+
+    /// <summary>Test-only: replaces the production iteration count for passwords hashed afterwards. Verifying always uses the count stored in the hash.</summary>
+    internal static int? Pbkdf2IterationsOverride { get; set; }
+
     private const int SaltBytes = 16;
     private const int HashBytes = 32;
 
@@ -184,9 +188,10 @@ public class AuthService : IAuthService
 
     private static string HashPassword(string password)
     {
+        var iterations = Pbkdf2IterationsOverride ?? Pbkdf2Iterations;
         var salt = RandomNumberGenerator.GetBytes(SaltBytes);
-        var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, Pbkdf2Iterations, HashAlgorithmName.SHA256, HashBytes);
-        return $"{Pbkdf2Iterations}.{Convert.ToBase64String(salt)}.{Convert.ToBase64String(hash)}";
+        var hash = Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, HashBytes);
+        return $"{iterations}.{Convert.ToBase64String(salt)}.{Convert.ToBase64String(hash)}";
     }
 
     private static bool VerifyPassword(string password, string stored)
