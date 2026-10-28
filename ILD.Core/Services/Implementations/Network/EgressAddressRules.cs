@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using ILD.Data.Entities;
 
 namespace ILD.Core.Services.Implementations.Network;
 
@@ -18,9 +19,7 @@ namespace ILD.Core.Services.Implementations.Network;
 /// </summary>
 public static class EgressAddressRules
 {
-    public const int MaxStoredLength = 4096;
-
-    public static readonly IPNetwork[] Blocked =
+    private static readonly IPNetwork[] Blocked =
     {
         IPNetwork.Parse("0.0.0.0/8"),
         IPNetwork.Parse("10.0.0.0/8"),
@@ -70,7 +69,7 @@ public static class EgressAddressRules
         return false;
     }
 
-    public static bool TryNormalizeInternalPattern(string input, out string pattern, out string error)
+    private static bool TryNormalizeInternalPattern(string input, out string pattern, out string error)
     {
         if (!input.Contains('/'))
             return EgressRules.TryNormalizePattern(input, out pattern, out error);
@@ -110,9 +109,9 @@ public static class EgressAddressRules
         }
 
         var joined = string.Join('\n', patterns);
-        if (joined.Length > MaxStoredLength)
+        if (joined.Length > AppSetting.MaxValueLength)
         {
-            error = $"The list is too long: at most {MaxStoredLength} characters once saved";
+            error = $"The list is too long: at most {AppSetting.MaxValueLength} characters once saved";
             return false;
         }
         canonical = joined;
