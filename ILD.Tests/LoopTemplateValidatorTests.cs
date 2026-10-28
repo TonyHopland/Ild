@@ -112,9 +112,26 @@ public class LoopTemplateValidatorTests
     }
 
     [Theory]
+    [InlineData("{{WorkTree.File:src/main.cs}}")]
+    [InlineData("{{Var.phase}}")]
+    public void Prefix_placeholders_with_a_valid_argument_are_accepted(string placeholder)
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                Node("a", "AI", "File contents: " + placeholder),
+                Node("c", "Cleanup")
+            },
+            new() { Edge("s", "a"), Edge("a", "c") });
+
+        Assert.Empty(LoopTemplateValidator.Validate(g));
+    }
+
+    [Theory]
     [InlineData("{{Global.bad-name}}", "Global.bad-name")]
     [InlineData("{{Global.9lives}}", "Global.9lives")]
     [InlineData("{{Global.}}", "Global.")]
+    [InlineData("{{Var.bad-name}}", "Var.bad-name")]
     public void A_global_variable_placeholder_with_an_invalid_name_is_unknown(string placeholder, string named)
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),

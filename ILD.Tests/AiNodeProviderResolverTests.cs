@@ -27,6 +27,8 @@ public class AiNodeProviderResolverTests
     [InlineData("Nightly", RemoteAiProviderOverrideMode.OverrideAll)]
     [InlineData("Nightly", RemoteAiProviderOverrideMode.OverrideDefault)]
     [InlineData(null, RemoteAiProviderOverrideMode.OverrideDefault)]
+    [InlineData(null, RemoteAiProviderOverrideMode.None)]
+    [InlineData("  ", RemoteAiProviderOverrideMode.None)]
     public async Task With_no_default_provider_and_no_applicable_override_fails_naming_the_tag(
         string? tag, RemoteAiProviderOverrideMode mode)
     {
@@ -38,21 +40,23 @@ public class AiNodeProviderResolverTests
         Assert.Null(provider);
         Assert.NotNull(error);
         Assert.Contains("no default provider", error, StringComparison.OrdinalIgnoreCase);
-        if (tag is not null)
+        if (!string.IsNullOrWhiteSpace(tag))
             Assert.Contains(tag, error);
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task An_applicable_override_naming_no_provider_fails_naming_its_id(bool withDefault)
+    [InlineData(true, RemoteAiProviderOverrideMode.OverrideDefault)]
+    [InlineData(false, RemoteAiProviderOverrideMode.OverrideDefault)]
+    [InlineData(true, RemoteAiProviderOverrideMode.OverrideAll)]
+    [InlineData(false, RemoteAiProviderOverrideMode.OverrideAll)]
+    public async Task An_applicable_override_naming_no_provider_fails_naming_its_id(bool withDefault, RemoteAiProviderOverrideMode mode)
     {
         using var db = new TestDb();
         await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: withDefault);
         var missingId = Guid.NewGuid();
 
         var (provider, error) = await AiNodeProviderResolver.ResolveAsync(
-            db.Providers, "Nightly", RemoteAiProviderOverrideMode.OverrideDefault, missingId);
+            db.Providers, "Nightly", mode, missingId);
 
         Assert.Null(provider);
         Assert.NotNull(error);

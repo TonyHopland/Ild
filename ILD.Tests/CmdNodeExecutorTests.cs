@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
@@ -247,23 +246,26 @@ public class CmdNodeExecutorTests : IDisposable
     }
 
     [Fact]
-    public void The_cmd_spawn_routes_to_the_agent_uid_rather_than_only_dropping_caps()
+    public void The_cmd_command_crosses_to_the_agent_uid_with_the_orchestrators_secrets_stripped_and_egress_proxied()
     {
-        var source = Regex.Replace(
-            File.ReadAllText(Path.Combine(
-                RepositoryRoot(), "ILD.Core", "Services", "Implementations", "Executors", "CmdNodeExecutor.cs")),
-            @"//[^\n]*|/\*.*?\*/", "", RegexOptions.Singleline);
+        var psi = CmdNodeExecutor.ShellStartInfo("make test", "/work");
+        foreach (var key in AgentIsolation.SecretEnvironmentKeys.Concat(AgentIsolation.OrchestratorTopologyEnvKeys))
+            psi.Environment[key] = "inherited-" + key;
+        psi.Environment["GIT_AUTHOR_NAME"] = "ILD";
 
-        Assert.DoesNotContain("AgentIsolation.DropInheritedCapabilities(", source);
-        Assert.Contains("AgentIsolation.StripOrchestratorEnvironment(", source);
-        Assert.Contains("AgentIsolation.Route(", source);
-    }
+        CmdNodeExecutor.IsolateCommand(psi, "agent", "agent", "/home/agent", "http://proxy.test:3128");
 
-    private static string RepositoryRoot()
-    {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-            if (File.Exists(Path.Combine(dir.FullName, "ILD.sln"))) return dir.FullName;
-        throw new InvalidOperationException("ILD.sln not found above " + AppContext.BaseDirectory);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
+        Assert.Equal(new[]
+        {
+            "--reuid=agent", "--regid=agent", "--init-groups", "--inh-caps=-all", "--ambient-caps=-all", "--",
+            "/bin/sh", "-c", "make test",
+        }, psi.ArgumentList);
+        Assert.Empty(AgentIsolation.SecretEnvironmentKeys.Concat(AgentIsolation.OrchestratorTopologyEnvKeys)
+            .Where(psi.Environment.ContainsKey));
+        Assert.Equal("ILD", psi.Environment["GIT_AUTHOR_NAME"]);
+        Assert.Equal("http://proxy.test:3128", psi.Environment["HTTPS_PROXY"]);
+        Assert.Equal("/home/agent", psi.Environment["HOME"]);
     }
 
     // The grandchild is not our child, so there is no exit to await: poll /proc

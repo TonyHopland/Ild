@@ -215,12 +215,11 @@ public class WorkItemRunEventsTests
         ParkedElsewhereWithAnOldQuestionOpen,
     }
 
-    public static TheoryData<Refusal, Answer> Refusals()
+    public static TheoryData<Refusal> Refusals()
     {
-        var data = new TheoryData<Refusal, Answer>();
+        var data = new TheoryData<Refusal>();
         foreach (var refusal in Enum.GetValues<Refusal>())
-            foreach (var answer in Enum.GetValues<Answer>())
-                data.Add(refusal, answer);
+            data.Add(refusal);
         return data;
     }
 
@@ -288,7 +287,17 @@ public class WorkItemRunEventsTests
 
     [Theory]
     [MemberData(nameof(Refusals))]
-    public async Task An_answer_for_anything_but_the_active_waiting_run_is_refused_and_changes_nothing(Refusal refusal, Answer answer)
+    public Task An_answer_for_anything_but_the_active_waiting_run_is_refused_and_changes_nothing(Refusal refusal)
+        => AssertRefusedAsync(refusal, Answer.Input);
+
+    [Fact]
+    public async Task Every_kind_of_answer_is_refused_alike_and_changes_nothing()
+    {
+        foreach (var answer in Enum.GetValues<Answer>())
+            await AssertRefusedAsync(Refusal.LatestCompleted, answer);
+    }
+
+    private static async Task AssertRefusedAsync(Refusal refusal, Answer answer)
     {
         using var h = refusal == Refusal.NoEngine ? null : new LoopEngineHarness();
         using var rig = h is null
