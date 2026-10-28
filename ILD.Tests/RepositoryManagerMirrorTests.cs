@@ -10,6 +10,7 @@ namespace ILD.Tests;
 /// (ADR-0014). Every test runs once per mode, with each git call checked by
 /// <see cref="AuditingRunner"/>.
 /// </summary>
+[Collection(GitBundleScratchCollection.Name)]
 public class RepositoryManagerMirrorTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.

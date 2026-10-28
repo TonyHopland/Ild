@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
+[Collection(GitBundleScratchCollection.Name)]
 public sealed class RepositoryManagerTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.

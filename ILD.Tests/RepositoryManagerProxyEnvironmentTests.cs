@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 
 namespace ILD.Tests;
 
+[Collection(GitBundleScratchCollection.Name)]
 public class RepositoryManagerProxyEnvironmentTests : IDisposable
 {
     private static readonly Dictionary<string, string> Noise = new()

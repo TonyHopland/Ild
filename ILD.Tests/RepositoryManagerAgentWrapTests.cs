@@ -10,6 +10,7 @@ namespace ILD.Tests;
 /// <see cref="AuditingRunner"/> checks the start info each call would get; the inner
 /// runner answers every command with success, so no git runs.
 /// </summary>
+[Collection(GitBundleScratchCollection.Name)]
 public sealed class RepositoryManagerAgentWrapTests : IDisposable
 {
     private sealed class SucceedingRunner : IProcessRunner
