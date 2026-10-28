@@ -4,7 +4,10 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -53,36 +56,49 @@ public class PrPollHandoverTests
             DeliveredHashes = delivered.Select(i => PrCommentLedger.Fingerprint(i.Path, i.Line, i.Body)).ToList(),
         });
 
-    private sealed class Harness
+    private sealed class Harness : IDisposable
     {
-        public LoopRun Run { get; }
-        public LoopRunNode RunNode { get; }
-        public Mock<ILoopRunStore> Runs { get; } = new();
+        private readonly TestDb _db = new();
+
+        /// <summary>The run as the pass loaded it, before it went to the forge.</summary>
+        public LoopRun Run { get; private set; } = null!;
+        public LoopRunNode RunNode { get; private set; } = null!;
+        public Mock<ILoopRunStore> Runs { get; private set; } = null!;
         public Mock<IRemoteProvider> Remote { get; } = new();
         public Mock<ILoopEngine> Engine { get; } = new();
         public NodeSignal? Fired { get; private set; }
 
         /// <summary>The persisted column — deliberately NOT the copy the pass carries.</summary>
-        public string? Row { get; set; }
+        public string? Row => _db.Fresh().LoopRuns.AsNoTracking()
+            .Where(r => r.Id == Run.Id).Select(r => r.PrCommentLedger).Single();
 
-        public bool WritesLand { get; set; } = true;
+        /// <param name="writesLand">
+        /// False lets another writer change the row between the pass's read of it and its write,
+        /// each time it reads, so the write never finds what it read.
+        /// </param>
+        public static async Task<Harness> CreateAsync(RemotePrReviewLedger fetched, string? carried, string? row,
+            bool approved = false, bool writesLand = true, params string[] wiredEdges)
+        {
+            var h = new Harness();
+            await h.InitAsync(fetched, carried, row, approved, writesLand, wiredEdges);
+            return h;
+        }
 
-        public Harness(RemotePrReviewLedger fetched, string? carried, string? row,
-            bool approved = false, params string[] wiredEdges)
+        private async Task InitAsync(RemotePrReviewLedger fetched, string? carried, string? row,
+            bool approved, bool writesLand, string[] wiredEdges)
         {
             var loopNodeId = Guid.NewGuid();
+            var seeded = await PrRunSeed.SeedParkedAsync(_db, currentNodeId: loopNodeId, ledger: row);
             Run = new LoopRun
             {
-                Id = Guid.NewGuid(),
+                Id = seeded.Id,
                 WorkItemId = "wi-1",
                 PrUrl = PrUrl,
                 Status = LoopRunStatus.WaitingHuman,
                 HumanFeedbackReason = HumanFeedbackReasons.PrAwaitingMerge,
                 CurrentNodeId = loopNodeId,
-                // What the pass loaded before it went to the forge.
                 PrCommentLedger = carried,
             };
-            Row = row;
             RunNode = new LoopRunNode
             {
                 Id = Guid.NewGuid(),
@@ -91,8 +107,9 @@ public class PrPollHandoverTests
                 Status = LoopRunNodeStatus.WaitingHuman,
             };
 
+            var real = new LoopRunStore(_db.Fresh());
+            Runs = PrRunSeed.OverRealWrites(real);
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
-            Runs.AcceptPollWrites(Run);
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
                 .ReturnsAsync((wiredEdges.Length == 0 ? new[] { LoopOutputs.OnComment } : wiredEdges)
@@ -104,14 +121,16 @@ public class PrPollHandoverTests
                         EdgeType = EdgeType.Custom,
                         Name = name,
                     }).ToArray());
-            Runs.Setup(s => s.GetPrCommentLedgerAsync(Run.Id)).ReturnsAsync(() => Row);
-            Runs.Setup(s => s.TrySetPrCommentLedgerAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
-                .ReturnsAsync((Guid _, string? expected, string? json) =>
+            if (!writesLand)
+            {
+                Runs.Setup(s => s.GetPrCommentLedgerAsync(Run.Id)).Returns(async () =>
                 {
-                    if (!WritesLand || !string.Equals(expected, Row, StringComparison.Ordinal)) return false;
-                    Row = json;
-                    return true;
+                    var read = await real.GetPrCommentLedgerAsync(Run.Id);
+                    await PrRunSeed.SetLedgerAsync(_db, Run.Id,
+                        PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with { Head = Guid.NewGuid().ToString("N") }));
+                    return read;
                 });
+            }
 
             Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Snapshot(approved));
             Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(fetched);
@@ -123,6 +142,8 @@ public class PrPollHandoverTests
         public Task PollAsync() => new PrStatusPollService(
             Runs.Object, Remote.Object, Engine.Object, Mock.Of<IRunNotifier>(),
             NullLogger<PrStatusPollService>.Instance).PollOnceAsync();
+
+        public void Dispose() => _db.Dispose();
     }
 
     [Fact]
@@ -133,7 +154,7 @@ public class PrPollHandoverTests
         // finding back. The write hands over both — so both have to be described.
         var incoming = Inline("10", NewFinding);
         var putBack = Inline("11", DroppedFinding);
-        var h = new Harness(Fetched(incoming, putBack), carried: Holding(putBack), row: Holding());
+        using var h = await Harness.CreateAsync(Fetched(incoming, putBack), carried: Holding(putBack), row: Holding());
 
         await h.PollAsync();
 
@@ -151,7 +172,7 @@ public class PrPollHandoverTests
         // to hand over. Resuming anyway starts a round with an empty batch and a
         // reason that names findings it will not be given.
         var incoming = Inline("10", NewFinding);
-        var h = new Harness(Fetched(incoming), carried: Holding(), row: Holding(incoming));
+        using var h = await Harness.CreateAsync(Fetched(incoming), carried: Holding(), row: Holding(incoming));
 
         await h.PollAsync();
 
@@ -168,9 +189,9 @@ public class PrPollHandoverTests
         // only a re-park clears that. The run would sit parked on a pull
         // request that has been approved and never hear about it.
         var incoming = Inline("10", NewFinding);
-        var h = new Harness(
+        using var h = await Harness.CreateAsync(
             Fetched(incoming), carried: Holding(), row: Holding(incoming),
-            approved: true, LoopOutputs.OnComment, LoopOutputs.OnApproved);
+            approved: true, wiredEdges: new[] { LoopOutputs.OnComment, LoopOutputs.OnApproved });
 
         await h.PollAsync();
 
@@ -184,9 +205,9 @@ public class PrPollHandoverTests
         // The other half: dropping on_comment out of the running must not
         // promote something that was never a candidate.
         var incoming = Inline("10", NewFinding);
-        var h = new Harness(
+        using var h = await Harness.CreateAsync(
             Fetched(incoming), carried: Holding(), row: Holding(incoming),
-            approved: true, LoopOutputs.OnComment);
+            approved: true, wiredEdges: new[] { LoopOutputs.OnComment });
 
         await h.PollAsync();
 
@@ -203,10 +224,8 @@ public class PrPollHandoverTests
         // repeated round and worse against a store that stays broken: the edge
         // would go quiet for good, with nothing saying so. That trade is open
         // in the escalation, not taken here.
-        var h = new Harness(Fetched(Inline("10", NewFinding)), carried: Holding(), row: Holding())
-        {
-            WritesLand = false,
-        };
+        using var h = await Harness.CreateAsync(
+            Fetched(Inline("10", NewFinding)), carried: Holding(), row: Holding(), writesLand: false);
 
         await h.PollAsync();
 
@@ -218,7 +237,7 @@ public class PrPollHandoverTests
     public async Task With_nothing_moving_the_signal_and_the_ledger_agree_as_they_always_did()
     {
         var incoming = Inline("10", NewFinding);
-        var h = new Harness(Fetched(incoming), carried: Holding(), row: Holding());
+        using var h = await Harness.CreateAsync(Fetched(incoming), carried: Holding(), row: Holding());
 
         await h.PollAsync();
 

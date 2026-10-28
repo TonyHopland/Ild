@@ -3,7 +3,9 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
-using ILD.Data.Stores.Interfaces;
+using ILD.Data.Stores;
+using ILD.Tests.Fakes;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 
 namespace ILD.Tests;
@@ -42,66 +44,38 @@ public class PrReviewServiceTests
     private static RemotePrReviewLedger Ledger(params RemotePrReviewItem[] items)
         => new(new[] { Review("r1", HeadA), Review("r2", HeadB) }, items, HeadB, null);
 
-    private sealed class Harness
+    private sealed class Harness : IDisposable
     {
+        public TestDb Db { get; } = new();
         public LoopRun Run { get; }
-        public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRemoteProvider> Remote { get; } = new();
-        public string? RecordedLedger { get; private set; }
-        public int LedgerWrites { get; private set; }
-        public string? RecordedQueue { get; private set; }
+
+        public string? RecordedLedger => ColumnOf(r => r.PrCommentLedger);
+        public string? RecordedQueue => ColumnOf(r => r.PrCommentQueue);
 
         public Harness(RemotePrReviewLedger? ledger, bool parkedAtPrNode = false, string? prUrl = PrUrl)
         {
-            Run = new LoopRun
-            {
-                Id = Guid.NewGuid(),
-                WorkItemId = "wi-1",
-                PrUrl = prUrl,
-                Status = parkedAtPrNode ? LoopRunStatus.WaitingHuman : LoopRunStatus.Running,
-                HumanFeedbackReason = parkedAtPrNode ? HumanFeedbackReasons.PrAwaitingMerge : null,
-            };
-            Runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(Run);
-            Runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(Run);
-            Runs.Setup(s => s.GetByIdAsync(Run.Id)).ReturnsAsync(() => Run);
-            Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
-                .Callback<Guid, string?>((_, json) => { RecordedLedger = json; LedgerWrites++; })
-                .Returns(Task.CompletedTask);
-
-            // The ledger is mutated by compare-and-set too: every writer of it
-            // reads the column and writes only if it still holds what it read.
-            Runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => Run.PrCommentLedger);
-            Runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
-                .ReturnsAsync((Guid _, string? expected, string? json) =>
-                {
-                    if (!string.Equals(expected, Run.PrCommentLedger, StringComparison.Ordinal)) return false;
-                    Run.PrCommentLedger = json;
-                    RecordedLedger = json;
-                    LedgerWrites++;
-                    return true;
-                });
-            // The queue is mutated by compare-and-set: the service reads the
-            // column, then writes only if it still holds what it read.
-            Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).ReturnsAsync(() => Run.PrCommentQueue);
-            Runs.Setup(s => s.TrySetPrCommentQueueAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
-                .ReturnsAsync((Guid _, string? expected, string? json) =>
-                {
-                    if (!string.Equals(expected, Run.PrCommentQueue, StringComparison.Ordinal)) return false;
-                    RecordedQueue = json;
-                    Run.PrCommentQueue = json;
-                    return true;
-                });
+            Run = PrRunSeed.Seed(
+                Db,
+                parkedAtPrNode ? LoopRunStatus.WaitingHuman : LoopRunStatus.Running,
+                prUrl,
+                humanFeedbackReason: parkedAtPrNode ? HumanFeedbackReasons.PrAwaitingMerge : null);
             if (ledger is not null)
                 Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(ledger);
         }
 
-        public PrReviewService Build() => new(Runs.Object, Remote.Object);
+        public PrReviewService Build() => new(new LoopRunStore(Db.Fresh()), Remote.Object);
+
+        private string? ColumnOf(System.Linq.Expressions.Expression<Func<LoopRun, string?>> column)
+            => Db.Fresh().LoopRuns.AsNoTracking().Where(r => r.Id == Run.Id).Select(column).Single();
+
+        public void Dispose() => Db.Dispose();
     }
 
     [Fact]
     public async Task Returns_every_item_on_the_work_items_pull_request()
     {
-        var h = new Harness(Ledger(
+        using var h = new Harness(Ledger(
             Inline("4049159495"),
             Suppressed("frontend/src/utils/attachments.ts", 30, "preserve the original text"),
             Issue("4051372317", "and a note at the pull request level")));
@@ -117,7 +91,7 @@ public class PrReviewServiceTests
     [Fact]
     public async Task What_ild_wrote_is_flagged_so_an_agent_does_not_answer_itself()
     {
-        var h = new Harness(Ledger(
+        using var h = new Harness(Ledger(
             Issue("500", PrCommentMarker.Stamp("Answered every point.", Guid.NewGuid())),
             Issue("501", "and a person's reply")));
 
@@ -132,7 +106,7 @@ public class PrReviewServiceTests
     {
         // A round that already answered the review on HeadA needs to know what
         // the review on HeadB added, not the whole history again.
-        var h = new Harness(Ledger(
+        using var h = new Harness(Ledger(
             Inline("11", commit: HeadA, reviewId: "r1"),
             Suppressed("src/B.cs", 20, "an older hidden finding", reviewId: "r1", commit: HeadA),
             Inline("21", commit: HeadB, reviewId: "r2")));
@@ -150,11 +124,11 @@ public class PrReviewServiceTests
         // tick, so that round reads the comments through this tool — and what it
         // was handed must not start a round of its own afterwards.
         var fetched = Ledger(Inline("4049159495"), Issue("4051372317", "and a note"));
-        var h = new Harness(fetched);
+        using var h = new Harness(fetched);
 
         await h.Build().ReadAsync("wi-1", sinceCommit: null, callerRunId: h.Run.Id);
 
-        Assert.Equal(1, h.LedgerWrites);
+        Assert.NotNull(h.RecordedLedger);
         Assert.Empty(PrCommentDelivery.Decide(fetched, HeadB, PrCommentLedgerJson.TryParse(h.RecordedLedger)).Items);
     }
 
@@ -164,22 +138,22 @@ public class PrReviewServiceTests
         // A chat agent asked "what did the review say?" borrows the same tools;
         // consuming here would silently cancel the firing those items are about
         // to cause.
-        var h = new Harness(Ledger(Inline("4049159495")), parkedAtPrNode: true);
+        using var h = new Harness(Ledger(Inline("4049159495")), parkedAtPrNode: true);
 
         await h.Build().ReadAsync("wi-1", sinceCommit: null, callerRunId: h.Run.Id);
 
-        Assert.Equal(0, h.LedgerWrites);
+        Assert.Null(h.RecordedLedger);
     }
 
     [Fact]
     public async Task A_read_from_somewhere_that_is_not_the_items_own_run_consumes_nothing()
     {
-        var h = new Harness(Ledger(Inline("4049159495")));
+        using var h = new Harness(Ledger(Inline("4049159495")));
 
         await h.Build().ReadAsync("wi-1", sinceCommit: null, callerRunId: null);
         await h.Build().ReadAsync("wi-1", sinceCommit: null, callerRunId: Guid.NewGuid());
 
-        Assert.Equal(0, h.LedgerWrites);
+        Assert.Null(h.RecordedLedger);
     }
 
     [Fact]
@@ -189,7 +163,7 @@ public class PrReviewServiceTests
         // the PR node sends it at the end of the round, which is the whole
         // point: a human sits between the agent and anything public — including
         // a chat agent, which has no loop run of its own driving it.
-        var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
+        using var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
 
         var result = await h.Build().ReplyAsync("wi-1", "4049159495", "That compiles: C# allows a long array length.", h.Run.Id);
 
@@ -214,18 +188,17 @@ public class PrReviewServiceTests
         // The marker and the posted id belong where the post happens. A reply a
         // human drops before the PR node runs must never have been recorded as
         // something ILD wrote.
-        var h = new Harness(Ledger(Inline("4049159495")));
+        using var h = new Harness(Ledger(Inline("4049159495")));
 
         await h.Build().ReplyAsync("wi-1", "4049159495", "Answered.", h.Run.Id);
 
         Assert.Null(h.RecordedLedger);
-        Assert.Equal(0, h.LedgerWrites);
     }
 
     [Fact]
     public async Task A_queued_write_a_human_drops_is_gone_and_nothing_else_is()
     {
-        var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
+        using var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
         h.Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(true);
         var service = h.Build();
         var reply = await service.ReplyAsync("wi-1", "4049159495", "Answered.", h.Run.Id);
@@ -242,7 +215,7 @@ public class PrReviewServiceTests
     [Fact]
     public async Task A_reply_to_a_comment_this_pull_request_does_not_hold_is_refused_by_name()
     {
-        var h = new Harness(Ledger(Inline("4049159495")));
+        using var h = new Harness(Ledger(Inline("4049159495")));
 
         var result = await h.Build().ReplyAsync("wi-1", "999999", "hello elsewhere", h.Run.Id);
 
@@ -254,7 +227,7 @@ public class PrReviewServiceTests
     [Fact]
     public async Task A_resolve_is_queued_too_and_closes_nothing_yet()
     {
-        var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
+        using var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
         h.Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(true);
 
         var result = await h.Build().ResolveAsync("wi-1", "PRRT_thread_1", h.Run.Id);
@@ -271,7 +244,7 @@ public class PrReviewServiceTests
     [Fact]
     public async Task Resolving_a_thread_this_pull_request_does_not_hold_is_refused_by_name()
     {
-        var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
+        using var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
 
         var result = await h.Build().ResolveAsync("wi-1", "PRRT_somewhere_else", h.Run.Id);
 
@@ -287,7 +260,7 @@ public class PrReviewServiceTests
         // after the agent stopped listening. A provider that can never resolve
         // is asked before anything is queued, so the answer arrives in the
         // agent's hands and nothing is left waiting that cannot happen.
-        var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
+        using var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
         h.Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(false);
 
         var result = await h.Build().ResolveAsync("wi-1", "PRRT_thread_1", h.Run.Id);
@@ -300,7 +273,7 @@ public class PrReviewServiceTests
     [Fact]
     public async Task A_work_item_with_no_pull_request_gets_a_message_not_an_error()
     {
-        var h = new Harness(ledger: null, prUrl: null);
+        using var h = new Harness(ledger: null, prUrl: null);
         var service = h.Build();
 
         var ledger = await service.ReadAsync("wi-1", null, h.Run.Id);
