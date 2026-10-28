@@ -3,9 +3,10 @@
 # Regression test for entrypoint.sh's agent egress rules (ADR-0019).
 #
 # The rules are what turns the egress proxy from advice into a boundary: they
-# drop everything the agent uid sends except loopback (DNS included, even on
-# loopback), so a connection that skips HTTP_PROXY goes nowhere. They are installed once, as root, right
-# before the privilege drop — and their absence has no runtime symptom at all.
+# drop everything the agent uid sends except loopback, and drop DNS even on
+# loopback, so a connection that skips HTTP_PROXY goes nowhere. They are
+# installed once, as root, right before the privilege drop — and their absence
+# has no runtime symptom at all.
 # The agent still reaches the network through the proxy, the log still fills,
 # and only the Settings page says "advisory". So the shape of the rule set, and
 # the honesty of the enforced/advisory report, are pinned here.
