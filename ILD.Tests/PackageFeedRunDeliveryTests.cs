@@ -125,7 +125,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
     {
         var repoId = await RepositoryWithCompanyAndAMissingFeedAsync();
 
-        var resolved = await Resolver().ResolveAsync(repoId);
+        var resolved = await Resolver().ResolveAsync(repoId, Ct);
 
         var feed = Assert.Single(resolved.Feeds);
         Assert.Equal("company", feed.Name);
@@ -142,7 +142,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
 
         foreach (var id in new Guid?[] { repoId, null })
         {
-            var resolved = await Resolver().ResolveAsync(id);
+            var resolved = await Resolver().ResolveAsync(id, Ct);
             Assert.Empty(resolved.Feeds);
             Assert.Empty(resolved.Missing);
         }
@@ -258,7 +258,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
     {
         var repoId = await RepositoryWithCompanyAndAMissingFeedAsync();
 
-        var outcomes = await RunCmdAsync(CmdContext(ReportCommand, repoId));
+        var outcomes = await RunCmdAsync(CmdContext(ReportCommand, repoId, cancel: Ct));
 
         var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success or NodeOutcome.Fail));
         AssertDelivered(success.Output!);
@@ -269,7 +269,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
     {
         var repoId = await RepositoryWithCompanyAndAMissingFeedAsync();
 
-        var outcomes = await RunCmdAsync(CmdContext(ReportCommand, runRepositoryId: null, workItemRepositoryId: repoId));
+        var outcomes = await RunCmdAsync(CmdContext(ReportCommand, runRepositoryId: null, workItemRepositoryId: repoId, cancel: Ct));
 
         var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success or NodeOutcome.Fail));
         AssertDelivered(success.Output!);
@@ -280,7 +280,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
     {
         var repoId = await RepositoryWithCompanyAndAMissingFeedAsync();
 
-        var outcomes = await RunCmdAsync(CmdContext(ReportCommand + "; exit 7", repoId));
+        var outcomes = await RunCmdAsync(CmdContext(ReportCommand + "; exit 7", repoId, cancel: Ct));
 
         var fail = Assert.IsType<NodeOutcome.Fail>(Assert.Single(outcomes, o => o is NodeOutcome.Success or NodeOutcome.Fail));
         Assert.Equal("exit code 7", fail.Reason);
@@ -319,7 +319,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
         await SeedFeedAsync("company", CompanyUrl, CompanyPat);
         var repoId = selectsOnlyAMissingFeed ? await SeedRepositoryAsync("gone") : await SeedRepositoryAsync();
 
-        var outcomes = await RunCmdAsync(CmdContext("printf '[%s][%s]' \"${NPM_CONFIG_USERCONFIG-unset}\" \"${VSS_NUGET_EXTERNAL_FEED_ENDPOINTS-unset}\"", repoId));
+        var outcomes = await RunCmdAsync(CmdContext("printf '[%s][%s]' \"${NPM_CONFIG_USERCONFIG-unset}\" \"${VSS_NUGET_EXTERNAL_FEED_ENDPOINTS-unset}\"", repoId, cancel: Ct));
 
         var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success or NodeOutcome.Fail));
         Assert.Equal("[unset][unset]", success.Output!.Trim());
@@ -445,7 +445,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
         var repoId = await RepositoryWithCompanyAndAMissingFeedAsync();
         var adapter = new ObservingAdapter(AdapterEnding.Succeeds);
 
-        await RunAiAsync(adapter, runRepositoryId: null, workItemRepositoryId: repoId);
+        await RunAiAsync(adapter, runRepositoryId: null, workItemRepositoryId: repoId, cancel: Ct);
 
         Assert.True(adapter.FileExistedDuringLaunch);
         Assert.Contains(CompanyNuGet, adapter.Environment![NuGetEndpoints]);
@@ -458,7 +458,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
         var repoId = await SeedRepositoryAsync("gone");
         var adapter = new ObservingAdapter(AdapterEnding.Succeeds);
 
-        await RunAiAsync(adapter, repoId);
+        await RunAiAsync(adapter, repoId, cancel: Ct);
 
         Assert.False(adapter.Environment?.ContainsKey(UserConfig) ?? false);
         Assert.False(adapter.Environment?.ContainsKey(NuGetEndpoints) ?? false);

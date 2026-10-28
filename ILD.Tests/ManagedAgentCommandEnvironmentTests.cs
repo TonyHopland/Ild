@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
@@ -12,6 +13,7 @@ namespace ILD.Tests;
 /// under the data root its supplied environment names in <c>ILD_DATA_PATH</c>.
 /// The staged binary only records that it ran.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public sealed class ManagedAgentCommandEnvironmentTests : IDisposable
 {
     private readonly string _dataRoot = Directory.CreateTempSubdirectory("ild-managed-data-").FullName;

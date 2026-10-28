@@ -162,7 +162,7 @@ public class LoopEngineRunEventsTests
     public async Task Parking_at_the_AI_step_cap_records_the_full_reason()
     {
         using var h = new LoopEngineHarness();
-        await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "1");
+        await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "1", TestContext.Current.CancellationToken);
         h.AddNode("ai", NodeType.AI, "Coder");
         h.Registry.Register(new ScriptedExecutor(NodeType.AI, new NodeOutcome.NodeStarting("x"), new NodeOutcome.Terminal("x")));
         var run = h.SeedRun("ai");

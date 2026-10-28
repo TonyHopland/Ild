@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
@@ -385,6 +386,7 @@ public class BackupApiTests
     // ---- criterion 8 (round trip), 11, 15 --------------------------------------------
 
     [Fact]
+    [SupportedOSPlatform("linux")]
     public async Task A_restore_imports_the_stored_bytes_first_keeps_the_current_data_for_download_and_that_file_restores_too()
     {
         await using var host = await Host.StartAsync();

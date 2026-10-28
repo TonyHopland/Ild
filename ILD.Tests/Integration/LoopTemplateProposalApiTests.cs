@@ -967,7 +967,7 @@ public class LoopTemplateProposalApiTests
         Assert.True((await VersionNumbersAsync(host, templateId)).Length <= 2, "the proposal's own version was written");
         using var scope = host.Factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        Assert.False(await db.LoopNodes.AnyAsync(n => n.Config.Contains("make proposed"), Ct), "the proposal's nodes were written");
+        Assert.False(await db.LoopNodes.AnyAsync(n => n.Config != null && n.Config.Contains("make proposed"), Ct), "the proposal's nodes were written");
     }
 
     [Fact]

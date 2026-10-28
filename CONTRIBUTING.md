@@ -35,9 +35,11 @@ dotnet test ILD.Tests/ILD.Tests.csproj
 
 # Frontend
 cd frontend
-vp check          # format + lint + type-check
+vp check          # format + lint + type-check; a lint warning fails it
 vp test --run     # one-shot test run
 ```
+
+A compiler or analyzer warning fails the build in every configuration (`TreatWarningsAsErrors`), locally and in CI, so fix its cause instead of suppressing it.
 
 New behaviour should come with tests. The suite covers loop execution, recovery,
 polling, repository management, auth, provider adapters, secret handling, metrics, schema

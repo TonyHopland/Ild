@@ -20,6 +20,7 @@ namespace ILD.Tests;
 /// to write stays silent. The agent read root is pointed at a temporary one
 /// whose <c>ild-mcp-config</c> directory this user cannot write into.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public sealed class McpConfigWriteFailureTests : IDisposable
 {
     private const string Token = "write-failure-test-token";

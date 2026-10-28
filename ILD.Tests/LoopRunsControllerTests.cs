@@ -33,7 +33,7 @@ public class LoopRunsControllerTests
         reclaimer.Setup(r => r.ReclaimLocalStateAsync(run)).ReturnsAsync(true);
 
         var controller = BuildController(store, reclaimer);
-        var result = await controller.Delete(run.Id.ToString());
+        var result = await controller.Delete(run.Id.ToString(), TestContext.Current.CancellationToken);
 
         Assert.IsType<NoContentResult>(result);
         reclaimer.Verify(r => r.ReclaimLocalStateAsync(run), Times.Once);
@@ -56,7 +56,7 @@ public class LoopRunsControllerTests
         reclaimer.Setup(r => r.ReclaimLocalStateAsync(run)).ReturnsAsync(false);
 
         var controller = BuildController(store, reclaimer);
-        var result = await controller.Delete(run.Id.ToString());
+        var result = await controller.Delete(run.Id.ToString(), TestContext.Current.CancellationToken);
 
         // The row must survive a failed reclaim — deleting it would leave the
         // worktree/branch orphaned with nothing pointing at them.

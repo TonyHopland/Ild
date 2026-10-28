@@ -317,7 +317,7 @@ public sealed class WorkItemServerHistoryApiTests : IClassFixture<WorkItemServer
         Assert.NotNull(history);
         var newestFirst = history!.Where(e => e.Kind.ToString() == "Changed").ToList();
         Assert.Equal(
-            new (string?, string?, string?, string?, string?)[]
+            new (string, string?, string?, string?, string?)[]
             {
                 ("status", "instance-user", "System", "system: scheduler", null),
                 ("title", "carol", "Chat", $"chat {chat}", null),

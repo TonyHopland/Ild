@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
@@ -6,6 +7,7 @@ using ILD.Data.Entities;
 
 namespace ILD.Tests;
 
+[SupportedOSPlatform("linux")]
 public class CopilotAdapterTests
 {
     [Theory]

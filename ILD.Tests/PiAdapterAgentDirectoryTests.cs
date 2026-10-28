@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -19,6 +20,7 @@ namespace ILD.Tests;
 /// <see cref="ProcessGlobalStateCollection"/>.
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
+[SupportedOSPlatform("linux")]
 public sealed class PiAdapterAgentDirectoryTests : IDisposable
 {
     private readonly Guid _runId = Guid.NewGuid();

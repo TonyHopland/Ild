@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -8,6 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
+[SupportedOSPlatform("linux")]
 public class ClaudeCodeAdapterTests
 {
     [Fact]

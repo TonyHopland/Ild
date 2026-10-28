@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -13,6 +14,7 @@ namespace ILD.Tests;
 /// whole list against what <see cref="IldMcpToolNames"/> reads from the server DLL
 /// the adapter launches.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public sealed class PiAdapterToolListTests : IDisposable
 {
     private readonly Guid _runId = Guid.NewGuid();

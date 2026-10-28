@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -18,6 +19,7 @@ namespace ILD.Tests;
 /// OpenCode's session export/import launches around it. A stand-in CLI records
 /// what it was started with.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public sealed class PackageFeedAgentLaunchTests : IDisposable
 {
     private const string UserConfigValue = "/feeds/ild-test-userconfig.npmrc";

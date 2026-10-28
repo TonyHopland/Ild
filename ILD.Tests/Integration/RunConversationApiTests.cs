@@ -185,7 +185,7 @@ public class RunConversationApiTests(SharedApiFactory factory) : IClassFixture<S
 
         var messages = doc.RootElement.GetProperty("messages").EnumerateArray().ToList();
         Assert.Equal(
-            new[]
+            new (string?, string?, string?)[]
             {
                 ("ai", "Implementer (retry)", "implemented it"),
                 ("human", "Human", "Looks good, but rename it"),
@@ -233,7 +233,7 @@ public class RunConversationApiTests(SharedApiFactory factory) : IClassFixture<S
 
         Assert.Equal(runId, doc.RootElement.GetProperty("runId").GetGuid());
         Assert.Equal(
-            new[]
+            new (string?, string?, string?)[]
             {
                 ("system", "Run started", "Run started from loop t"),
                 ("ai", "Coder", "a plan"),
@@ -297,7 +297,7 @@ public class RunConversationApiTests(SharedApiFactory factory) : IClassFixture<S
         using var later = await ConversationAsync(client, runId, $"?after={aiStarted.Id}");
         Assert.Equal(new[] { ai.Id, reply.Id }, MessageIds(later));
         Assert.Equal(
-            new[] { ("ai", "Coder", "a plan"), ("human", "Human", "go on") },
+            new (string?, string?, string?)[] { ("ai", "Coder", "a plan"), ("human", "Human", "go on") },
             later.RootElement.GetProperty("messages").EnumerateArray()
                 .Select(m => (m.GetProperty("role").GetString(), m.GetProperty("name").GetString(), m.GetProperty("text").GetString())));
         Assert.Equal(edge.Id, LastEventId(later));

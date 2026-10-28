@@ -83,6 +83,7 @@ internal sealed class PromptCapturingCli : IDisposable
                 : string.Empty);
 
         File.WriteAllText(BinaryPath, "#!/bin/sh\n" + record + recordPerInvocation + turn);
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The capturing CLI is a shell script.");
         File.SetUnixFileMode(BinaryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 

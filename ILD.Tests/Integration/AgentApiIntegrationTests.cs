@@ -1228,7 +1228,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var messages = conversation.GetProperty("messages").EnumerateArray().ToList();
         Assert.Equal(new[] { latestStarted, latestAi, latestReply }, messages.Select(m => m.GetProperty("id").GetInt64()));
         Assert.Equal(
-            new[] { ("system", "latest run started"), ("ai", "a plan"), ("human", "go on") },
+            new (string?, string?)[] { ("system", "latest run started"), ("ai", "a plan"), ("human", "go on") },
             messages.Select(m => (m.GetProperty("role").GetString(), m.GetProperty("text").GetString())));
         Assert.All(messages, m => Assert.Equal(latest, m.GetProperty("runId").GetGuid()));
         Assert.Equal("Coder", messages[1].GetProperty("name").GetString());
