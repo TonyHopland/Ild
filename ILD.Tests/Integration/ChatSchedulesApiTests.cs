@@ -13,6 +13,7 @@ namespace ILD.Tests.Integration;
 /// fires next. Schedules belong to the user who made them and nobody else can
 /// reach them.
 /// </summary>
+// A host per test: each test drives its own manual clock and scheduler passes.
 public sealed class ChatSchedulesApiTests
 {
     [Fact]

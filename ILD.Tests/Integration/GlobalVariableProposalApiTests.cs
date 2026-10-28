@@ -22,6 +22,7 @@ namespace ILD.Tests.Integration;
 /// Agent calls are made the way the MCP server makes them: the agent service
 /// token plus the session header.
 /// </summary>
+// A host per test: variable names, the length-limit setting and the race interceptor are host-wide.
 public class GlobalVariableProposalApiTests
 {
     private const string VariablesUrl = "/api/v1/global-variables";

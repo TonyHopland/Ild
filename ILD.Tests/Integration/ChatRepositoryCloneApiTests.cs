@@ -29,6 +29,7 @@ namespace ILD.Tests.Integration;
 /// remote itself instead of to ILD's base clone fails here as it would against
 /// a private forge.
 /// </summary>
+// A host per test: each test owns its git remote and the chat scratch root cloned into.
 public class ChatRepositoryCloneApiTests
 {
     private const string ChatHeader = "X-ILD-Chat-Session-Id";

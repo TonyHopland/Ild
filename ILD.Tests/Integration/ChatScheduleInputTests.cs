@@ -7,6 +7,7 @@ namespace ILD.Tests.Integration;
 /// A schedule's text is judged as it will be stored. The save strips NUL, which
 /// Postgres cannot hold, so a value is checked without it.
 /// </summary>
+// A host per test: each test drives its own manual clock and scheduler passes.
 public sealed class ChatScheduleInputTests
 {
     [Fact]

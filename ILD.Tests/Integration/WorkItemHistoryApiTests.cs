@@ -26,20 +26,29 @@ namespace ILD.Tests.Integration;
 /// proposal), the user and agent routes that read it, and the MCP tool option
 /// that asks for it.
 /// </summary>
-public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
+public class WorkItemHistoryApiTests : IClassFixture<WorkItemHistoryApiTests.Host>
 {
     private const string RunHeader = "X-ILD-Run-Id";
     private const string ChatHeader = "X-ILD-Chat-Session-Id";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private sealed class Host : IAsyncDisposable
+    private readonly Host _host;
+
+    public WorkItemHistoryApiTests(Host host) => _host = host;
+
+    public sealed class Host : IAsyncLifetime
     {
         public ApiFactory Factory { get; }
         public HttpClient Human { get; private set; } = null!;
         public Guid RepositoryId { get; private set; }
 
-        public Host(Action<IServiceCollection>? configureServices = null)
+        public Host()
+            : this(null)
+        {
+        }
+
+        internal Host(Action<IServiceCollection>? configureServices)
         {
             Factory = new ApiFactory(configureServices: services =>
             {
@@ -49,7 +58,9 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
             });
         }
 
-        public async Task<Host> StartAsync()
+        public async ValueTask InitializeAsync() => await StartAsync();
+
+        internal async Task<Host> StartAsync()
         {
             Human = await Factory.CreateAuthenticatedClientAsync();
             RepositoryId = await SeedRepositoryAsync(Factory);
@@ -119,7 +130,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
     [Fact]
     public async Task A_human_in_the_UI_is_recorded_by_their_username_and_a_manual_park_carries_its_reason()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var id = await CreateAsHumanAsync(host, "Original title");
 
         var rename = await host.Human.PutAsJsonAsync($"/api/v1/workitems/{id}", new
@@ -149,7 +160,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
     [Fact]
     public async Task A_loop_runs_changes_are_recorded_as_the_instance_user_naming_the_step_and_the_item_the_run_works_on()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var parent = await CreateAsHumanAsync(host, "The item the run works on");
         var runId = await SeedRunAsync(host.Factory, parent, runningStepLabel: "AI Coder");
         var agent = host.Agent(runId: runId);
@@ -169,7 +180,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
     [Fact]
     public async Task A_chats_changes_are_recorded_as_the_chats_user_naming_the_chat()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var chatId = await SeedChatSessionAsync(host.Factory, "carol");
 
         var id = await CreateAsAgentAsync(host, host.Agent(chatSessionId: chatId), "Raised in a chat");
@@ -186,7 +197,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
     [InlineData(Proposer.Chat)]
     public async Task An_approved_proposal_is_recorded_as_the_approver_naming_the_proposal_and_its_proposer(Proposer proposer)
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var id = await CreateAsHumanAsync(host, "Old title");
         var parent = await CreateAsHumanAsync(host, "The proposing run's item");
         Guid? runId = null, chatId = null;
@@ -217,6 +228,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
     public async Task A_baseline_made_by_a_run_of_this_instance_is_served_with_the_runs_work_item()
     {
         using var server = new FakeWorkItemServerHarness();
+        // Own host: it swaps the WorkItem server client for the whole host.
         await using var host = await new Host(services =>
         {
             services.RemoveAll<IWorkItemServerClient>();
@@ -268,7 +280,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
     [Fact]
     public async Task History_of_an_unknown_item_is_404()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
 
         Assert.Equal(HttpStatusCode.NotFound, (await host.Human.GetAsync("/api/v1/workitems/999999/history", Ct)).StatusCode);
     }
@@ -282,6 +294,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
             .ThrowsAsync(outage);
         client.Setup(c => c.GetHistoryAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(outage);
+        // Own host: it swaps the WorkItem server client for the whole host.
         await using var factory = new ApiFactory(configureServices: services => services.ReplaceSingleton(client.Object));
         var human = await factory.CreateAuthenticatedClientAsync();
 
@@ -294,7 +307,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
     [Fact]
     public async Task Get_workitem_carries_history_only_when_asked_for()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var id = await CreateAsHumanAsync(host, "Original title");
         await host.Human.PutAsJsonAsync($"/api/v1/workitems/{id}", new
         {
@@ -325,7 +338,7 @@ public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<S
     [Fact]
     public async Task A_deleted_items_history_stays_readable_and_names_who_deleted_it()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var id = await CreateAsHumanAsync(host, "Soon gone");
 
         Assert.Equal(HttpStatusCode.OK, (await host.Human.DeleteAsync($"/api/v1/workitems/{id}", Ct)).StatusCode);

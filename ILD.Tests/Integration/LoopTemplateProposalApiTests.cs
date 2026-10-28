@@ -24,6 +24,7 @@ namespace ILD.Tests.Integration;
 /// pending proposals Stale. Agent calls are made the way the MCP server makes
 /// them: the agent service token plus the session header.
 /// </summary>
+// A host per test: template names and the proposal list are host-wide, and the race interceptor is armed per host.
 public class LoopTemplateProposalApiTests
 {
     private const string TemplatesUrl = "/api/v1/looptemplates";

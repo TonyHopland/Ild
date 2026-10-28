@@ -9,6 +9,7 @@ namespace ILD.Tests.Integration;
 /// false) and chat.autoDeleteInactiveDays (14 on a fresh install, an integer from 1
 /// to 3650); anything else is refused and leaves what was stored.
 /// </summary>
+// A host per test: the tests change the chat auto-delete settings, which are host-wide.
 public class ChatAutoDeleteSettingsTests
 {
     private const string Switch = "chat.autoDeleteInactive";

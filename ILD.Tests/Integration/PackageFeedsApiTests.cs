@@ -17,6 +17,7 @@ namespace ILD.Tests.Integration;
 /// (and the agent token may not touch), a PAT that goes in and never comes back
 /// out, and the repositories that select feeds by name.
 /// </summary>
+// A host per test: feed names and the feed list are host-wide.
 public class PackageFeedsApiTests
 {
     private const string Pat = "patSECRET-4f1d-XyZ9";
