@@ -91,7 +91,7 @@ public sealed class StuckRunWatchdog : BackgroundService
         }
     }
 
-    private async Task SweepOnceAsync(CancellationToken ct)
+    internal async Task SweepOnceAsync(CancellationToken ct)
     {
         // Mid-restore every run row is about to be replaced, and recovering one now would write to
         // the data being restored and call a work item server whose rows are being swapped.

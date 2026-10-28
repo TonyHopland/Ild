@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -122,20 +123,5 @@ public sealed class AgentRunFilesTests : IDisposable
     {
         Assert.True(await AgentRunFiles.SweepAtStartupAsync(
             new HashSet<Guid>(), _readRoot, _scratchRoot, DateTime.UtcNow, NullLogger.Instance, CancellationToken.None));
-    }
-
-    private sealed class RecordingLogger : ILogger
-    {
-        public List<string> Warnings { get; } = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning)
-                Warnings.Add(formatter(state, exception));
-        }
     }
 }

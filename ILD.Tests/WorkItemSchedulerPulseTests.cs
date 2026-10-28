@@ -1,5 +1,6 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -159,25 +160,5 @@ public class WorkItemSchedulerPulseTests
                 return ValueTask.CompletedTask;
             }
         }
-    }
-
-    private sealed class StaticOptionsMonitor<T> : IOptionsMonitor<T>
-    {
-        private T _value;
-        public StaticOptionsMonitor(T value) { _value = value; }
-        public Action? OnNextRead;
-
-        public T CurrentValue
-        {
-            get
-            {
-                Interlocked.Exchange(ref OnNextRead, null)?.Invoke();
-                return _value;
-            }
-        }
-        public T Get(string? name) => _value;
-        public void Set(T value) => _value = value;
-        public IDisposable OnChange(Action<T, string?> listener) => new Noop();
-        private sealed class Noop : IDisposable { public void Dispose() { } }
     }
 }

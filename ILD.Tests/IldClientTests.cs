@@ -1,5 +1,6 @@
 using System.Net;
 using ILD.McpServer;
+using ILD.Tests.Fakes;
 using ModelContextProtocol;
 
 namespace ILD.Tests;
@@ -19,7 +20,7 @@ public class IldClientTests
 
     private static IldClient Client(Func<HttpRequestMessage, HttpResponseMessage> respond)
         => new(
-            new HttpClient(new StubHandler(respond)) { BaseAddress = new Uri(BaseAddress) },
+            new HttpClient(new StubHandler(req => Task.FromResult(respond(req)))) { BaseAddress = new Uri(BaseAddress) },
             new IldClientOptions(BaseAddress.TrimEnd('/'), "the-agent-token", LoopRunId: null));
 
     [Fact]
@@ -69,14 +70,5 @@ public class IldClientTests
         var client = Client(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(payload) });
 
         Assert.Equal(payload, await client.GetRawAsync("api/v1/agent/workitems", TestContext.Current.CancellationToken));
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(respond(request));
-        }
     }
 }

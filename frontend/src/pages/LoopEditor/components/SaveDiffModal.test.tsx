@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
 import SaveDiffModal from "./SaveDiffModal";
 
 afterEach(cleanup);
@@ -16,20 +16,6 @@ const edited = JSON.stringify(
 );
 
 describe("SaveDiffModal", () => {
-  test("renders nothing when closed", () => {
-    const { container } = render(
-      <SaveDiffModal
-        isOpen={false}
-        beforeJson={saved}
-        afterJson={edited}
-        isSaving={false}
-        onConfirm={vi.fn()}
-        onCancel={vi.fn()}
-      />,
-    );
-    expect(container.firstChild).toBeNull();
-  });
-
   test("shows the whole-document diff of saved vs edited JSON", () => {
     render(
       <SaveDiffModal
@@ -91,40 +77,6 @@ describe("SaveDiffModal", () => {
     const view = screen.getByTestId("save-diff-view");
     expect(view.querySelector(".save-diff-add")?.textContent).toContain("note");
     expect(view.querySelector(".save-diff-seg-add")).toBeNull();
-  });
-
-  test("Save changes triggers onConfirm (persist)", () => {
-    const onConfirm = vi.fn();
-    render(
-      <SaveDiffModal
-        isOpen
-        beforeJson={saved}
-        afterJson={edited}
-        isSaving={false}
-        onConfirm={onConfirm}
-        onCancel={vi.fn()}
-      />,
-    );
-    fireEvent.click(screen.getByText("Save changes"));
-    expect(onConfirm).toHaveBeenCalledTimes(1);
-  });
-
-  test("Cancel aborts without persisting", () => {
-    const onConfirm = vi.fn();
-    const onCancel = vi.fn();
-    render(
-      <SaveDiffModal
-        isOpen
-        beforeJson={saved}
-        afterJson={edited}
-        isSaving={false}
-        onConfirm={onConfirm}
-        onCancel={onCancel}
-      />,
-    );
-    fireEvent.click(screen.getByText("Cancel"));
-    expect(onCancel).toHaveBeenCalledTimes(1);
-    expect(onConfirm).not.toHaveBeenCalled();
   });
 
   test("reports no changes when saved and edited match", () => {

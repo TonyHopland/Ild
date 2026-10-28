@@ -3,6 +3,7 @@ using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -15,15 +16,6 @@ namespace ILD.Tests;
 /// </summary>
 public class SetVariableNodeExecutorTests
 {
-    /// <summary>Resolves <c>{{Node.Input}}</c> and <c>{{WorkItem.Title}}</c>, enough to tell rendered from raw.</summary>
-    private sealed class FakeRendering : IPromptRenderingService
-    {
-        public Task<string> RenderAsync(string? template, Guid runId, WorkItemView workItem, string? previousNodeOutput)
-            => Task.FromResult((template ?? string.Empty)
-                .Replace("{{Node.Input}}", previousNodeOutput ?? string.Empty)
-                .Replace("{{WorkItem.Title}}", workItem.Title));
-    }
-
     private static LoopNode Node(object assignments) => new()
     {
         Id = Guid.NewGuid(),

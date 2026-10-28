@@ -6,6 +6,7 @@ import { WorkItem, WorkItemAttachment, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import { deferred } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -42,16 +43,6 @@ function makeWorkItem(): WorkItem {
     dependentIds: [],
     attachments: [attachment("att-1", "first.png"), attachment("att-2", "second.png")],
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 function mockServices() {

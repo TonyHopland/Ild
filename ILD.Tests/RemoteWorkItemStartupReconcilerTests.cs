@@ -58,13 +58,13 @@ public class RemoteWorkItemStartupReconcilerTests
         var (db, run) = SeedRun(LoopRunStatus.Running);
         using var _ = db;
         var recovery = new Mock<IRecoveryManager>();
+        var engine = EngineEndingRuns(db);
 
         await RunReconcilerAsync(db, recovery,
-            ServerReturns(run.WorkItemId, RemoteWorkItemStatus.Ready));
+            ServerReturns(run.WorkItemId, RemoteWorkItemStatus.Ready), engine);
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
-        Assert.Equal(LoopRunStatus.Cancelled, FreshStatus(db, run.Id));
-        Assert.NotNull(db.Fresh().LoopRuns.First(r => r.Id == run.Id).CompletedAt);
+        engine.Verify(e => e.StopRunAsync(run.Id, It.IsAny<string>()), Times.Once);
     }
 
     [Fact]

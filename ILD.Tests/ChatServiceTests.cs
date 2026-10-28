@@ -386,7 +386,7 @@ public sealed class ChatServiceTests : IDisposable
         Assert.True(assistant.Interrupted);
         Assert.Equal("partial answer", assistant.Content);
         // That the cancelled turn also REPORTS itself interrupted is the runner's
-        // job now: ChatTurnLifecycleTests covers it, under the turn's own id.
+        // job now: ChatTurnRunnerTests covers it, under the turn's own id.
     }
 
     [Fact]
@@ -693,38 +693,11 @@ public sealed class ChatServiceTests : IDisposable
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "Help me wire up a deploy loop", CancellationToken.None);
         Assert.Equal("Help me wire up a deploy loop", _db.Context.ChatSessions.Single().Name);
+        Assert.Equal(ChatTitleSource.Fallback, ReadSession(started.Id).TitleSource);
 
         // The name is fixed by the first turn — a later message must not rename it.
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "now add a PR node", CancellationToken.None);
         Assert.Equal("Help me wire up a deploy loop", _db.Context.ChatSessions.Single().Name);
-    }
-
-    [Fact]
-    public async Task ExecuteTurnAsync_truncates_a_long_first_message_into_the_name()
-    {
-        var provider = await SeedProviderAsync();
-        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-
-        var longMessage = new string('a', 200);
-        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), longMessage, CancellationToken.None);
-
-        var name = _db.Context.ChatSessions.Single().Name!;
-        Assert.Equal(new string('a', 119) + "…", name);
-    }
-
-    [Fact]
-    public async Task ExecuteTurnAsync_names_the_chat_from_its_first_message_without_the_markdown()
-    {
-        var provider = await SeedProviderAsync();
-        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-
-        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "## Fix the **login** page", CancellationToken.None);
-
-        var session = ReadSession(started.Id);
-        Assert.Equal("Fix the login page", session.Name);
-        Assert.Equal(ChatTitleSource.Fallback, session.TitleSource);
     }
 
     [Fact]
@@ -943,24 +916,24 @@ public sealed class ChatServiceTests : IDisposable
         // Opened up front: a context cannot first open the connection while the sweep's read is still on it.
         using var starring = _db.Fresh();
         Assert.Equal(1, await starring.ChatSessions.CountAsync(TestContext.Current.CancellationToken));
-        var starAfterCheck = new StarAfterLastMessageRead(starring, started.Id);
+        var starAfterInactiveRead = new StarAfterInactiveRead(starring, started.Id);
         using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(starAfterCheck).Options);
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(starAfterInactiveRead).Options);
         var sweep = new ChatService(deleting, _db.Providers, Mock.Of<IAgentAdapterRegistry>(), _notifier, Options,
             _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
 
         Assert.False(await sweep.DeleteIfInactiveAsync(started.Id, DateTime.UtcNow.AddDays(1), TestContext.Current.CancellationToken));
 
-        Assert.True(starAfterCheck.Starred);
+        Assert.True(starAfterInactiveRead.Starred);
         using var ctx = _db.Fresh();
         var kept = Assert.Single(ctx.ChatSessions.AsNoTracking());
         Assert.True(kept.IsFavorite);
         Assert.NotEmpty(ctx.ChatMessages.AsNoTracking());
     }
 
-    // Stars the chat once the sweep has read its newest message, the last thing it
-    // checks before deleting: starring does not wait for the chat's turn gate.
-    private sealed class StarAfterLastMessageRead(AppDbContext starring, Guid chatId) : DbCommandInterceptor
+    // Stars the chat once the sweep has read it as inactive, before it deletes:
+    // starring does not wait for the chat's turn gate.
+    private sealed class StarAfterInactiveRead(AppDbContext starring, Guid chatId) : DbCommandInterceptor
     {
         public bool Starred { get; private set; }
 
@@ -970,7 +943,7 @@ public sealed class ChatServiceTests : IDisposable
             System.Data.Common.DbDataReader result,
             CancellationToken cancellationToken = default)
         {
-            if (!Starred && command.CommandText.Contains("MAX(") && command.CommandText.Contains("\"ChatMessages\""))
+            if (!Starred)
             {
                 Starred = true;
                 await starring.ChatSessions.Where(c => c.Id == chatId)

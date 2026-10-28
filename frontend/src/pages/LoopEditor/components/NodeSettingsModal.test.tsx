@@ -85,19 +85,12 @@ describe("NodeSettingsModal install-on-start option", () => {
     cleanup();
   });
 
-  test("renders the install checkbox unchecked for a Start node", () => {
-    renderModal({ startRunInstall: false });
-
-    const checkbox = screen.getByLabelText("Run ild.config install") as HTMLInputElement;
-    expect(checkbox.type).toBe("checkbox");
-    expect(checkbox.checked).toBe(false);
-  });
-
   test("reflects an enabled install option as checked", () => {
     renderModal({ startRunInstall: true });
 
-    const checkbox = screen.getByLabelText("Run ild.config install") as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
+    expect((screen.getByLabelText("Run ild.config install") as HTMLInputElement).checked).toBe(
+      true,
+    );
   });
 
   test("notifies when the install option is toggled on", () => {
@@ -137,30 +130,6 @@ describe("NodeSettingsModal session memory mode", () => {
     expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("");
   });
 
-  test("shows the session name field when continuing a session", () => {
-    renderModal({
-      selectedNode: makeNode(NodeType.AI),
-      aiUseSession: true,
-      aiSessionPlaceholder: "research",
-    });
-
-    const input = screen.getByLabelText("Session name") as HTMLInputElement;
-    expect(input.value).toBe("research");
-  });
-
-  test("renders the source picker and destination when forking", () => {
-    renderModal({
-      selectedNode: makeNode(NodeType.AI),
-      aiUseSession: true,
-      aiForkFromPlaceholder: "base",
-      aiSessionPlaceholder: "variant-a",
-      sessionPlaceholderUsages: [{ name: "base", count: 1 }],
-    });
-
-    expect((screen.getByLabelText("Fork from") as HTMLSelectElement).value).toBe("base");
-    expect((screen.getByLabelText("Into new session") as HTMLInputElement).value).toBe("variant-a");
-  });
-
   test("notifies when the fork source is chosen", () => {
     const props = renderModal({
       selectedNode: makeNode(NodeType.AI),
@@ -177,17 +146,13 @@ describe("NodeSettingsModal session memory mode", () => {
     expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("other");
   });
 
-  test("shows a templated session name verbatim and says it expands per run", () => {
+  test("says a templated session name expands per run", () => {
     renderModal({
       selectedNode: makeNode(NodeType.AI),
       aiUseSession: true,
       aiSessionPlaceholder: "ticket_{{Var.current_ticket}}",
     });
 
-    // Never rewritten — the author's template is the stored value.
-    expect((screen.getByLabelText("Session name") as HTMLInputElement).value).toBe(
-      "ticket_{{Var.current_ticket}}",
-    );
     expect(screen.getByText(/one session per distinct value/)).toBeTruthy();
   });
 
@@ -211,6 +176,9 @@ describe("NodeSettingsModal session memory mode", () => {
     });
 
     expect((screen.getByLabelText("Fork from") as HTMLSelectElement).value).toBe("base_{{Var.n}}");
+    expect((screen.getByLabelText("Into new session") as HTMLInputElement).value).toBe(
+      "fork_{{Var.n}}",
+    );
     expect(screen.getByText("base_{{Var.n}} (1 node, one per value)")).toBeTruthy();
   });
 

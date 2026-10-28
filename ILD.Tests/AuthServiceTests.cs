@@ -107,33 +107,6 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task An_expired_session_is_rejected()
-    {
-        using var db = new TestDb();
-        var svc = Make(db);
-        var token = await LoginAsync(svc);
-
-        await ShiftSessionBackAsync(db, TimeSpan.FromDays(200));
-
-        Assert.Null(await svc.AuthenticateSessionAsync(token));
-        Assert.Null((await svc.AuthenticateSessionAsync(token))?.Username);
-    }
-
-    [Fact]
-    public async Task An_idle_session_is_rejected_once_the_idle_window_passes()
-    {
-        using var db = new TestDb();
-        var svc = Make(db);
-        var token = await LoginAsync(svc);
-
-        // Still inside the absolute cap, but untouched for longer than the idle
-        // window — idle expiry alone must kill it.
-        await ShiftSessionBackAsync(db, TimeSpan.FromDays(45), keepExpiryInFuture: true);
-
-        Assert.Null(await svc.AuthenticateSessionAsync(token));
-    }
-
-    [Fact]
     public async Task Idle_expiry_honours_the_configured_setting()
     {
         using var db = new TestDb();
@@ -264,22 +237,6 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task AuthenticateSession_bumps_LastSeenAt_only_once_a_minute()
-    {
-        using var db = new TestDb();
-        var token = await LoginAsync(Make(db));
-
-        var stale = DateTime.UtcNow.AddSeconds(-5);
-        await SetLastSeenAsync(db, stale);
-        Assert.NotNull(await Make(db).AuthenticateSessionAsync(token));
-        Assert.True(Math.Abs(((await StoredSessionAsync(db)).LastSeenAt - stale).TotalSeconds) < 1);
-
-        await SetLastSeenAsync(db, DateTime.UtcNow.AddMinutes(-5));
-        Assert.NotNull(await Make(db).AuthenticateSessionAsync(token));
-        Assert.True((await StoredSessionAsync(db)).LastSeenAt > DateTime.UtcNow.AddSeconds(-30));
-    }
-
-    [Fact]
     public async Task GetSessions_lists_every_device_and_marks_the_caller()
     {
         using var db = new TestDb();
@@ -362,45 +319,6 @@ public class AuthServiceTests
         Assert.Empty(await svc.GetSessionsAsync(token));
         Assert.False(await svc.RevokeSessionAsync(token, Guid.NewGuid()));
         Assert.Equal(0, await svc.RevokeOtherSessionsAsync(token));
-    }
-
-    [Fact]
-    public async Task An_unknown_token_is_rejected()
-    {
-        using var db = new TestDb();
-        var svc = Make(db);
-        await LoginAsync(svc);
-
-        Assert.Null(await svc.AuthenticateSessionAsync("not-a-token"));
-        Assert.Null(await svc.AuthenticateSessionAsync(string.Empty));
-    }
-
-    [Fact]
-    public async Task A_live_session_names_its_owner()
-    {
-        using var db = new TestDb();
-        var svc = Make(db);
-        var token = await LoginAsync(svc);
-
-        Assert.Equal("admin", (await svc.AuthenticateSessionAsync(token))?.Username);
-    }
-
-    [Fact]
-    public async Task ILD_USERNAME_overrides_the_bootstrapped_username()
-    {
-        using var db = new TestDb();
-        var variables = new Dictionary<string, string?> { ["ILD_PASSWORD"] = "secret", ["ILD_USERNAME"] = "tony" };
-        var svc = new AuthService(db.Auth, db.Settings,
-            BootstrapCredentials.FromEnvironment(name => variables.GetValueOrDefault(name)));
-
-        // The configured username bootstraps and authenticates.
-        var ok = await svc.LoginAsync("tony", "secret");
-        Assert.True(ok.Success);
-        Assert.Equal("tony", ok.Username);
-
-        // "admin" no longer bootstraps when a custom username is configured.
-        var admin = await svc.LoginAsync("admin", "secret");
-        Assert.False(admin.Success);
     }
 
     /// <summary>

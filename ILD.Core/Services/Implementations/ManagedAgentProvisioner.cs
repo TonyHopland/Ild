@@ -29,6 +29,9 @@ public sealed class ManagedAgentProvisioner : IManagedAgentProvisioner, IHostedS
     private readonly ConcurrentDictionary<string, byte> _inFlight = new();
     private readonly CancellationTokenSource _stopping = new();
 
+    /// <summary>Whether an ensure is queued or running, recorded as soon as it is queued.</summary>
+    internal bool AnyEnsureInFlight => !_inFlight.IsEmpty;
+
     public ManagedAgentProvisioner(IServiceScopeFactory scopes, ILogger<ManagedAgentProvisioner> log)
     {
         _scopes = scopes;

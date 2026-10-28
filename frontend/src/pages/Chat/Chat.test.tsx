@@ -3,60 +3,48 @@ import { render, screen, fireEvent, cleanup, waitFor, act, within } from "@testi
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router";
 import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary, User } from "../../types";
 import {
+  emitHubEvent,
   openChatFromList,
   openChatList,
+  settle,
   showChatActions,
+  signalRHub,
   type ChatHubEvents,
 } from "../../test-support";
 
-const {
-  handlers,
-  invoke,
-  chatService,
-  aiProviderService,
-  workItemService,
-  authService,
-  getOpenLoopDocument,
-} = vi.hoisted(() => ({
-  // Every handler registered for an event, across every mounted hub connection:
-  // the inbox, the bubble and the page each hold their own, as the real hook does.
-  handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
-  invoke: vi.fn((..._args: unknown[]) => Promise.resolve()),
-  chatService: {
-    listHistory: vi.fn(),
-    getById: vi.fn(),
-    start: vi.fn(),
-    sendMessage: vi.fn(),
-    interrupt: vi.fn(),
-    deleteOne: vi.fn(),
-    deleteMany: vi.fn(),
-    searchChats: vi.fn(() => Promise.resolve([] as string[])),
-    markRead: vi.fn(),
-    rename: vi.fn(() => Promise.resolve()),
-    setFavorite: vi.fn(() => Promise.resolve()),
-  },
-  aiProviderService: { getAll: vi.fn() },
-  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
-  authService: {
-    getUser: vi.fn(),
-    getToken: vi.fn(() => "test-token"),
-    getMe: vi.fn(),
-    clearAuth: vi.fn(),
-    logout: vi.fn(() => Promise.resolve()),
-    onTokenChange: vi.fn(() => () => {}),
-  },
-  getOpenLoopDocument: vi.fn(),
-}));
+const { chatService, aiProviderService, workItemService, authService, getOpenLoopDocument } =
+  vi.hoisted(() => ({
+    chatService: {
+      listHistory: vi.fn(),
+      getById: vi.fn(),
+      start: vi.fn(),
+      sendMessage: vi.fn(),
+      interrupt: vi.fn(),
+      deleteOne: vi.fn(),
+      deleteMany: vi.fn(),
+      searchChats: vi.fn(() => Promise.resolve([] as string[])),
+      markRead: vi.fn(),
+      rename: vi.fn(() => Promise.resolve()),
+      setFavorite: vi.fn(() => Promise.resolve()),
+    },
+    aiProviderService: { getAll: vi.fn() },
+    workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
+    authService: {
+      getUser: vi.fn(),
+      getToken: vi.fn(() => "test-token"),
+      getMe: vi.fn(),
+      clearAuth: vi.fn(),
+      logout: vi.fn(() => Promise.resolve()),
+      onTokenChange: vi.fn(() => () => {}),
+    },
+    getOpenLoopDocument: vi.fn(),
+  }));
 
-vi.mock("../../hooks/useSignalR", () => {
-  const on = (event: string, handler: (msg: { payload: unknown }) => void) => {
-    (handlers[event] ??= new Set()).add(handler);
-  };
-  const off = (event: string, handler: (msg: { payload: unknown }) => void) => {
-    handlers[event]?.delete(handler);
-  };
-  return { useSignalR: () => ({ connectionState: "connected", on, off, invoke }) };
-});
+// The inbox, the bubble and the page each open a connection; every one of them is
+// the shared fake hub, which keeps each one's handlers apart.
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
 
 vi.mock("../../services/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../services/auth")>()),
@@ -70,7 +58,6 @@ vi.mock("../../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 import App from "../../App";
 import ChatBubble from "../../components/ChatBubble";
 import { ChatInboxProvider } from "../../components/ChatInbox";
-import ChatSidebar from "../../components/ChatSidebar";
 import Header from "../../components/Header";
 import { AuthContext } from "../../hooks/useAuth";
 import { setChatEnabled } from "../../hooks/useChatEnabled";
@@ -198,7 +185,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   for (const k of Object.keys(sessions)) delete sessions[k];
   server = [];
   vi.clearAllMocks();
@@ -269,20 +256,10 @@ function emit(
   payload: { chatSessionId: string },
 ): void;
 function emit(event: string, payload: unknown) {
-  act(() => {
-    for (const handler of Array.from(handlers[event] ?? [])) handler({ payload });
-  });
+  emitHubEvent(event, payload);
 }
 
-/** Let every answer already given reach the view, and every effect it causes run. */
-async function settle() {
-  for (let i = 0; i < 3; i++) {
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-  }
-}
-
+/** The Chat link in the app's navigation. */
 function chatLink() {
   return within(screen.getByRole("navigation")).getByRole("link", { name: "Chat" });
 }
@@ -314,7 +291,7 @@ function heldJoins(method: "SubscribeToChat" | "SubscribeToChatInbox", id?: stri
   const leave = method === "SubscribeToChat" ? "UnsubscribeFromChat" : "UnsubscribeFromChatInbox";
   const matches = (args: unknown[], name: string) =>
     args[0] === name && (id === undefined || args[1] === id);
-  const calls = invoke.mock.calls as unknown[][];
+  const calls = signalRHub.invoke.mock.calls;
   return (
     calls.filter((a) => matches(a, method)).length - calls.filter((a) => matches(a, leave)).length
   );
@@ -353,7 +330,7 @@ describe("Chat tab in the main navigation", () => {
     seedTwoChats();
     setChatEnabled(false);
     renderShell("/taskboard");
-    await settle();
+    await settle(3);
     expect(screen.queryByRole("button", { name: "Open chat" })).toBeNull();
 
     fireEvent.click(chatLink());
@@ -363,20 +340,18 @@ describe("Chat tab in the main navigation", () => {
   });
 
   test.each([
-    ["/chat/s1", "s1 reply"],
-    ["/chat", "Start chat"],
+    ["/chat/s1", () => screen.findByText("s1 reply")],
+    ["/chat", () => screen.findByText("Start chat")],
+    ["/chat/schedules", () => screen.findByRole("heading", { name: "Schedules" })],
   ])(
     "App renders %s as the Chat page inside the signed-in shell, without the bubble",
-    async (path, shown) => {
+    async (path, findPage) => {
       if (path === "/chat/s1") seedTwoChats();
       window.history.replaceState(null, "", path);
-      render(<App />, { wrapper: WorkItemHubProvider });
+      render(<App />);
 
-      expect(await screen.findByText(shown)).toBeTruthy();
-      expect(screen.queryByText(NO_CONTEXT)).toBeNull();
-      expect(
-        within(screen.getByRole("navigation")).getByRole("link", { name: "Chat" }),
-      ).toBeTruthy();
+      expect(await findPage()).toBeTruthy();
+      expect(chatLink()).toBeTruthy();
       expect(window.location.pathname).toBe(path);
       expect(screen.queryByRole("button", { name: "Open chat" })).toBeNull();
       expect(screen.queryByRole("dialog", { name: "AI chat" })).toBeNull();
@@ -415,7 +390,7 @@ describe("Opening the Chat tab", () => {
     fireEvent.click(within(pageSidebar()).getByText("First"));
     await waitFor(() => expect(currentPath()).toBe("/chat/s1"));
     expect(await screen.findByText("s1 reply")).toBeTruthy();
-    await settle();
+    await settle(3);
     expect(screen.queryByText("s2 reply")).toBeNull();
     // The bubble's conversation is not mounted on the tab, so nothing is left
     // listening to the chat it had open before.
@@ -444,7 +419,7 @@ describe("Opening the Chat tab", () => {
     expect(screen.queryByRole("button", { name: "Open chat" })).toBeNull();
     // Marked read up to its newest message, once.
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("s1", 1));
-    await settle();
+    await settle(3);
     expect(chatService.markRead).toHaveBeenCalledTimes(1);
   });
 
@@ -475,7 +450,7 @@ describe("Opening the Chat tab", () => {
 
     await waitFor(() => expect(currentPath()).toBe("/chat"));
     expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
-    await settle();
+    await settle(3);
     // The start form stays: leaving a chat is not a reason to open another one.
     expect(currentPath()).toBe("/chat");
     expect(screen.queryByText("Hello there")).toBeNull();
@@ -491,7 +466,7 @@ describe("Opening a chat by URL", () => {
     expect(pageTitleShows("Second")).toBe(true);
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeTruthy();
     expect(screen.queryByText(NO_CONTEXT)).toBeNull();
-    await settle();
+    await settle(3);
     expect(currentPath()).toBe("/chat/s2");
     expect(screen.queryByText("s1 reply")).toBeNull();
     expect(chatService.markRead).toHaveBeenCalledWith("s2", 1);
@@ -504,7 +479,7 @@ describe("Opening a chat by URL", () => {
 
     expect(await screen.findByText("Chat not found.")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
-    await settle();
+    await settle(3);
     expect(screen.queryByText("s1 reply")).toBeNull();
     expect(screen.queryByText("s2 reply")).toBeNull();
     expect(currentPath()).not.toMatch(/^\/chat\/s[12]$/);
@@ -531,7 +506,7 @@ describe("Opening a chat by URL", () => {
     expect(await screen.findByText("s2 reply")).toBeTruthy();
 
     answerFirst(structuredClone(sessions.s1));
-    await settle();
+    await settle(3);
     expect(currentPath()).toBe("/chat/s2");
     expect(screen.queryByText("s1 reply")).toBeNull();
 
@@ -588,32 +563,6 @@ describe("The page's chat list and conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
   });
-
-  test("a sidebar given extra entries shows them in the list", () => {
-    render(
-      <ChatSidebar
-        history={[]}
-        currentChatId={null}
-        full={false}
-        onOpen={() => {}}
-        onNewChat={() => {}}
-        onDelete={() => {}}
-        onDeleteMany={() => {}}
-        renameChat={() => Promise.resolve(true)}
-        renamesInFlight={new Set()}
-        onFavorite={() => {}}
-        favoritesInFlight={new Set()}
-        extras={<a href="/chat/schedules">Schedules</a>}
-      />,
-      { wrapper: WorkItemHubProvider },
-    );
-
-    expect(
-      within(screen.getByRole("complementary", { name: "Chats" })).getByRole("link", {
-        name: "Schedules",
-      }),
-    ).toBeTruthy();
-  });
 });
 
 describe("Several chats busy at once", () => {
@@ -626,7 +575,7 @@ describe("Several chats busy at once", () => {
     emit("ChatTurnProgress", { chatSessionId: "s2", turnId: "tB", delta: "B partial" });
     expect(await screen.findByText("B partial")).toBeTruthy();
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("s2", 1));
-    await settle();
+    await settle(3);
 
     emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "tA" });
     emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "tA", delta: "A background text" });
@@ -645,7 +594,7 @@ describe("Several chats busy at once", () => {
       ).toBeTruthy(),
     );
     await waitFor(() => expect(description(chatLink())).toMatch(/\b1\b/));
-    await settle();
+    await settle(3);
 
     // The open chat is exactly as it was.
     expect(currentPath()).toBe("/chat/s2");
@@ -677,7 +626,7 @@ describe("Several chats busy at once", () => {
 
     // A turn event alone says nothing about the list: only the server's history does.
     emit("ChatTurnStarted", { chatSessionId: "s2", turnId: "tB" });
-    await settle();
+    await settle(3);
     expect(busyMarker(rowOf(bubbleList, "Second"))).toBeNull();
 
     patchServer("s2", { isBusy: true });
@@ -731,7 +680,7 @@ describe("The open chat and what is shown", () => {
     renderShell("/chat/s1");
 
     await waitFor(() => expect(chatService.getById).toHaveBeenCalledWith("s1"));
-    await settle();
+    await settle(3);
     expect(screen.queryByText("s1 reply")).toBeNull();
     expect(chatService.markRead).not.toHaveBeenCalled();
 
@@ -817,7 +766,7 @@ describe("The open chat and what is shown", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
     const bubble = await screen.findByRole("dialog", { name: "AI chat" });
     expect(await within(bubble).findByRole("button", { name: "Start chat" })).toBeTruthy();
-    await settle();
+    await settle(3);
     expect(within(bubble).queryByText("Hello there")).toBeNull();
   });
 
@@ -853,7 +802,7 @@ describe("The open chat and what is shown", () => {
       expect(chatService.listHistory.mock.calls.length).toBeGreaterThan(listReads);
       fireEvent.click(screen.getByRole("button", { name: "History back" }));
     });
-    await settle();
+    await settle(3);
   }
 
   async function startFormIsShownAndNotTheNewChat() {
@@ -867,7 +816,7 @@ describe("The open chat and what is shown", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
     const bubble = await screen.findByRole("dialog", { name: "AI chat" });
     expect(await within(bubble).findByRole("button", { name: "Start chat" })).toBeTruthy();
-    await settle();
+    await settle(3);
     expect(within(bubble).queryByText("Hello there")).toBeNull();
   }
 
@@ -928,7 +877,7 @@ describe("The open chat and what is shown", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
     const bubble = await screen.findByRole("dialog", { name: "AI chat" });
     expect(await within(bubble).findByRole("button", { name: "Start chat" })).toBeTruthy();
-    await settle();
+    await settle(3);
     expect(within(bubble).queryByText("s1 reply")).toBeNull();
   });
 
@@ -959,7 +908,7 @@ describe("The open chat and what is shown", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
     const bubble = await screen.findByRole("dialog", { name: "AI chat" });
     expect(await within(bubble).findByRole("button", { name: "Start chat" })).toBeTruthy();
-    await settle();
+    await settle(3);
     expect(within(bubble).queryByText("s1 reply")).toBeNull();
   });
 
@@ -991,7 +940,7 @@ describe("The open chat and what is shown", () => {
     await act(async () => {
       created();
     });
-    await settle();
+    await settle(3);
     expect(currentPath()).toBe("/taskboard");
 
     fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
@@ -1062,10 +1011,21 @@ describe("the Chat tab on a phone", () => {
   test("New chat from the list shows the start form", async () => {
     seedTwoChats();
     renderShell("/chat");
-    await waitFor(() => expect(listShown()).toBe(true));
+    await waitFor(() => expect(currentPath()).toBe("/chat/s1"));
 
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     await waitFor(() => expect(currentPath()).toBe("/chat"));
-    expect(listShown()).toBe(false);
+    expect(await screen.findByText("Start chat")).toBeTruthy();
+  });
+});
+
+describe("the Chat tab on a wide screen", () => {
+  test("the tab shows the chat beside the list, never the list alone", async () => {
+    seedTwoChats();
+    renderShell("/chat");
+
+    await waitFor(() => expect(currentPath()).toBe("/chat/s1"));
+    expect(await screen.findByText("s1 reply")).toBeTruthy();
+    expect(document.querySelector(".chat-page")!.classList.contains("chat-page--list")).toBe(false);
   });
 });

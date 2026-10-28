@@ -4,6 +4,7 @@ using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Enums;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -372,15 +373,5 @@ public class GracefulShutdownDrainTests
         public CancellationToken ApplicationStopping => _stopping.Token;
         public CancellationToken ApplicationStopped => CancellationToken.None;
         public void StopApplication() => _stopping.Cancel();
-    }
-
-    private sealed class StaticOptionsMonitor<T> : IOptionsMonitor<T>
-    {
-        private readonly T _value;
-        public StaticOptionsMonitor(T value) { _value = value; }
-        public T CurrentValue => _value;
-        public T Get(string? name) => _value;
-        public IDisposable OnChange(Action<T, string?> listener) => new Noop();
-        private sealed class Noop : IDisposable { public void Dispose() { } }
     }
 }

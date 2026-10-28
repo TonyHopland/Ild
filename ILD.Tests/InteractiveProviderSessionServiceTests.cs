@@ -22,7 +22,7 @@ public class InteractiveProviderSessionServiceTests
     [Fact]
     public async Task BridgesBytesBetweenWebSocketAndPty()
     {
-        if (!IsUnix) return; // PTY backend on Windows requires conhost; not the focus here.
+        if (!IsUnix) Assert.Skip("PTY backend on Windows requires conhost");
 
         var (server, client) = WebSocketPair.Create();
         var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance);
@@ -54,7 +54,7 @@ public class InteractiveProviderSessionServiceTests
     [Fact]
     public async Task ClosesGracefullyWhenBinaryMissing()
     {
-        if (!IsUnix) return;
+        if (!IsUnix) Assert.Skip("PTY sessions are Unix-only here");
 
         var (server, client) = WebSocketPair.Create();
         var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance);
@@ -92,7 +92,7 @@ public class InteractiveProviderSessionServiceTests
     [Fact]
     public async Task Launches_the_cli_with_exactly_the_saved_extra_arguments_and_says_so_first()
     {
-        if (!IsUnix) return;
+        if (!IsUnix) Assert.Skip("PTY sessions are Unix-only here");
 
         // printf prints each argument after the format on its own <<line>>, so the
         // output shows the argv the terminal launched, token by token.
@@ -114,7 +114,7 @@ public class InteractiveProviderSessionServiceTests
     [Fact]
     public async Task Shows_what_a_cli_that_exits_at_once_wrote_and_its_exit_code_then_closes_normally()
     {
-        if (!IsUnix) return;
+        if (!IsUnix) Assert.Skip("PTY sessions are Unix-only here");
 
         var (text, closeStatus) = await RunToCloseAsync("/bin/sh", "-c \"echo boom >&2; exit 3\"");
 
@@ -128,7 +128,7 @@ public class InteractiveProviderSessionServiceTests
     [Fact]
     public async Task Launches_with_no_extra_arguments_and_no_launch_line_when_none_are_saved()
     {
-        if (!IsUnix) return;
+        if (!IsUnix) Assert.Skip("PTY sessions are Unix-only here");
 
         var (text, _) = await RunToCloseAsync("/bin/echo", extraArgs: null);
 
@@ -138,7 +138,7 @@ public class InteractiveProviderSessionServiceTests
     [Fact]
     public async Task Ignores_saved_extra_arguments_that_do_not_split_and_says_so()
     {
-        if (!IsUnix) return;
+        if (!IsUnix) Assert.Skip("PTY sessions are Unix-only here");
 
         var (text, _) = await RunToCloseAsync("/bin/echo", "marker-token \"unbalanced");
 

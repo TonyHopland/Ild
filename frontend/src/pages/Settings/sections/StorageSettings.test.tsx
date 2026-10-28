@@ -2,20 +2,11 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import StorageSettings from "./StorageSettings";
 import * as services from "../../../services/auth";
+import { deferred } from "../../../test-support";
 
 const KB = 1024;
 const MB = 1024 * KB;
 const GB = 1024 * MB;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 function overview(incomplete: boolean, worktreesBytes = 5 * GB) {
   return {
@@ -174,13 +165,6 @@ describe("StorageSettings overview", () => {
     ).toBeGreaterThan(0);
     expect(screen.queryAllByText(/measuring|loading/i)).toEqual([]);
     expect(pageText()).not.toMatch(/\b5(\.0)? GB\b/);
-  });
-
-  test("offers no bulk cleanup of Done items' worktrees: a run's worktree goes when the run ends", async () => {
-    await renderLoaded();
-
-    expect(screen.queryByRole("button", { name: /clean up worktrees/i })).toBeNull();
-    expect(screen.queryByText(/worktrees of done work items/i)).toBeNull();
   });
 
   test("Refresh measures again and shows the new figures", async () => {

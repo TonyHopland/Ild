@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using ILD.McpServer;
 using ILD.McpServer.Tools;
+using ILD.Tests.Fakes;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 
@@ -23,7 +24,7 @@ public class AttachmentToolsTests
 
     private static AttachmentTools Tools(Func<HttpRequestMessage, HttpResponseMessage> respond)
         => new(new IldClient(
-            new HttpClient(new StubHandler(respond)) { BaseAddress = new Uri(BaseAddress) },
+            new HttpClient(new StubHandler(req => Task.FromResult(respond(req)))) { BaseAddress = new Uri(BaseAddress) },
             new IldClientOptions(BaseAddress.TrimEnd('/'), "the-agent-token", LoopRunId: null)));
 
     private static HttpResponseMessage File(byte[] bytes, string contentType, string fileName)
@@ -106,20 +107,11 @@ public class AttachmentToolsTests
     [Fact]
     public void The_server_offers_exactly_one_attachment_tool_and_it_only_reads()
     {
-        var names = McpServerToolReflection.Names();
+        var names = McpToolInvoker.Names();
 
         Assert.Contains("get_workitem_attachment", names);
         Assert.Equal(
             new[] { "get_workitem_attachment" },
             names.Where(n => n.Contains("attachment", StringComparison.OrdinalIgnoreCase)).OrderBy(n => n, StringComparer.Ordinal).ToArray());
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(respond(request));
-        }
     }
 }

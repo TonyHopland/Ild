@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
@@ -13,6 +14,7 @@ using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Http;
@@ -30,6 +32,7 @@ namespace ILD.Tests.Integration;
 /// application/octet-stream body). The archive it serves begins with a 4-byte
 /// big-endian length, then that many bytes of manifest JSON, then opaque bytes.
 /// </summary>
+// A host per test: backups read and write the host's data root and the settings it holds.
 public class BackupApiTests
 {
     private const string Url = "/api/v1/storage/backups";
@@ -247,13 +250,6 @@ public class BackupApiTests
         }
     }
 
-    private sealed class StaticOptionsMonitor<T>(T value) : Microsoft.Extensions.Options.IOptionsMonitor<T>
-    {
-        public T CurrentValue => value;
-        public T Get(string? name) => value;
-        public IDisposable? OnChange(Action<T, string?> listener) => null;
-    }
-
     private static JsonElement DbStatus(JsonElement status, string db)
     {
         var dbs = status.GetProperty("databases");
@@ -384,6 +380,7 @@ public class BackupApiTests
     // ---- criterion 8 (round trip), 11, 15 --------------------------------------------
 
     [Fact]
+    [SupportedOSPlatform("linux")]
     public async Task A_restore_imports_the_stored_bytes_first_keeps_the_current_data_for_download_and_that_file_restores_too()
     {
         await using var host = await Host.StartAsync();
@@ -724,10 +721,6 @@ public class BackupApiTests
         await service.StopAsync(CancellationToken.None);
     }
 
-    private static Task SweepOnceAsync(object service)
-        => (Task)service.GetType().GetMethod("SweepOnceAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(service, [CancellationToken.None])!;
-
     [Theory]
     [InlineData("work-item scheduler")]
     [InlineData("throttled-resume sweeper")]
@@ -781,10 +774,10 @@ public class BackupApiTests
                     await OnePassAsync(ActivatorUtilities.CreateInstance<ChatScheduleScheduler>(sp, (TimeProvider)time), time);
                     break;
                 case "throttled-resume sweeper":
-                    await SweepOnceAsync(ActivatorUtilities.CreateInstance<ThrottledRunResumeSweeper>(sp));
+                    await ActivatorUtilities.CreateInstance<ThrottledRunResumeSweeper>(sp).SweepOnceAsync(CancellationToken.None);
                     break;
                 case "stuck-run watchdog":
-                    await SweepOnceAsync(ActivatorUtilities.CreateInstance<StuckRunWatchdog>(sp));
+                    await ActivatorUtilities.CreateInstance<StuckRunWatchdog>(sp).SweepOnceAsync(CancellationToken.None);
                     break;
             }
         }

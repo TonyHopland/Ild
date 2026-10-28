@@ -17,6 +17,7 @@ namespace ILD.Tests.Integration;
 /// The coordinator's claim rules are covered in <c>RepositoryParallelismTests</c>;
 /// these pin what the route answers and that it shares the scheduler's claim gate.
 /// </summary>
+// A host per test: the work queue pass claims every ready item on the host and the engine mock records each start.
 public class WorkItemStartAnywayApiTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

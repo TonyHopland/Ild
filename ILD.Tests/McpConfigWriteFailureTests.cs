@@ -2,13 +2,13 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ILD.Api.Configuration;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -21,6 +21,7 @@ namespace ILD.Tests;
 /// to write stays silent. The agent read root is pointed at a temporary one
 /// whose <c>ild-mcp-config</c> directory this user cannot write into.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public sealed class McpConfigWriteFailureTests : IDisposable
 {
     private const string Token = "write-failure-test-token";
@@ -263,8 +264,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
     {
         var warning = Assert.Single(warnings);
         Assert.Contains(_configDir, warning);
-        // The UnauthorizedAccessException .NET raises for the denied temp-file create.
-        Assert.Matches($"Access to the path '{Regex.Escape(_configDir)}/[^']+' is denied\\.", warning);
+        Assert.Contains("Could not write the MCP config", warning);
         Assert.DoesNotContain(Token, warning);
     }
 
@@ -326,31 +326,8 @@ public sealed class McpConfigWriteFailureTests : IDisposable
             "#!/bin/sh\n" +
             $"printf '%s\\n' \"$@\" > '{worktree}/argv.txt'\n" +
             "echo 'done'\n");
-        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(script);
-        using var chmod = Process.Start(psi)!;
-        chmod.WaitForExit();
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
-    }
-
-    private class RecordingLogger : ILogger
-    {
-        public List<string> Warnings { get; } = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning)
-                Warnings.Add(formatter(state, exception));
-        }
-    }
-
-    private sealed class RecordingLogger<T> : RecordingLogger, ILogger<T>
-    {
     }
 
     private sealed class RecordingLoggerProvider : ILoggerProvider

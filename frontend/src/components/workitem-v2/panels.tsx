@@ -26,6 +26,7 @@ import Icon from "../Icon";
 import { feedbackReasonLabel, pillClass, type Tone } from "../../utils/labels";
 import { failureMessage } from "./RunDetailSections";
 import { repositoryName } from "../../utils/repositoryName";
+import { PR_AWAITING_MERGE } from "./offers";
 import { NODE_FAILED, nodeTakesRetry, runReopensOnRetry, runTakesRetryNow } from "./retry";
 
 /**
@@ -140,7 +141,6 @@ function writeLabel(write: { kind: string; targetId?: string | null }): string {
 }
 
 const HUMAN_INPUT_NEEDED = "Human Input Needed";
-const PR_AWAITING_MERGE = "PR Awaiting Merge";
 
 /** Why the item waits on a person, as far as the run on screen bears it out. */
 export type Feedback =

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -13,6 +14,7 @@ namespace ILD.Tests;
 /// whole list against what <see cref="IldMcpToolNames"/> reads from the server DLL
 /// the adapter launches.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public sealed class PiAdapterToolListTests : IDisposable
 {
     private readonly Guid _runId = Guid.NewGuid();
@@ -109,11 +111,7 @@ public sealed class PiAdapterToolListTests : IDisposable
             "cat >/dev/null\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-tools\",\"cwd\":\"/w\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        var chmod = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        chmod.ArgumentList.Add("+x");
-        chmod.ArgumentList.Add(script);
-        using var process = Process.Start(chmod)!;
-        process.WaitForExit();
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
     }
 }

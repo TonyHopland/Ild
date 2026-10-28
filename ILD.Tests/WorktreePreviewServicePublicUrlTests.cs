@@ -88,22 +88,79 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
         File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), config);
     }
 
+    private static string? PublicUrl(
+        string? proxyBase,
+        string? authored = null,
+        string? workItemId = "7",
+        string serviceName = "app",
+        bool singlePublicService = true,
+        int? port = 5173)
+        => WorktreePreviewService.ComposePublicUrl(
+            authored, PreviewProxyBase.Parse(proxyBase), workItemId, serviceName, "127.0.0.1", port, singlePublicService);
+
     [Fact]
-    public async Task Without_a_proxy_base_the_public_url_is_the_historical_host_and_port()
+    public void Without_a_proxy_base_the_public_url_is_the_historical_host_and_port()
+        => Assert.Equal("http://127.0.0.1:5173", PublicUrl(proxyBase: null));
+
+    [Fact]
+    public void With_a_proxy_base_the_public_url_becomes_the_work_items_preview_hostname()
+        => Assert.Equal("http://wi-7.ild.example:8080", PublicUrl("http://ild.example:8080"));
+
+    [Fact]
+    public void A_proxy_base_on_its_scheme_default_port_advertises_no_port()
+        => Assert.Equal("https://wi-7.ild.example.com", PublicUrl("https://ild.example.com"));
+
+    [Fact]
+    public void An_authored_public_url_wins_over_the_proxy_base()
+        => Assert.Equal(
+            "https://preview.example.test/app",
+            PublicUrl("http://ild.example:8080", authored: "https://preview.example.test/app"));
+
+    [Fact]
+    public void Several_public_services_are_each_advertised_under_their_own_hostname()
     {
-        WriteConfig();
-        var service = BuildService(proxyBase: null);
-
-        var response = await service.StartAsync(
-            _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
-
-        var app = response.Services.Single(s => s.Name == "app");
-        Assert.Equal($"http://127.0.0.1:{app.Port}", app.PublicUrl);
+        // The bare wi-7 names one service, so neither may claim it.
+        Assert.Equal("http://wi-7-app.ild.example:8080", PublicUrl("http://ild.example:8080", serviceName: "app", singlePublicService: false));
+        Assert.Equal("http://wi-7-docs.ild.example:8080", PublicUrl("http://ild.example:8080", serviceName: "docs", singlePublicService: false));
     }
 
     [Fact]
-    public async Task With_a_proxy_base_the_public_url_becomes_the_work_items_preview_hostname()
+    public void A_service_whose_name_cannot_be_a_hostname_keeps_a_reachable_direct_url()
+    {
+        // ild.config.json does not constrain service names to DNS labels, and an unreachable URL is worse than a loopback one.
+        Assert.Equal(
+            "http://127.0.0.1:5174",
+            PublicUrl("http://ild.example:8080", serviceName: "docs_site", singlePublicService: false, port: 5174));
+        Assert.Equal(
+            "http://wi-7-app.ild.example:8080",
+            PublicUrl("http://ild.example:8080", serviceName: "app", singlePublicService: false));
+    }
+
+    [Fact]
+    public void Without_a_work_item_id_the_proxy_base_cannot_name_a_hostname_and_the_url_falls_back()
+    {
+        Assert.Equal("http://127.0.0.1:5173", PublicUrl("http://ild.example:8080", workItemId: null));
+        Assert.Equal("http://127.0.0.1:5173", PublicUrl("http://ild.example:8080", workItemId: " "));
+    }
+
+    [Fact]
+    public void Without_a_port_and_without_a_hostname_there_is_no_url()
+        => Assert.Null(PublicUrl(proxyBase: null, port: null));
+
+    [Theory]
+    [InlineData("7", null, "wi-7")]
+    [InlineData("7", "api", "wi-7-api")]
+    [InlineData("7", "work-item-server", "wi-7-work-item-server")]
+    [InlineData("7", "docs_site", null)]
+    [InlineData("7", "-api", null)]
+    [InlineData("7", "api-", null)]
+    [InlineData(null, "api", null)]
+    [InlineData("", null, null)]
+    public void A_preview_host_label_needs_a_work_item_id_and_a_dns_safe_service_name(string? workItemId, string? serviceName, string? expected)
+        => Assert.Equal(expected, WorktreePreviewService.BuildPreviewHostLabel(workItemId, serviceName));
+
+    [Fact]
+    public async Task A_started_preview_advertises_the_work_items_preview_hostname_when_a_proxy_base_is_set()
     {
         WriteConfig();
         var service = BuildService("http://ild.example:8080");
@@ -113,79 +170,6 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
             new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
 
         Assert.Equal("http://wi-7.ild.example:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
-    }
-
-    [Fact]
-    public async Task A_proxy_base_on_its_scheme_default_port_advertises_no_port()
-    {
-        WriteConfig();
-        var service = BuildService("https://ild.example.com");
-
-        var response = await service.StartAsync(
-            _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
-
-        Assert.Equal("https://wi-7.ild.example.com", response.Services.Single(s => s.Name == "app").PublicUrl);
-    }
-
-    [Fact]
-    public async Task An_authored_public_url_wins_over_the_proxy_base()
-    {
-        WriteConfig(publicUrlTemplate: "https://preview.example.test/app");
-        var service = BuildService("http://ild.example:8080");
-
-        var response = await service.StartAsync(
-            _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
-
-        Assert.Equal("https://preview.example.test/app", response.Services.Single(s => s.Name == "app").PublicUrl);
-    }
-
-    [Fact]
-    public async Task Several_public_services_are_each_advertised_under_their_own_hostname()
-    {
-        WriteConfig(secondPublicServiceName: "docs");
-        var service = BuildService("http://ild.example:8080");
-
-        var response = await service.StartAsync(
-            _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
-
-        // The bare wi-7 names one service, so neither may claim it — handing both the
-        // same URL would send one of them to the wrong application.
-        Assert.Equal("http://wi-7-app.ild.example:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
-        Assert.Equal("http://wi-7-docs.ild.example:8080", response.Services.Single(s => s.Name == "docs").PublicUrl);
-    }
-
-    [Fact]
-    public async Task A_service_whose_name_cannot_be_a_hostname_keeps_a_reachable_direct_url()
-    {
-        // ild.config.json does not constrain service names to DNS labels, and an
-        // unreachable URL is worse than a loopback one.
-        WriteConfig(secondPublicServiceName: "docs_site");
-        var service = BuildService("http://ild.example:8080");
-
-        var response = await service.StartAsync(
-            _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
-
-        var docs = response.Services.Single(s => s.Name == "docs_site");
-        Assert.Equal($"http://127.0.0.1:{docs.Port}", docs.PublicUrl);
-        Assert.Equal("http://wi-7-app.ild.example:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
-    }
-
-    [Fact]
-    public async Task Without_a_work_item_id_the_proxy_base_cannot_name_a_hostname_and_the_url_falls_back()
-    {
-        WriteConfig();
-        var service = BuildService("http://ild.example:8080");
-
-        // Every API path that starts a preview knows the work item; a caller that
-        // does not still gets a usable (if loopback-only) URL rather than a wrong one.
-        var response = await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
-
-        var app = response.Services.Single(s => s.Name == "app");
-        Assert.Equal($"http://127.0.0.1:{app.Port}", app.PublicUrl);
     }
 
     private static int FindFreePort()

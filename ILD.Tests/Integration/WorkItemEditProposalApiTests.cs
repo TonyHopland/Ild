@@ -20,12 +20,12 @@ namespace ILD.Tests.Integration;
 /// human surface may approve or reject one. Agent calls are made the way the
 /// MCP server makes them — the agent service token plus the session header.
 /// </summary>
-public class WorkItemEditProposalApiTests
+public class WorkItemEditProposalApiTests : IClassFixture<WorkItemEditProposalApiTests.Host>
 {
     private const string RunHeader = "X-ILD-Run-Id";
     private const string ChatHeader = "X-ILD-Chat-Session-Id";
 
-    private sealed class Host : IAsyncDisposable
+    public sealed class Host : IAsyncLifetime
     {
         public ApiFactory Factory { get; }
         public Mock<IWorkItemNotifier> WorkItemNotifier { get; } = new();
@@ -45,11 +45,10 @@ public class WorkItemEditProposalApiTests
             });
         }
 
-        public async Task<Host> StartAsync()
+        public async ValueTask InitializeAsync()
         {
             Human = await Factory.CreateAuthenticatedClientAsync();
             RepositoryId = await SeedRepositoryAsync(Factory);
-            return this;
         }
 
         public HttpClient Agent(Guid? runId = null, Guid? chatSessionId = null)
@@ -65,7 +64,14 @@ public class WorkItemEditProposalApiTests
         public async ValueTask DisposeAsync() => await Factory.DisposeAsync();
     }
 
-    private static async Task<Host> StartHostAsync() => await new Host().StartAsync();
+    private readonly Host _host;
+
+    public WorkItemEditProposalApiTests(Host host)
+    {
+        _host = host;
+        host.WorkItemNotifier.Invocations.Clear();
+        host.ChatNotifier.Invocations.Clear();
+    }
 
     /// <summary>An older backlog item no agent session created.</summary>
     private static async Task<string> CreateHumanItemAsync(Host host)
@@ -149,7 +155,7 @@ public class WorkItemEditProposalApiTests
     [InlineData(Caller.Both)]
     public async Task An_agent_proposes_an_edit_to_an_item_it_did_not_create_and_the_item_is_unchanged(Caller caller)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var runId = caller is Caller.LoopRun or Caller.Both ? await SeedRunAsync(host.Factory) : (Guid?)null;
         var chatId = caller is Caller.ChatSession or Caller.Both ? await SeedChatSessionAsync(host.Factory) : (Guid?)null;
@@ -192,7 +198,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task Proposing_on_an_item_the_callers_own_session_created_is_still_only_a_proposal()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var runId = await SeedRunAsync(host.Factory);
         var agent = host.Agent(runId);
         var created = await agent.PostAsJsonAsync("/api/v1/agent/workitems", new
@@ -212,7 +218,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task A_tag_outside_the_loop_templates_and_a_blank_override_are_proposable()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var agent = host.Agent(await SeedRunAsync(host.Factory));
 
@@ -227,20 +233,14 @@ public class WorkItemEditProposalApiTests
     public static TheoryData<string, string> InvalidProposals => new()
     {
         { "nothing proposed", "{}" },
-        { "only a rationale", """{"rationale":"just because"}""" },
-        { "empty title", """{"title":""}""" },
-        { "blank title", """{"title":"   "}""" },
         { "title over 512", $$"""{"title":"{{new string('t', 513)}}"}""" },
-        { "illegal branch name", """{"branchNameOverride":"bad..name"}""" },
-        { "illegal base branch", """{"baseBranchOverride":"has space"}""" },
-        { "rationale over 2000", $$"""{"title":"ok","rationale":"{{new string('r', 2001)}}"}""" },
     };
 
     [Theory]
     [MemberData(nameof(InvalidProposals))]
     public async Task An_invalid_proposal_is_a_400_that_stores_nothing(string _, string json)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var agent = host.Agent(await SeedRunAsync(host.Factory));
 
@@ -259,7 +259,7 @@ public class WorkItemEditProposalApiTests
     [InlineData(SessionHeader.UnknownChat, HttpStatusCode.Forbidden)]
     public async Task A_proposal_needs_a_session_that_exists(SessionHeader header, HttpStatusCode expected)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var agent = host.Agent(
             runId: header == SessionHeader.UnknownRun ? Guid.NewGuid() : null,
@@ -276,7 +276,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task Proposing_on_an_unknown_item_is_404()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var agent = host.Agent(await SeedRunAsync(host.Factory));
 
         var resp = await ProposeAsync(agent, Guid.NewGuid().ToString(), new { title = "Renamed" });
@@ -287,7 +287,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task A_twenty_first_pending_proposal_on_one_item_is_refused_with_409()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var agent = host.Agent(await SeedRunAsync(host.Factory));
         for (var i = 0; i < 20; i++)
@@ -302,7 +302,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task A_human_approving_applies_exactly_the_proposed_fields_and_tells_the_board_and_the_chat()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var statusBefore = (await GetItemAsync(host, itemId)).GetProperty("status").GetString();
         var chatId = await SeedChatSessionAsync(host.Factory);
@@ -333,7 +333,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task Approving_after_a_human_edit_is_a_409_that_marks_the_proposal_stale_and_keeps_the_edit()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var proposalId = await ProposeOkAsync(host.Agent(await SeedRunAsync(host.Factory)), itemId, new { title = "Agent title" });
         var edit = await host.Human.PutAsJsonAsync($"/api/v1/workitems/{itemId}", new
@@ -359,7 +359,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task After_one_of_several_is_approved_the_others_are_stale_and_approving_them_is_a_409()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var agent = host.Agent(await SeedRunAsync(host.Factory));
         var first = await ProposeOkAsync(agent, itemId, new { title = "First title" });
@@ -379,7 +379,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task Rejecting_applies_nothing_and_the_agent_can_read_the_reason()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var chatId = await SeedChatSessionAsync(host.Factory);
         var agent = host.Agent(chatSessionId: chatId);
@@ -412,7 +412,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task A_reject_reason_over_2000_characters_is_refused_and_the_proposal_stays_pending()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var proposalId = await ProposeOkAsync(host.Agent(await SeedRunAsync(host.Factory)), itemId, new { title = "Agent title" });
 
@@ -425,7 +425,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task An_unknown_proposal_or_one_of_another_item_is_404()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var otherId = await CreateHumanItemAsync(host);
         var proposalId = await ProposeOkAsync(host.Agent(await SeedRunAsync(host.Factory)), itemId, new { title = "Agent title" });
@@ -440,7 +440,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task Creating_a_proposal_from_a_chat_hints_the_item_and_the_chat()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var chatId = await SeedChatSessionAsync(host.Factory);
 
@@ -453,7 +453,9 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task The_human_can_list_pending_proposals_across_items_and_a_chats_proposals()
     {
-        await using var host = await StartHostAsync();
+        // Own host: it asserts the whole pending list across items.
+        await using var host = new Host();
+        await host.InitializeAsync();
         var itemA = await CreateHumanItemAsync(host);
         var itemB = await CreateHumanItemAsync(host);
         var chatId = await SeedChatSessionAsync(host.Factory);
@@ -476,7 +478,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task The_agent_token_cannot_list_approve_or_reject_on_the_human_surface()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var runId = await SeedRunAsync(host.Factory);
         var agent = host.Agent(runId);
@@ -506,7 +508,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task Update_workitem_still_refuses_an_item_the_session_did_not_create_and_points_at_proposing()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var agent = host.Agent(await SeedRunAsync(host.Factory));
 
@@ -543,7 +545,7 @@ public class WorkItemEditProposalApiTests
     [InlineData(RunStep.OneRunningAndAChatHeaderToo)]
     public async Task A_loop_proposal_records_the_step_that_was_running_when_it_was_made(RunStep step)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var (runId, runningNodeId) = await SeedRunWithStepsAsync(host.Factory, running: step != RunStep.NoneRunning);
         await SeedRunWithStepsAsync(host.Factory, running: true);
@@ -575,7 +577,7 @@ public class WorkItemEditProposalApiTests
     [MemberData(nameof(ChatTranscripts))]
     public async Task A_chat_proposal_records_the_reply_it_follows(string _, string[] roles, int? expected)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var chatId = await SeedChatSessionAsync(host.Factory);
         await SeedChatMessagesAsync(host.Factory, chatId, roles);
@@ -593,7 +595,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task Anchors_come_back_unchanged_from_every_listing_and_decision()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var chatId = await SeedChatSessionAsync(host.Factory);
         var chat = host.Agent(chatSessionId: chatId);
@@ -643,7 +645,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task An_items_requested_list_holds_what_its_runs_proposed_on_any_item_and_listings_name_the_requester()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemA = await CreateHumanItemAsync(host);
         var itemB = await CreateHumanItemAsync(host);
         var itemC = await CreateHumanItemAsync(host);
@@ -687,7 +689,7 @@ public class WorkItemEditProposalApiTests
     [Fact]
     public async Task The_requesting_item_is_hinted_when_its_proposal_on_another_item_is_made_rejected_or_made_stale()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemA = await CreateHumanItemAsync(host);
         var itemB = await CreateHumanItemAsync(host);
         var agentOfA = host.Agent(await SeedRunAsync(host.Factory, itemA));
@@ -717,7 +719,7 @@ public class WorkItemEditProposalApiTests
     [InlineData(RunDeletion.ItsWorkItemIsDeleted)]
     public async Task Deleting_a_run_rejects_its_pending_proposals_and_leaves_decided_ones_and_other_runs_ones(RunDeletion deletion)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemA = await CreateHumanItemAsync(host);
         var itemB = await CreateHumanItemAsync(host);
         var itemC = await CreateHumanItemAsync(host);

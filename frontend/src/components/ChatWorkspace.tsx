@@ -220,6 +220,12 @@ export default function ChatWorkspace({
   // button the moment one turn handed over to the next.
   const [turn, setTurn] = useState<string | null>(null);
   const turnRef = useRef<string | null>(null);
+  // Turns the open chat's view saw another turn's start replace. A replaced turn
+  // is over, so no read may make it the chat's turn again — a read taken during
+  // the hand-over can still name it, and completing it would then end the chat
+  // under the turn that replaced it. Belongs to the chat open now: cleared
+  // whenever the view moves to another chat or none.
+  const replacedTurnsRef = useRef(new Set<string>());
   // Bumped by every turn change a read must not overrule — a hub event, a send,
   // leaving or opening a chat — so a snapshot taken before one of those can tell
   // that what it was asked about has moved on. Monotonic on purpose: a turn value
@@ -429,7 +435,9 @@ export default function ChatWorkspace({
         return missing.length === 0 ? prev : [...prev, ...missing].sort(byTranscriptOrder);
       });
 
-      const active = view.activeTurnId ?? null;
+      const named = view.activeTurnId ?? null;
+      const active =
+        named !== null && replacedTurnsRef.current.has(named) ? turnRef.current : named;
       // A streamed partial belongs to the turn that produced it, and only that
       // turn's own finalized reply replaces it. If the server no longer names
       // that turn, the text on screen is from a turn that has ended.
@@ -508,6 +516,10 @@ export default function ChatWorkspace({
       // keeps it. Dropped only when the turn really changes, so a start that
       // merely confirms the turn we are already on leaves its text alone.
       clearStreamUnlessFrom(msg.payload.turnId);
+      const outgoing = turnRef.current;
+      if (outgoing !== null && outgoing !== PENDING_TURN && outgoing !== msg.payload.turnId) {
+        replacedTurnsRef.current.add(outgoing);
+      }
       applyTurn(msg.payload.turnId);
     };
     const onCompleted = (msg: { payload: ChatTurnCompletedPayload }) => {
@@ -596,6 +608,7 @@ export default function ChatWorkspace({
       setMessages(created.messages);
       applyTurn(created.activeTurnId ?? null);
       sessionIdRef.current = created.id;
+      replacedTurnsRef.current = new Set();
       releaseRequestClaims();
       setActiveChatId(created.id);
       onActiveChatChangeRef.current?.(created.id);
@@ -735,6 +748,7 @@ export default function ChatWorkspace({
     applyTurn(null);
     setError(null);
     sessionIdRef.current = null;
+    replacedTurnsRef.current = new Set();
     releaseRequestClaims();
     void refreshHistory().catch(() => {});
     setActiveChatId(null);
@@ -760,6 +774,7 @@ export default function ChatWorkspace({
       // all — the transcript is not the only thing being resumed.
       applyTurn(resumed.activeTurnId ?? null);
       sessionIdRef.current = resumed.id;
+      replacedTurnsRef.current = new Set();
       // Opened fresh, so it starts with no claim of its own — the same rule from
       // the other end, for a chat entered by any path that did not go via the list.
       releaseRequestClaims();

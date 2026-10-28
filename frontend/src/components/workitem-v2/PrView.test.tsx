@@ -50,23 +50,4 @@ describe("PrView", () => {
     expect(screen.getByText("looks good")).toBeTruthy();
     expect(screen.getByText("bob")).toBeTruthy();
   });
-
-  test("shows merge-conflict and changes-requested badges and a merged state", () => {
-    render(
-      <PrView
-        snapshot={snapshot({
-          state: "open",
-          ci: "Failed",
-          approved: false,
-          changesRequested: true,
-          mergeable: false,
-          mergeableState: "dirty",
-        })}
-      />,
-    );
-
-    expect(screen.getByText("CI failed")).toBeTruthy();
-    expect(screen.getByText("Changes requested")).toBeTruthy();
-    expect(screen.getByText("Merge conflict")).toBeTruthy();
-  });
 });

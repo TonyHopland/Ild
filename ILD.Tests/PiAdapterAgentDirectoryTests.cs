@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -19,6 +20,7 @@ namespace ILD.Tests;
 /// <see cref="ProcessGlobalStateCollection"/>.
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
+[SupportedOSPlatform("linux")]
 public sealed class PiAdapterAgentDirectoryTests : IDisposable
 {
     private readonly Guid _runId = Guid.NewGuid();
@@ -202,11 +204,7 @@ public sealed class PiAdapterAgentDirectoryTests : IDisposable
             "cat >/dev/null\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-agent-dir\",\"cwd\":\"/w\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        var chmod = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        chmod.ArgumentList.Add("+x");
-        chmod.ArgumentList.Add(script);
-        using var process = Process.Start(chmod)!;
-        process.WaitForExit();
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
     }
 }

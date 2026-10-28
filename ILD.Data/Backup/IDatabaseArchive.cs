@@ -1,4 +1,8 @@
+#if WORKITEM_SERVER
+namespace ILD.WorkItemServer.Backup;
+#else
 namespace ILD.Data.Backup;
+#endif
 
 /// <summary>The names a database goes by in a backup: in its manifest and header, and in the API.</summary>
 public static class ArchiveDatabase

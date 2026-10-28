@@ -6,7 +6,7 @@ import { LoopRun, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
 import type { HumanInputProposal, RunConversationMessage } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
-import { documentOrder, fakeHub, reply, stubFetch } from "../../test-support";
+import { documentOrder, fakeHub, reply, stubFetch, routeEveryHub } from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
@@ -117,7 +117,7 @@ function turn(
 
 function mockServices(turns: RunConversationMessage[] = []) {
   const hub = fakeHub();
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
+  routeEveryHub(signalRHook, hub);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);

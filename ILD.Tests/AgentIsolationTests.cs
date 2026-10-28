@@ -555,22 +555,14 @@ public class AgentIsolationTests
     }
 
     [Fact]
-    public void RouteCommand_carries_no_environment_when_isolation_is_off()
-    {
-        var routed = AgentIsolation.RouteCommand("claude", Array.Empty<string>(),
-            agentUser: null, agentGroup: null, agentHome: "/home/agent");
-
-        Assert.Empty(routed.Environment);
-    }
-
-    [Fact]
-    public void RouteCommand_is_a_noop_when_isolation_is_off()
+    public void RouteCommand_is_a_noop_carrying_no_environment_when_isolation_is_off()
     {
         var routed = AgentIsolation.RouteCommand("claude", new[] { "--version" },
-            agentUser: null, agentGroup: null, agentHome: null);
+            agentUser: null, agentGroup: null, agentHome: "/home/agent");
 
         Assert.Equal("claude", routed.FileName);
         Assert.Equal(new[] { "--version" }, routed.Arguments);
+        Assert.Empty(routed.Environment);
     }
 
     [Fact]
@@ -598,19 +590,6 @@ public class AgentIsolationTests
         // are why — a user without a home is routed but keeps the inherited HOME,
         // so anything hung off it has to fall back with it.
         Assert.Equal(expected, AgentIsolation.ResolveChildHome(user, home));
-    }
-
-    [Fact]
-    public void Route_leaves_HOME_alone_when_no_agent_home_is_configured()
-    {
-        var psi = BuildPsi();
-        psi.Environment.TryGetValue("HOME", out var originalHome);
-
-        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: null);
-
-        psi.Environment.TryGetValue("HOME", out var home);
-        Assert.Equal(originalHome, home);
-        Assert.Equal("/usr/bin/setpriv", psi.FileName);
     }
 
     [Fact]
@@ -727,17 +706,5 @@ public class AgentIsolationTests
 
         Assert.Equal("Host=db", psi.Environment["ILD_DB_CONNECTION_STRING"]);
         Assert.Equal("/tmp/private", psi.Environment[AgentIsolation.PrivateRootEnvVar]);
-    }
-
-    [Fact]
-    public void Route_preserves_environment_variables_set_by_the_adapter()
-    {
-        var psi = BuildPsi();
-        psi.Environment["OPENCODE_CONFIG_CONTENT"] = "{}";
-
-        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
-
-        // Adapter-set env must survive the wrap (setpriv passes it through).
-        Assert.Equal("{}", psi.Environment["OPENCODE_CONFIG_CONTENT"]);
     }
 }

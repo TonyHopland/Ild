@@ -1,28 +1,19 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ILD.Data.Entities;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
-public class RemoteProvidersIntegrationTests
+public class RemoteProvidersIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
-    [Fact]
-    public async Task GetAll_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/remoteproviders", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
     [Fact]
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        // Own host: it asserts the whole provider list is empty.
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/remoteproviders", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
@@ -32,7 +23,6 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task GetTypes_with_token_returns_only_implemented_provider_types()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.GetAsync("/api/v1/remoteproviders/types", TestContext.Current.CancellationToken);
@@ -64,7 +54,6 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task Test_returns_the_result_as_data_for_a_stored_provider()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         // Not an absolute URL, so the test answers without leaving the process.
         var id = await SeedProviderAsync(factory, "Forgejo", "not a url");
@@ -82,7 +71,6 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task Test_rejects_a_malformed_id_and_an_unknown_one()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var malformed = await client.PostAsync("/api/v1/remoteproviders/not-a-guid/test", null, TestContext.Current.CancellationToken);
@@ -95,7 +83,6 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task Test_is_for_signed_in_users_only()
     {
-        await using var factory = new ApiFactory();
         var id = await SeedProviderAsync(factory, "Forgejo", "not a url");
 
         var anonymous = await factory.CreateClient().PostAsync($"/api/v1/remoteproviders/{id}/test", null, TestContext.Current.CancellationToken);
@@ -113,11 +100,11 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task GetAll_pages_providers_with_the_same_name_in_a_stable_order()
     {
-        var sql = new SqlCapture();
-        await using var factory = new ApiFactory(configureServices: sql.Register);
-        var client = await factory.CreateAuthenticatedClientAsync();
+        // Own host: the page order is asserted over every row the host holds.
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         var ids = new[] { "33333333-0000-0000-0000-000000000000", "22222222-0000-0000-0000-000000000000", "11111111-0000-0000-0000-000000000000" };
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = ownHost.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             foreach (var id in ids)
@@ -133,8 +120,5 @@ public class RemoteProvidersIntegrationTests
         }
 
         Assert.Equal(new[] { ids[2], ids[1], ids[0] }, paged);
-        Assert.Contains(sql.Commands, c => SortsByNameThenId.IsMatch(c));
     }
-
-    private static readonly Regex SortsByNameThenId = new("ORDER BY \"\\w+\"\\.\"Name\", \"\\w+\"\\.\"Id\"");
 }

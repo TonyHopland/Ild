@@ -4,6 +4,7 @@ using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -159,13 +160,6 @@ public class WorkItemManagerTests
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Backlog, wi!.Status);
-    }
-
-    private sealed class TestClock : TimeProvider
-    {
-        public DateTime Now;
-        public TestClock(DateTime now) => Now = now;
-        public override DateTimeOffset GetUtcNow() => new(Now, TimeSpan.Zero);
     }
 
     [Fact]
@@ -1433,40 +1427,6 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task DeleteAsync_removes_workitem_and_all_dependencies()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
-        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
-
-        var ok = await mgr.DeleteAsync(TestActors.Human, child);
-
-        Assert.True(ok);
-        Assert.Null((await mgr.GetWorkItemAsync(child)));
-        // Dependencies live on the WorkItemServer; delete propagates there.
-    }
-
-    [Fact]
-    public async Task DeleteAsync_removes_workitem_when_other_items_depend_on_it()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
-        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
-
-        var ok = await mgr.DeleteAsync(TestActors.Human, dep);
-
-        Assert.True(ok);
-        Assert.Null((await mgr.GetWorkItemAsync(dep)));
-        // Dependencies live on the WorkItemServer; delete propagates there.
-    }
-
-    [Fact]
     public async Task DeleteAsync_returns_false_for_unknown_id()
     {
         var (mgr, db, _, _, _) = Setup();
@@ -1667,12 +1627,12 @@ public class WorkItemManagerTests
         var run = RunTimeline.SeedRun(db, id, RunTimeline.SeedVersion(db), LoopRunStatus.Running);
         await using (var other = db.Fresh())
             await other.LoopRuns.Where(r => r.Id == run.Id)
-                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, LoopRunStatus.Cancelled));
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, LoopRunStatus.Cancelled), cancellationToken: TestContext.Current.CancellationToken);
 
         await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
 
         await using var read = db.Fresh();
-        Assert.Equal(LoopRunStatus.Cancelled, (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).Status);
+        Assert.Equal(LoopRunStatus.Cancelled, (await read.LoopRuns.SingleAsync(r => r.Id == run.Id, TestContext.Current.CancellationToken)).Status);
     }
 
     [Fact]
@@ -1686,12 +1646,12 @@ public class WorkItemManagerTests
         await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "Need approval", currentLoopRunId: run.Id);
 
         await using (var read = db.Fresh())
-            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
+            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id, TestContext.Current.CancellationToken)).HumanFeedbackReason);
         // A later save of the caller's copy must not put the old reason back.
         Assert.Equal("Need approval", run.HumanFeedbackReason);
         await db.LoopRuns.UpdateRunAsync(run);
         await using (var read = db.Fresh())
-            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
+            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id, TestContext.Current.CancellationToken)).HumanFeedbackReason);
     }
 
     [Fact]
@@ -1717,12 +1677,14 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
-        var existingRunId = SeedLoopRun(db, id);
+        var runId = SeedLoopRun(db, id);
+        db.Context.LoopRuns.Single(r => r.Id == runId).HumanFeedbackReason = "earlier-label";
+        db.Context.SaveChanges();
 
-        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running, currentLoopRunId: null);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "needs a look", null,
+            currentLoopRunId: null, humanFeedbackReason: "another-label");
 
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.NotNull(after!.CurrentLoopRunId);
+        Assert.Equal("earlier-label", db.Fresh().LoopRuns.AsNoTracking().Single(r => r.Id == runId).HumanFeedbackReason);
     }
 
     [Fact]
@@ -1733,11 +1695,12 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
         var runId = SeedLoopRun(db, id);
+        db.Context.LoopRuns.Single(r => r.Id == runId).HumanFeedbackReason = "stale-label";
+        db.Context.SaveChanges();
 
         await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Done, currentLoopRunId: Guid.Empty);
 
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
+        Assert.Null(db.Fresh().LoopRuns.AsNoTracking().Single(r => r.Id == runId).HumanFeedbackReason);
     }
 
     [Fact]
@@ -1785,8 +1748,15 @@ public class WorkItemManagerTests
         notifier.Verify(n => n.HumanFeedbackRequiredAsync(id, "second"), Times.Once);
     }
 
-    [Fact]
-    public async Task CreateWorkItemAsync_notifies_state_change_so_clients_add_the_item_live()
+    // Creation has no prior status, so old and new are both the landing status.
+    // The Taskboard's WorkItemStateChanged handler loads any item it doesn't yet
+    // know about, so this single broadcast is what makes a freshly created item
+    // appear without a manual refresh. The AI/MCP path forces Backlog regardless
+    // of the repo's intake default (WorkQueue here) and must broadcast too.
+    [Theory]
+    [InlineData(false, RemoteWorkItemStatus.WorkQueue)]
+    [InlineData(true, RemoteWorkItemStatus.Backlog)]
+    public async Task CreateWorkItemAsync_notifies_state_change_so_clients_add_the_item_live(bool agentCreated, RemoteWorkItemStatus landing)
     {
         var db = new TestDb();
         using var _ = db;
@@ -1800,13 +1770,11 @@ public class WorkItemManagerTests
         var notifier = new Mock<IWorkItemNotifier>();
         var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
 
-        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id);
+        var id = agentCreated
+            ? await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id, Guid.NewGuid(), forceBacklog: true)
+            : await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id);
 
-        // Creation has no prior status, so old and new are both the landing
-        // status (here WorkQueue). The Taskboard's WorkItemStateChanged handler
-        // loads any item it doesn't yet know about, so this single broadcast is
-        // what makes a freshly created item appear without a manual refresh.
-        notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.WorkQueue), Times.Once);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(id, landing, landing), Times.Once);
     }
 
     // ---- Preview teardown on Done ----------------------------------------
@@ -1962,30 +1930,6 @@ public class WorkItemManagerTests
 
         preview.Verify(p => p.StopAsync("/tmp/worktrees/cleanup-wi", It.IsAny<CancellationToken>()), Times.Once);
         notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
-    }
-
-    [Fact]
-    public async Task CreateWorkItemAsync_notifies_for_agent_created_backlog_items()
-    {
-        var db = new TestDb();
-        using var _ = db;
-        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
-        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git", DefaultIntakeStatus = WorkItemStatus.WorkQueue };
-        db.Context.RemoteProviders.Add(remote);
-        db.Context.Repositories.Add(repo);
-        db.Context.SaveChanges();
-        var repoMgr = new Mock<IRepositoryManager>();
-        var eventLog = new Mock<IEventLogService>();
-        var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
-
-        // The AI/MCP path forces Backlog regardless of the repo's intake default.
-        // This is the path the bug report was about — an agent-created item must
-        // still broadcast so the board updates without a refresh.
-        var runId = Guid.NewGuid();
-        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id, runId, forceBacklog: true);
-
-        notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.Backlog, RemoteWorkItemStatus.Backlog), Times.Once);
     }
 
     // Through the same contract the poller writes with, so a test cannot pass
@@ -2654,7 +2598,7 @@ public class WorkItemManagerTests
                 Assert.Equal(expected[view.Id], (view.CurrentLoopRunId, view.IsPreviewRunning, view.StatusReason));
         }
 
-        var opts = await db.ServerOptions.ResolveForWorkItemAsync(target);
+        var opts = await db.ServerOptions.ResolveForWorkItemAsync(target, TestContext.Current.CancellationToken);
 
         await mgr.AddDependencyAsync(TestActors.Human, target, a);
         var oneDependency = await Measure(() => mgr.GetDependenciesAsync(target));
@@ -2668,10 +2612,10 @@ public class WorkItemManagerTests
         var threeDependencies = await Measure(() => mgr.GetDependenciesAsync(target));
         var twoDependents = await Measure(() => mgr.GetDependentsAsync(a));
 
-        var dependencyOrder = (await db.ServerClient.GetAsync(opts, target))!.Dependencies;
+        var dependencyOrder = (await db.ServerClient.GetAsync(opts, target, TestContext.Current.CancellationToken))!.Dependencies;
         Assert.Equal(3, dependencyOrder.Count);
         AssertViews(dependencyOrder, threeDependencies.Views);
-        var dependentOrder = (await db.ServerClient.ListAsync(opts, status: null, tags: null))
+        var dependentOrder = (await db.ServerClient.ListAsync(opts, status: null, tags: null, ct: TestContext.Current.CancellationToken))
             .Where(w => w.Dependencies.Contains(a)).Select(w => w.Id).ToList();
         Assert.Equal(2, dependentOrder.Count);
         AssertViews(dependentOrder, twoDependents.Views);

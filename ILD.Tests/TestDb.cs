@@ -23,8 +23,8 @@ namespace ILD.Tests;
 ///         observe writes done through one store from another should mutate via <c>Context</c>
 ///         (or call <see cref="Fresh"/> to get an untracked context on the same connection)
 ///         to avoid stale change-tracker reads.</item>
-///   <item>End-to-end / integration tests must NOT share a <c>TestDb</c>; use the per-test
-///         <see cref="ILD.Tests.Integration.ApiFactory"/> instead, which boots the full API
+///   <item>End-to-end / integration tests must NOT share a <c>TestDb</c>; use an
+///         <see cref="ILD.Tests.Integration.ApiFactory"/> of its own (per test or per class) instead, which boots the full API
 ///         pipeline against its own in-memory connection and temp data directory.</item>
 /// </list>
 /// </summary>

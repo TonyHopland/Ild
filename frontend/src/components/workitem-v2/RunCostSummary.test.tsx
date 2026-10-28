@@ -46,6 +46,7 @@ describe("RunCostSummary", () => {
 
     expect(screen.queryByText("cost")).toBeNull();
     expect(screen.getByText("50")).toBeTruthy();
+    expect(screen.getByText("10")).toBeTruthy();
   });
 
   test("renders nothing when the run has no token or cost data", () => {

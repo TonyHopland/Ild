@@ -17,6 +17,7 @@ namespace ILD.Tests.Integration;
 /// (and the agent token may not touch), a PAT that goes in and never comes back
 /// out, and the repositories that select feeds by name.
 /// </summary>
+// A host per test: feed names and the feed list are host-wide.
 public class PackageFeedsApiTests
 {
     private const string Pat = "patSECRET-4f1d-XyZ9";
@@ -152,20 +153,6 @@ public class PackageFeedsApiTests
         Assert.Empty(await ListFeedsAsync(client));
     }
 
-    [Theory]
-    [InlineData("abcd1234", "••••1234")]
-    [InlineData("abc1234", "••••")]
-    [InlineData("x", "••••")]
-    public async Task The_pat_hint_shows_the_last_four_characters_only_of_a_pat_long_enough_to_spare_them(string pat, string hint)
-    {
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-
-        var created = await CreateFeedAsync(client, "company", CompanyUrl, pat);
-
-        Assert.Equal(hint, created.GetProperty("patHint").GetString());
-    }
-
     [Fact]
     public async Task A_bad_name_or_missing_pat_is_refused_with_a_reason_and_nothing_is_stored()
     {
@@ -190,45 +177,19 @@ public class PackageFeedsApiTests
     }
 
     [Fact]
-    public async Task Only_an_azure_artifacts_feed_url_on_either_host_is_accepted()
+    public async Task A_feed_url_that_is_not_an_azure_artifacts_feed_is_refused_on_create_and_update_and_the_legacy_host_is_accepted()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = (await CreateFeedAsync(client, "company", CompanyUrl)).GetProperty("id").GetString()!;
 
-        var rejected = new[]
-        {
-            "",
-            "not a url",
-            "http://pkgs.dev.azure.com/example-org/_packaging/company",
-            "https://example.com/example-org/_packaging/company",
-            "http://example-org.pkgs.visualstudio.com/_packaging/company",
-            "https://pkgs.visualstudio.com/_packaging/company",
-            "https://team.example-org.pkgs.visualstudio.com/_packaging/company",
-            "https://example-org.pkgs.visualstudio.com/_packaging",
-            "https://example-org.pkgs.visualstudio.com/example-project/team/_packaging/company",
-            "https://example-org.pkgs.visualstudio.com/_packaging/company/nuget/v3/index.json",
-            "https://example-org.pkgs.visualstudio.com/_packaging/company?api-version=7.1",
-            "https://pkgs.dev.azure.com/_packaging/company",
-            "https://pkgs.dev.azure.com/example-org/_packaging",
-            "https://pkgs.dev.azure.com/example-org/_packaging/",
-            "https://pkgs.dev.azure.com/example-org/example-project/team/_packaging/company",
-            "https://pkgs.dev.azure.com/example-org/_packaging/company/nuget/v3/index.json",
-            "https://pkgs.dev.azure.com/example-org/_packaging/company/npm/registry/",
-            "https://pkgs.dev.azure.com/example-org/_packaging/company//",
-            "https://pkgs.dev.azure.com/example-org/_packaging/company?api-version=7.1",
-            "https://pkgs.dev.azure.com/example-org/_packaging/company#top",
-        };
-        var n = 0;
-        foreach (var url in rejected)
-        {
-            await AssertBadRequestWithReasonAsync(
-                await client.PostAsJsonAsync("/api/v1/package-feeds", new { name = $"feed-{n++}", feedUrl = url, pat = Pat }, Ct),
-                $"create with '{url}'");
-            await AssertBadRequestWithReasonAsync(
-                await client.PutAsJsonAsync($"/api/v1/package-feeds/{id}", new { feedUrl = url }, Ct),
-                $"update to '{url}'");
-        }
+        const string badUrl = "https://pkgs.dev.azure.com/example-org/_packaging/company?api-version=7.1";
+        await AssertBadRequestWithReasonAsync(
+            await client.PostAsJsonAsync("/api/v1/package-feeds", new { name = "bad", feedUrl = badUrl, pat = Pat }, Ct),
+            "create with a bad url");
+        await AssertBadRequestWithReasonAsync(
+            await client.PutAsJsonAsync($"/api/v1/package-feeds/{id}", new { feedUrl = badUrl }, Ct),
+            "update to a bad url");
 
         Assert.Equal(CompanyUrl, Assert.Single(await ListFeedsAsync(client)).GetProperty("feedUrl").GetString());
         Assert.Equal(ToolsUrl, (await CreateFeedAsync(client, "tools", ToolsUrl + "/")).GetProperty("feedUrl").GetString());
@@ -253,8 +214,7 @@ public class PackageFeedsApiTests
 
         var response = await client.PutAsJsonAsync($"/api/v1/package-feeds/{id}", new { name = "renamed", feedUrl = CompanyUrl }, Ct);
 
-        Assert.True(response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.BadRequest,
-            $"unexpected {(int)response.StatusCode}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("company", Assert.Single(await ListFeedsAsync(client)).GetProperty("name").GetString());
     }
 

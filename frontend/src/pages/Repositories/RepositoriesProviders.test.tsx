@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import Repositories from "./index";
 import * as services from "../../services/auth";
+import { deferred, reply } from "../../test-support";
 
 const availableTypes = [{ type: "Forgejo" }, { type: "GitHub" }];
 
@@ -14,30 +15,15 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
-
-type FakeResponse = { ok: boolean; status: number; text: () => Promise<string> };
-
-function reply(body: unknown, status = 200): FakeResponse {
-  return { ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 type Row = Record<string, unknown>;
 
 function routedFetch(
   state: { providers: Row[]; repos: Row[] },
-  onTest: (id: string) => Promise<FakeResponse> = () => Promise.resolve(reply(null, 404)),
-  onRepoTest: (id: string) => Promise<FakeResponse> = () => Promise.resolve(reply(null, 404)),
+  onTest: (id: string) => Promise<Response> = () => Promise.resolve(reply(404)),
+  onRepoTest: (id: string) => Promise<Response> = () => Promise.resolve(reply(404)),
 ) {
   return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -48,35 +34,37 @@ function routedFetch(
     const repoTest = /\/repositories\/([^/]+)\/test$/.exec(url);
     if (repoTest && method === "POST") return onRepoTest(repoTest[1]);
 
-    if (url.includes("/remoteproviders/types")) return Promise.resolve(reply(availableTypes));
+    if (url.includes("/remoteproviders/types")) return Promise.resolve(reply(200, availableTypes));
     const oneProvider = /\/remoteproviders\/([^/?]+)$/.exec(url);
     if (oneProvider && method === "PUT") {
       const body = JSON.parse((init?.body as string | undefined) ?? "{}");
       state.providers = state.providers.map((p) =>
         p.id === oneProvider[1] ? { ...p, ...body, updatedAt: later() } : p,
       );
-      return Promise.resolve(reply(state.providers.find((p) => p.id === oneProvider[1])));
+      const updated = state.providers.find((p) => p.id === oneProvider[1]);
+      return Promise.resolve(reply(200, updated));
     }
     if (url.includes("/remoteproviders") && method === "POST") {
       const body = JSON.parse((init?.body as string | undefined) ?? "{}");
       const created = { ...body, id: `prov-${state.providers.length + 1}`, createdAt: later() };
       state.providers = [...state.providers, created];
-      return Promise.resolve(reply(created, 201));
+      return Promise.resolve(reply(201, created));
     }
-    if (url.includes("/remoteproviders")) return Promise.resolve(reply(state.providers));
+    if (url.includes("/remoteproviders")) return Promise.resolve(reply(200, state.providers));
 
     if (/\/repositories\/[^/]+\/preview-env$/.test(url))
-      return Promise.resolve(reply({ previewEnv: null }));
+      return Promise.resolve(reply(200, { previewEnv: null }));
     const oneRepo = /\/repositories\/([^/?]+)$/.exec(url);
     if (oneRepo && method === "PUT") {
       state.repos = state.repos.map((r) =>
         r.id === oneRepo[1] ? { ...r, updatedAt: later() } : r,
       );
-      return Promise.resolve(reply(state.repos.find((r) => r.id === oneRepo[1])));
+      const updated = state.repos.find((r) => r.id === oneRepo[1]);
+      return Promise.resolve(reply(200, updated));
     }
     if (url.includes("/repositories") && method === "GET")
-      return Promise.resolve(reply(state.repos));
-    return Promise.resolve(reply(null, 404));
+      return Promise.resolve(reply(200, state.repos));
+    return Promise.resolve(reply(404));
   });
 }
 
@@ -210,13 +198,14 @@ describe("Repositories page — providers", () => {
       const list = /\/remoteproviders(?:\?skip=(\d+)&take=(\d+))?$/.exec(url);
       if (!list || (init?.method ?? "GET") !== "GET") return route(url, init);
       const skip = Number(list[1] ?? 0);
-      return Promise.resolve(reply(providers.slice(skip, skip + Number(list[2] ?? 100))));
+      return Promise.resolve(reply(200, providers.slice(skip, skip + Number(list[2] ?? 100))));
     });
     renderPage(fetchMock);
 
-    await screen.findByRole("region", { name: "Forge 500" });
-    expect(within(card("Forge 500")).getByText("late-app")).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Provider not found" })).toBeNull();
+    const providerOf = (name: string) =>
+      screen.getByText(name).closest("section")?.getAttribute("aria-label");
+    await waitFor(() => expect(providerOf("late-app")).toBe("Forge 500"));
+    expect(document.querySelectorAll("section.provider-card")).toHaveLength(501);
   });
 
   test("Add repository opens the repository form with that provider chosen", async () => {
@@ -313,7 +302,7 @@ describe("Repositories page — providers", () => {
     let failProviders = true;
     fetchMock.mockImplementation((url: string, init?: RequestInit) =>
       /\/remoteproviders\?/.test(url) && failProviders
-        ? Promise.resolve(reply({ error: "database unavailable" }, 503))
+        ? Promise.resolve(reply(503, { error: "database unavailable" }))
         : route(url, init),
     );
     renderPage(fetchMock);
@@ -332,15 +321,15 @@ describe("Repositories page — providers", () => {
   test("a retry in flight keeps the error up rather than an empty list", async () => {
     const fetchMock = routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] });
     const route = fetchMock.getMockImplementation()!;
-    let providerList: () => Promise<FakeResponse> = () =>
-      Promise.resolve(reply({ error: "database unavailable" }, 503));
+    let providerList: () => Promise<Response> = () =>
+      Promise.resolve(reply(503, { error: "database unavailable" }));
     fetchMock.mockImplementation((url: string, init?: RequestInit) =>
       /\/remoteproviders\?/.test(url) ? providerList() : route(url, init),
     );
     renderPage(fetchMock);
     await screen.findByText(/Couldn't load the providers and repositories/);
 
-    const retry = deferred<FakeResponse>();
+    const retry = deferred<Response>();
     providerList = () => retry.promise;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
@@ -351,7 +340,7 @@ describe("Repositories page — providers", () => {
       screen.queryByText("Add a remote provider first — repositories are added under one."),
     ).toBeNull();
 
-    retry.resolve(reply([provider("prov-1", "Alpha Forge")]));
+    retry.resolve(reply(200, [provider("prov-1", "Alpha Forge")]));
     await screen.findByRole("region", { name: "Alpha Forge" });
     expect(screen.queryByText(/Couldn't load the providers and repositories/)).toBeNull();
   });
@@ -388,7 +377,7 @@ describe("Repositories page — provider form", () => {
     let failTypes = true;
     fetchMock.mockImplementation((url: string, init?: RequestInit) =>
       String(url).includes("/remoteproviders/types") && failTypes
-        ? Promise.resolve(reply({ error: "catalog unavailable" }, 503))
+        ? Promise.resolve(reply(503, { error: "catalog unavailable" }))
         : route(url, init),
     );
     renderPage(fetchMock);
@@ -438,7 +427,7 @@ describe("Repositories page — provider form", () => {
   test("the form cannot be closed while a save is in flight", async () => {
     const fetchMock = routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] });
     const route = fetchMock.getMockImplementation()!;
-    const save = deferred<FakeResponse>();
+    const save = deferred<Response>();
     fetchMock.mockImplementation((url: string, init?: RequestInit) =>
       init?.method === "PUT" ? save.promise : route(url, init),
     );
@@ -461,7 +450,7 @@ describe("Repositories page — provider form", () => {
       (within(dialog).getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled,
     ).toBe(true);
 
-    save.resolve(reply(provider("prov-1", "Alpha Forge")));
+    save.resolve(reply(200, provider("prov-1", "Alpha Forge")));
     await waitFor(() => expect(dialog.isConnected).toBe(false));
   });
 
@@ -489,7 +478,7 @@ describe("Repositories page — provider form", () => {
     const route = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation((url: string, init?: RequestInit) =>
       String(url).endsWith("/remoteproviders") && init?.method === "POST"
-        ? Promise.resolve(reply({ error: "Unsupported remote provider type." }, 400))
+        ? Promise.resolve(reply(400, { error: "Unsupported remote provider type." }))
         : route(url, init),
     );
     renderPage(fetchMock);
@@ -558,9 +547,9 @@ describe("Repositories page — provider Test button", () => {
       providers: [provider("prov-1", "Alpha Forge"), provider("prov-2", "Beta Forge")],
       repos: [],
     };
-    const pending: Record<string, ReturnType<typeof deferred<FakeResponse>>> = {};
+    const pending: Record<string, ReturnType<typeof deferred<Response>>> = {};
     const fetchMock = routedFetch(state, (id) => {
-      pending[id] = deferred<FakeResponse>();
+      pending[id] = deferred<Response>();
       return pending[id].promise;
     });
     renderPage(fetchMock);
@@ -580,7 +569,7 @@ describe("Repositories page — provider Test button", () => {
     );
 
     pending["prov-1"].resolve(
-      reply({ ok: true, outcome: "Ok", message: "Signed in as forge-bot.", detail: null }),
+      reply(200, { ok: true, outcome: "Ok", message: "Signed in as forge-bot.", detail: null }),
     );
     await within(card("Alpha Forge")).findByText("Signed in as forge-bot.");
     expect(card("Alpha Forge").querySelector("pre")).toBeNull();
@@ -588,7 +577,7 @@ describe("Repositories page — provider Test button", () => {
 
     fireEvent.click(within(card("Beta Forge")).getByRole("button", { name: "Test" }));
     pending["prov-2"].resolve(
-      reply({
+      reply(200, {
         ok: false,
         outcome: "InvalidApiKey",
         message: "The API key was rejected.",
@@ -603,9 +592,9 @@ describe("Repositories page — provider Test button", () => {
   });
 
   test("a call to ILD that fails says the test couldn't run, with the error", async () => {
-    const answers: Array<() => Promise<FakeResponse>> = [
+    const answers: Array<() => Promise<Response>> = [
       () => Promise.reject(new TypeError("Failed to fetch")),
-      () => Promise.resolve(reply({ error: "boom" }, 500)),
+      () => Promise.resolve(reply(500, { error: "boom" })),
     ];
     renderPage(
       routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] }, () =>
@@ -623,10 +612,10 @@ describe("Repositories page — provider Test button", () => {
   });
 
   test("saving a provider clears its result, and drops one still in flight", async () => {
-    const pending: Array<ReturnType<typeof deferred<FakeResponse>>> = [];
+    const pending: Array<ReturnType<typeof deferred<Response>>> = [];
     renderPage(
       routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] }, () => {
-        const d = deferred<FakeResponse>();
+        const d = deferred<Response>();
         pending.push(d);
         return d.promise;
       }),
@@ -642,7 +631,7 @@ describe("Repositories page — provider Test button", () => {
 
     fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Test" }));
     pending[0].resolve(
-      reply({ ok: true, outcome: "Ok", message: "Signed in as forge-bot.", detail: null }),
+      reply(200, { ok: true, outcome: "Ok", message: "Signed in as forge-bot.", detail: null }),
     );
     await within(card("Alpha Forge")).findByText("Signed in as forge-bot.");
 
@@ -655,7 +644,7 @@ describe("Repositories page — provider Test button", () => {
     await within(card("Alpha Forge")).findByRole("button", { name: "Test" });
 
     pending[1].resolve(
-      reply({ ok: false, outcome: "Unreachable", message: "Stale answer.", detail: "old" }),
+      reply(200, { ok: false, outcome: "Unreachable", message: "Stale answer.", detail: "old" }),
     );
     await pending[1].promise;
     await new Promise((r) => setTimeout(r, 0));
@@ -672,7 +661,7 @@ describe("Repositories page — provider Test button", () => {
         undefined,
         () =>
           Promise.resolve(
-            reply({ ok: true, outcome: "Ok", message: "Reached branch main.", detail: null }),
+            reply(200, { ok: true, outcome: "Ok", message: "Reached branch main.", detail: null }),
           ),
       ),
     );

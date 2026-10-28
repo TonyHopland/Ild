@@ -24,6 +24,7 @@ namespace ILD.Tests.Integration;
 /// and the real engine takes the answer; its relaunch of the run is held off by
 /// raising the shutdown flag, so the run stays where the answer left it.
 /// </summary>
+// A host per test: the claim race rewrites every proposal row and each test signals shutdown on its host.
 public class HumanInputProposalApiTests
 {
     private const string AgentUrl = "/api/v1/agent/workitems";

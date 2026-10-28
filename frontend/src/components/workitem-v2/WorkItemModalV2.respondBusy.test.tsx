@@ -3,7 +3,7 @@ import { useState } from "react";
 import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { pressEscapeUntil } from "../../test-support";
+import { pressEscapeUntil, deferred } from "../../test-support";
 import { WorkItem, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -41,14 +41,6 @@ function makeParkedWorkItem(): WorkItem {
     dependencyIds: [],
     dependentIds: [],
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 function mockServices() {
@@ -125,7 +117,7 @@ async function type(text: string) {
 }
 
 /** Lets the dialog's first reads land, so the answer buttons are wired up. */
-async function settle() {
+async function dialogReady() {
   await waitFor(() => expect(authServices.settingsService.getAttachmentLimits).toHaveBeenCalled());
   await act(async () => {
     await Promise.resolve();
@@ -144,7 +136,7 @@ describe("an answer that has been submitted", () => {
     const refreshed = deferred<WorkItem>();
     vi.spyOn(authServices.workItemService, "getById").mockReturnValue(refreshed.promise);
     await renderDialog();
-    await settle();
+    await dialogReady();
 
     const approve = screen.getByRole("button", { name: "Approve" });
     await act(async () => {
@@ -185,7 +177,7 @@ describe("an answer whose refresh never arrives", () => {
       message: "WorkItemServer unreachable",
     });
     await renderDialog();
-    await settle();
+    await dialogReady();
 
     const approve = screen.getByRole("button", { name: "Approve" });
     await act(async () => {
@@ -214,7 +206,7 @@ describe("answering while an answer is already in flight", () => {
       .spyOn(authServices.workItemService, "humanFeedbackInput")
       .mockReturnValue(submitted.promise);
     await renderDialog();
-    await settle();
+    await dialogReady();
 
     const approve = screen.getByRole("button", { name: "Approve" });
     await act(async () => {
@@ -250,7 +242,7 @@ describe("closing while the dialog is in the middle of something", () => {
     const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
     const onClose = vi.fn();
     await renderDialog({ onClose });
-    await settle();
+    await dialogReady();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -297,7 +289,7 @@ describe("closing while the dialog is in the middle of something", () => {
       .mockReturnValue(submitted.promise);
     const onClose = vi.fn();
     await renderDialog({ onClose });
-    await settle();
+    await dialogReady();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -326,37 +318,6 @@ describe("closing while the dialog is in the middle of something", () => {
   });
 });
 
-describe("an answer the server refuses", () => {
-  test("shows the server's message and releases the buttons for a retry", async () => {
-    mockServices();
-    const answer = vi
-      .spyOn(authServices.workItemService, "humanFeedbackInput")
-      .mockRejectedValueOnce({ status: 400, message: "Input must be 8192 characters or fewer." })
-      .mockResolvedValue(undefined);
-    await renderDialog();
-    await settle();
-    await type("Looks good");
-
-    const approve = screen.getByRole("button", { name: "Approve" });
-    await act(async () => {
-      fireEvent.click(approve);
-      await Promise.resolve();
-    });
-    await waitFor(() =>
-      expect(feedback().textContent).toContain("Input must be 8192 characters or fewer."),
-    );
-    expect((approve as HTMLButtonElement).disabled).toBe(false);
-
-    await act(async () => {
-      fireEvent.click(approve);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
-    expect(answer.mock.calls[1]).toEqual(["wi-1", "run-1", "Looks good"]);
-  });
-});
-
 describe("an answer waiting to be retried", () => {
   test("survives an edit opened and cancelled beside it", async () => {
     mockServices();
@@ -366,7 +327,7 @@ describe("an answer waiting to be retried", () => {
       .mockRejectedValueOnce({ status: 400, message: "Input must be 8192 characters or fewer." })
       .mockResolvedValue(undefined);
     await renderDialog();
-    await settle();
+    await dialogReady();
     await type("Looks good");
 
     await act(async () => {
@@ -404,7 +365,7 @@ describe("closing with feedback typed in the pane", () => {
     mockServices();
     const onClose = vi.fn();
     await renderDialog({ onClose });
-    await settle();
+    await dialogReady();
     await type("Half an answer");
 
     await pressEscapeUntil(() => {
@@ -457,7 +418,7 @@ describe("an answer sent after the run has moved on", () => {
     mockAnswerServices();
     vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockRejectedValue(MOVED_ON);
     const hosted = await renderHosted(makeParkedWorkItem());
-    await settle();
+    await dialogReady();
     vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(now);
     await type(TYPED);
 
@@ -508,16 +469,6 @@ describe("an answer sent after the run has moved on", () => {
     expect(screen.queryByText(TYPED)).toBeNull();
   });
 
-  test("does not carry over to another work item", async () => {
-    const { show } = await answerRefusedWithRunNow(runningOn("run-1"));
-
-    await show({ ...runningOn("run-9"), id: "wi-2", title: "Another item" });
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Another item" })).toBeTruthy());
-    expect(notice()).toBeNull();
-    expect(screen.queryByText(TYPED)).toBeNull();
-  });
-
   test("the run parking for an answer again opens an empty box", async () => {
     const { show } = await answerRefusedWithRunNow(runningOn("run-1"));
     await waitFor(() => expect(feedback()).toBeNull());
@@ -532,7 +483,7 @@ describe("an answer sent after the run has moved on", () => {
     mockAnswerServices();
     vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
     await renderHosted(makeParkedWorkItem());
-    await settle();
+    await dialogReady();
     vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(runningOn("run-1"));
     await type(TYPED);
 

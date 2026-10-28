@@ -10,13 +10,10 @@ import type {
   NetworkStatus,
 } from "../../../types";
 import { WorkItemHubProvider } from "../../../hooks/useWorkItemHub";
+import { fakeHub, routeHubs } from "../../../test-support";
 
-type Handler = (message: { type: string; payload: unknown; timestamp: string }) => void;
-const handlers = new Map<string, Set<Handler>>();
-
-function emit(type: string, payload: unknown) {
-  handlers.get(type)?.forEach((h) => h({ type, payload, timestamp: new Date().toISOString() }));
-}
+const hub = fakeHub();
+const emit = hub.dispatch;
 
 const enforced: NetworkStatus = {
   enforcement: "enforced",
@@ -70,18 +67,7 @@ function mockServices(
   mode = "off",
   forwards: NetworkForward[] = [postgres],
 ) {
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    connectionState: "connected",
-    on: vi.fn((type: string, handler: Handler) => {
-      const set = handlers.get(type) ?? new Set<Handler>();
-      set.add(handler);
-      handlers.set(type, set);
-    }),
-    off: vi.fn((type: string, handler: Handler) => {
-      handlers.get(type)?.delete(handler);
-    }),
-    invoke: vi.fn(),
-  } as any);
+  routeHubs(signalRHook, { "/hubs/work-item": hub });
   vi.spyOn(services.networkService, "getStatus").mockResolvedValue(status);
   vi.spyOn(services.networkService, "getEntries").mockResolvedValue([github, evil]);
   vi.spyOn(services.networkService, "getForwards").mockResolvedValue(forwards);
@@ -104,7 +90,7 @@ const forwardRow = async (name: string) =>
 const modeButton = (name: string) =>
   within(screen.getByRole("group", { name: "Filter mode" })).getByRole("button", { name });
 
-beforeEach(() => handlers.clear());
+beforeEach(() => hub.reset());
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -714,6 +700,17 @@ describe("Network settings", () => {
     emit("NetworkPolicyChanged", {});
     await waitFor(() => expect(screen.queryByText("database unavailable")).toBeNull());
     expect(await screen.findByText(".github.com")).toBeTruthy();
+  });
+
+  test("leaving the page takes its three listeners off the shared hub", async () => {
+    mockServices();
+    const { unmount } = render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    const events = ["NetworkPolicyChanged", "NetworkLogAppended", "NetworkLogCleared"];
+    await waitFor(() => expect(events.map((e) => hub.handlers[e]?.size)).toEqual([1, 1, 1]));
+
+    unmount();
+
+    expect(events.map((e) => hub.handlers[e]?.size ?? 0)).toEqual([0, 0, 0]);
   });
 
   test("live-updates the log and the lists from the hub", async () => {

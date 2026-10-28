@@ -24,6 +24,7 @@ namespace ILD.Tests.Integration;
 /// API by cursor must see every event exactly once; two answers to one waiting
 /// node must deliver exactly one.
 /// </summary>
+// A host per test: each test owns its SQLite file, commit gate and interleaving hook.
 public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
@@ -333,7 +334,7 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
         {
             CommitGate.ActAs(CommitGate.Contender);
             await engine.SignalNodeResultAsync(runId, waitingNode, NodeSignal.Custom(LoopOutputs.OnCiFailed, "CI is red"));
-        });
+        }, TestContext.Current.CancellationToken);
         await Within(_gate.ContenderStarted, "The signal never touched the database.");
 
         _gate.Release();

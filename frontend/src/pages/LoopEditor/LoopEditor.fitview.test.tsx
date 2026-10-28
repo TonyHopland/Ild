@@ -148,24 +148,12 @@ function renderEditor() {
 }
 
 describe("Loop Editor fit view", () => {
-  test("fits the view when a loop is opened in the editor", async () => {
+  test("fits the view when a loop is opened and again when switching to a different loop", async () => {
     stubFetch();
     renderEditor();
 
     await waitFor(() => expect(screen.getByText("Loop One")).toBeTruthy());
     expect(mockFitView).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByText("Loop One"));
-
-    await waitFor(() => expect(screen.getByText("Alpha Start")).toBeTruthy());
-    await waitFor(() => expect(mockFitView).toHaveBeenCalled());
-  });
-
-  test("re-fits the view when switching to a different loop", async () => {
-    stubFetch();
-    renderEditor();
-
-    await waitFor(() => expect(screen.getByText("Loop One")).toBeTruthy());
 
     fireEvent.click(screen.getByText("Loop One"));
     await waitFor(() => expect(screen.getByText("Alpha Start")).toBeTruthy());

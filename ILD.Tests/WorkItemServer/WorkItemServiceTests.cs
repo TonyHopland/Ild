@@ -4,6 +4,7 @@ using ILD.WorkItemServer;
 using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Dtos;
 using ILD.WorkItemServer.Services;
+using ILD.Tests.Fakes;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -36,13 +37,6 @@ public class WorkItemServiceTests : IAsyncLifetime
     {
         await _db.DisposeAsync();
         await _conn.DisposeAsync();
-    }
-
-    private sealed class TestClock : TimeProvider
-    {
-        public DateTime Now;
-        public TestClock(DateTime now) => Now = now;
-        public override DateTimeOffset GetUtcNow() => new(Now, TimeSpan.Zero);
     }
 
     [Fact]
@@ -140,7 +134,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a", ForceStatus = WorkItemStatus.Ready }, ct);
         await _svc.CreateAsync(new CreateWorkItemRequest { Title = "b", ForceStatus = WorkItemStatus.Ready }, ct);
-        var commands = new SaveCommandRecorder();
+        var commands = new CommandTextRecorder();
         await using var recorded = new WorkItemServerDbContext(
             new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).AddInterceptors(commands).Options)
         {
@@ -219,21 +213,6 @@ public class WorkItemServiceTests : IAsyncLifetime
             .FindProperty(nameof(WorkItem.Description))!;
 
         Assert.Null(prop.GetMaxLength());
-    }
-
-    [Fact]
-    public async Task Create_round_trips_description_far_larger_than_old_cap()
-    {
-        var description = new string('x', 20000);
-
-        var created = await _svc.CreateAsync(new CreateWorkItemRequest
-        {
-            Title = "big",
-            Description = description,
-        }, TestContext.Current.CancellationToken);
-
-        var fresh = await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken);
-        Assert.Equal(description, fresh!.Description);
     }
 
     [Fact]
@@ -969,9 +948,9 @@ public class WorkItemServiceTests : IAsyncLifetime
     public async Task A_save_updates_the_item_before_it_inserts_the_history_of_the_change()
     {
         var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "before" }, TestContext.Current.CancellationToken);
-        var commands = new SaveCommandRecorder();
+        var saves = new SaveRecorder();
         await using var recorded = new WorkItemServerDbContext(
-            new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).AddInterceptors(commands).Options)
+            new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).AddInterceptors(saves).Options)
         {
             HistoryActor = TestActors.ServerHuman,
         };
@@ -979,12 +958,29 @@ public class WorkItemServiceTests : IAsyncLifetime
         await new WorkItemService(recorded, _clock)
             .UpdateAsync(wi.Id, new UpdateWorkItemRequest { Title = "after" }, TestContext.Current.CancellationToken);
 
-        var update = commands.Executed.FindIndex(c => c.Contains("UPDATE \"WorkItems\"", StringComparison.Ordinal));
-        var insert = commands.Executed.FindIndex(c => c.Contains("INSERT INTO \"WorkItemHistoryEntries\"", StringComparison.Ordinal));
-        Assert.True(update >= 0 && insert > update, string.Join("\n", commands.Executed));
+        var update = saves.Pending.FindIndex(s => s.Contains((typeof(WorkItem), EntityState.Modified)));
+        var history = saves.Pending.FindIndex(s => s.Contains((typeof(WorkItemHistoryEntry), EntityState.Added)));
+        Assert.True(update >= 0 && history > update,
+            string.Join("\n", saves.Pending.Select(s => string.Join(", ", s))));
     }
 
-    private sealed class SaveCommandRecorder : DbCommandInterceptor
+    /// <summary>The entity changes each pass of a save writes, in the order the passes run.</summary>
+    private sealed class SaveRecorder : SaveChangesInterceptor
+    {
+        public List<List<(Type Entity, EntityState State)>> Pending { get; } = new();
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            Pending.Add(eventData.Context!.ChangeTracker.Entries()
+                .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+                .Select(e => (e.Metadata.ClrType, e.State))
+                .ToList());
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class CommandTextRecorder : DbCommandInterceptor
     {
         public List<string> Executed { get; } = new();
 

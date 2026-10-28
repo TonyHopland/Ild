@@ -4,6 +4,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
+using ILD.Tests.Fakes;
 using Moq;
 
 namespace ILD.Tests;
@@ -39,37 +40,16 @@ public class PrLedgerConcurrencyTests
             items, Head, null);
 
     /// <summary>A run parked at its PR node with the finding already handed over.</summary>
-    private static async Task<LoopRun> SeedAsync(TestDb db, string workItemId = "wi-1")
+    private static Task<LoopRun> SeedAsync(TestDb db, string workItemId = "wi-1")
     {
-        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
-        var version = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplates.Add(template);
-        db.Context.LoopTemplateVersions.Add(version);
-        await db.Context.SaveChangesAsync();
-
         var delivered = PrCommentDelivery.Decide(Fetched(Item("11")), Head, PrCommentLedger.Empty with
         {
             Head = Head,
             WatchedFrom = new DateTime(2026, 9, 20, 0, 0, 0, DateTimeKind.Utc),
         });
-
-        var run = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = workItemId,
-            LoopTemplateVersionId = version.Id,
-            Status = LoopRunStatus.WaitingHuman,
-            HumanFeedbackReason = HumanFeedbackReasons.PrAwaitingMerge,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-            PrUrl = PrUrl,
-            StartedAt = DateTime.UtcNow,
-            PrCommentLedger = PrCommentLedgerJson.Serialize(delivered.Ledger),
-        };
-        await db.LoopRuns.CreateRunAsync(run);
-        return run;
+        return PrRunSeed.SeedAsync(db, LoopRunStatus.WaitingHuman, PrUrl, workItemId,
+            ledger: PrCommentLedgerJson.Serialize(delivered.Ledger),
+            humanFeedbackReason: HumanFeedbackReasons.PrAwaitingMerge);
     }
 
     private static PrReviewService ServiceOn(TestDb db)

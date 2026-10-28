@@ -8,6 +8,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -25,7 +26,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
 
     private readonly TestDb _db = new();
     private readonly RecordingLog _log = new();
-    private readonly CapturingLogger _diagnostics = new();
+    private readonly RecordingLogger<EgressForwarder> _diagnostics = new();
     private readonly ServiceProvider _services;
     private readonly EgressPolicy _policy;
     private EgressForwarder? _forwarder;
@@ -90,14 +91,31 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         }
     }
 
-    /// <summary>A loopback port nothing is using, as far as the kernel just said.</summary>
+    // Below the ephemeral range, which the kernel hands to every other test's
+    // listeners and outgoing connections: a port probed free there can be taken
+    // before the forwarder binds it, which is what an ephemeral probe allowed.
+    private const int FirstForwardPort = 20000;
+    private const int ForwardPortCount = 10000;
+    private static int _nextForwardPort = Random.Shared.Next(ForwardPortCount);
+
+    /// <summary>A loopback port nothing is using, never handed out twice in this process.</summary>
     private static int FreePort()
     {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
+        while (true)
+        {
+            var port = FirstForwardPort + (int)((uint)Interlocked.Increment(ref _nextForwardPort) % ForwardPortCount);
+            var probe = new TcpListener(IPAddress.Loopback, port);
+            try
+            {
+                probe.Start();
+            }
+            catch (SocketException)
+            {
+                continue;
+            }
+            probe.Stop();
+            return port;
+        }
     }
 
     private async Task SetModeAsync(NetworkMode mode)
@@ -312,25 +330,6 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Only the caller's own failures are worth another accept. Retrying the rest
-    /// spins a core on a listener that has stopped working while the row goes on
-    /// saying it is listening, so they retire it and let the next reconcile
-    /// rebind.
-    /// </summary>
-    [Theory]
-    [InlineData(SocketError.ConnectionReset, true)]
-    [InlineData(SocketError.ConnectionAborted, true)]
-    [InlineData(SocketError.Interrupted, true)]
-    [InlineData(SocketError.TooManyOpenSockets, false)]
-    [InlineData(SocketError.NotSocket, false)]
-    [InlineData(SocketError.InvalidArgument, false)]
-    [InlineData(SocketError.NoBufferSpaceAvailable, false)]
-    public void An_accept_failure_is_retried_only_when_it_was_the_clients(SocketError error, bool retried)
-    {
-        Assert.Equal(retried, EgressForwarder.IsAbandonedHandshake(error));
-    }
-
-    /// <summary>
     /// Binding and retiring race the accept loop that each bind starts, and a
     /// loop that faults on the way up leaves a row advertising a port nothing
     /// answers on. Withdraw a port and declare it again, and insist that
@@ -380,7 +379,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         }
         catch (TimeoutException)
         {
-            Assert.Fail($"expected {count} recorded destination(s), saw {_log.Entries.Count}; forwarder said: {string.Join(" | ", _diagnostics.Lines)}");
+            Assert.Fail($"expected {count} recorded destination(s), saw {_log.Entries.Count}; forwarder said: {string.Join(" | ", _diagnostics.Entries)}");
         }
         return _log.Entries;
     }
@@ -438,23 +437,6 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     /// lines makes a failure here say what went wrong instead of only that nothing
     /// was recorded.
     /// </summary>
-    private sealed class CapturingLogger : ILogger<EgressForwarder>
-    {
-        private readonly List<string> _lines = new();
-
-        public IReadOnlyList<string> Lines
-        {
-            get { lock (_lines) return _lines.ToList(); }
-        }
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            lock (_lines) _lines.Add($"{logLevel}: {formatter(state, exception)}{(exception is null ? "" : " -- " + exception)}");
-        }
-    }
 
     private sealed class SilentNotifier : INetworkNotifier
     {

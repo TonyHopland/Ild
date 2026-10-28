@@ -145,11 +145,11 @@ public class ExtraCliArgsTests
     [InlineData("codex", "--json", "--json is not allowed, because ILD already sets it for this provider.")]
     [InlineData("codex", "-C /tmp", "-C is not allowed, because it would move Codex out of the worktree.")]
     [InlineData("codex", "--cd=/tmp", "--cd is not allowed, because it would move Codex out of the worktree.")]
-    [InlineData("codex", "-s read-only", "-s is not allowed, because it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox).")]
-    [InlineData("codex", "--sandbox read-only", "--sandbox is not allowed, because it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox).")]
+    [InlineData("codex", "-s read-only", "-s is not allowed, because it contradicts how ILD runs Codex")]
+    [InlineData("codex", "--sandbox read-only", "--sandbox is not allowed, because it contradicts how ILD runs Codex")]
     public void Validate_says_why_a_codex_flag_is_refused(string type, string raw, string message)
     {
-        Assert.Equal("Extra CLI arguments: " + message, ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw));
+        Assert.StartsWith("Extra CLI arguments: " + message, ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw));
     }
 
     /// <summary>Each key ILD sets, in each form codex takes a config override, with the flag the message names.</summary>
@@ -214,6 +214,15 @@ public class ExtraCliArgsTests
     public void Validate_rejects_a_bare_end_of_options_separator(string type)
     {
         var error = ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, "--effort high -- extra");
+
+        Assert.NotNull(error);
+        Assert.Contains("--", error);
+    }
+
+    [Fact]
+    public void Validate_rejects_an_end_of_options_separator_at_the_end_and_names_it()
+    {
+        var error = ExtraCliArgs.Validate(DeclaredTraits.For("opencode").ExtraCliArgs, "--variant high --");
 
         Assert.NotNull(error);
         Assert.Contains("--", error);

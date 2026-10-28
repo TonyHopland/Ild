@@ -4,6 +4,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -17,32 +18,6 @@ namespace ILD.Tests;
 /// </summary>
 public class AINodeExecutorSteeringTests
 {
-    private sealed class CapturingAdapter : IAgentAdapter
-    {
-        public AgentExecutionContext? Captured { get; private set; }
-        public string Name => "Capturing";
-        public string[] SupportedProviderTypes => ["claude-code"];
-        public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            Captured = context;
-            return Task.FromResult(NodeExecutionResult.Ok("done", context.Prompt, context.SessionId));
-        }
-    }
-
-    private sealed class FakeRegistry : IAgentAdapterRegistry
-    {
-        private readonly IAgentAdapter _adapter;
-        public FakeRegistry(IAgentAdapter adapter) => _adapter = adapter;
-        public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => _adapter;
-        public string[] GetAllSupportedProviderTypes() => ["claude-code"];
-        public AdapterModelSupport GetModelSupport(string providerType) => _adapter.ModelSupport;
-        public AgentAdapterTraits GetTraits(string? providerType) => _adapter.Traits;
-    }
-
     private static (IServiceProvider sp, CapturingAdapter adapter) BuildServices(TestDb db, string workItemTitle = "")
     {
         var provider = new AiProvider
@@ -66,7 +41,7 @@ public class AINodeExecutorSteeringTests
         services.AddSingleton(providerStore.Object);
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton(wim);
-        services.AddSingleton<IAgentAdapterRegistry>(new FakeRegistry(adapter));
+        services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
         // Production always has the rendering service in scope, so the steering
         // path must be exercised with it present.
         services.AddSingleton<IPromptRenderingService>(new ILD.Core.Services.Implementations.PromptRenderingService(

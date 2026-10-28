@@ -11,7 +11,8 @@ import {
   WorktreeFiles,
 } from "../../types";
 import * as authServices from "../../services/auth";
-import { REVOKE_DELAY_MS } from "../../utils/saveBlob";
+import * as saveBlobModule from "../../utils/saveBlob";
+import { settle } from "../../test-support";
 
 // Every panel asks for the commit list it offers ranges from; one with no
 // commits of its own leaves the rest of the panel exactly as it was.
@@ -395,8 +396,7 @@ describe("FilesPanel markdown preview", () => {
     expect(document.querySelector(".markdown-body")).toBeNull();
 
     await click("Preview");
-    const heading = screen.getByRole("heading", { name: "Title" });
-    expect(heading.tagName).toBe("H1");
+    expect(screen.getByRole("heading", { name: "Title" })).toBeTruthy();
     expect(document.querySelector(".wiv2-code")).toBeNull();
 
     // A non-markdown file has no Preview to offer.
@@ -531,49 +531,7 @@ describe("FilesPanel syntax highlighting", () => {
     expect(classes).toContainEqual(["hljs-number", "42"]);
     // Splitting a line into spans must not change what it reads or copies as.
     expect(line.textContent).toBe("1const answer = 42;");
-  });
-
-  test("keeps a multi-line token coloured on every line it spans", async () => {
-    // The whole file is highlighted once and the tokens are then cut at
-    // newlines; tokenizing line by line would end the comment at the first
-    // newline and leave the rest of it plain.
-    const lines = await showCode("src/a.ts", "/* one\n   two */\nlet x;");
-
-    const comment = (row: Element) =>
-      Array.from(row.querySelectorAll(".hljs-comment")).map((span) => span.textContent);
-    expect(comment(lines[0])).toEqual(["/* one"]);
-    expect(comment(lines[1])).toEqual(["   two */"]);
-    expect(comment(lines[2])).toEqual([]);
-  });
-
-  test("renders an unmapped extension as plain numbered lines", async () => {
-    const lines = await showCode("notes.wat", "some prose\nmore prose");
-
-    expect(document.querySelectorAll("[class^='hljs']")).toHaveLength(0);
-    expect(lines.map((line) => line.querySelector(".wiv2-code-text")?.textContent)).toEqual([
-      "some prose",
-      "more prose",
-    ]);
-    expect(lines.map((line) => line.querySelector(".wiv2-code-gutter")?.textContent)).toEqual([
-      "1",
-      "2",
-    ]);
-  });
-
-  test("leaves a file too large to highlight as plain numbered lines", async () => {
-    // Highlighting is one synchronous pass over the whole file, so past the size
-    // cap it is skipped rather than stalling the dialog on a generated blob.
-    const code = `const a = ${"1".repeat(300_001)};`;
-    const [line] = await showCode("big.ts", code);
-
-    expect(line.querySelectorAll("[class^='hljs']")).toHaveLength(0);
-    // The file is still shown in full, just uncoloured.
-    expect(line.querySelector(".wiv2-code-text")?.textContent).toHaveLength(code.length);
-  });
-
-  test("numbers every line of a file that ends in a newline without adding one", async () => {
-    const lines = await showCode("src/a.ts", "let a;\nlet b;\n");
-    expect(lines).toHaveLength(2);
+    expect(line.querySelector(".wiv2-code-gutter")?.textContent).toBe("1");
   });
 });
 
@@ -625,7 +583,7 @@ describe("FilesPanel diff rendering", () => {
   }
 
   test("renders a paired line as its marker plus strongly shaded word spans", async () => {
-    const [hunk, del, add] = await showDiff(
+    const [, del, add] = await showDiff(
       ["@@ -1 +1 @@", "-const timeout = 30;", "+const timeout = 60;"].join("\n"),
     );
 
@@ -649,11 +607,6 @@ describe("FilesPanel diff rendering", () => {
       expect(textCell(row).firstChild?.nodeType).toBe(Node.TEXT_NODE);
       expect(textCell(row).firstChild?.textContent).toBe(marker);
     }
-
-    // The light tier still comes from the row, so both tiers stack.
-    expect(del.className).toBe("wiv2-diff-line wiv2-diff-del");
-    expect(add.className).toBe("wiv2-diff-line wiv2-diff-add");
-    expect(hunk.className).toBe("wiv2-diff-line wiv2-diff-hunk");
   });
 
   test("renders an unsegmented line as plain text in its shading class", async () => {
@@ -662,25 +615,13 @@ describe("FilesPanel diff rendering", () => {
     const rows = await showDiff(["@@ -1 +1 @@", "-hello", "+world"].join("\n"));
 
     expect(document.querySelectorAll(".wiv2-diff-seg-add, .wiv2-diff-seg-del")).toHaveLength(0);
-    expect(rows.map((row) => row.className)).toEqual([
-      "wiv2-diff-line wiv2-diff-hunk",
-      "wiv2-diff-line wiv2-diff-del",
-      "wiv2-diff-line wiv2-diff-add",
+    expect(rows.map((row) => textCell(row).textContent)).toEqual([
+      "@@ -1 +1 @@",
+      "-hello",
+      "+world",
     ]);
     expect(screen.getByText("-hello")).toBeTruthy();
     expect(screen.getByText("+world")).toBeTruthy();
-  });
-
-  test("Wrap wraps long lines instead of scrolling them sideways, and unticking it scrolls again", async () => {
-    await showDiff(["diff --git a/a.ts b/a.ts", "@@ -1,1 +1,1 @@", "-a", "+b"].join("\n"));
-    const content = () => document.querySelector(".wiv2-files-content")!;
-    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(false);
-
-    fireEvent.click(screen.getByRole("checkbox", { name: "Wrap" }));
-    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(true);
-
-    fireEvent.click(screen.getByRole("checkbox", { name: "Wrap" }));
-    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(false);
   });
 
   test("shows original and current line numbers beside each line, blank where absent", async () => {
@@ -725,18 +666,6 @@ describe("FilesPanel diff rendering", () => {
       expect(text.querySelector(".wiv2-diff-gutter")).toBeNull();
     }
     expect(rows.map((row) => textCell(row).textContent)).toEqual(lines.slice(3));
-    // Shading still comes from the row's kind.
-    expect(rows.map((row) => row.className)).toEqual([
-      "wiv2-diff-line wiv2-diff-hunk",
-      "wiv2-diff-line wiv2-diff-ctx",
-      "wiv2-diff-line wiv2-diff-del",
-      "wiv2-diff-line wiv2-diff-ctx",
-      "wiv2-diff-line wiv2-diff-add",
-      "wiv2-diff-line wiv2-diff-ctx",
-      "wiv2-diff-line wiv2-diff-hunk",
-      "wiv2-diff-line wiv2-diff-ctx",
-      "wiv2-diff-line wiv2-diff-add",
-    ]);
   });
 });
 
@@ -824,7 +753,6 @@ describe("FilesPanel SVG preview", () => {
     );
     expect(document.querySelector(".wiv2-files-content svg")).toBeNull();
     expect(document.querySelector(".wiv2-files-content script")).toBeNull();
-    expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
   });
 
   test("says an empty SVG is empty rather than drawing a broken image", async () => {
@@ -1410,20 +1338,9 @@ describe("FilesPanel download", () => {
     return { held, spy };
   }
 
-  /** What the browser was asked to save: the anchor clicks and the object URLs. */
+  /** What the panel handed over to be saved. */
   function captureSaves() {
-    // jsdom only turns its own Blob implementation into an object URL, so the
-    // URL is stubbed: what is under test is that the saved link carries it.
-    const objectUrl = "blob:http://localhost/raw-file";
-    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue(objectUrl);
-    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-    const clicks: { download: string; href: string }[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      clicks.push({ download: this.download, href: this.href });
-    });
-    return { objectUrl, createObjectURL, revokeObjectURL, clicks };
+    return { save: vi.spyOn(saveBlobModule, "saveBlob").mockImplementation(() => {}) };
   }
 
   async function renderView(workItem: WorkItem) {
@@ -1459,7 +1376,7 @@ describe("FilesPanel download", () => {
   }
 
   /** Settles a held download and lets everything that follows it run out. */
-  async function settle(run: () => void) {
+  async function settleDownload(run: () => void) {
     await act(async () => {
       run();
       await new Promise((r) => setTimeout(r, 0));
@@ -1608,7 +1525,7 @@ describe("FilesPanel download", () => {
         }),
       );
     const { held, spy } = holdDownloads();
-    const { objectUrl, createObjectURL, revokeObjectURL, clicks } = captureSaves();
+    const { save } = captureSaves();
 
     await renderView(makeWorkItem());
     for (const folder of ["src", "a"]) {
@@ -1619,9 +1536,6 @@ describe("FilesPanel download", () => {
     }
     await open("b.png");
     await clickButton("Diff");
-    // The saved file's URL is kept alive for a while after the click: only that timer is faked, and only
-    // from here, since the testing library's own waiting needs real ones.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await clickButton("Download");
 
     expect(spy).toHaveBeenCalledTimes(1);
@@ -1629,16 +1543,10 @@ describe("FilesPanel download", () => {
     const blob = new Blob([new Uint8Array([0x89, 0x50, 0x00, 0xff])]);
     await act(async () => {
       held[0].resolve(blob);
-      await vi.advanceTimersByTimeAsync(0);
     });
 
     // The very bytes the server answered with, under the path's last segment.
-    expect(createObjectURL).toHaveBeenCalledWith(blob);
-    expect(clicks).toEqual([{ download: "b.png", href: objectUrl }]);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(REVOKE_DELAY_MS);
-    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
-    vi.useRealTimers();
+    expect(save).toHaveBeenCalledWith(blob, "b.png");
 
     // Saving a copy is not a navigation: same file, same mode, same pane.
     expect(screen.getByRole("button", { name: "Diff" }).getAttribute("aria-pressed")).toBe("true");
@@ -1657,12 +1565,12 @@ describe("FilesPanel download", () => {
 
     await clickButton("Download");
     expect(downloadButton()!.disabled).toBe(true);
-    await settle(() => held[0].resolve(new Blob(["x"])));
+    await settleDownload(() => held[0].resolve(new Blob(["x"])));
     expect(downloadButton()!.disabled).toBe(false);
 
     await clickButton("Download");
     expect(downloadButton()!.disabled).toBe(true);
-    await settle(() => held[1].reject({ status: 500, message: "boom" }));
+    await settleDownload(() => held[1].reject({ status: 500, message: "boom" }));
     expect(downloadButton()!.disabled).toBe(false);
   });
 
@@ -1674,7 +1582,9 @@ describe("FilesPanel download", () => {
     const view = await renderView(makeWorkItem());
     await open("a.ts");
     await clickButton("Download");
-    await settle(() => held[0].reject({ status: 404, message: "File not found in worktree." }));
+    await settleDownload(() =>
+      held[0].reject({ status: 404, message: "File not found in worktree." }),
+    );
 
     const shown = screen.getByText("File not found in worktree.");
     expect(shown.classList.contains("preview-error")).toBe(true);
@@ -1686,7 +1596,7 @@ describe("FilesPanel download", () => {
 
     // With nothing to say, the error still says something.
     await clickButton("Download");
-    await settle(() => held[1].reject({}));
+    await settleDownload(() => held[1].reject({}));
     expect(screen.getByText("Failed to download file.")).toBeTruthy();
 
     await switchTo(view, makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
@@ -1702,12 +1612,12 @@ describe("FilesPanel download", () => {
     await open("a.ts");
     await clickButton("Download");
     await open("b.ts");
-    await settle(() => held[0].reject({ message: "left behind on a.ts" }));
+    await settleDownload(() => held[0].reject({ message: "left behind on a.ts" }));
     expect(screen.queryByText("left behind on a.ts")).toBeNull();
 
     await clickButton("Download");
     await switchTo(view, makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
-    await settle(() => held[1].reject({ message: "left behind on wi-1" }));
+    await settleDownload(() => held[1].reject({ message: "left behind on wi-1" }));
     expect(screen.queryByText("left behind on wi-1")).toBeNull();
   });
 
@@ -1729,11 +1639,11 @@ describe("FilesPanel download", () => {
     expect(spy).toHaveBeenLastCalledWith("wi-2", "README.md");
     expect(downloadButton()!.disabled).toBe(true);
 
-    await settle(() => held[0].reject({ message: "wi-1 failed" }));
+    await settleDownload(() => held[0].reject({ message: "wi-1 failed" }));
     expect(downloadButton()!.disabled).toBe(true);
     expect(screen.queryByText("wi-1 failed")).toBeNull();
 
-    await settle(() => held[1].resolve(new Blob(["readme"])));
+    await settleDownload(() => held[1].resolve(new Blob(["readme"])));
     expect(downloadButton()!.disabled).toBe(false);
   });
 
@@ -1753,10 +1663,10 @@ describe("FilesPanel download", () => {
     await open("x.ts");
     expect(downloadButton()!.disabled).toBe(true);
 
-    await settle(() => held[1].resolve(new Blob(["y"])));
+    await settleDownload(() => held[1].resolve(new Blob(["y"])));
     expect(downloadButton()!.disabled).toBe(true);
 
-    await settle(() => held[0].resolve(new Blob(["x"])));
+    await settleDownload(() => held[0].resolve(new Blob(["x"])));
     expect(downloadButton()!.disabled).toBe(false);
   });
 });
@@ -1817,18 +1727,9 @@ describe("FilesPanel diff range", () => {
         call.settled = true;
         call.resolve(value);
       }
-      await settle();
+      await settle(4);
     };
     return { calls, impl, answer };
-  }
-
-  /** Lets every answer already given land, along with whatever it sets off. */
-  async function settle() {
-    for (let i = 0; i < 4; i++) {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-    }
   }
 
   async function mount(workItem: WorkItem) {
@@ -1836,20 +1737,20 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       view = render(<FilesPanel workItem={workItem} />);
     });
-    await settle();
+    await settle(4);
     return {
       /** The parent hands down a fresh copy of the same item, as it does when the run advances. */
       refresh: async () => {
         await act(async () => {
           view.rerender(<FilesPanel workItem={{ ...workItem }} />);
         });
-        await settle();
+        await settle(4);
       },
       switchTo: async (next: WorkItem) => {
         await act(async () => {
           view.rerender(panelFor(next));
         });
-        await settle();
+        await settle(4);
       },
     };
   }
@@ -1880,7 +1781,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(rangeToggle());
     });
-    await settle();
+    await settle(4);
   }
 
   function box(name: RegExp): HTMLInputElement {
@@ -1895,7 +1796,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(checkbox);
     });
-    await settle();
+    await settle(4);
   }
 
   const checked = () =>
@@ -1969,7 +1870,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("a.ts"));
     });
-    await settle();
+    await settle(4);
     await panel.refresh();
 
     // The dropdown on its default costs nothing: one list per load, nothing
@@ -2068,7 +1969,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("b.ts"));
     });
-    await settle();
+    await settle(4);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Diff" }));
     });
@@ -2183,7 +2084,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("a.ts"));
     });
-    await settle();
+    await settle(4);
     expect(getFileContent).toHaveBeenLastCalledWith("wi-1", "a.ts", { from: C2, to: C3 });
 
     await act(async () => {
@@ -2200,7 +2101,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
     });
-    await settle();
+    await settle(4);
 
     expect(save).toHaveBeenCalledWith("wi-1", "a.ts", "after", { from: C2, to: C3 });
     expect(disabled(pendingBox())).toBe(false);

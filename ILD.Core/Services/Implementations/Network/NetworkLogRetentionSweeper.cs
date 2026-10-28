@@ -56,7 +56,7 @@ public sealed class NetworkLogRetentionSweeper : BackgroundService
         }
     }
 
-    private async Task SweepOnceAsync(CancellationToken ct)
+    internal async Task SweepOnceAsync(CancellationToken ct)
     {
         using var scope = _scopes.CreateScope();
         var sp = scope.ServiceProvider;

@@ -92,7 +92,7 @@ public sealed class McpServerLauncherTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        psi.ArgumentList.Add(McpServerToolReflection.RunnableServerDll);
+        psi.ArgumentList.Add(McpServerBinary.RunnableServerDll);
         psi.ArgumentList.Add("--launch");
         psi.ArgumentList.Add(file);
         foreach (var name in psi.Environment.Keys.ToArray())

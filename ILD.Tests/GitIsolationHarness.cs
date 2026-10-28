@@ -265,6 +265,8 @@ internal sealed class AuditingRunner : IProcessRunner
 
     private void RecordBundles()
     {
+        if (!OperatingSystem.IsLinux()) return;
+
         foreach (var path in BundleFilesUnderPrivateRoot())
         {
             lock (_gate)

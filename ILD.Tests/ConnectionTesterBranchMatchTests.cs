@@ -11,34 +11,40 @@ namespace ILD.Tests;
 /// name, so the repository test must not read a different branch as the
 /// default one. Real git against a local repository.
 /// </summary>
-[Collection("Git")]
-public class ConnectionTesterBranchMatchTests : IDisposable
+public class ConnectionTesterBranchMatchTests : IClassFixture<ConnectionTesterBranchMatchTests.Origin>
 {
-    private readonly string _origin = Path.Combine(Path.GetTempPath(), "ild-branchmatch-" + Guid.NewGuid().ToString("N"));
+    private readonly string _origin;
 
-    public ConnectionTesterBranchMatchTests()
-    {
-        Directory.CreateDirectory(_origin);
-        Git("init", "-b", "main-x");
-        File.WriteAllText(Path.Combine(_origin, "README.md"), "hi\n");
-        Git("add", "-A");
-        Git("-c", "user.email=t@t.io", "-c", "user.name=Tester", "commit", "-m", "init");
-        Git("branch", "x/refs/heads/main");
-    }
+    public ConnectionTesterBranchMatchTests(Origin origin) => _origin = origin.Path;
 
-    public void Dispose()
+    /// <summary>The local repository every test only reads from, built once for the class.</summary>
+    public sealed class Origin : IDisposable
     {
-        try { Directory.Delete(_origin, recursive: true); } catch { }
-        GC.SuppressFinalize(this);
-    }
+        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ild-branchmatch-" + Guid.NewGuid().ToString("N"));
 
-    private void Git(params string[] args)
-    {
-        var psi = new ProcessStartInfo("git") { WorkingDirectory = _origin, RedirectStandardError = true, RedirectStandardOutput = true };
-        foreach (var arg in args) psi.ArgumentList.Add(arg);
-        using var process = Process.Start(psi)!;
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
+        public Origin()
+        {
+            Directory.CreateDirectory(Path);
+            Git("init", "-b", "main-x");
+            File.WriteAllText(System.IO.Path.Combine(Path, "README.md"), "hi\n");
+            Git("add", "-A");
+            Git("-c", "user.email=t@t.io", "-c", "user.name=Tester", "commit", "-m", "init");
+            Git("branch", "x/refs/heads/main");
+        }
+
+        public void Dispose()
+        {
+            try { Directory.Delete(Path, recursive: true); } catch { }
+        }
+
+        private void Git(params string[] args)
+        {
+            var psi = new ProcessStartInfo("git") { WorkingDirectory = Path, RedirectStandardError = true, RedirectStandardOutput = true };
+            foreach (var arg in args) psi.ArgumentList.Add(arg);
+            using var process = Process.Start(psi)!;
+            process.WaitForExit();
+            Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
+        }
     }
 
     private Task<ConnectionTestResult> TestAsync(string defaultBranch)

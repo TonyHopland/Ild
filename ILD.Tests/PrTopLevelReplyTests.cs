@@ -172,17 +172,36 @@ public class PrTopLevelReplyTests
         Assert.Equal(PrQueuedWrite.Reply, write.Kind);
         Assert.Equal("Removed.", write.Body);
     }
+
     [Fact]
-    public async Task A_suppressed_finding_is_refused_and_says_where_to_answer_instead()
+    public async Task A_review_carrying_a_suppressed_finding_is_answered_on_its_body_not_on_the_finding()
     {
-        // The forge never gave it an id, so there is neither a thread nor a
-        // comment to quote. The review body that carries it is the answerable
-        // thing, and the refusal now says so.
+        // The finding has no comment id of its own, so the review's id can only
+        // reach the review body.
+        var (service, run) = Build();
+
+        var queued = await service.ReplyAsync("wi-1", "r1", "Understood.", run.Id);
+
+        Assert.True(queued.Ok);
+        var write = Assert.Single(PrCommentQueueJson.TryParse(run.PrCommentQueue));
+        Assert.Equal(PrQueuedWrite.Comment, write.Kind);
+        Assert.Contains("> Some improvements to be made", write.Body!, StringComparison.Ordinal);
+        Assert.DoesNotContain("a finding with no comment of its own", write.Body!, StringComparison.Ordinal);
+        Assert.Null(write.Path);
+        Assert.Null(write.Line);
+    }
+
+    [Fact]
+    public async Task An_unknown_id_is_refused_and_nothing_is_queued()
+    {
         var (service, run) = Build();
 
         var refused = await service.ReplyAsync("wi-1", "no-such-id", "…", run.Id);
 
         Assert.False(refused.Ok);
+        Assert.Equal(
+            "No comment with id 'no-such-id' on this work item's pull request. The review ledger lists the comment ids that can be answered.",
+            refused.Message);
         Assert.Null(run.PrCommentQueue);
     }
 }

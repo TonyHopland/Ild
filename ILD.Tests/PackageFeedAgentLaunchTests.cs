@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -18,6 +19,7 @@ namespace ILD.Tests;
 /// OpenCode's session export/import launches around it. A stand-in CLI records
 /// what it was started with.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public sealed class PackageFeedAgentLaunchTests : IDisposable
 {
     private const string UserConfigValue = "/feeds/ild-test-userconfig.npmrc";
@@ -45,11 +47,7 @@ public sealed class PackageFeedAgentLaunchTests : IDisposable
     {
         var path = Path.Combine(_dir, "fake-agent.sh");
         File.WriteAllText(path, "#!/bin/sh\n" + body);
-        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(path);
-        using var chmod = Process.Start(psi)!;
-        chmod.WaitForExit();
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return path;
     }
 

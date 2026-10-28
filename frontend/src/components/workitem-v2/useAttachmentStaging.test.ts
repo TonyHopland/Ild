@@ -1,8 +1,10 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act, cleanup, waitFor } from "@testing-library/react";
 import { useAttachmentStaging } from "./useAttachmentStaging";
 import { AttachmentLimits } from "../../types";
 import { workItemService } from "../../services/auth";
+import { deferred } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -15,14 +17,6 @@ const LIMITS: AttachmentLimits = {
   maxFilesPerRequest: 10,
   maxTotalBytesPerWorkItem: 250 * 1024 * 1024,
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 /** A file of an arbitrary reported size, without holding that many bytes. */
 function fileOfSize(name: string, bytes: number, type = "application/octet-stream"): File {
@@ -276,5 +270,30 @@ describe("useAttachmentStaging", () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.errors).toEqual(["Attachments for this work item exceed the total allowed."]);
     expect(result.current.staged[0].status).toBe("pending");
+  });
+
+  test("after a partial failure the landed file is marked uploaded and the other stays pending", async () => {
+    vi.spyOn(workItemService, "uploadAttachment").mockImplementation((_id: string, file: File) =>
+      file.name === "b.pdf" ? Promise.reject({ message: "unreachable" }) : Promise.resolve([]),
+    );
+    const { result } = renderHook(() => useAttachmentStaging("wi-1", LIMITS));
+    act(() =>
+      result.current.add([
+        new File(["a"], "a.png", { type: "image/png" }),
+        new File(["b"], "b.pdf", { type: "application/pdf" }),
+      ]),
+    );
+
+    let first!: Awaited<ReturnType<typeof result.current.uploadAll>>;
+    await act(async () => {
+      first = await result.current.uploadAll("wi-1");
+    });
+
+    expect(first.ok).toBe(false);
+    expect(first.storedNames).toEqual(["a.png"]);
+    expect(result.current.staged.map((e) => [e.file.name, e.status])).toEqual([
+      ["a.png", "uploaded"],
+      ["b.pdf", "pending"],
+    ]);
   });
 });

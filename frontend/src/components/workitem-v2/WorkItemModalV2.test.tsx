@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, within, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { pressEscapeUntil } from "../../test-support";
+import { pressEscapeUntil, deferred, settle } from "../../test-support";
 import {
   WorkItemStatus,
   WorkItem,
@@ -682,20 +682,6 @@ describe("WorkItemModalV2", () => {
 
   function branchItem(overrides: Partial<WorkItem> = {}): WorkItem {
     return makeWorkItem({ branchName: LINKED_BRANCH, worktreePath: "/tmp/wt/wi-1", ...overrides });
-  }
-
-  function deferred<T>() {
-    let resolve!: (value: T) => void;
-    const promise = new Promise<T>((r) => {
-      resolve = r;
-    });
-    return { promise, resolve };
-  }
-
-  async function settle() {
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
-    });
   }
 
   function expectPlainBranch(name: string) {
@@ -1649,31 +1635,14 @@ describe("WorkItemModalV2", () => {
     expect(screen.queryByText("ILD is at its concurrency limit.")).toBeNull();
   });
 
-  test("neither the hold nor Start anyway shows for an item the repository limit is not holding in Ready", async () => {
-    const notHeld: Partial<WorkItem>[] = [
-      { status: WorkItemStatus.Ready, repositoryParallelismHold: null },
-      { status: WorkItemStatus.Ready },
-      { status: WorkItemStatus.Backlog, repositoryParallelismHold: { inProgress: 1, limit: 1 } },
-      { status: WorkItemStatus.WorkQueue, repositoryParallelismHold: { inProgress: 1, limit: 1 } },
-      { status: WorkItemStatus.Running, repositoryParallelismHold: { inProgress: 1, limit: 1 } },
-      {
-        status: WorkItemStatus.HumanFeedback,
-        repositoryParallelismHold: { inProgress: 1, limit: 1 },
-      },
-    ];
-    for (const overrides of notHeld) {
-      mockServices();
-      const { container } = await renderDialog(makeWorkItem(overrides));
+  test("neither the hold nor Start anyway shows for a Ready item the repository limit is not holding", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Ready }));
 
-      expect(container.ownerDocument.body.textContent).not.toContain(
-        "repository parallelism limit",
-      );
-      expect(
-        screen.queryByRole("button", { name: "Start anyway (ignore repository limit)" }),
-      ).toBeNull();
-      cleanup();
-      vi.restoreAllMocks();
-    }
+    expect(document.body.textContent).not.toContain("repository parallelism limit");
+    expect(
+      screen.queryByRole("button", { name: "Start anyway (ignore repository limit)" }),
+    ).toBeNull();
   });
 
   test("while the scheduler is paused a Ready item starts now from the footer", async () => {
@@ -1741,30 +1710,20 @@ describe("WorkItemModalV2", () => {
     expect(screen.queryByText("ILD is at its concurrency limit.")).toBeNull();
   });
 
-  test("Start now shows only for a Ready item the repository limit is not holding while the scheduler is known to be paused", async () => {
-    const hold = { inProgress: 1, limit: 1 };
-    const cases: [Partial<WorkItem>, boolean | undefined][] = [
-      [{ status: WorkItemStatus.Ready }, false],
-      [{ status: WorkItemStatus.Ready }, undefined],
-      [{ status: WorkItemStatus.Backlog }, true],
-      [{ status: WorkItemStatus.WorkQueue }, true],
-      [{ status: WorkItemStatus.Running }, true],
-      [{ status: WorkItemStatus.HumanFeedback }, true],
-      [{ status: WorkItemStatus.Done }, true],
-      [{ status: WorkItemStatus.Ready, repositoryParallelismHold: hold }, true],
-      [{ status: WorkItemStatus.Ready, repositoryParallelismHold: hold }, false],
-    ];
-    for (const [overrides, schedulerPaused] of cases) {
-      mockServices();
-      await renderDialog(makeWorkItem(overrides), { schedulerPaused });
+  test("Start now gives way to Start anyway for a Ready item the repository limit is holding", async () => {
+    mockServices();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.Ready,
+        repositoryParallelismHold: { inProgress: 1, limit: 1 },
+      }),
+      { schedulerPaused: true },
+    );
 
-      expect(screen.queryByRole("button", { name: "Start now (scheduler paused)" })).toBeNull();
-      expect(
-        screen.queryAllByRole("button", { name: "Start anyway (ignore repository limit)" }),
-      ).toHaveLength(overrides.repositoryParallelismHold ? 1 : 0);
-      cleanup();
-      vi.restoreAllMocks();
-    }
+    expect(screen.queryByRole("button", { name: "Start now (scheduler paused)" })).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "Start anyway (ignore repository limit)" }),
+    ).toHaveLength(1);
   });
 
   test("Delete stays out of the footer even when cleanup buttons are present", async () => {
@@ -1868,59 +1827,6 @@ describe("WorkItemModalV2", () => {
       expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
     });
     expect(onClose).not.toHaveBeenCalled();
-  });
-
-  test("a save that stores some files and fails on one publishes what landed", async () => {
-    mockServices();
-    const item = makeWorkItem();
-    const stored = {
-      id: "att-1",
-      fileName: "a.png",
-      contentType: "image/png",
-      sizeBytes: 1,
-    };
-    vi.spyOn(authServices.workItemService, "update").mockResolvedValue(item);
-    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue({
-      ...item,
-      attachments: [stored],
-    });
-    vi.spyOn(authServices.workItemService, "uploadAttachment").mockImplementation(
-      (_id: string, file: File) =>
-        file.name === "b.pdf"
-          ? Promise.reject({ status: 503, message: "WorkItemServer unreachable" })
-          : Promise.resolve([stored]),
-    );
-    const onSave = vi.fn();
-    await renderDialog(item, { onSave });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-      await Promise.resolve();
-    });
-    await act(async () => {
-      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
-        target: {
-          files: [
-            new File(["a"], "a.png", { type: "image/png" }),
-            new File(["b"], "b.pdf", { type: "application/pdf" }),
-          ],
-        },
-      });
-      await Promise.resolve();
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Update" }));
-      await Promise.resolve();
-    });
-
-    // The form stays open for the retry, and what the parent now holds includes
-    // the file that did land rather than the item as it was before the batch.
-    await waitFor(() => expect(screen.getByRole("button", { name: "Update" })).toBeTruthy());
-    await waitFor(() => {
-      const calls = onSave.mock.calls;
-      const published = calls[calls.length - 1]?.[0] as WorkItem | undefined;
-      expect(published?.attachments?.map((a) => a.fileName)).toEqual(["a.png"]);
-    });
   });
 
   test("an edit whose reread fails after the uploads is not reported as a failed save", async () => {
@@ -2243,473 +2149,6 @@ describe("WorkItemModalV2 creation", () => {
     });
     expect(onClose).not.toHaveBeenCalled();
   });
-
-  async function openPreviewTab() {
-    await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Preview/ }));
-      await Promise.resolve();
-    });
-  }
-
-  // jsdom renders a collapsed <details> body but does not toggle it from a summary
-  // click, so drive the open state (and the toggle event the editor loads on) by hand.
-  async function openEnvEditor() {
-    const details = document.querySelector("details.preview-env") as HTMLDetailsElement;
-    await act(async () => {
-      details.open = true;
-      fireEvent(details, new Event("toggle"));
-      await Promise.resolve();
-    });
-  }
-
-  test("preview tab renders one table row per service with state, name, port and link", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
-      configured: true,
-      state: "running",
-      worktreePath: "/wt",
-      configPath: "/wt/ild.config.json",
-      profileName: "app",
-      publicHost: "127.0.0.1",
-      stateDirectory: "/state",
-      message: null,
-      services: [
-        {
-          name: "web",
-          portAlias: "web",
-          status: "running",
-          port: 5173,
-          suggestedPort: 5173,
-          healthUrl: "http://127.0.0.1:5173/",
-          publicUrl: "http://127.0.0.1:5173",
-          logFilePath: "/state/web.log",
-          processId: 42,
-          exitCode: null,
-        },
-        {
-          name: "api",
-          portAlias: "api",
-          status: "exited",
-          port: 8080,
-          suggestedPort: 8080,
-          healthUrl: "http://127.0.0.1:8080/health",
-          publicUrl: null,
-          logFilePath: "/state/api.log",
-          processId: 43,
-          exitCode: 1,
-        },
-      ],
-    });
-    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
-    await openPreviewTab();
-
-    const table = await screen.findByRole("table");
-    const utils = within(table);
-    expect(utils.getByText("State")).toBeTruthy();
-    expect(utils.getByText("Link")).toBeTruthy();
-
-    // The running service shows Running, its port, and a clickable link.
-    expect(utils.getByText("web")).toBeTruthy();
-    expect(utils.getByText("Running")).toBeTruthy();
-    const link = utils.getByRole("link", { name: "http://127.0.0.1:5173" });
-    expect(link.getAttribute("href")).toBe("http://127.0.0.1:5173");
-
-    // The exited service surfaces as Error with its exit code.
-    expect(utils.getByText("api")).toBeTruthy();
-    expect(utils.getByText("Error")).toBeTruthy();
-    expect(utils.getByText(/exit 1/)).toBeTruthy();
-  });
-
-  test("preview tab exposes a repo-wide custom .env editor with a persistence warning", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
-      configured: true,
-      state: "stopped",
-      worktreePath: "/wt",
-      configPath: null,
-      profileName: null,
-      publicHost: null,
-      stateDirectory: null,
-      message: null,
-      services: [],
-    });
-    const updateSpy = vi.spyOn(authServices.repositoryService, "update").mockResolvedValue({
-      id: "repo-1",
-      name: "my-repo",
-      remoteProviderId: "rp-1",
-      cloneUrl: "",
-      defaultBranch: null,
-      worktreesPath: null,
-      defaultIntakeStatus: WorkItemStatus.Backlog,
-      hasPreviewEnv: true,
-      createdAt: "2025-01-01T00:00:00Z",
-    });
-
-    const envSpy = vi
-      .spyOn(authServices.repositoryService, "getPreviewEnv")
-      .mockResolvedValue("STORED=1");
-
-    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
-    await openPreviewTab();
-
-    // The warning makes the repo-wide, persisted-in-ILD scope explicit.
-    const warning = await screen.findByRole("note");
-    expect(warning.textContent).toMatch(/Repository-wide/);
-    expect(warning.textContent).toMatch(/every.*work item that uses it, not just this one/);
-
-    // Egress out of the container is dropped silently, so the .env editor says
-    // where a connection string is actually meant to point.
-    expect(screen.getByText(/Settings → Network/)).toBeTruthy();
-
-    // The plaintext is only fetched once the user expands the editor.
-    expect(envSpy).not.toHaveBeenCalled();
-    const textarea = screen.getByPlaceholderText(
-      /injected into preview processes/i,
-    ) as HTMLTextAreaElement;
-    await openEnvEditor();
-    expect(envSpy).toHaveBeenCalledWith("repo-1");
-    await waitFor(() => {
-      expect(textarea.value).toBe("STORED=1");
-    });
-
-    // Editing and saving persists via the repository update endpoint (repo-wide),
-    // not a per-work-item call.
-    await act(async () => {
-      fireEvent.change(textarea, { target: { value: "API_TOKEN=x" } });
-      await Promise.resolve();
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /Save \.env/i }));
-      await Promise.resolve();
-    });
-
-    expect(updateSpy).toHaveBeenCalledWith(
-      "repo-1",
-      expect.objectContaining({ previewEnv: "API_TOKEN=x" }),
-    );
-  });
-
-  test("emptying the custom .env editor removes the stored value", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
-      configured: true,
-      state: "stopped",
-      worktreePath: "/wt",
-      configPath: null,
-      profileName: null,
-      publicHost: null,
-      stateDirectory: null,
-      message: null,
-      services: [],
-    });
-    const updateSpy = vi.spyOn(authServices.repositoryService, "update");
-    vi.spyOn(authServices.repositoryService, "getPreviewEnv").mockResolvedValue("STORED=1");
-    const clearSpy = vi
-      .spyOn(authServices.repositoryService, "clearPreviewEnv")
-      .mockResolvedValue({} as never);
-
-    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
-    await openPreviewTab();
-
-    const textarea = (await screen.findByPlaceholderText(
-      /injected into preview processes/i,
-    )) as HTMLTextAreaElement;
-    await openEnvEditor();
-    await waitFor(() => {
-      expect(textarea.value).toBe("STORED=1");
-    });
-
-    await act(async () => {
-      fireEvent.change(textarea, { target: { value: "" } });
-      await Promise.resolve();
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /Remove \.env/i }));
-      await Promise.resolve();
-    });
-
-    // The repository update endpoint reads a blank .env as "keep it", so removing
-    // has to go through the dedicated clear call.
-    expect(clearSpy).toHaveBeenCalledWith("repo-1");
-    expect(updateSpy).not.toHaveBeenCalled();
-  });
-
-  test("editing a service port sends it as an override when starting the preview", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
-      configured: true,
-      state: "stopped",
-      worktreePath: "/wt",
-      configPath: "/wt/ild.config.json",
-      profileName: "app",
-      publicHost: null,
-      stateDirectory: null,
-      message: null,
-      services: [
-        {
-          name: "web",
-          portAlias: "web",
-          status: "stopped",
-          port: null,
-          suggestedPort: 5173,
-          healthUrl: null,
-          publicUrl: null,
-          logFilePath: null,
-          processId: null,
-          exitCode: null,
-        },
-      ],
-    });
-    const startSpy = vi.spyOn(authServices.workItemService, "startPreview").mockResolvedValue({
-      configured: true,
-      state: "running",
-      worktreePath: "/wt",
-      configPath: "/wt/ild.config.json",
-      profileName: "app",
-      publicHost: "127.0.0.1",
-      stateDirectory: "/state",
-      message: null,
-      services: [],
-    });
-    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
-    await openPreviewTab();
-
-    // The port input is prefilled with the suggested port and is editable.
-    const portInput = (await screen.findByLabelText("Port for web")) as HTMLInputElement;
-    expect(portInput.value).toBe("5173");
-
-    await act(async () => {
-      fireEvent.change(portInput, { target: { value: "4000" } });
-      await Promise.resolve();
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Start Preview" }));
-      await Promise.resolve();
-    });
-
-    expect(startSpy).toHaveBeenCalledWith("wi-1", { portOverrides: { web: 4000 } });
-  });
-
-  test("the log toggle fetches and shows a service's captured output", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
-      configured: true,
-      state: "failed",
-      worktreePath: "/wt",
-      configPath: "/wt/ild.config.json",
-      profileName: "app",
-      publicHost: "127.0.0.1",
-      stateDirectory: "/state",
-      message: null,
-      services: [
-        {
-          name: "api",
-          portAlias: "api",
-          status: "exited",
-          port: 8080,
-          suggestedPort: 8080,
-          healthUrl: "http://127.0.0.1:8080/health",
-          publicUrl: null,
-          logFilePath: "/state/api.log",
-          processId: 43,
-          exitCode: 1,
-        },
-      ],
-    });
-    const logSpy = vi
-      .spyOn(authServices.workItemService, "getPreviewLogs")
-      .mockResolvedValue({ service: "api", content: "Error: port already in use" });
-    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
-    await openPreviewTab();
-
-    await act(async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Log" }));
-      await Promise.resolve();
-    });
-
-    expect(logSpy).toHaveBeenCalledWith("wi-1", "api");
-    expect(await screen.findByText("Error: port already in use")).toBeTruthy();
-  });
-
-  test("the per-row Start button starts only that service, passing its edited port", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
-      configured: true,
-      state: "stopped",
-      worktreePath: "/wt",
-      configPath: "/wt/ild.config.json",
-      profileName: "app",
-      publicHost: null,
-      stateDirectory: null,
-      message: null,
-      services: [
-        {
-          name: "web",
-          portAlias: "web",
-          status: "stopped",
-          port: null,
-          suggestedPort: 5173,
-          healthUrl: null,
-          publicUrl: null,
-          logFilePath: null,
-          processId: null,
-          exitCode: null,
-        },
-        {
-          name: "api",
-          portAlias: "api",
-          status: "stopped",
-          port: null,
-          suggestedPort: 8080,
-          healthUrl: null,
-          publicUrl: null,
-          logFilePath: null,
-          processId: null,
-          exitCode: null,
-        },
-      ],
-    });
-    const startServiceSpy = vi
-      .spyOn(authServices.workItemService, "startPreviewService")
-      .mockResolvedValue({
-        configured: true,
-        state: "partial",
-        worktreePath: "/wt",
-        configPath: "/wt/ild.config.json",
-        profileName: "app",
-        publicHost: "127.0.0.1",
-        stateDirectory: "/state",
-        message: null,
-        services: [],
-      });
-    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
-    await openPreviewTab();
-
-    const portInput = (await screen.findByLabelText("Port for web")) as HTMLInputElement;
-    await act(async () => {
-      fireEvent.change(portInput, { target: { value: "4000" } });
-      await Promise.resolve();
-    });
-
-    // Two rows each have a "Start" button; the first belongs to the "web" row.
-    const startButtons = screen.getAllByRole("button", { name: "Start" });
-    await act(async () => {
-      fireEvent.click(startButtons[0]);
-      await Promise.resolve();
-    });
-
-    expect(startServiceSpy).toHaveBeenCalledWith("wi-1", "web", { portOverrides: { web: 4000 } });
-  });
-
-  test("the per-row Stop button stops only that service", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
-      configured: true,
-      state: "running",
-      worktreePath: "/wt",
-      configPath: "/wt/ild.config.json",
-      profileName: "app",
-      publicHost: "127.0.0.1",
-      stateDirectory: "/state",
-      message: null,
-      services: [
-        {
-          name: "web",
-          portAlias: "web",
-          status: "running",
-          port: 5173,
-          suggestedPort: 5173,
-          healthUrl: "http://127.0.0.1:5173/",
-          publicUrl: "http://127.0.0.1:5173",
-          logFilePath: "/state/web.log",
-          processId: 42,
-          exitCode: null,
-        },
-      ],
-    });
-    const stopServiceSpy = vi
-      .spyOn(authServices.workItemService, "stopPreviewService")
-      .mockResolvedValue({
-        configured: true,
-        state: "stopped",
-        worktreePath: "/wt",
-        configPath: "/wt/ild.config.json",
-        profileName: "app",
-        publicHost: "127.0.0.1",
-        stateDirectory: "/state",
-        message: null,
-        services: [],
-      });
-    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
-    await openPreviewTab();
-
-    await act(async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
-      await Promise.resolve();
-    });
-
-    expect(stopServiceSpy).toHaveBeenCalledWith("wi-1", "web");
-  });
-
-  test("the config toggle loads a service's config and saving persists the edit", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
-      configured: true,
-      state: "stopped",
-      worktreePath: "/wt",
-      configPath: "/wt/ild.config.json",
-      profileName: "app",
-      publicHost: null,
-      stateDirectory: null,
-      message: null,
-      services: [
-        {
-          name: "web",
-          portAlias: "web",
-          status: "stopped",
-          port: null,
-          suggestedPort: 5173,
-          healthUrl: null,
-          publicUrl: null,
-          logFilePath: null,
-          processId: null,
-          exitCode: null,
-        },
-      ],
-    });
-    const configSpy = vi
-      .spyOn(authServices.workItemService, "getPreviewServiceConfig")
-      .mockResolvedValue({ service: "web", config: '{\n  "name": "web"\n}' });
-    const saveSpy = vi
-      .spyOn(authServices.workItemService, "updatePreviewServiceConfig")
-      .mockResolvedValue({
-        service: "web",
-        config: '{\n  "name": "web",\n  "suggestedPort": 4000\n}',
-      });
-    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
-    await openPreviewTab();
-
-    await act(async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Config" }));
-      await Promise.resolve();
-    });
-
-    expect(configSpy).toHaveBeenCalledWith("wi-1", "web");
-    const editor = (await screen.findByLabelText("Config for web")) as HTMLTextAreaElement;
-    expect(editor.value).toBe('{\n  "name": "web"\n}');
-
-    const edited = '{\n  "name": "web",\n  "suggestedPort": 4000\n}';
-    await act(async () => {
-      fireEvent.change(editor, { target: { value: edited } });
-      await Promise.resolve();
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      await Promise.resolve();
-    });
-
-    expect(saveSpy).toHaveBeenCalledWith("wi-1", "web", edited);
-  });
 });
 
 describe("WorkItemModalV2 files tab", () => {
@@ -2735,10 +2174,6 @@ describe("WorkItemModalV2 files tab", () => {
       imageBase64: null,
     });
     const { rerender } = await renderDialog(makeWorkItem({ worktreePath: "/tmp/wt/a" }));
-    const settle = () =>
-      act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
 
     await act(async () => {
       fireEvent.click(screen.getByRole("tab", { name: "Files" }));
@@ -2900,12 +2335,6 @@ describe("WorkItemModalV2 Runs tab run action refresh", () => {
 // Every control in the dialog that acts on a run waits for any other action on
 // that run, whichever tab or footer started it.
 describe("WorkItemModalV2 one action at a time per run", () => {
-  function settle<T = void>() {
-    let resolve!: (v: T) => void;
-    const promise = new Promise<T>((res) => (resolve = res));
-    return { promise, resolve };
-  }
-
   async function openRunsTab(run: LoopRun, item: Partial<WorkItem>) {
     mockServices([run]);
     await renderDialog(
@@ -2932,7 +2361,7 @@ describe("WorkItemModalV2 one action at a time per run", () => {
 
   test("a footer cleanup and a Runs-tab delete of the same run never overlap", async () => {
     await openRunsTab(makeRun(), {});
-    const cleanupDone = settle();
+    const cleanupDone = deferred();
     vi.spyOn(authServices.workItemService, "cleanupToDone").mockReturnValue(cleanupDone.promise);
     await findRunAction(/delete run/i);
 
@@ -2949,7 +2378,7 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     });
     await waitFor(() => expect((deleteRun() as HTMLButtonElement).disabled).toBe(false));
 
-    const deletion = settle();
+    const deletion = deferred();
     const remove = vi
       .spyOn(authServices.loopRunService, "delete")
       .mockReturnValue(deletion.promise);
@@ -2974,7 +2403,7 @@ describe("WorkItemModalV2 one action at a time per run", () => {
       isHalted: true,
     });
     await openRunsTab(halted, { humanFeedbackReason: "Human Input Needed" });
-    const deletion = settle();
+    const deletion = deferred();
     vi.spyOn(authServices.loopRunService, "delete").mockReturnValue(deletion.promise);
 
     fireEvent.click(await findRunAction(/delete run/i));

@@ -1,116 +1,34 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, waitFor, act, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
-import type { ChatSession, ChatSessionSummary } from "../types";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { screen, fireEvent, waitFor, act, within } from "@testing-library/react";
+import type { ChatSessionSummary } from "../types";
+import { emitHubEvent, openChatList, settle, showChatActions, signalRHub } from "../test-support";
+import {
+  backToChatList,
+  chatServer,
+  chatSession,
+  chatSummary,
+  openChatPanel,
+  renderChatBubble,
+  resumeChat,
+  stubChatServices,
+} from "../test-support.chatBubble";
 
-const {
-  handlers,
-  connection,
-  invoke,
-  chatService,
-  aiProviderService,
-  workItemService,
-  getOpenLoopDocument,
-  setCurrentChatSessionId,
-} = vi.hoisted(() => ({
-  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-  connection: {
-    state: "connected" as "disconnected" | "connecting" | "connected" | "reconnecting",
-  },
-  invoke: vi.fn((..._args: unknown[]) => Promise.resolve()),
-  chatService: {
-    listHistory: vi.fn(),
-    getById: vi.fn(),
-    start: vi.fn(),
-    sendMessage: vi.fn(),
-    interrupt: vi.fn(),
-    deleteOne: vi.fn(),
-    deleteMany: vi.fn(),
-    markRead: vi.fn(),
-    rename: vi.fn(),
-  },
-  aiProviderService: { getAll: vi.fn(() => Promise.resolve([])) },
-  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
-  getOpenLoopDocument: vi.fn(),
-  setCurrentChatSessionId: vi.fn(),
-}));
+vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
+vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
+vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
-vi.mock("../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: connection.state,
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event] = handler;
-    },
-    off: (event: string) => {
-      delete handlers[event];
-    },
-    invoke,
-  }),
-}));
-
-vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
-vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
-vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
-
-import ChatBubble from "./ChatBubble";
-import { ChatInboxProvider } from "./ChatInbox";
-import { openChatList, showChatActions } from "../test-support";
-
-// A stand-in for the server: what GET /chat/history answers right now. A rename
-// that succeeds changes it there, as PUT /chat/{id}/name does.
-let server: ChatSessionSummary[] = [];
-const sessions: Record<string, ChatSession> = {};
-
-function summary(id: string, name: string): ChatSessionSummary {
-  return {
-    id,
-    name,
-    createdAt: "2026-01-01T00:00:00Z",
-    updatedAt: "2026-01-02T00:00:00Z",
-    hasUnread: false,
-  };
-}
-
-function setName(id: string, name: string) {
-  server = server.map((c) => (c.id === id ? { ...c, name } : c));
-}
-
-beforeEach(() => {
-  chatService.listHistory.mockImplementation(() => Promise.resolve(server.map((c) => ({ ...c }))));
-  chatService.getById.mockImplementation((id: string) => Promise.resolve(sessions[id]));
-  chatService.markRead.mockResolvedValue(undefined);
-  chatService.rename.mockImplementation((id: string, name: string) => {
-    setName(id, name);
-    return Promise.resolve();
-  });
-});
+const services = stubChatServices();
+const { chatService } = services;
+const server = chatServer(services);
 
 afterEach(() => {
-  cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
-  for (const k of Object.keys(sessions)) delete sessions[k];
-  connection.state = "connected";
-  server = [];
+  signalRHub.reset();
   vi.clearAllMocks();
   localStorage.clear();
 });
 
-function bubble() {
-  return (
-    <MemoryRouter initialEntries={["/"]}>
-      <ChatInboxProvider>
-        <ChatBubble />
-      </ChatInboxProvider>
-    </MemoryRouter>
-  );
-}
-
 function panel() {
   return screen.getByRole("dialog");
-}
-
-async function openPanel() {
-  fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
 }
 
 /** The rename draft's input, if one is open: any text box but the message box. */
@@ -133,21 +51,123 @@ function pressEnter(input: HTMLInputElement) {
   else fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 }
 
+describe("chat titles", () => {
+  test("a title saved on the server replaces the open chat's header and the list row without a reload", async () => {
+    server.chats = [chatSummary("a", "Could this be solved better by")];
+    server.sessions.a = chatSession({ id: "a", name: "Could this be solved better by" });
+    await renderChatBubble();
+    await openChatPanel();
+    await resumeChat("Could this be solved better by");
+
+    server.update("a", { name: "Login page fix" });
+    emitHubEvent("ChatTitleChanged", { chatSessionId: "a" });
+    await within(panel()).findByText("Login page fix");
+    expect(within(panel()).queryByText("Could this be solved better by")).toBeNull();
+
+    await backToChatList();
+    expect(screen.getByText("Login page fix")).toBeTruthy();
+
+    server.update("a", { name: "Login page redirect loop" });
+    emitHubEvent("ChatTitleChanged", { chatSessionId: "a" });
+    await screen.findByText("Login page redirect loop");
+    expect(screen.queryByText("Login page fix")).toBeNull();
+  });
+
+  test("a row is renamed inline: Enter saves, Cancel and Escape discard, and an empty name cannot be saved", async () => {
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
+    await renderChatBubble();
+    await openChatPanel();
+    await openChatList();
+    await screen.findByText("Alpha");
+
+    let input = startRenamingRow("Alpha");
+    fireEvent.change(input, { target: { value: "Deploy loop wiring" } });
+    pressEnter(input);
+    await waitFor(() => expect(chatService.rename).toHaveBeenCalledWith("a", "Deploy loop wiring"));
+    await screen.findByText("Deploy loop wiring");
+    await waitFor(() => expect(renameInput()).toBeUndefined());
+
+    input = startRenamingRow("Deploy loop wiring");
+    fireEvent.change(input, { target: { value: "Thrown away" } });
+    fireEvent.click(within(panel()).getByRole("button", { name: "Cancel" }));
+    expect(renameInput()).toBeUndefined();
+
+    input = startRenamingRow("Beta");
+    fireEvent.change(input, { target: { value: "Thrown away too" } });
+    fireEvent.keyDown(input, { key: "Escape", code: "Escape" });
+    expect(renameInput()).toBeUndefined();
+
+    input = startRenamingRow("Beta");
+    fireEvent.change(input, { target: { value: "   " } });
+    expect(
+      (within(panel()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    pressEnter(input);
+    await settle();
+
+    expect(chatService.rename).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Deploy loop wiring")).toBeTruthy();
+    expect(screen.queryByText("Thrown away")).toBeNull();
+    expect(screen.queryByText("Thrown away too")).toBeNull();
+  });
+
+  test("a failed rename shows an error and keeps the old title", async () => {
+    server.chats = [chatSummary("a", "Alpha")];
+    chatService.rename.mockRejectedValue(new Error("Name is taken"));
+    await renderChatBubble();
+    await openChatPanel();
+    await openChatList();
+    await screen.findByText("Alpha");
+
+    const input = startRenamingRow("Alpha");
+    fireEvent.change(input, { target: { value: "Deploy loop wiring" } });
+    pressEnter(input);
+
+    await within(panel()).findByText("Name is taken");
+    const draft = renameInput();
+    if (draft) fireEvent.keyDown(draft, { key: "Escape", code: "Escape" });
+    expect(screen.getByText("Alpha")).toBeTruthy();
+    expect(screen.queryByText("Deploy loop wiring")).toBeNull();
+  });
+
+  test("switching chat discards an unsaved rename", async () => {
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
+    server.sessions.a = chatSession({ id: "a", name: "Alpha" });
+    server.sessions.b = chatSession({ id: "b", name: "Beta" });
+    await renderChatBubble();
+    await openChatPanel();
+    await resumeChat("Alpha");
+    await backToChatList();
+    expect(screen.getByText("Alpha")).toBeTruthy();
+
+    fireEvent.change(startRenamingRow("Alpha"), { target: { value: "Unsaved row name" } });
+    await resumeChat("Beta");
+    expect(renameInput()).toBeUndefined();
+    await backToChatList();
+    expect(renameInput()).toBeUndefined();
+
+    await resumeChat("Alpha");
+    expect(renameInput()).toBeUndefined();
+    expect(within(panel()).getByText("Alpha")).toBeTruthy();
+    expect(chatService.rename).not.toHaveBeenCalled();
+  });
+});
+
 describe("a rename being saved", () => {
   test("cannot be edited while its save is out, so what is saved is what was shown", async () => {
-    server = [summary("a", "Alpha")];
+    server.chats = [chatSummary("a", "Alpha")];
     let saved!: () => void;
     chatService.rename.mockImplementation(
       (id: string, name: string) =>
         new Promise<void>((resolve) => {
           saved = () => {
-            setName(id, name);
+            server.update(id, { name: name });
             resolve();
           };
         }),
     );
-    render(bubble());
-    await openPanel();
+    await renderChatBubble();
+    await openChatPanel();
     await openChatList();
     await screen.findByText("Alpha");
 
@@ -164,10 +184,10 @@ describe("a rename being saved", () => {
   });
 
   test("can be edited again once a save fails", async () => {
-    server = [summary("a", "Alpha")];
+    server.chats = [chatSummary("a", "Alpha")];
     chatService.rename.mockRejectedValue(new Error("Name is taken"));
-    render(bubble());
-    await openPanel();
+    await renderChatBubble();
+    await openChatPanel();
     await openChatList();
     await screen.findByText("Alpha");
 
@@ -181,19 +201,19 @@ describe("a rename being saved", () => {
   });
 
   test("cancelled mid-save still holds its chat: a new rename of it waits for the first to settle", async () => {
-    server = [summary("a", "Alpha")];
+    server.chats = [chatSummary("a", "Alpha")];
     const answers: (() => void)[] = [];
     chatService.rename.mockImplementation(
       (id: string, name: string) =>
         new Promise<void>((resolve) => {
           answers.push(() => {
-            setName(id, name);
+            server.update(id, { name: name });
             resolve();
           });
         }),
     );
-    render(bubble());
-    await openPanel();
+    await renderChatBubble();
+    await openChatPanel();
     await openChatList();
     await screen.findByText("Alpha");
 
@@ -230,9 +250,9 @@ describe("a rename being saved", () => {
   ])(
     "taken by the server is shown at once, even when the re-read after it %s",
     async (_, reread) => {
-      server = [summary("a", "Alpha")];
-      render(bubble());
-      await openPanel();
+      server.chats = [chatSummary("a", "Alpha")];
+      await renderChatBubble();
+      await openChatPanel();
       await openChatList();
       await screen.findByText("Alpha");
       chatService.listHistory.mockImplementation(reread);
@@ -248,9 +268,9 @@ describe("a rename being saved", () => {
   );
 
   test("is sent and shown as the server stores it: trimmed, without NUL characters", async () => {
-    server = [summary("a", "Alpha")];
-    render(bubble());
-    await openPanel();
+    server.chats = [chatSummary("a", "Alpha")];
+    await renderChatBubble();
+    await openChatPanel();
     await openChatList();
     await screen.findByText("Alpha");
     chatService.listHistory.mockImplementation(() => new Promise<ChatSessionSummary[]>(() => {}));
@@ -266,15 +286,15 @@ describe("a rename being saved", () => {
 
 describe("a rename draft", () => {
   test("cancelled with Escape leaves the page's own Escape alone, so an open work item stays open", async () => {
-    server = [summary("a", "Alpha")];
+    server.chats = [chatSummary("a", "Alpha")];
     const pageEscape = vi.fn();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") pageEscape();
     };
     document.addEventListener("keydown", onKey);
     try {
-      render(bubble());
-      await openPanel();
+      await renderChatBubble();
+      await openChatPanel();
       await openChatList();
       await screen.findByText("Alpha");
 

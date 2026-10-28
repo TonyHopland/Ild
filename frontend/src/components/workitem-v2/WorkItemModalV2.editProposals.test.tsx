@@ -11,7 +11,7 @@ import {
   WorkItemStatus,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
-import { proposalCardAround } from "../../test-support";
+import { documentOrder, proposalCardAround, makeEditProposal } from "../../test-support";
 import * as authServices from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
@@ -73,10 +73,8 @@ function makeProposal(
   runNodeId: string | null,
   overrides: Partial<WorkItemEditProposal> = {},
 ): WorkItemEditProposal {
-  return {
+  return makeEditProposal({
     id: `p-${title}`,
-    workItemId: "wi-1",
-    status: "Pending",
     proposed: { title },
     snapshot: {
       title: "Old title",
@@ -85,16 +83,11 @@ function makeProposal(
       branchNameOverride: null,
       baseBranchOverride: null,
     },
-    rationale: null,
-    rejectionReason: null,
     createdByLoopRunId: "run-1",
-    createdByChatSessionId: null,
     createdByRunNodeId: runNodeId,
     chatReplySequence: null,
-    createdAt: "2026-09-26T10:00:00Z",
-    decidedAt: null,
     ...overrides,
-  };
+  });
 }
 
 function turn(
@@ -188,24 +181,6 @@ const overview = () => document.getElementById("wiv2-panel-overview") as HTMLEle
 const action = () => document.getElementById("wiv2-panel-action") as HTMLElement;
 const cardOf = (title: string) => proposalCardAround(within(action()).getByText(title));
 
-/** The labels, in the order their elements appear in the document. */
-function documentOrder(entries: [string, Element][]): string[] {
-  return [...entries]
-    .sort(([, a], [, b]) =>
-      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-    )
-    .map(([label]) => label);
-}
-
-function inAction(labels: string[]): [string, Element][] {
-  return labels.map((l) => [
-    l,
-    l === "PR details"
-      ? within(action()).getByRole("button", { name: /PR details/ })
-      : within(action()).getByText(l),
-  ]);
-}
-
 describe("edit proposals in the detail view", () => {
   test("the Overview shows no card, and the Action tab shows the loop's cards but not a chat's", async () => {
     mockServices();
@@ -271,14 +246,14 @@ describe("edit proposals in the detail view", () => {
       "End first",
       "End second",
     ];
-    expect(documentOrder(inAction(expected))).toEqual(expected);
+    expect(documentOrder(expected, action())).toEqual(expected);
   });
 
   test("while the item waits on a human, a card whose step wrote no turn sits above the feedback card and one without a step below it", async () => {
     mockServices(makeRun({ status: LoopRunStatus.WaitingHuman }), [aiTurn(1, "Done.", "exec-1")]);
     vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       makeProposal("Loose card", null),
-      makeProposal("Halted step card", "exec-9"),
+      makeProposal("Halted one", "exec-9"),
       makeProposal("Step card", "exec-1"),
     ]);
 
@@ -293,8 +268,8 @@ describe("edit proposals in the detail view", () => {
     await waitFor(() => expect(action().textContent).toContain("Loose card"));
     await waitFor(() => expect(action().textContent).toContain("Needs you"));
 
-    const expected = ["Done.", "Step card", "Halted step card", "Needs you", "Loose card"];
-    expect(documentOrder(inAction(expected))).toEqual(expected);
+    const expected = ["Done.", "Step card", "Halted one", "Needs you", "Loose card"];
+    expect(documentOrder(expected, action())).toEqual(expected);
   });
 
   test("approving re-reads the cards and the approved card stays where it was", async () => {
@@ -341,7 +316,7 @@ describe("edit proposals in the detail view", () => {
     expect(list).toHaveBeenCalledWith("wi-1");
     expect(list.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(cardOf("Agent's sharper title").textContent).toContain("Approved");
-    expect(documentOrder(inAction(expected))).toEqual(expected);
+    expect(documentOrder(expected, action())).toEqual(expected);
   });
 
   test("an approve refused because the item changed shows the card stale, in place, and leaves the item as it is", async () => {
@@ -372,7 +347,7 @@ describe("edit proposals in the detail view", () => {
     expect(within(action()).queryByRole("button", { name: "Approve" })).toBeNull();
     expect(onSave).not.toHaveBeenCalled();
     const expected = ["First turn.", "Agent's sharper title", "Second turn."];
-    expect(documentOrder(inAction(expected))).toEqual(expected);
+    expect(documentOrder(expected, action())).toEqual(expected);
   });
 
   test("a hint for the item brings in its new card, and after switching items the old item's cards are gone", async () => {
@@ -437,7 +412,7 @@ describe("edit proposals in the detail view", () => {
     await waitFor(() => expect(action().textContent).toContain("Coded it."));
 
     const expected = ["Planned.", "Coded it.", "Live card", "Live Output"];
-    expect(documentOrder(inAction(expected))).toEqual(expected);
+    expect(documentOrder(expected, action())).toEqual(expected);
     expect(
       (within(action()).getByLabelText("Rejection reason (optional)") as HTMLTextAreaElement).value,
     ).toBe("Too long");

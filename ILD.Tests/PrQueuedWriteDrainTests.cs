@@ -5,7 +5,10 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -38,38 +41,59 @@ public class PrQueuedWriteDrainTests
     private static PrQueuedWrite Resolve(string id, string threadId)
         => new(id, PrQueuedWrite.Resolve, threadId, null, "src/A.cs", 10, DateTime.UtcNow);
 
-    private sealed class Fixture
+    private sealed class Fixture : IDisposable
     {
-        public Mock<IRemoteProvider> Remote { get; } = new();
-        public Mock<ILoopRunStore> Runs { get; } = new();
+        public TestDb Db { get; } = new();
+        public PrNodeBuilder Node { get; } = new(cloneUrl: CloneUrl);
+        public Mock<IRemoteProvider> Remote => Node.Remote;
+        public Mock<ILoopRunStore> Runs { get; private set; } = null!;
         public Mock<IRunNotifier> Notifier { get; } = new();
         public Mock<IEventLogService> Events { get; } = new();
         public List<EventLog> Logged { get; } = new();
         public List<Guid> QueueChanges { get; } = new();
-        public LoopRun Run { get; }
         public List<(string Kind, string Target, string? Body)> Written { get; } = new();
-        public string? RecordedLedger { get; private set; }
-        public List<string?> QueueWrites { get; } = new();
         public string? PostedComment { get; private set; }
 
         /// <summary>Every general comment posted, in order — a run can visit this node more than once.</summary>
         public List<string> PostedComments { get; } = new();
 
-        public Fixture(IReadOnlyList<PrQueuedWrite> queued)
+        /// <summary>
+        /// The instance the engine carries into the node. Deliberately NOT given the queue: the
+        /// engine loaded it before the round queued anything, so a node that trusts it sends the
+        /// wrong list — or, with no comment template, never enters the branch that sends at all.
+        /// </summary>
+        public LoopRun Run => Node.Run;
+
+        /// <summary>The persisted queue column, which is what the node reads and claims.</summary>
+        public string? Row => PrRunSeed.QueueOf(Db, Run.Id);
+
+        public string? RecordedLedger => PrRunSeed.LedgerOf(Db, Run.Id);
+
+        public int Reads { get; private set; }
+
+        /// <summary>Runs after each read of the queue and before the claim that follows it.</summary>
+        public Func<Task>? AfterRead { get; set; }
+
+        public static async Task<Fixture> CreateAsync(IReadOnlyList<PrQueuedWrite> queued, string? ledger = null)
         {
-            Row = queued.Count == 0 ? null : PrCommentQueueJson.Serialize(queued);
-            Run = new LoopRun
-            {
-                Id = Guid.NewGuid(),
-                WorkItemId = "WI-1",
-                PrUrl = PrUrl,
-                CurrentNodeId = Guid.NewGuid(),
-                // Deliberately NOT the queue: the engine loaded this instance
-                // before the round queued anything, so a node that trusts it
-                // sends the wrong list — or, with no comment template, never
-                // enters the branch that sends at all.
-                PrCommentQueue = null,
-            };
+            var f = new Fixture();
+            await f.InitAsync(queued, ledger);
+            return f;
+        }
+
+        private Fixture()
+        {
+        }
+
+        private async Task InitAsync(IReadOnlyList<PrQueuedWrite> queued, string? ledger)
+        {
+            Run.PrUrl = PrUrl;
+            Run.CurrentNodeId = Node.Node.Id;
+            await PrRunSeed.SeedAsync(Db, prUrl: PrUrl, workItemId: "WI-1", currentNodeId: Node.Node.Id, id: Run.Id);
+            if (queued.Count > 0)
+                await PrRunSeed.SetQueueAsync(Db, Run.Id, PrCommentQueueJson.Serialize(queued));
+            if (ledger is not null)
+                await PrRunSeed.SetLedgerAsync(Db, Run.Id, ledger);
 
             Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
                 .Callback<string, string, string, string>((_, _, target, body) => Written.Add((PrQueuedWrite.Reply, target, body)))
@@ -90,95 +114,36 @@ public class PrQueuedWriteDrainTests
                 .Callback<Guid>(QueueChanges.Add)
                 .Returns(Task.CompletedTask);
 
-            Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
-                .Callback<Guid, string?>((_, json) => RecordedLedger = json)
-                .Returns(Task.CompletedTask);
-
-            // The ledger is mutated by compare-and-set too: every writer of it
-            // reads the column and writes only if it still holds what it read.
-            Runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => Run.PrCommentLedger);
-            Runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
-                .ReturnsAsync((Guid _, string? expected, string? json) =>
-                {
-                    if (!string.Equals(expected, Run.PrCommentLedger, StringComparison.Ordinal)) return false;
-                    Run.PrCommentLedger = json;
-                    RecordedLedger = json;
-                    return true;
-                });
-
-            // The row, not the instance the engine carries. The node reads and
-            // claims the queue through these, so anything queued or dropped
-            // after Run was loaded is visible to it — which is the whole point
-            // of the claim.
-            Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).ReturnsAsync(() =>
+            var real = new LoopRunStore(Db.Fresh());
+            Runs = PrRunSeed.OverRealWrites(real);
+            // The row is allowed to move out from under this read, which is what a human
+            // dropping something mid-round does. The claim's compare-and-set then fails
+            // against what was read and it tries again.
+            Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).Returns(async () =>
             {
                 Reads++;
-                var read = Row;
-                // The row is allowed to move out from under this read, which is
-                // what a human dropping something mid-round does. The claim's
-                // compare-and-set then fails against `read` and it tries again.
-                AfterRead?.Invoke();
+                var read = await real.GetPrCommentQueueAsync(Run.Id);
+                if (AfterRead is not null)
+                    await AfterRead();
                 return read;
             });
-            Runs.Setup(s => s.TrySetPrCommentQueueAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
-                .ReturnsAsync((Guid _, string? expected, string? json) =>
-                {
-                    if (!string.Equals(expected, Row, StringComparison.Ordinal)) return false;
-                    QueueWrites.Add(json);
-                    Row = json;
-                    return true;
-                });
         }
 
-        /// <summary>The persisted column, which only the store members above touch.</summary>
-        public string? Row { get; set; }
-
-        public int Reads { get; private set; }
-
-        /// <summary>Runs after each read of the queue and before the claim that follows it.</summary>
-        public Action? AfterRead { get; set; }
-
-        public async Task<List<NodeOutcome>> RunNodeAsync()
+        public Task<List<NodeOutcome>> RunNodeAsync()
         {
-            var repoId = Guid.NewGuid();
-            var workItems = new Mock<IWorkItemManager>();
-            workItems.Setup(m => m.GetWorkItemAsync("WI-1"))
-                .ReturnsAsync(new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId });
-            var providerStore = new Mock<IProviderStore>();
-            providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(new Repository
-            {
-                Id = repoId, Name = "repo", CloneUrl = CloneUrl, DefaultBranch = "main", RemoteProviderId = Guid.NewGuid(),
-            });
-            providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
-
-            var services = new ServiceCollection();
-            services.AddSingleton(workItems.Object);
-            services.AddSingleton(providerStore.Object);
-            services.AddSingleton(Remote.Object);
-            services.AddSingleton(Mock.Of<IRepositoryManager>());
-            services.AddSingleton(Runs.Object);
-            services.AddSingleton(Notifier.Object);
-            services.AddSingleton(Events.Object);
-
-            var node = new LoopNode
-            {
-                Id = Run.CurrentNodeId!.Value,
-                NodeType = NodeType.PR,
-                Config = "{}",
-            };
-
-            var outcomes = new List<NodeOutcome>();
-            await foreach (var outcome in new PRNodeExecutor()
-                .ExecuteAsync(new NodeExecutionContext(Run, node, services.BuildServiceProvider(), CancellationToken.None)))
-                outcomes.Add(outcome);
-            return outcomes;
+            Node.Runs = Runs.Object;
+            Node.Notifier = Notifier.Object;
+            Node.Events = Events.Object;
+            return Node.RunAsync();
         }
+
+        public void Dispose() => Db.Dispose();
     }
 
     [Fact]
     public async Task The_pr_node_is_where_a_queued_reply_and_resolve_finally_go_out()
     {
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles."), Resolve("w2", "PRRT_t1") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles."), Resolve("w2", "PRRT_t1") });
 
         await f.RunNodeAsync();
 
@@ -192,7 +157,7 @@ public class PrQueuedWriteDrainTests
     [Fact]
     public async Task A_queued_reply_is_stamped_only_when_it_is_posted()
     {
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles.") });
 
         await f.RunNodeAsync();
 
@@ -206,7 +171,7 @@ public class PrQueuedWriteDrainTests
     [Fact]
     public async Task What_the_round_posted_never_fires_the_comment_edge_back_at_it()
     {
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles.") });
 
         await f.RunNodeAsync();
 
@@ -231,7 +196,7 @@ public class PrQueuedWriteDrainTests
         // thread stays open, nothing is recorded as written, and the finding
         // comes back on the next review rather than vanishing.
         var kept = Reply("w2", "4051372317", "And this one stands.");
-        var f = new Fixture(new[] { kept });
+        using var f = await Fixture.CreateAsync(new[] { kept });
 
         await f.RunNodeAsync();
 
@@ -258,9 +223,7 @@ public class PrQueuedWriteDrainTests
     {
         // WI-181: corrected twice in one round, the implementer answered the
         // same review three times, and all three were about to be posted.
-        var f = new Fixture(Array.Empty<PrQueuedWrite>());
-        f.Runs.Setup(s => s.GetActiveByWorkItemAsync("WI-1")).ReturnsAsync(f.Run);
-        f.Runs.Setup(s => s.GetLatestByWorkItemAsync("WI-1")).ReturnsAsync(f.Run);
+        using var f = await Fixture.CreateAsync(Array.Empty<PrQueuedWrite>());
         f.Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "42")).ReturnsAsync(new RemotePrReviewLedger(
             Array.Empty<RemotePrReviewSummary>(),
             new[]
@@ -269,7 +232,7 @@ public class PrQueuedWriteDrainTests
                     "this allocation is wrong", "Copilot", Head, DateTime.UtcNow, false, false),
             },
             Head, null));
-        var agent = new PrReviewService(f.Runs.Object, f.Remote.Object);
+        var agent = new PrReviewService(new LoopRunStore(f.Db.Fresh()), f.Remote.Object);
         foreach (var answer in new[] { "first answer", "second answer", "third answer" })
             Assert.True((await agent.ReplyAsync("WI-1", "4049159495", answer, f.Run.Id)).Ok);
         var takenBack = await agent.CommentAsync("WI-1", "a note I thought better of", f.Run.Id);
@@ -288,11 +251,10 @@ public class PrQueuedWriteDrainTests
     [Fact]
     public async Task The_queue_is_emptied_once_it_has_gone_out()
     {
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles.") });
 
         await f.RunNodeAsync();
 
-        Assert.Contains(null, f.QueueWrites);
         Assert.Null(f.Row);
     }
 
@@ -301,7 +263,7 @@ public class PrQueuedWriteDrainTests
     {
         // A round may answer threads without the node having a comment to post;
         // those answers must still go out.
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles.") });
 
         var outcomes = await f.RunNodeAsync();
 
@@ -317,7 +279,7 @@ public class PrQueuedWriteDrainTests
         // Nothing is lost by a refusal: the thread stays open and the finding
         // comes back. Failing here would park the run on something no human
         // asked for, and keeping the item would retry it every round.
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles.") });
         f.Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrWriteResult(false, null, "403 from the forge"));
 
@@ -336,12 +298,12 @@ public class PrQueuedWriteDrainTests
         // landing while it executes has to be honoured. Reading the queue off
         // the instance the engine has carried since the iteration began would
         // post the answer anyway, after a person had explicitly stopped it.
-        var f = new Fixture(new[]
+        using var f = await Fixture.CreateAsync(new[]
         {
             Reply("w1", "4049159495", "This one was stopped."),
             Reply("w2", "4051372317", "And this one stands."),
         });
-        f.AfterRead = () =>
+        f.AfterRead = async () =>
         {
             // The drop lands after the claim has read the queue but before it
             // clears it — the narrowest version of the window, and the one a
@@ -349,7 +311,8 @@ public class PrQueuedWriteDrainTests
             // overtaken; the retry finds a settled row. A comment template is
             // set so this read is the claim's own and not the branch's gate.
             if (f.Reads != 1) return;
-            f.Row = PrCommentQueueJson.Serialize(new[] { Reply("w2", "4051372317", "And this one stands.") });
+            await PrRunSeed.SetQueueAsync(f.Db, f.Run.Id,
+                PrCommentQueueJson.Serialize(new[] { Reply("w2", "4051372317", "And this one stands.") }));
         };
 
         await f.RunNodeAsync();
@@ -368,7 +331,7 @@ public class PrQueuedWriteDrainTests
         // it was loaded. A node with no comment template decides whether to run
         // this branch at all on that answer, so trusting it strands every reply
         // an ordinary round produces.
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles.") });
         Assert.Null(f.Run.PrCommentQueue);
 
         var outcomes = await f.RunNodeAsync();
@@ -383,21 +346,11 @@ public class PrQueuedWriteDrainTests
     {
         // Once the claim lands the answers are on their way out. A panel still
         // showing them offers a Drop that cannot work.
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles.") });
 
         await f.RunNodeAsync();
 
         Assert.Equal(f.Run.Id, Assert.Single(f.QueueChanges));
-    }
-
-    [Fact]
-    public async Task A_round_with_nothing_queued_announces_no_queue_change()
-    {
-        var f = new Fixture(Array.Empty<PrQueuedWrite>());
-
-        await f.RunNodeAsync();
-
-        Assert.Empty(f.QueueChanges);
     }
 
     [Fact]
@@ -408,17 +361,17 @@ public class PrQueuedWriteDrainTests
         // the thread stays open and no later review ever raises it again.
         const string body = "this allocation is wrong";
         var hash = PrCommentLedger.Fingerprint("src/A.cs", 10, body);
-        var f = new Fixture(new[]
+        using var f = await Fixture.CreateAsync(new[]
         {
             Reply("w1", "4049159495", "That compiles.") with { SourceHash = hash },
         });
-        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with
+        await PrRunSeed.SetLedgerAsync(f.Db, f.Run.Id, PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with
         {
             Head = Head,
             DeliveredIds = new[] { PrCommentLedger.KeyFor("review", "4049159495") },
             DeliveredHashes = new[] { hash },
             WatchedFrom = new DateTime(2026, 9, 20, 0, 0, 0, DateTimeKind.Utc),
-        });
+        }));
         f.Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrWriteResult(false, null, "403 from the forge"));
 
@@ -436,16 +389,16 @@ public class PrQueuedWriteDrainTests
     public async Task An_answer_that_went_out_leaves_its_finding_answered()
     {
         var hash = PrCommentLedger.Fingerprint("src/A.cs", 10, "this allocation is wrong");
-        var f = new Fixture(new[]
+        using var f = await Fixture.CreateAsync(new[]
         {
             Reply("w1", "4049159495", "That compiles.") with { SourceHash = hash },
         });
-        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with
+        await PrRunSeed.SetLedgerAsync(f.Db, f.Run.Id, PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with
         {
             Head = Head,
             DeliveredHashes = new[] { hash },
             WatchedFrom = new DateTime(2026, 9, 20, 0, 0, 0, DateTimeKind.Utc),
-        });
+        }));
 
         await f.RunNodeAsync();
 
@@ -458,7 +411,7 @@ public class PrQueuedWriteDrainTests
         // A top-level comment and a review body have no thread on any forge, so
         // the answer is a pull-request comment of its own — stamped like every
         // other thing ILD posts, or the next heartbeat hands it back to the loop.
-        var f = new Fixture(new[] { Comment("w1", "127", "In reply to the comment (127):\n\n> Rename it\n\nRenamed.") });
+        using var f = await Fixture.CreateAsync(new[] { Comment("w1", "127", "In reply to the comment (127):\n\n> Rename it\n\nRenamed.") });
 
         await f.RunNodeAsync();
 
@@ -475,7 +428,7 @@ public class PrQueuedWriteDrainTests
         // It lands as a pull-request comment, which the ledger keys `issue:` —
         // recording it as `review:` would eventually mark a real review comment
         // as ILD's own and swallow it.
-        var f = new Fixture(new[] { Comment("w1", "127", "Renamed.") });
+        using var f = await Fixture.CreateAsync(new[] { Comment("w1", "127", "Renamed.") });
 
         await f.RunNodeAsync();
 
@@ -487,7 +440,7 @@ public class PrQueuedWriteDrainTests
     [Fact]
     public async Task What_a_standalone_answer_posted_never_fires_the_comment_edge_back_at_it()
     {
-        var f = new Fixture(new[] { Comment("w1", "127", "Renamed.") });
+        using var f = await Fixture.CreateAsync(new[] { Comment("w1", "127", "Renamed.") });
 
         await f.RunNodeAsync();
 
@@ -511,7 +464,7 @@ public class PrQueuedWriteDrainTests
         // call, so a crash between the two loses those answers while the round
         // reads as finished. This record is the only thing standing between
         // that and answers nobody can see ever existed.
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles."), Resolve("w2", "PRRT_t1") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles."), Resolve("w2", "PRRT_t1") });
 
         await f.RunNodeAsync();
 
@@ -528,7 +481,7 @@ public class PrQueuedWriteDrainTests
         // The case the record exists for, short of a crash: the answer is gone
         // from the queue, nothing reached the pull request, and this is where a
         // person finds out what the round had meant to say.
-        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        using var f = await Fixture.CreateAsync(new[] { Reply("w1", "4049159495", "That compiles.") });
         f.Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrWriteResult(false, null, "403 from the forge"));
 
@@ -539,26 +492,22 @@ public class PrQueuedWriteDrainTests
     }
 
     [Fact]
-    public async Task A_round_with_nothing_queued_records_no_claim_either()
+    public async Task A_round_with_nothing_queued_says_nothing_at_all_and_still_parks()
     {
-        var f = new Fixture(Array.Empty<PrQueuedWrite>());
+        // The change this whole design turns on: a round that answered on the
+        // threads, or changed code and had nothing to add, leaves the pull
+        // request quiet. There is no template comment behind it any more.
+        using var f = await Fixture.CreateAsync(Array.Empty<PrQueuedWrite>());
 
-        await f.RunNodeAsync();
-
-        Assert.Empty(f.Logged);
-    }
-
-    [Fact]
-    public async Task A_run_with_nothing_queued_writes_nothing_and_touches_no_queue()
-    {
-        var f = new Fixture(Array.Empty<PrQueuedWrite>());
-
-        await f.RunNodeAsync();
+        var outcomes = await f.RunNodeAsync();
 
         Assert.Empty(f.Written);
-        Assert.Empty(f.QueueWrites);
-        // …and says nothing general either: there is no comment left that the
-        // node writes on the round's behalf.
         Assert.Null(f.PostedComment);
+        Assert.Empty(f.QueueChanges);
+        Assert.Empty(f.Logged);
+        Assert.Null(f.Row);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
     }
 }
+

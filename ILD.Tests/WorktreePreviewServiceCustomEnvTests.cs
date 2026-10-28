@@ -78,44 +78,66 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         Assert.Equal("s3cr3t", ReadMarker());
     }
 
+    private static Dictionary<string, string> Merge(
+        Dictionary<string, string> defaults,
+        Dictionary<string, string>? configEnv = null,
+        Dictionary<string, string>? customEnv = null,
+        Dictionary<string, string>? feedEnv = null)
+        => WorktreePreviewService.MergePreviewEnvironment(
+            defaults, configEnv, value => $"templated({value})", customEnv ?? [], feedEnv ?? []);
+
+    private static Dictionary<string, string> Defaults(params (string Key, string Value)[] entries)
+        => new(entries.ToDictionary(e => e.Key, e => e.Value), StringComparer.OrdinalIgnoreCase);
+
     [Fact]
-    public async Task Custom_env_overrides_a_base_default_variable()
+    public void Custom_env_overrides_a_base_default_variable()
     {
-        // NPM_CONFIG_CACHE is set by BuildDefaultEnvironment; the repo .env must win.
-        WriteConfig("NPM_CONFIG_CACHE");
-        var service = BuildService();
+        var merged = Merge(
+            Defaults(("NPM_CONFIG_CACHE", "/state/npm-cache"), ("HOME", "/home/x")),
+            customEnv: new() { ["NPM_CONFIG_CACHE"] = "/tmp/from-dotenv-cache" });
 
-        await service.InstallAsync(_worktree, customEnv: "NPM_CONFIG_CACHE=/tmp/from-dotenv-cache", cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("/tmp/from-dotenv-cache", ReadMarker());
+        Assert.Equal("/tmp/from-dotenv-cache", merged["NPM_CONFIG_CACHE"]);
+        Assert.Equal("/home/x", merged["HOME"]);
     }
 
     [Fact]
-    public async Task Custom_env_overrides_per_service_config_env()
+    public void Custom_env_overrides_per_service_config_env_which_overrides_the_defaults()
     {
-        // The repo .env is the highest-precedence source: it is what the human who
-        // owns the repository typed, and ild.config.json is worktree-editable.
-        WriteConfig("FOO", stepEnvJson: "{ \"FOO\": \"from-config\" }");
-        var service = BuildService();
+        // The repo .env is what the human who owns the repository typed, and ild.config.json is worktree-editable.
+        var merged = Merge(
+            Defaults(("FOO", "from-default"), ("BAR", "from-default")),
+            configEnv: new() { ["FOO"] = "from-config", ["BAR"] = "from-config", ["BAZ"] = "from-config" },
+            customEnv: new() { ["FOO"] = "from-dotenv" });
 
-        await service.InstallAsync(_worktree, customEnv: "FOO=from-dotenv", cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("from-dotenv", ReadMarker());
+        Assert.Equal("from-dotenv", merged["FOO"]);
+        Assert.Equal("templated(from-config)", merged["BAR"]);
+        Assert.Equal("templated(from-config)", merged["BAZ"]);
     }
 
     [Fact]
-    public async Task Custom_env_values_are_injected_verbatim_not_expanded_as_templates()
+    public void Custom_env_values_are_injected_verbatim_not_expanded_as_templates()
     {
-        // They are secrets, not ${PORT:...} templates. A password that happens to
-        // contain a `$` or a `${...}` must arrive byte-for-byte — expanding it would
-        // corrupt it, and an unknown token would fail the whole install.
+        // They are secrets, not ${PORT:...} templates: a password containing `${...}` must arrive byte-for-byte.
         const string password = "p$ss${STATE_DIR}w${PORT:nope}rd$";
-        WriteConfig("DB_PASSWORD", stepEnvJson: "{ \"DB_PASSWORD\": \"from-config\" }");
-        var service = BuildService();
 
-        await service.InstallAsync(_worktree, customEnv: $"DB_PASSWORD={password}", cancellationToken: TestContext.Current.CancellationToken);
+        var merged = Merge(
+            Defaults(),
+            configEnv: new() { ["DB_PASSWORD"] = "from-config" },
+            customEnv: new() { ["DB_PASSWORD"] = password });
 
-        Assert.Equal(password, ReadMarker());
+        Assert.Equal(password, merged["DB_PASSWORD"]);
+    }
+
+    [Fact]
+    public void Package_feed_credentials_beat_everything_typed_anywhere()
+    {
+        var merged = Merge(
+            Defaults(("NPM_CONFIG_USERCONFIG", "/default")),
+            configEnv: new() { ["NPM_CONFIG_USERCONFIG"] = "/config" },
+            customEnv: new() { ["NPM_CONFIG_USERCONFIG"] = "/dotenv" },
+            feedEnv: new() { ["NPM_CONFIG_USERCONFIG"] = "/feed" });
+
+        Assert.Equal("/feed", merged["NPM_CONFIG_USERCONFIG"]);
     }
 
     [Fact]

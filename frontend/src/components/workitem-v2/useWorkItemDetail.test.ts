@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { useWorkItemDetail } from "./useWorkItemDetail";
@@ -11,6 +12,7 @@ import {
   loopRunService,
 } from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import { fakeHub, routeEveryHub } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -43,30 +45,15 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
   };
 }
 
-type Handler = (m: { type: string; payload: unknown; timestamp: string }) => void;
-
 /**
- * Installs a controllable useSignalR mock. `invoke` resolves to whatever the
- * test supplies for the SubscribeToRun backlog; `emit` drives live events.
+ * Answers every hub with one fake whose `invoke` resolves to whatever the test
+ * supplies for the SubscribeToRun backlog; `emit` drives live events.
  */
 function mockSignalR(subscribeResult: unknown) {
-  const handlers = new Map<string, Set<Handler>>();
-  const on = vi.fn((event: string, h: Handler) => {
-    const set = handlers.get(event) ?? new Set<Handler>();
-    set.add(h);
-    handlers.set(event, set);
-  });
-  const off = vi.fn((event: string, h: Handler) => handlers.get(event)?.delete(h));
-  const invoke = vi.fn().mockReturnValue(Promise.resolve(subscribeResult));
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on,
-    off,
-    invoke,
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-  const emit = (event: string, payload: unknown) =>
-    handlers.get(event)?.forEach((h) => h({ type: event, payload, timestamp: "" }));
-  return { emit, invoke };
+  const hub = fakeHub();
+  hub.invoke.mockImplementation(() => Promise.resolve(subscribeResult as void));
+  routeEveryHub(signalRHook, hub);
+  return { emit: hub.dispatch, invoke: hub.invoke };
 }
 
 function stubServices() {

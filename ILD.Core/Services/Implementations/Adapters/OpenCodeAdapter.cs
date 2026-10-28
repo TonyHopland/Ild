@@ -198,19 +198,9 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             {
                 return NodeExecutionResult.Fail(KillAndDescribe(p, "opencode stream read timed out"));
             }
-            var (response, sessionId, jsonError, sawJsonEvents) = ExtractTextAndSessionIdFromJsonEvents(stdout);
-
-            // opencode --format json emits a stream of typed events (step_start,
-            // tool_use, text, error, ...). Only `text` events carry assistant
-            // output, and `error` events surface session failures. Previously
-            // we fell back to dumping the raw NDJSON whenever no text was
-            // extracted, which made the AI node output unreadable when the
-            // model only produced tool calls or the session errored. Surface
-            // a clear diagnostic instead and propagate session errors. When
-            // stdout is not JSON at all (e.g. tests using a stub binary), keep
-            // the raw stdout as the response.
-            if (sessionId is not null) onSessionSeen?.Invoke(sessionId);
-            var effectiveSessionId = sessionId ?? sessionIdToUse;
+            var events = ExtractTextAndSessionIdFromJsonEvents(stdout);
+            if (events.SessionId is not null) onSessionSeen?.Invoke(events.SessionId);
+            var effectiveSessionId = events.SessionId ?? sessionIdToUse;
             string? exportedSessionJson = null;
             if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
             {
@@ -219,51 +209,73 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     exportedSessionJson = sessionJson;
             }
 
-            if (string.IsNullOrEmpty(response) && !string.IsNullOrWhiteSpace(exportedSessionJson))
-            {
-                response = ExtractLatestAssistantTextFromSessionJson(exportedSessionJson!);
-            }
-
-            // Snapshot before applying fallback error strings so we can tell below whether
-            // the model actually produced text.
-            var modelProducedText = !string.IsNullOrEmpty(response);
-
-            if (string.IsNullOrEmpty(response))
-            {
-                if (!string.IsNullOrEmpty(jsonError))
-                    response = $"[opencode-error] {jsonError}";
-                else if (!sawJsonEvents)
-                    response = stdout;
-                else if (!string.IsNullOrEmpty(stderr))
-                    response = $"[opencode] no text response. stderr: {stderr.Trim()}";
-                else
-                    response = "[opencode] no text response from model";
-            }
-
-            if (p.ExitCode == 0 && !string.IsNullOrEmpty(jsonError))
-                // opencode's `{"type":"error"}` event isolates the provider's own
-                // message, so classify from that rather than leaving the executor
-                // to read it back out of a prefixed error string next to a page of
-                // agent narration. Unknown is passed through deliberately: the
-                // executor's fallback still gets its turn.
-                return NodeExecutionResult.Fail(
-                    $"opencode session error: {jsonError}", response,
-                    AiFailureClassifier.ClassifyProviderMessage(jsonError));
-
-            // Model produced no text despite a clean exit — treat as retryable
-            // failure so the on_failure edge can recover instead of propagating
-            // the error string as real AI output.
-            if (p.ExitCode == 0 && sawJsonEvents && !modelProducedText)
-                return NodeExecutionResult.Fail(response);
-
-            return p.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.ParseOpenCode(stdout))
-                : NodeExecutionResult.Fail($"exit={p.ExitCode} stderr={stderr}", response);
+            return AssembleResult(stdout, events, stderr, p.ExitCode, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, exportedSessionJson);
         }
         catch (Exception ex)
         {
             return NodeExecutionResult.Fail($"[opencode-error] {ex.Message}");
         }
+    }
+
+    /// <summary>Turns a finished run's stdout, stderr and exit code into the node's result.</summary>
+    /// <remarks>
+    /// opencode --format json emits a stream of typed events (step_start,
+    /// tool_use, text, error, ...). Only `text` events carry assistant
+    /// output, and `error` events surface session failures. When no text
+    /// comes through, the response is a diagnostic rather than the raw
+    /// NDJSON, which is unreadable as AI node output. When
+    /// stdout is not JSON at all (e.g. tests using a stub binary), keep
+    /// the raw stdout as the response.
+    /// </remarks>
+    /// <param name="events">What <paramref name="stdout"/> says, parsed once by the caller.</param>
+    /// <param name="sessionId">The session the run ended on: the one its stream named, else the one it was started with.</param>
+    /// <param name="exportedSessionJson">The session as exported afterwards, read for the answer when the stream carried no text.</param>
+    internal static NodeExecutionResult AssembleResult(
+        string stdout, JsonEvents events, string stderr, int exitCode, string prompt,
+        string? sessionId, string? incomingSessionId, string? exportedSessionJson)
+    {
+        var (response, _, jsonError, sawJsonEvents) = events;
+
+        if (string.IsNullOrEmpty(response) && !string.IsNullOrWhiteSpace(exportedSessionJson))
+        {
+            response = ExtractLatestAssistantTextFromSessionJson(exportedSessionJson!);
+        }
+
+        // Snapshot before applying fallback error strings so we can tell below whether
+        // the model actually produced text.
+        var modelProducedText = !string.IsNullOrEmpty(response);
+
+        if (string.IsNullOrEmpty(response))
+        {
+            if (!string.IsNullOrEmpty(jsonError))
+                response = $"[opencode-error] {jsonError}";
+            else if (!sawJsonEvents)
+                response = stdout;
+            else if (!string.IsNullOrEmpty(stderr))
+                response = $"[opencode] no text response. stderr: {stderr.Trim()}";
+            else
+                response = "[opencode] no text response from model";
+        }
+
+        if (exitCode == 0 && !string.IsNullOrEmpty(jsonError))
+            // opencode's `{"type":"error"}` event isolates the provider's own
+            // message, so classify from that rather than leaving the executor
+            // to read it back out of a prefixed error string next to a page of
+            // agent narration. Unknown is passed through deliberately: the
+            // executor's fallback still gets its turn.
+            return NodeExecutionResult.Fail(
+                $"opencode session error: {jsonError}", response,
+                AiFailureClassifier.ClassifyProviderMessage(jsonError));
+
+        // Model produced no text despite a clean exit — treat as retryable
+        // failure so the on_failure edge can recover instead of propagating
+        // the error string as real AI output.
+        if (exitCode == 0 && sawJsonEvents && !modelProducedText)
+            return NodeExecutionResult.Fail(response);
+
+        return exitCode == 0
+            ? NodeExecutionResult.Ok(response, prompt, sessionId, incomingSessionId, AdapterUsageParser.ParseOpenCode(stdout))
+            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
     }
 
     private async Task<ManagedSessionRestoreResult> RestoreManagedSessionAsync(
@@ -527,7 +539,10 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return sb.ToString();
     }
 
-    static (string Text, string? SessionId, string? Error, bool SawJsonEvents) ExtractTextAndSessionIdFromJsonEvents(string raw)
+    /// <summary>What a run's <c>--format json</c> stdout says: its text, the last session id named, the last session error, and whether it was an event stream at all.</summary>
+    internal sealed record JsonEvents(string Text, string? SessionId, string? Error, bool SawJsonEvents);
+
+    internal static JsonEvents ExtractTextAndSessionIdFromJsonEvents(string raw)
     {
         var sb = new StringBuilder();
         string? lastSessionId = null;
@@ -575,7 +590,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
             catch { }
         }
-        return (sb.ToString(), lastSessionId, lastError, sawJsonEvents);
+        return new JsonEvents(sb.ToString(), lastSessionId, lastError, sawJsonEvents);
     }
 
     static string? ExtractErrorMessage(JsonElement error)
@@ -667,7 +682,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         }
     }
 
-    static string? ExtractLatestAssistantTextFromSessionJson(string sessionJson)
+    internal static string? ExtractLatestAssistantTextFromSessionJson(string sessionJson)
     {
         try
         {
@@ -928,7 +943,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         lock (lockObj) return string.Join("\n", lines);
     }
 
-    private static string? ExtractSessionIdFromLine(string line)
+    internal static string? ExtractSessionIdFromLine(string line)
     {
         var trimmed = line.Trim();
         if (string.IsNullOrEmpty(trimmed)) return null;
@@ -943,7 +958,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         }
     }
 
-    private static string? ExtractTextFromJsonLine(string line)
+    internal static string? ExtractTextFromJsonLine(string line)
     {
         var trimmed = line.Trim();
         if (string.IsNullOrEmpty(trimmed)) return null;

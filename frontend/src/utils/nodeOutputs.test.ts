@@ -10,6 +10,9 @@ import {
   outputRowProblems,
   applyOutputChoices,
   buttonColorOf,
+  closedReasonOf,
+  outputControlsShown,
+  successFailureOutputs,
   outputColorOf,
   outputConfirmationOf,
   defaultOutputOf,
@@ -594,5 +597,66 @@ describe("defaultOutputOf", () => {
     expect(defaultOutputOf(undefined)).toBeNull();
     expect(defaultOutputOf({})).toBeNull();
     expect(defaultOutputOf({ outputs: [{ name: "OnSuccess" }, { name: "later" }] })).toBeNull();
+  });
+});
+
+describe("outputControlsShown: which node types list outputs with the eye, shield, default and colour", () => {
+  test.each([
+    [NodeType.Human, true],
+    [NodeType.PR, true],
+    [NodeType.AI, false],
+    [NodeType.Condition, false],
+    [NodeType.Cmd, false],
+    [NodeType.Start, false],
+    [NodeType.Cleanup, false],
+    [NodeType.Prompt, false],
+    [NodeType.SetVariable, false],
+  ])("a %s node: %s", (type, shown) => {
+    expect(outputControlsShown(type)).toBe(shown);
+  });
+
+  test("no other node type shows them", () => {
+    const shownFor = Object.values(NodeType).filter((type) => outputControlsShown(type));
+    expect(shownFor.sort()).toEqual([NodeType.Human, NodeType.PR].sort());
+  });
+});
+
+describe("closedReasonOf: why an output row is greyed out", () => {
+  test.each([
+    ["an unwired output, even if offered", false, true, "no edge connected"],
+    ["an unwired output that is hidden", false, false, "no edge connected"],
+    ["a wired output that is hidden", true, false, "hidden from user"],
+    ["a wired output that is offered", true, true, null],
+  ])("%s", (_, wired, visible, reason) => {
+    expect(closedReasonOf(wired, visible)).toBe(reason);
+  });
+});
+
+describe("successFailureOutputs", () => {
+  const fixed = new Map([
+    [NodeType.Human, [{ name: "OnSuccess" }, { name: "OnFailure" }]],
+    [
+      NodeType.PR,
+      [{ name: "OnSuccess" }, { name: "OnFailure" }, { name: "on_merged", reserved: true }],
+    ],
+  ]);
+
+  test.each([
+    ["a Human node's fixed outputs", NodeType.Human, undefined, ["OnSuccess", "OnFailure"]],
+    [
+      "a PR node's reserved outputs are not among them",
+      NodeType.PR,
+      undefined,
+      ["OnSuccess", "OnFailure"],
+    ],
+    ["a type with no fixed outputs and none declared", NodeType.Cmd, undefined, []],
+    [
+      "declared in the config only",
+      NodeType.Cmd,
+      { outputs: [{ name: "OnFailure" }, { name: "x" }] },
+      ["OnFailure"],
+    ],
+  ])("%s", (_, type, config, names) => {
+    expect(successFailureOutputs(type, config, fixed)).toEqual(names);
   });
 });

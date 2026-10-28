@@ -5,6 +5,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -51,16 +52,6 @@ public class AINodeExecutorThrottleParkTests
         }
     }
 
-    private sealed class FakeRegistry : IAgentAdapterRegistry
-    {
-        private readonly IAgentAdapter _adapter;
-        public FakeRegistry(IAgentAdapter adapter) => _adapter = adapter;
-        public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => _adapter;
-        public string[] GetAllSupportedProviderTypes() => ["claude-code"];
-        public AdapterModelSupport GetModelSupport(string providerType) => _adapter.ModelSupport;
-        public AgentAdapterTraits GetTraits(string? providerType) => _adapter.Traits;
-    }
-
     private static IServiceProvider BuildServices(TestDb db, IAgentAdapter adapter)
     {
         var providerStore = new Mock<IProviderStore>();
@@ -83,7 +74,7 @@ public class AINodeExecutorThrottleParkTests
         services.AddSingleton(providerStore.Object);
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton(wim);
-        services.AddSingleton<IAgentAdapterRegistry>(new FakeRegistry(adapter));
+        services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
         return services.BuildServiceProvider();
     }
 

@@ -145,4 +145,75 @@ public sealed class SettingsControllerTests : IDisposable
         Assert.Equal(sent, StatedValue(result));
         Assert.Equal(sent, await Stored(key));
     }
+
+    [Theory]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "1")]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "5")]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "10")]
+    [InlineData(AppSettingKeys.RunRetentionDays, "0")]
+    [InlineData(AppSettingKeys.RunRetentionDays, "30")]
+    [InlineData(AppSettingKeys.RunRetentionDays, "3650")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "1")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "500")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "8192")]
+    public async Task A_value_inside_the_range_of_a_ranged_setting_is_stored(string key, string sent)
+    {
+        var result = await Put(key, sent);
+
+        Assert.Equal(sent, StatedValue(result));
+        Assert.Equal(sent, await Stored(key));
+    }
+
+    [Theory]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "0")]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "11")]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "-1")]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "three")]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "")]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "2.5")]
+    [InlineData(AppSettingKeys.RunRetentionDays, "-1")]
+    [InlineData(AppSettingKeys.RunRetentionDays, "3651")]
+    [InlineData(AppSettingKeys.RunRetentionDays, "7.5")]
+    [InlineData(AppSettingKeys.RunRetentionDays, "")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "0")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "8193")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "-1")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "four thousand")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "2.5")]
+    public async Task A_value_outside_the_range_of_a_ranged_setting_is_refused_and_stores_nothing(string key, string sent)
+    {
+        var result = await Put(key, sent);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Null(await Stored(key));
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("3651")]
+    [InlineData("7.5")]
+    [InlineData("")]
+    public async Task The_run_retention_refusal_names_the_upper_limit_and_no_longer_calls_zero_when_done(string sent)
+    {
+        var result = await Put(AppSettingKeys.RunRetentionDays, sent);
+
+        var error = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<BadRequestObjectResult>(result).Value);
+        Assert.Contains("3650", error);
+        Assert.DoesNotContain("when done", error);
+        Assert.DoesNotContain("disabled", error);
+    }
+
+    [Theory]
+    [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "3")]
+    [InlineData(AppSettingKeys.RunRetentionDays, "14")]
+    [InlineData(AppSettingKeys.GlobalVariableMaxLength, "4000")]
+    public async Task A_ranged_setting_reads_its_default_until_one_is_stored(string key, string expected)
+    {
+        Assert.Equal(expected, StatedValue(await Build().Get(key, TestContext.Current.CancellationToken)));
+
+        var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
+        var rows = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(all)!;
+        Assert.Equal(expected, rows.Single(r => r["key"] == key)["value"]);
+    }
 }

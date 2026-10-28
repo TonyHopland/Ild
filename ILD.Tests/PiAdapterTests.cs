@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
@@ -13,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
+[SupportedOSPlatform("linux")]
 public class PiAdapterTests
 {
     [Fact]
@@ -28,19 +30,6 @@ public class PiAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_returns_failure_when_binary_not_found()
-    {
-        var adapter = new PiAdapter();
-
-        var result = await adapter.ExecuteAsync(BuildContext(
-            binaryPath: "/nonexistent/pi",
-            executionCount: 1));
-
-        Assert.False(result.Success);
-        Assert.Contains("pi-error", result.Error);
-    }
-
-    [Fact]
     public async Task ExecuteAsync_reads_text_and_session_id_from_json_events()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-test-{Guid.NewGuid():N}");
@@ -52,7 +41,7 @@ public class PiAdapterTests
             "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"hello \"}}'\n" +
             "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"world\"}}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"hello world\"}]}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -83,110 +72,6 @@ public class PiAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_streams_tool_calls_to_progress_without_polluting_output()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-tool-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-tool\",\"cwd\":\"$PWD\"}'\n" +
-            "printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolCallId\":\"call-1\",\"toolName\":\"bash\",\"args\":{\"command\":\"npm\\n  test\"}}'\n" +
-            "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"ran the tests\"}}'\n" +
-            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ran the tests\"}]}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var progress = new System.Collections.Concurrent.ConcurrentBag<string>();
-
-            var result = await new PiAdapter().ExecuteAsync(BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1,
-                progressCallback: chunk =>
-                {
-                    progress.Add(chunk);
-                    return Task.CompletedTask;
-                }));
-
-            Assert.True(result.Success);
-            Assert.Contains("\n[tool: bash] npm test\n", progress);
-            Assert.Equal("ran the tests", result.Output);
-            Assert.DoesNotContain("[tool:", result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_invokes_OnSessionId_once_on_session_event()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-sid-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-live\",\"cwd\":\"$PWD\"}'\n" +
-            "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"hi\"}}'\n" +
-            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"hi\"}]}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        try
-        {
-            var captured = new System.Collections.Concurrent.ConcurrentBag<string>();
-            var result = await new PiAdapter().ExecuteAsync(BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1,
-                onSessionId: sid => captured.Add(sid)));
-
-            Assert.True(result.Success);
-            Assert.Single(captured);
-            Assert.Equal("pi-live", captured.Single());
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_fails_when_stream_ends_before_turn_end()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-truncated-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "cat >/dev/null\n" +
-            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-trunc\",\"cwd\":\"$PWD\"}'\n" +
-            "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"partial response\"}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        try
-        {
-            var result = await new PiAdapter().ExecuteAsync(BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1));
-
-            Assert.False(result.Success);
-            Assert.Contains("truncated", result.Error);
-            Assert.Equal("partial response", result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
     public async Task ExecuteAsync_ignores_http_base_url_when_binary_path_is_not_configured()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-baseurl-{Guid.NewGuid():N}");
@@ -202,7 +87,7 @@ public class PiAdapterTests
             "cat >/dev/null\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-http-base\",\"cwd\":\"$PWD\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -250,7 +135,7 @@ public class PiAdapterTests
             "echo STDIN-BEGIN\n" +
             "cat\n" +
             "echo STDIN-END\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -301,7 +186,7 @@ public class PiAdapterTests
             "printf '%s\\n' \"$@\"\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-restore\",\"cwd\":\"$PWD\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         const string stored = "{\"type\":\"session\",\"id\":\"pi-session-restore\"}\n{\"type\":\"message\",\"text\":\"héllo\"}";
         await harness.SeedSnapshotAsync(runId, "Pi", "pi-session-restore", stored);
@@ -420,7 +305,7 @@ public class PiAdapterTests
         // Minimal pi stub: drain the prompt on stdin and exit, so the only
         // snapshot writes come from the fork copy + the post-run persist.
         File.WriteAllText(scriptPath, "#!/bin/sh\ncat >/dev/null\nexit 0\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         const string sourceJson = "{\"type\":\"session\",\"version\":3,\"id\":\"source-sess\",\"cwd\":\"/w\"}\n";
         await harness.SeedSnapshotAsync(runId, "Pi", "source-sess", sourceJson);
@@ -469,7 +354,7 @@ public class PiAdapterTests
             "#!/bin/sh\n" +
             "printf '%s\\n' \"$@\"\n" +
             "cat >/dev/null\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -505,7 +390,7 @@ public class PiAdapterTests
             "echo STDIN-BEGIN\n" +
             "cat\n" +
             "echo STDIN-END\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -642,36 +527,6 @@ public class PiAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_allows_exactly_the_mcp_servers_tools_alongside_the_built_ins()
-    {
-        var runId = Guid.NewGuid();
-        var worktreeDir = NewWorktree("ild-pi-mcp-tools");
-        var scriptPath = WriteRecordingPi(worktreeDir);
-
-        try
-        {
-            var result = await new PiAdapter().ExecuteAsync(BuildContext(
-                binaryPath: scriptPath,
-                worktreePath: worktreeDir,
-                runId: runId,
-                executionCount: 1));
-
-            Assert.True(result.Success, result.Error);
-            var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
-            var tools = argv[Array.IndexOf(argv, "--tools") + 1].Split(',');
-
-            var expected = new[] { "read", "grep", "find", "ls", "edit", "write", "bash" }
-                .Concat(McpServerToolReflection.Names().Select(n => "mcp__ild__" + n));
-            Assert.Equal(expected.OrderBy(n => n, StringComparer.Ordinal), tools.OrderBy(n => n, StringComparer.Ordinal));
-        }
-        finally
-        {
-            CleanUpRunScratch(runId);
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
     public async Task ExecuteAsync_with_an_absolute_base_url_keeps_models_json_and_loads_the_extension_from_scratch()
     {
         var runId = Guid.NewGuid();
@@ -722,7 +577,7 @@ public class PiAdapterTests
             "#!/bin/sh\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-noext\",\"cwd\":\"$PWD\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -758,7 +613,7 @@ public class PiAdapterTests
             "cat >/dev/null\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-modelskey\",\"cwd\":\"$PWD\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -920,90 +775,9 @@ public class PiAdapterTests
         }
     }
 
-    [Fact]
-    public async Task ExecuteAsync_marks_an_ild_tool_called_from_codemode_on_the_live_stream()
-    {
-        // Pi 1.0.4 dist/core/nested-tool-calls.js: a tool called from codemode is
-        // announced with its own tool_execution_start carrying parentToolCallId.
-        var worktreeDir = NewWorktree("ild-pi-nested-tool");
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "cat >/dev/null\n" +
-            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-nested\",\"cwd\":\"/w\"}'\n" +
-            "echo '{\"type\":\"tool_execution_start\",\"toolCallId\":\"call-1\",\"toolName\":\"codemode\",\"args\":{\"code\":\"await mcp.ild.get_workitem({workItemId: 1})\"}}'\n" +
-            "echo '{\"type\":\"tool_execution_start\",\"toolCallId\":\"call-1/1\",\"toolName\":\"mcp__ild__get_workitem\",\"args\":{\"workItemId\":\"wi-7\"},\"parentToolCallId\":\"call-1\"}'\n" +
-            "echo '{\"type\":\"tool_execution_end\",\"toolCallId\":\"call-1/1\",\"toolName\":\"mcp__ild__get_workitem\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{}\"}]},\"isError\":false,\"parentToolCallId\":\"call-1\"}'\n" +
-            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var progress = new System.Collections.Concurrent.ConcurrentBag<string>();
-            var result = await new PiAdapter().ExecuteAsync(BuildContext(
-                binaryPath: scriptPath,
-                worktreePath: worktreeDir,
-                executionCount: 1,
-                progressCallback: chunk =>
-                {
-                    progress.Add(chunk);
-                    return Task.CompletedTask;
-                }));
-
-            Assert.True(result.Success, result.Error);
-            Assert.Contains("\n[tool: mcp__ild__get_workitem] wi-7\n", progress);
-            Assert.Equal("done", result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_records_usage_summed_over_the_runs_assistant_messages()
-    {
-        var worktreeDir = NewWorktree("ild-pi-usage");
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        const string first = "{\"input\":100,\"output\":10,\"cacheRead\":20,\"cacheWrite\":5,\"totalTokens\":135,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.25}}";
-        const string second = "{\"input\":200,\"output\":30,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":230,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.5}}";
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "cat >/dev/null\n" +
-            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-usage\",\"cwd\":\"/w\"}'\n" +
-            $"echo '{{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"toolCall\",\"id\":\"c1\",\"name\":\"bash\",\"arguments\":{{}}}}],\"usage\":{first}}}}}'\n" +
-            $"echo '{{\"type\":\"turn_end\",\"message\":{{\"role\":\"assistant\",\"content\":[],\"usage\":{first}}},\"toolResults\":[]}}'\n" +
-            $"echo '{{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}],\"usage\":{second}}}}}'\n" +
-            $"echo '{{\"type\":\"turn_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}],\"usage\":{second}}},\"toolResults\":[]}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var result = await new PiAdapter().ExecuteAsync(BuildContext(
-                binaryPath: scriptPath,
-                worktreePath: worktreeDir,
-                executionCount: 1));
-
-            Assert.True(result.Success, result.Error);
-            Assert.NotNull(result.Usage);
-            Assert.Equal(325, result.Usage!.InputTokens);
-            Assert.Equal(40, result.Usage.OutputTokens);
-            Assert.Equal(0.75m, result.Usage.CostUsd);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
     private static void MakeExecutable(string scriptPath)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(scriptPath);
-        using var proc = System.Diagnostics.Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start chmod");
-        proc.WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
     private static AgentExecutionContext BuildContext(

@@ -1,3 +1,4 @@
+using ILD.Tests.Fakes;
 using System.Net;
 using System.Text;
 using ILD.Core.Services.Implementations;
@@ -43,39 +44,6 @@ public class RemotePrReviewLedgerTests
         db.Context.SaveChanges();
     }
 
-    private sealed class RoutingHandler : HttpMessageHandler
-    {
-        private readonly List<(Func<HttpRequestMessage, bool> Match, Func<string> Body)> _rules = new();
-        public List<(HttpMethod Method, string Url, string Body)> Calls { get; } = new();
-
-        public RoutingHandler Map(Func<string, bool> match, Func<string> body)
-        {
-            _rules.Add((r => match(r.RequestUri!.ToString()), body));
-            return this;
-        }
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
-            Calls.Add((request.Method, request.RequestUri!.ToString(), body));
-            foreach (var (match, responseBody) in _rules)
-            {
-                if (match(request))
-                    return new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(responseBody(), Encoding.UTF8, "application/json"),
-                    };
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        }
-    }
-
-    private sealed class ThrowingHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => throw new HttpRequestException("connection reset");
-    }
-
     private const string ReviewBody =
         "### Changes recommended\n\n<details>\n<summary>Review details</summary>\n\n### Suppressed comments (1)\n\n"
         + "**frontend/src/utils/attachments.ts:30**\n* `attachedNote` trims what the human typed; preserve it.\n"
@@ -109,7 +77,7 @@ public class RemotePrReviewLedgerTests
         + "\"nodes\":[{\"id\":\"PRRT_kwDOS8ssMs5f1thread\",\"isResolved\":true,"
         + "\"comments\":{\"nodes\":[{\"fullDatabaseId\":\"4049159495\"},{\"fullDatabaseId\":\"4051372317\"}]}}]}}}}}";
 
-    private static RoutingHandler GitHubPr() => new RoutingHandler()
+    private static RoutingHttpHandler GitHubPr() => new RoutingHttpHandler()
         .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), Reviews)
         .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), ReviewComments)
         .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), IssueComments)
@@ -214,7 +182,7 @@ public class RemotePrReviewLedgerTests
     {
         using var db = new TestDb();
         AddProvider(db, "GitHub", "https://github.com");
-        var truncated = new RoutingHandler()
+        var truncated = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () =>
                 "[{\"id\":5222030374,\"user\":{\"login\":\"copilot-pull-request-reviewer[bot]\"},\"state\":\"COMMENTED\","
                 + "\"submitted_at\":\"2026-09-18T17:34:45Z\",\"commit_id\":\"" + Head + "\","
@@ -234,7 +202,7 @@ public class RemotePrReviewLedgerTests
     {
         using var db = new TestDb();
         AddProvider(db, "GitHub", "https://github.com");
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.EndsWith("/replies", StringComparison.Ordinal), () => "{\"id\":4053396920}");
 
         var result = await CreateService(db, handler).ReplyToReviewThreadAsync(
@@ -253,7 +221,7 @@ public class RemotePrReviewLedgerTests
     {
         using var db = new TestDb();
         AddProvider(db, "GitHub", "https://github.com");
-        var handler = new RoutingHandler().Map(u => u.EndsWith("/replies", StringComparison.Ordinal), () => "{}");
+        var handler = new RoutingHttpHandler().Map(u => u.EndsWith("/replies", StringComparison.Ordinal), () => "{}");
 
         var result = await CreateService(db, handler).ReplyToReviewThreadAsync(
             "https://github.com/team/repo", "7", "4049159495", "That compiles.");
@@ -267,7 +235,7 @@ public class RemotePrReviewLedgerTests
     {
         using var db = new TestDb();
         AddProvider(db, "GitHub", "https://github.com");
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal),
                 () => "{\"data\":{\"resolveReviewThread\":{\"thread\":{\"isResolved\":true}}}}");
 
@@ -286,7 +254,7 @@ public class RemotePrReviewLedgerTests
     {
         using var db = new TestDb();
         AddProvider(db, "GitHub", "https://github.com");
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal),
                 () => "{\"errors\":[{\"message\":\"Resource not accessible by integration\"}]}");
 
@@ -302,7 +270,7 @@ public class RemotePrReviewLedgerTests
     {
         using var db = new TestDb();
         AddProvider(db, "Forgejo", "https://gitea.example");
-        var handler = new RoutingHandler();
+        var handler = new RoutingHttpHandler();
 
         var result = await CreateService(db, handler).ResolveReviewThreadAsync(
             "https://gitea.example/team/repo.git", "5", "thread-1");
@@ -317,7 +285,7 @@ public class RemotePrReviewLedgerTests
     {
         using var db = new TestDb();
 
-        var service = CreateService(db, new RoutingHandler());
+        var service = CreateService(db, new RoutingHttpHandler());
         var ledger = await service.GetPullRequestReviewLedgerAsync("https://nowhere.example/team/repo", "7");
 
         Assert.Empty(ledger.Items);

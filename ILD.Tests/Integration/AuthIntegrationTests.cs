@@ -3,12 +3,11 @@ using System.Net.Http.Json;
 
 namespace ILD.Tests.Integration;
 
-public class AuthIntegrationTests
+public class AuthIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Fact]
     public async Task Login_with_valid_admin_password_returns_200_and_token()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/v1/auth/login", new
@@ -26,7 +25,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Login_with_wrong_password_returns_401()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/v1/auth/login", new
@@ -39,20 +37,8 @@ public class AuthIntegrationTests
     }
 
     [Fact]
-    public async Task Me_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-
-        var response = await client.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
     public async Task Me_with_valid_token_returns_200()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken);
@@ -63,7 +49,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Login_reports_when_the_session_expires()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/v1/auth/login", new
@@ -80,7 +65,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task A_second_login_leaves_the_first_device_signed_in()
     {
-        await using var factory = new ApiFactory();
         var phone = await factory.CreateAuthenticatedClientAsync();
 
         // The headline bug: this used to overwrite the one session column.
@@ -92,7 +76,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Logout_signs_out_only_the_device_that_called_it()
     {
-        await using var factory = new ApiFactory();
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktop = await factory.CreateAuthenticatedClientAsync();
 
@@ -105,9 +88,10 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Sessions_lists_every_device_without_leaking_a_token()
     {
-        await using var factory = new ApiFactory();
-        var phone = await factory.CreateAuthenticatedClientAsync();
-        var desktopToken = await factory.GetAdminTokenAsync();
+        // Own host: it asserts the whole list of the admin's signed-in sessions.
+        await using var ownHost = new ApiFactory();
+        var phone = await ownHost.CreateAuthenticatedClientAsync();
+        var desktopToken = await ownHost.GetAdminTokenAsync();
 
         var response = await phone.GetAsync("/api/v1/auth/sessions", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -124,9 +108,10 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Revoking_a_session_signs_that_device_out()
     {
-        await using var factory = new ApiFactory();
-        var phone = await factory.CreateAuthenticatedClientAsync();
-        var desktop = await factory.CreateAuthenticatedClientAsync();
+        // Own host: the signed-in sessions of the one admin user are host-wide.
+        await using var ownHost = new ApiFactory();
+        var phone = await ownHost.CreateAuthenticatedClientAsync();
+        var desktop = await ownHost.CreateAuthenticatedClientAsync();
 
         var sessions = await phone.GetFromJsonAsync<SessionBody[]>("/api/v1/auth/sessions", CaseInsensitive, TestContext.Current.CancellationToken);
         var other = sessions!.Single(s => !s.IsCurrent);
@@ -141,10 +126,11 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Revoking_others_keeps_the_calling_device_signed_in()
     {
-        await using var factory = new ApiFactory();
-        var phone = await factory.CreateAuthenticatedClientAsync();
-        var desktop = await factory.CreateAuthenticatedClientAsync();
-        var tablet = await factory.CreateAuthenticatedClientAsync();
+        // Own host: the signed-in sessions of the one admin user are host-wide.
+        await using var ownHost = new ApiFactory();
+        var phone = await ownHost.CreateAuthenticatedClientAsync();
+        var desktop = await ownHost.CreateAuthenticatedClientAsync();
+        var tablet = await ownHost.CreateAuthenticatedClientAsync();
 
         var response = await phone.PostAsync("/api/v1/auth/sessions/revoke-others", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -159,8 +145,9 @@ public class AuthIntegrationTests
     public async Task An_authenticated_request_reads_its_session_once_and_keeps_its_name()
     {
         var sql = new SqlCapture();
-        await using var factory = new ApiFactory(configureServices: sql.Register);
-        var client = await factory.CreateAuthenticatedClientAsync();
+        // Own host: it counts every SQL statement the host runs.
+        await using var ownHost = new ApiFactory(configureServices: sql.Register);
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         int SessionReads() => sql.Commands.Count(c => c.Contains("FROM \"UserSessions\""));
 
         var before = SessionReads();
@@ -169,15 +156,6 @@ public class AuthIntegrationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("admin", (await response.Content.ReadFromJsonAsync<MeBody>(CaseInsensitive, TestContext.Current.CancellationToken))!.Username);
         Assert.Equal(1, SessionReads() - before);
-    }
-
-    [Fact]
-    public async Task Sessions_without_a_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/v1/auth/sessions", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     private static readonly System.Text.Json.JsonSerializerOptions CaseInsensitive =

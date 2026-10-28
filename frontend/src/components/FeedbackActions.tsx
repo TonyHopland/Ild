@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import Icon from "./Icon";
+import {
+  PR_MERGE,
+  answerStyleOf,
+  answerToneOf,
+  confirmToneOf,
+  outputLabel,
+  primaryAnswerOf,
+  visibleAnswersOf,
+  type Tone,
+} from "./feedbackAnswers";
 
 /**
  * An answer waiting on the person to confirm it: the button they pressed and
@@ -7,7 +17,7 @@ import Icon from "./Icon";
  */
 interface PendingAnswer {
   label: string;
-  tone: string;
+  tone: Tone;
   style: CSSProperties | undefined;
   send: () => void;
   askedUnder: (name: string) => boolean;
@@ -53,18 +63,6 @@ interface FeedbackActionsProps {
 // success/failure roles; everything else names one of the node's outputs.
 const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
 
-/** The label of the button for an output: the role's verb for the two defaults, otherwise the output's own name. */
-export const outputLabel = (name: string) =>
-  name === "OnSuccess" ? "Approve" : name === "OnFailure" ? "Reject" : name;
-
-// The PR merge in the list of buttons. It holds a comma, which no output name
-// can, as the actions string is split on commas: an output called "Merge" is
-// its own button.
-const PR_MERGE = ",pr-merge";
-
-/** A button's look: one primary, Reject in danger, everything else secondary. */
-type Tone = "btn-primary" | "btn-secondary" | "btn-danger";
-
 /**
  * Renders the node's answers as buttons, from the comma-separated
  * <c>humanFeedbackActions</c> on the work item: Approve (OnSuccess), Merge, one
@@ -102,14 +100,7 @@ export default function FeedbackActions({
   const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(true);
 
-  const actionList = (
-    actions
-      ? actions
-          .split(",")
-          .map((a) => a.trim())
-          .filter(Boolean)
-      : ["OnSuccess", "OnFailure"]
-  ).filter((name) => isVisible(name));
+  const actionList = visibleAnswersOf(actions, isVisible);
 
   const customNames = actionList.filter((a) => !ROLE_TOKENS.has(a));
 
@@ -119,15 +110,9 @@ export default function FeedbackActions({
   const enterTarget = submitDefaultOnEnter ? shownDefault : null;
   // Primary only by the loop's say: its default output, else the PR merge. With
   // neither, no answer is pushed over the others.
-  const primary: string | null = shownDefault ?? (onMerge ? PR_MERGE : null);
-
-  const toneOf = (name: string): Tone =>
-    name === primary ? "btn-primary" : name === "OnFailure" ? "btn-danger" : "btn-secondary";
-
-  const styleOf = (name: string): CSSProperties | undefined => {
-    const color = colorOf?.(name);
-    return color ? ({ "--output-color": color } as CSSProperties) : undefined;
-  };
+  const primary = primaryAnswerOf(shownDefault, Boolean(onMerge));
+  const toneOf = (name: string) => answerToneOf(name, primary);
+  const styleOf = (name: string) => answerStyleOf(colorOf?.(name));
 
   const sendOf = (name: string) =>
     name === "OnSuccess" ? onApprove : name === "OnFailure" ? onReject : () => onEdge(name);
@@ -137,7 +122,7 @@ export default function FeedbackActions({
     if (needsConfirm?.(name))
       setAsked({
         label: outputLabel(name),
-        tone: name === "OnFailure" ? "btn-danger" : "btn-primary",
+        tone: confirmToneOf(name),
         style: styleOf(name),
         send,
         askedUnder: needsConfirm,

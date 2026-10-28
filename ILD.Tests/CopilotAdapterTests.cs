@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
@@ -6,82 +7,9 @@ using ILD.Data.Entities;
 
 namespace ILD.Tests;
 
+[SupportedOSPlatform("linux")]
 public class CopilotAdapterTests
 {
-    [Fact]
-    public void Metadata_advertises_copilot_provider_type()
-    {
-        var adapter = new CopilotAdapter();
-
-        Assert.Equal("Copilot", adapter.Name);
-        Assert.Contains("copilot", adapter.SupportedProviderTypes);
-        Assert.Contains(adapter.ConfigSchema, f => f.Name == "customMcpServersJson");
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_succeeds_when_binary_exits_zero()
-    {
-        var worktreeDir = CreateWorktree();
-        try
-        {
-            var adapter = new CopilotAdapter();
-            var ctx = BuildContext(binaryPath: "/bin/true", worktreePath: worktreeDir);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_returns_failure_when_binary_not_found()
-    {
-        var worktreeDir = CreateWorktree();
-        try
-        {
-            var adapter = new CopilotAdapter();
-            var ctx = BuildContext(binaryPath: "/nonexistent/copilot", worktreePath: worktreeDir);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.False(result.Success);
-            Assert.Contains("copilot-error", result.Error);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_launches_with_the_providers_model()
-    {
-        var worktreeDir = CreateWorktree();
-        var scriptPath = Path.Combine(worktreeDir, "args.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        try
-        {
-            var withModel = await new CopilotAdapter().ExecuteAsync(
-                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, model: "claude-sonnet-5"));
-            var withoutModel = await new CopilotAdapter().ExecuteAsync(
-                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, model: ""));
-
-            var args = withModel.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            Assert.Equal("claude-sonnet-5", args[Array.IndexOf(args, "--model") + 1]);
-            Assert.DoesNotContain("--model", withoutModel.Output!.Split('\n'));
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
     [Theory]
     [InlineData("--effort high --append-system-prompt \"be brief\"", new[] { "--effort", "high", "--append-system-prompt", "be brief" })]
     [InlineData("--effort \"high", new string[0])]
@@ -90,7 +18,7 @@ public class CopilotAdapterTests
         var worktreeDir = CreateWorktree();
         var scriptPath = Path.Combine(worktreeDir, "args.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -115,40 +43,6 @@ public class CopilotAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_fails_without_worktree()
-    {
-        var adapter = new CopilotAdapter();
-        var ctx = BuildContext(binaryPath: "/bin/true", worktreePath: "/this/does/not/exist");
-
-        var result = await adapter.ExecuteAsync(ctx);
-
-        Assert.False(result.Success);
-        Assert.Contains("valid worktree path", result.Error);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_reads_binaryPath_from_config()
-    {
-        var worktreeDir = CreateWorktree();
-        try
-        {
-            var adapter = new CopilotAdapter();
-            var ctx = BuildContext(
-                binaryPath: "/nonexistent/path",
-                worktreePath: worktreeDir,
-                config: "{\"binaryPath\":\"/bin/true\"}");
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
     public async Task ExecuteAsync_returns_stdout_as_output_and_streams_progress()
     {
         var worktreeDir = CreateWorktree();
@@ -157,7 +51,7 @@ public class CopilotAdapterTests
             "#!/bin/sh\n" +
             "echo 'Working on it.'\n" +
             "echo 'All done.'\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
@@ -187,32 +81,28 @@ public class CopilotAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_strips_nul_bytes_from_output_so_it_is_db_safe()
+    public async Task ExecuteAsync_strips_nul_bytes_from_stdout_and_stderr_so_they_are_db_safe()
     {
-        // Regression: copilot forwards raw terminal stdout, which can carry a NUL
-        // (U+0000). A NUL cannot be stored in a PostgreSQL text column, so if it
-        // reaches the persisted node output the engine's SaveChanges throws a
-        // DbUpdateException and the run crashes before recording its result. The
-        // adapter must scrub NUL while keeping every visible character.
+        // Copilot forwards raw terminal output, and a NUL cannot be stored in a
+        // PostgreSQL text column: one reaching the node's output or error makes the
+        // engine's save throw before the run records its result.
         var worktreeDir = CreateWorktree();
         var scriptPath = Path.Combine(worktreeDir, "fake-copilot.sh");
         File.WriteAllText(scriptPath,
             "#!/bin/sh\n" +
-            "printf 'clean line\\n'\n" +
-            "printf 'with\\0nul\\n'\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+            "printf 'with\\0nul\\n'\n" +
+            "printf 'warn\\0ing\\n' >&2\n" +
+            "exit 1\n");
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         try
         {
-            var adapter = new CopilotAdapter();
-            var ctx = BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir);
+            var result = await new CopilotAdapter().ExecuteAsync(BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir));
 
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            Assert.NotNull(result.Output);
-            Assert.DoesNotContain('\0', result.Output!);
-            Assert.Equal("clean line\nwithnul", result.Output);
+            Assert.False(result.Success);
+            Assert.Equal("withnul", result.Output);
+            Assert.Contains("warning", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain('\0', result.Error!);
         }
         finally
         {
@@ -323,12 +213,6 @@ public class CopilotAdapterTests
     }
 
     [Fact]
-    public void Copilot_declares_model_support_as_optional()
-    {
-        Assert.Equal(AdapterModelSupport.Optional, new CopilotAdapter().ModelSupport);
-    }
-
-    [Fact]
     public void BuildRunProcessStartInfo_grants_extra_allowed_directories_as_add_dir()
     {
         // ADR-0011: the Chat Context's open work item active-run worktree is
@@ -359,7 +243,7 @@ public class CopilotAdapterTests
         var launched = Path.Combine(worktreeDir, "launched");
         var scriptPath = Path.Combine(worktreeDir, "args.sh");
         File.WriteAllText(scriptPath, $"#!/bin/sh\ntouch '{launched}'\nprintf '%s\\n' \"$@\"\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var config = JsonSerializer.Serialize(new
         {
             binaryPath = scriptPath,

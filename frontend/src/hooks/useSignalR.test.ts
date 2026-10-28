@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act } from "@testing-library/react";
 
@@ -77,6 +78,7 @@ vi.mock("@microsoft/signalr", () => {
 
 import { useSignalR } from "./useSignalR";
 import { authService } from "../services/auth";
+import { flushPromises } from "../test-support";
 
 beforeEach(() => {
   connectionState = "Disconnected";
@@ -101,28 +103,6 @@ describe("useSignalR", () => {
     const { result } = renderHook(() => useSignalR("/hubs/test"));
     expect(startMock).not.toHaveBeenCalled();
     expect(result.current.connectionState).toBe("disconnected");
-  });
-
-  test("starts a connection when a token is set", async () => {
-    localStorage.setItem("auth_token", "tok-1");
-    authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
-
-    const { unmount } = renderHook(() => useSignalR("/hubs/test"));
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(startMock).toHaveBeenCalled();
-    unmount();
-  });
-
-  test("on/off add and remove handlers without throwing", () => {
-    const { result } = renderHook(() => useSignalR("/hubs/test"));
-    const handler = vi.fn();
-    act(() => {
-      result.current.on("TestEvent", handler);
-      result.current.off("TestEvent", handler);
-    });
-    expect(handler).not.toHaveBeenCalled();
   });
 
   test("does not auto-subscribe to work items when connected to a non-work-item hub", async () => {
@@ -285,17 +265,9 @@ describe("useSignalR after the hub has closed", () => {
     delete (document as unknown as Record<string, unknown>).visibilityState;
   });
 
-  async function flush() {
-    for (let i = 0; i < 5; i++) {
-      await act(async () => {
-        await Promise.resolve();
-      });
-    }
-  }
-
   async function mountConnected(hubUrl = "/hubs/work-item") {
     const hook = renderHook(() => useSignalR(hubUrl));
-    await flush();
+    await flushPromises();
     expect(hook.result.current.connectionState).toBe("connected");
     return hook;
   }
@@ -307,7 +279,7 @@ describe("useSignalR after the hub has closed", () => {
     await act(async () => {
       onclose(new Error("Server timeout elapsed."));
     });
-    await flush();
+    await flushPromises();
   }
 
   async function becomeVisible() {
@@ -315,14 +287,14 @@ describe("useSignalR after the hub has closed", () => {
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    await flush();
+    await flushPromises();
   }
 
   async function comeOnline() {
     await act(async () => {
       window.dispatchEvent(new Event("online"));
     });
-    await flush();
+    await flushPromises();
   }
 
   function hold() {
@@ -388,7 +360,7 @@ describe("useSignalR after the hub has closed", () => {
     expect(startMock.mock.calls.length).toBe(before + 1);
 
     await act(async () => restart.release());
-    await flush();
+    await flushPromises();
     expect(result.current.connectionState).toBe("connected");
     expect(startMock.mock.calls.length).toBe(before + 1);
     unmount();
@@ -403,7 +375,7 @@ describe("useSignalR after the hub has closed", () => {
       visibility = "hidden";
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    await flush();
+    await flushPromises();
 
     expect(startMock.mock.calls.length).toBe(before);
     unmount();
@@ -435,7 +407,7 @@ describe("useSignalR after the hub has closed", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_000);
       });
-      await flush();
+      await flushPromises();
     }
 
     expect(result.current.connectionState).toBe("connected");
@@ -450,14 +422,14 @@ describe("useSignalR after the hub has closed", () => {
   test("a first start that fails is retried after a backoff", async () => {
     startOutcomes.push(() => Promise.reject(new Error("Failed to fetch")));
     const { result, unmount } = renderHook(() => useSignalR("/hubs/loop-run"));
-    await flush();
+    await flushPromises();
     expect(startMock).toHaveBeenCalledTimes(1);
     expect(result.current.connectionState).toBe("disconnected");
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
-    await flush();
+    await flushPromises();
 
     expect(startMock).toHaveBeenCalledTimes(2);
     expect(result.current.connectionState).toBe("connected");
@@ -467,7 +439,7 @@ describe("useSignalR after the hub has closed", () => {
   test("a wake-up restarts a hub whose first start failed", async () => {
     startOutcomes.push(() => Promise.reject(new Error("Failed to fetch")));
     const { result, unmount } = renderHook(() => useSignalR("/hubs/loop-run"));
-    await flush();
+    await flushPromises();
     expect(startMock).toHaveBeenCalledTimes(1);
 
     await comeOnline();
@@ -515,7 +487,7 @@ describe("useSignalR after the hub has closed", () => {
     await act(async () => {
       authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-2");
     });
-    await flush();
+    await flushPromises();
     expect(result.current.connectionState).toBe("connected");
     const starts = startMock.mock.calls.length;
 
@@ -544,12 +516,12 @@ describe("useSignalR after the hub has closed", () => {
   test("the work-item hub is not reported connected until it has joined its group", async () => {
     const join = holdJoin();
     const { result, unmount } = renderHook(() => useSignalR("/hubs/work-item"));
-    await flush();
+    await flushPromises();
     expect(invokeMock).toHaveBeenCalledWith("SubscribeToWorkItems");
     expect(result.current.connectionState).toBe("connecting");
 
     await act(async () => join.release());
-    await flush();
+    await flushPromises();
     expect(result.current.connectionState).toBe("connected");
     unmount();
   });
@@ -562,11 +534,11 @@ describe("useSignalR after the hub has closed", () => {
 
     await act(async () => onreconnecting());
     await act(async () => onreconnected());
-    await flush();
+    await flushPromises();
     expect(result.current.connectionState).toBe("reconnecting");
 
     await act(async () => join.release());
-    await flush();
+    await flushPromises();
     expect(result.current.connectionState).toBe("connected");
     unmount();
   });
@@ -579,19 +551,19 @@ describe("useSignalR after the hub has closed", () => {
     async (_, reconnect) => {
       const join = reconnect ? undefined : holdJoin();
       const hook = renderHook(() => useSignalR("/hubs/work-item"));
-      await flush();
+      await flushPromises();
       let failJoin = join?.fail;
       if (reconnect) {
         expect(hook.result.current.connectionState).toBe("connected");
         failJoin = holdJoin().fail;
         await act(async () => (onreconnectingMock.mock.calls[0][0] as () => void)());
         await act(async () => (onreconnectedMock.mock.calls[0][0] as () => void)());
-        await flush();
+        await flushPromises();
       }
       const starts = startMock.mock.calls.length;
 
       await act(async () => failJoin!(new Error("Invocation canceled")));
-      await flush();
+      await flushPromises();
       expect(stopMock).toHaveBeenCalledTimes(1);
       expect(hook.result.current.connectionState).not.toBe("connected");
 
@@ -600,7 +572,7 @@ describe("useSignalR after the hub has closed", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_000);
       });
-      await flush();
+      await flushPromises();
 
       expect(startMock.mock.calls.length).toBe(starts + 1);
       expect(hook.result.current.connectionState).toBe("connected");

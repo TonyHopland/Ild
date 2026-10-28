@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
@@ -12,6 +13,7 @@ namespace ILD.Tests;
 /// the only place the server's credentials travel, so it must never be inline in
 /// argv and must be gone once the run ends.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public class CopilotAdapterMcpInjectionTests : IDisposable
 {
     private readonly string _tempDir;
@@ -307,11 +309,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
             "done\n" +
             "echo 'done'\n" +
             $"exit {exitCode}\n");
-        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(script);
-        using var chmod = Process.Start(psi)!;
-        chmod.WaitForExit();
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
     }
 }

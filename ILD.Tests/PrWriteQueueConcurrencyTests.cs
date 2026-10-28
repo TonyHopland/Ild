@@ -4,6 +4,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
+using ILD.Tests.Fakes;
 using ILD.Data.Stores.Interfaces;
 using Moq;
 
@@ -27,31 +28,8 @@ public class PrWriteQueueConcurrencyTests
         => new(id, PrQueuedWrite.Reply, target, $"answer for {target}", "src/A.cs", 10,
             new DateTime(2026, 9, 20, 12, 0, 0, DateTimeKind.Utc));
 
-    private static async Task<LoopRun> SeedAsync(TestDb db, params PrQueuedWrite[] queued)
-    {
-        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
-        var version = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplates.Add(template);
-        db.Context.LoopTemplateVersions.Add(version);
-        await db.Context.SaveChangesAsync();
-
-        var run = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = "wi-1",
-            LoopTemplateVersionId = version.Id,
-            Status = LoopRunStatus.Running,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-            PrUrl = PrUrl,
-            StartedAt = DateTime.UtcNow,
-            PrCommentQueue = PrCommentQueueJson.Serialize(queued),
-        };
-        await db.LoopRuns.CreateRunAsync(run);
-        return run;
-    }
+    private static Task<LoopRun> SeedAsync(TestDb db, params PrQueuedWrite[] queued)
+        => PrRunSeed.SeedAsync(db, prUrl: PrUrl, queue: PrCommentQueueJson.Serialize(queued));
 
     /// <summary>A service on its own store instance, as each HTTP request gets.</summary>
     private static PrReviewService ServiceOn(TestDb db)

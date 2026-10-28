@@ -1,4 +1,5 @@
 using ILD.Core.Services.Remote;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
@@ -82,7 +83,7 @@ public class CapStallReporterTests
 
         reporter.Report(new PollCycleResult { SlotHolders = new[] { "wi-1" } }, maxConcurrent: 1);
 
-        Assert.Empty(log.Messages);
+        Assert.Empty(log.Entries);
     }
 
     [Fact]
@@ -105,19 +106,4 @@ public class CapStallReporterTests
     private static PollCycleResult Blocked(params string[] slotHolders)
         => new() { BlockedByCap = true, SlotHolders = slotHolders };
 
-    private sealed class RecordingLogger : ILogger
-    {
-        public List<(LogLevel Level, string Text)> Messages { get; } = new();
-
-        public List<string> At(LogLevel level)
-            => Messages.Where(m => m.Level == level).Select(m => m.Text).ToList();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter)
-            => Messages.Add((logLevel, formatter(state, exception)));
-    }
 }

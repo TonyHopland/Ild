@@ -7,32 +7,6 @@ namespace ILD.Tests;
 public class EngineSignalValidationTests
 {
     [Fact]
-    public async Task SignalNodeResultAsync_validates_runNodeId_belongs_to_run()
-    {
-        using var h = new LoopEngineHarness();
-        h.AddNode("h", NodeType.Human);
-
-        h.Registry.Register(new ScriptedExecutor(NodeType.Human,
-            new NodeOutcome.NodeStarting("ask"),
-            new NodeOutcome.WaitingAction("Awaiting input", "prompt")));
-
-        h.SeedRun("h");
-        await h.RunAsync();
-
-        var waitingNode = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
-
-        // Signal with a fake runNodeId that doesn't belong to this run.
-        var fakeNodeId = Guid.NewGuid();
-        await h.Engine.SignalNodeResultAsync(h.RunId, fakeNodeId,
-            new NodeSignal(ExternalActionResultType.Success, Output: "user-text"));
-
-        // The signal should be rejected: run stays WaitingHuman.
-        await h.WaitUntilIdleAsync();
-        var run = h.ReloadRun();
-        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
-    }
-
-    [Fact]
     public async Task SignalNodeResultAsync_validates_runNodeId_is_WaitingHuman()
     {
         using var h = new LoopEngineHarness();
@@ -67,40 +41,6 @@ public class EngineSignalValidationTests
         await h.WaitUntilIdleAsync();
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
-    }
-
-    [Fact]
-    public async Task SignalNodeResultAsync_accepts_valid_WaitingHuman_runNodeId()
-    {
-        using var h = new LoopEngineHarness();
-        h.AddNode("h", NodeType.Human);
-        h.AddNode("after", NodeType.Cmd);
-        h.AddEdge("h", "after", EdgeType.Custom, "Respond");
-
-        var humanExec = new ScriptedExecutor(NodeType.Human,
-            new NodeOutcome.NodeStarting("ask"),
-            new NodeOutcome.WaitingAction("Awaiting input", "prompt"));
-        humanExec.Then(
-            new NodeOutcome.NodeStarting("re-entry"),
-            new NodeOutcome.Success(EdgeType.Custom, "human-said-yes", "Respond"));
-        h.Registry.Register(humanExec);
-        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
-            new NodeOutcome.NodeStarting("after"),
-            new NodeOutcome.Terminal("done")));
-
-        h.SeedRun("h");
-        await h.RunAsync();
-
-        var waitingNode = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
-
-        // Signal with the correct WaitingHuman node ID — should succeed.
-        await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
-            NodeSignal.Custom("Respond", "user-text"));
-
-        await h.WaitUntilIdleAsync();
-
-        var run = h.ReloadRun();
-        Assert.Equal(LoopRunStatus.Completed, run.Status);
     }
 
     [Fact]

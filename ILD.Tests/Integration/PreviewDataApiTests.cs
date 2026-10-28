@@ -22,7 +22,7 @@ namespace ILD.Tests.Integration;
 /// preview holds it.
 /// </summary>
 [SupportedOSPlatform("linux")]
-public class PreviewDataApiTests
+public class PreviewDataApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -35,19 +35,19 @@ public class PreviewDataApiTests
     [Fact]
     public async Task One_work_items_preview_holds_the_repositorys_data_against_other_starts_and_every_removal_until_it_stops()
     {
-        // The preview service the API runs, from the same container as the delete.
-        await using var factory = new ApiFactory(configureServices: services =>
+        // Own host: it runs the real preview service, from the same container as the delete.
+        await using var ownHost = new ApiFactory(configureServices: services =>
         {
             services.RemoveAll<IWorktreePreviewService>();
             services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
         });
-        var user = await factory.CreateAuthenticatedClientAsync();
-        var agent = AgentClient(factory);
-        var repositoryId = await SeedRepositoryAsync(factory, "alpha");
-        await SetKeepAsync(factory, repositoryId, keep: true);
-        var (a, aTitle, _) = await PreviewableWorkItemAsync(factory, user, repositoryId, "First item", "wt-a");
-        var (b, bTitle, bWorktree) = await PreviewableWorkItemAsync(factory, user, repositoryId, "Second item", "wt-b");
-        var folder = PreviewDataFolder(factory, repositoryId);
+        var user = await ownHost.CreateAuthenticatedClientAsync();
+        var agent = AgentClient(ownHost);
+        var repositoryId = await SeedRepositoryAsync(ownHost, "alpha");
+        await SetKeepAsync(ownHost, repositoryId, keep: true);
+        var (a, aTitle, _) = await PreviewableWorkItemAsync(ownHost, user, repositoryId, "First item", "wt-a");
+        var (b, bTitle, bWorktree) = await PreviewableWorkItemAsync(ownHost, user, repositoryId, "Second item", "wt-b");
+        var folder = PreviewDataFolder(ownHost, repositoryId);
 
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsJsonAsync($"/api/v1/workitems/{a}/preview/start", new { }, Ct)).StatusCode);
         Assert.True(File.Exists(Path.Combine(folder, "data", "file")));
@@ -79,7 +79,7 @@ public class PreviewDataApiTests
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsync($"/api/v1/workitems/{b}/preview/stop", null, Ct)).StatusCode);
 
         // A keep-off preview holds the repository too.
-        await SetKeepAsync(factory, repositoryId, keep: false);
+        await SetKeepAsync(ownHost, repositoryId, keep: false);
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsJsonAsync($"/api/v1/workitems/{b}/preview/start", new { }, Ct)).StatusCode);
         Directory.CreateDirectory(Path.Combine(folder, "data"));
         File.WriteAllText(Path.Combine(folder, "data", "left"), "x");
@@ -94,7 +94,6 @@ public class PreviewDataApiTests
     [Fact]
     public async Task Deleting_preview_data_is_for_the_user_and_refuses_ids_that_are_not_guids()
     {
-        await using var factory = new ApiFactory();
         var user = await factory.CreateAuthenticatedClientAsync();
         var agent = AgentClient(factory);
         var repositoryId = await SeedRepositoryAsync(factory, "alpha");
@@ -124,7 +123,6 @@ public class PreviewDataApiTests
     [Fact]
     public async Task Turning_the_setting_off_or_deleting_the_repository_leaves_its_preview_data_in_place()
     {
-        await using var factory = new ApiFactory();
         var user = await factory.CreateAuthenticatedClientAsync();
         var repositoryId = await SeedRepositoryAsync(factory, "alpha");
         await SetKeepAsync(factory, repositoryId, keep: true);

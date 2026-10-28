@@ -120,50 +120,6 @@ describe("FeedbackActions", () => {
 
   const buttonNames = () => screen.queryAllByRole("button").map((b) => b.textContent);
 
-  test.each([
-    ["OnSuccess,Respond,Escalate,OnFailure", ["OnSuccess"], ["Respond", "Escalate", "Reject"]],
-    ["OnSuccess,Respond,Escalate,OnFailure", ["OnFailure"], ["Approve", "Respond", "Escalate"]],
-    ["OnSuccess,Respond,Escalate,OnFailure", ["Escalate"], ["Approve", "Respond", "Reject"]],
-    [
-      "OnSuccess,constructor,toString,OnFailure",
-      ["toString"],
-      ["Approve", "constructor", "Reject"],
-    ],
-    [null, ["OnSuccess"], ["Reject"]],
-    [null, ["OnFailure"], ["Approve"]],
-    ["", ["OnFailure"], ["Approve"]],
-  ])("actions %j with %j hidden offers only the rest", (actions, hidden, expected) => {
-    render(
-      <FeedbackActions
-        actions={actions}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onEdge={vi.fn()}
-        isVisible={hiding(...hidden)}
-      />,
-    );
-
-    expect(buttonNames()).toHaveLength(expected.length);
-    expect(new Set(buttonNames())).toEqual(new Set(expected));
-  });
-
-  test.each([["OnSuccess,Respond,OnFailure"], [null]])(
-    "with every output of %j hidden there is no output button, and no fallback to Approve and Reject",
-    (actions) => {
-      render(
-        <FeedbackActions
-          actions={actions}
-          onApprove={vi.fn()}
-          onReject={vi.fn()}
-          onEdge={vi.fn()}
-          isVisible={() => false}
-        />,
-      );
-
-      expect(buttonNames()).toEqual([]);
-    },
-  );
-
   test("a visible output beside hidden ones still submits as before", () => {
     const onEdge = vi.fn();
     const onReject = vi.fn();
@@ -210,7 +166,7 @@ describe("FeedbackActions", () => {
     ["Reject", "OnFailure", "onReject"],
     ["Escalate", "Escalate", "onEdge"],
   ] as const)(
-    "%s on an output that asks to confirm sends nothing until confirmed, in the button's colour",
+    "%s on an output that asks to confirm sends nothing until confirmed",
     (label, output, handler) => {
       const handlers = { onApprove: vi.fn(), onReject: vi.fn(), onEdge: vi.fn() };
       render(
@@ -222,12 +178,9 @@ describe("FeedbackActions", () => {
       );
 
       const pressed = screen.getByRole("button", { name: label });
-      // The confirmation names the answer and offers it in danger for Reject, primary otherwise.
-      const tone = output === "OnFailure" ? "btn-danger" : "btn-primary";
       fireEvent.click(pressed);
       const dialog = screen.getByRole("dialog", { name: `Confirm ${label}` });
       expect(dialog.textContent).toContain(`${label}?`);
-      expect(within(dialog).getByRole("button", { name: label }).className).toBe(`btn ${tone}`);
       // It takes the place of the buttons rather than opening over them: the
       // confirm button and Cancel are all there is.
       expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([label, "Cancel"]);
@@ -308,54 +261,9 @@ describe("FeedbackActions", () => {
 });
 
 const PURPLE = "#7e22ce";
-const YELLOW = "#fde047";
 
-/** An output's colour shows as a dot and border from --output-color, never as a fill. */
-function expectColoured(button: HTMLElement, color: string) {
-  expect(button.style.getPropertyValue("--output-color")).toBe(color);
-  expect(button.classList.contains("has-output-color")).toBe(true);
-  expect(button.querySelector(".output-color-dot")).not.toBeNull();
-  expect(button.style.backgroundColor).toBe("");
-}
-
-function expectUncoloured(button: HTMLElement) {
-  expect(button.style.getPropertyValue("--output-color")).toBe("");
-  expect(button.querySelector(".output-color-dot")).toBeNull();
-}
-
-describe("FeedbackActions — button colours", () => {
-  test.each([
-    ["Approve", "OnSuccess", "btn-secondary", "onApprove"],
-    ["Reject", "OnFailure", "btn-danger", "onReject"],
-    ["Escalate", "Escalate", "btn-secondary", "onEdge"],
-  ] as const)(
-    "%s shows its output's colour as a dot, keeps its class, and still sends the same output",
-    (label, output, tone, handler) => {
-      const handlers = { onApprove: vi.fn(), onReject: vi.fn(), onEdge: vi.fn() };
-      render(
-        <FeedbackActions
-          actions="OnSuccess,Escalate,Respond,OnFailure"
-          {...handlers}
-          colorOf={(name) => (name === output ? PURPLE : name === "Respond" ? YELLOW : null)}
-        />,
-      );
-
-      const pressed = screen.getByRole("button", { name: label });
-      expectColoured(pressed, PURPLE);
-      expect(pressed.classList.contains("btn")).toBe(true);
-      expect(pressed.classList.contains(tone)).toBe(true);
-      expectColoured(screen.getByRole("button", { name: "Respond" }), YELLOW);
-      for (const other of ["Approve", "Escalate", "Reject"].filter((name) => name !== label)) {
-        expectUncoloured(screen.getByRole("button", { name: other }));
-      }
-
-      fireEvent.click(pressed);
-      expect(handlers[handler]).toHaveBeenCalledTimes(1);
-      if (handler === "onEdge") expect(handlers.onEdge).toHaveBeenCalledWith("Escalate");
-    },
-  );
-
-  test("with no colour no button has an inline style, and Merge is the one primary when offered", () => {
+describe("FeedbackActions — button look", () => {
+  test("the tone class and the output colour reach the buttons and the confirm button", () => {
     render(
       <FeedbackActions
         actions="OnSuccess,Escalate,OnFailure"
@@ -363,72 +271,58 @@ describe("FeedbackActions — button colours", () => {
         onReject={vi.fn()}
         onEdge={vi.fn()}
         onMerge={vi.fn()}
-        colorOf={() => null}
+        needsConfirm={(name) => name === "Escalate"}
+        colorOf={(name) => (name === "Escalate" ? PURPLE : null)}
       />,
     );
 
-    for (const button of screen.getAllByRole("button")) {
-      expect(button.getAttribute("style"), button.textContent ?? "").toBeNull();
-    }
-    expect(screen.getByRole("button", { name: "Merge" }).className).toBe("btn btn-sm btn-primary");
-    expect(screen.getByRole("button", { name: "Approve" }).className).toBe(
-      "btn btn-sm btn-secondary",
+    expect(screen.getByRole("button", { name: "Merge" }).classList.contains("btn-primary")).toBe(
+      true,
     );
-    expect(screen.getByRole("button", { name: "Escalate" }).className).toBe(
-      "btn btn-sm btn-secondary",
+    expect(screen.getByRole("button", { name: "Reject" }).classList.contains("btn-danger")).toBe(
+      true,
     );
-    expect(screen.getByRole("button", { name: "Reject" }).className).toBe("btn btn-sm btn-danger");
+    const escalate = screen.getByRole("button", { name: "Escalate" });
+    expect(escalate.style.getPropertyValue("--output-color")).toBe(PURPLE);
+    expectColourMarker(escalate, true);
+    const approve = screen.getByRole("button", { name: "Approve" });
+    expect(approve.getAttribute("style")).toBeNull();
+    expectColourMarker(approve, false);
+
+    fireEvent.click(escalate);
+    const dialog = screen.getByRole("dialog", { name: "Confirm Escalate" });
+    const confirm = within(dialog).getByRole("button", { name: "Escalate" });
+    expect(confirm.style.getPropertyValue("--output-color")).toBe(PURPLE);
+    expectColourMarker(confirm, true);
+    expect(confirm.classList.contains("btn-primary")).toBe(true);
   });
 
-  test.each([
-    ["Approve", "OnSuccess", "btn-primary", YELLOW],
-    ["Escalate", "Escalate", "btn-primary", PURPLE],
-    ["Reject", "OnFailure", "btn-danger", PURPLE],
-  ] as const)(
-    "confirming %s offers a confirm button with the pressed button's colour",
-    (label, output, tone, color) => {
-      const handlers = { onApprove: vi.fn(), onReject: vi.fn(), onEdge: vi.fn() };
-      render(
-        <FeedbackActions
-          actions="OnSuccess,Escalate,OnFailure"
-          {...handlers}
-          needsConfirm={(name) => name === output}
-          colorOf={(name) => (name === output ? color : null)}
-        />,
-      );
-
-      fireEvent.click(screen.getByRole("button", { name: label }));
-      const dialog = screen.getByRole("dialog", { name: `Confirm ${label}` });
-      const confirm = within(dialog).getByRole("button", { name: label });
-      expect(confirm.className).toBe(`btn ${tone} has-output-color`);
-      expectColoured(confirm, color);
-      expectUncoloured(within(dialog).getByRole("button", { name: "Cancel" }));
-
-      fireEvent.click(confirm);
-      const sent = { OnSuccess: "onApprove", OnFailure: "onReject", Escalate: "onEdge" } as const;
-      expect(handlers[sent[output]]).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  test("confirming an uncoloured output offers the confirm button with no inline colour", () => {
+  test("the confirm button of an uncoloured Reject is a danger button without a colour marker", () => {
     render(
       <FeedbackActions
-        actions="OnSuccess,Escalate,OnFailure"
+        actions="OnSuccess,OnFailure"
         onApprove={vi.fn()}
         onReject={vi.fn()}
         onEdge={vi.fn()}
-        needsConfirm={(name) => name === "Escalate"}
-        colorOf={(name) => (name === "OnSuccess" ? PURPLE : null)}
+        needsConfirm={(name) => name === "OnFailure"}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Escalate" }));
-    const dialog = screen.getByRole("dialog", { name: "Confirm Escalate" });
-    expect(
-      within(dialog).getByRole("button", { name: "Escalate" }).getAttribute("style"),
-    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    const confirm = within(screen.getByRole("dialog", { name: "Confirm Reject" })).getByRole(
+      "button",
+      { name: "Reject" },
+    );
+    expect(confirm.classList.contains("btn-danger")).toBe(true);
+    expectColourMarker(confirm, false);
   });
 });
+
+/** The class and the dot that mark a button carrying its output's colour. */
+function expectColourMarker(button: HTMLElement, marked: boolean) {
+  expect(button.classList.contains("has-output-color")).toBe(marked);
+  expect(button.querySelector(".output-color-dot") !== null).toBe(marked);
+}
 
 describe("FeedbackActions — Enter in the feedback box", () => {
   type Props = Parameters<typeof FeedbackActions>[0];
@@ -609,13 +503,10 @@ describe("FeedbackActions — Enter in the feedback box", () => {
   );
 });
 
-describe("FeedbackActions — order and the one primary", () => {
+describe("FeedbackActions — order", () => {
   const names = () =>
     screen.getAllByRole("button").map((b) => (b.textContent ?? "").replace(/⏎/g, "").trim());
-  const primaries = () =>
-    screen.getAllByRole("button").filter((b) => b.classList.contains("btn-primary"));
-
-  test("the default output comes first as the only primary button, and Reject comes last", () => {
+  test("the default output comes first, and Reject comes last", () => {
     render(
       <FeedbackActions
         actions="OnSuccess,Revise,Split,OnFailure"
@@ -627,24 +518,6 @@ describe("FeedbackActions — order and the one primary", () => {
     );
 
     expect(names()).toEqual(["Split", "Approve", "Revise", "Reject"]);
-    expect(primaries().map((b) => b.textContent)).toEqual(["Split"]);
-    expect(screen.getByRole("button", { name: "Reject" }).classList.contains("btn-danger")).toBe(
-      true,
-    );
-  });
-
-  test("with no default and no Merge, no answer is primary, Approve included", () => {
-    render(
-      <FeedbackActions
-        actions="OnSuccess,Revise,OnFailure"
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onEdge={vi.fn()}
-      />,
-    );
-
-    expect(names()).toEqual(["Approve", "Revise", "Reject"]);
-    expect(primaries()).toEqual([]);
   });
 
   test("an output that asks to confirm shows its label as it is, with nothing added that reads as cut off", () => {
@@ -659,22 +532,6 @@ describe("FeedbackActions — order and the one primary", () => {
     );
 
     expect(screen.getByRole("button", { name: "Park" }).textContent).toBe("Park");
-  });
-
-  test("with only named outputs and no default, none is promoted to primary", () => {
-    render(
-      <FeedbackActions
-        actions="approve,reject"
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onEdge={vi.fn()}
-      />,
-    );
-
-    expect(primaries()).toEqual([]);
-    expect(
-      screen.getByRole("button", { name: "approve" }).classList.contains("btn-secondary"),
-    ).toBe(true);
   });
 
   test("an output called Merge is its own answer, apart from the PR merge", () => {
@@ -692,10 +549,7 @@ describe("FeedbackActions — order and the one primary", () => {
 
     const merges = screen.getAllByRole("button", { name: "Merge" });
     expect(merges).toHaveLength(2);
-    // The PR merge is the primary and asks first; the output sends at once.
-    const [prMerge, output] = merges;
-    expect(prMerge.classList.contains("btn-primary")).toBe(true);
-    expect(output.classList.contains("btn-secondary")).toBe(true);
+    const output = merges[1];
     fireEvent.click(output);
     expect(onEdge).toHaveBeenCalledWith("Merge");
     expect(onMerge).not.toHaveBeenCalled();

@@ -49,4 +49,15 @@ describe("validateLoopGraphLocally", () => {
     const edges = [edge("s", "ai"), edge("ai", "c")];
     expect(validateLoopGraphLocally(nodes, edges)).toEqual([]);
   });
+
+  test("accepts a graph with a cycle, such as a build failing back into its AI step", () => {
+    const nodes = [
+      node("s", NodeType.Start),
+      node("ai", NodeType.AI),
+      node("cmd", NodeType.Cmd),
+      node("c", NodeType.Cleanup),
+    ];
+    const edges = [edge("s", "ai"), edge("ai", "cmd"), edge("cmd", "ai"), edge("cmd", "c")];
+    expect(validateLoopGraphLocally(nodes, edges)).toEqual([]);
+  });
 });

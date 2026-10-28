@@ -24,6 +24,7 @@ function TaskboardColumn(
 import WorkItemCard, { WORK_ITEM_DRAG_TYPE } from "./WorkItemCard";
 import { WorkItem, WorkItemStatus } from "../types";
 import * as authServices from "../services/auth";
+import { settle } from "../test-support";
 
 afterEach(() => {
   cleanup();
@@ -297,12 +298,7 @@ function dropAt(target: Element, draggedId: string, clientY: number) {
   }
 }
 
-/** Lets the drop's requests and their callbacks run. */
-async function settle() {
-  for (let i = 0; i < 5; i++) await Promise.resolve();
-  await new Promise((r) => setTimeout(r, 0));
-}
-
+/** One item per id, in that order, all in the given column. */
 function itemsIn(status: WorkItemStatus, ids: string[]): WorkItem[] {
   return ids.map((id) => makeItem({ id, title: `Item ${id}`, status }));
 }
@@ -1082,6 +1078,7 @@ describe("TaskboardColumn drop line", () => {
           workItems={itemsIn(WorkItemStatus.Backlog, ["a", "b", "c"])}
           total={3}
           onWorkItemUpdate={vi.fn()}
+          onError={vi.fn()}
           foldChoice={false}
         />
       </Profiler>,

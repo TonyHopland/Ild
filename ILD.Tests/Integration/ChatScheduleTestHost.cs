@@ -12,6 +12,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -37,7 +38,7 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
 {
     public static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
-    public ManualClock Clock { get; }
+    public TestClock Clock { get; }
     public ScriptedChatAdapter Adapter { get; } = new();
     public ScriptedAdapterRegistry Registry { get; }
     public RecordingChatHub Hub { get; } = new();
@@ -49,7 +50,7 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
 
     private ChatScheduleTestHost(DateTime startUtc, string? databaseFile)
     {
-        Clock = new ManualClock(startUtc);
+        Clock = new TestClock(startUtc);
         Registry = new ScriptedAdapterRegistry(Adapter);
         _ownsDatabase = databaseFile is null;
         DatabaseFile = databaseFile
@@ -327,26 +328,6 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
                 lastSeen is null ? $"timed out waiting for {waitingFor}" : $"timed out waiting for {waitingFor}; {lastSeen()}");
             await Task.Delay(20, TestContext.Current.CancellationToken);
         }
-    }
-}
-
-/// <summary>A clock that stands still until the test moves it, and whose timers never fire.</summary>
-internal sealed class ManualClock(DateTime startUtc) : TimeProvider
-{
-    private long _ticks = startUtc.Ticks;
-
-    public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref _ticks), TimeSpan.Zero);
-
-    public void Set(string iso) => Interlocked.Exchange(ref _ticks, ChatScheduleTestHost.ParseUtc(iso).Ticks);
-
-    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        => new NeverTimer();
-
-    private sealed class NeverTimer : ITimer
-    {
-        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
-        public void Dispose() { }
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
 

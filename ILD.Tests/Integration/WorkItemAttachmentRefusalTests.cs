@@ -17,7 +17,7 @@ namespace ILD.Tests.Integration;
 /// would otherwise cross the network to be refused there, or come back as an
 /// empty success that stored nothing.
 /// </summary>
-public class WorkItemAttachmentRefusalTests
+public class WorkItemAttachmentRefusalTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private static async Task<string> CreateWorkItemAsync(ApiFactory factory, HttpClient client)
     {
@@ -88,7 +88,6 @@ public class WorkItemAttachmentRefusalTests
     [Fact]
     public async Task An_upload_carrying_no_files_is_refused_rather_than_answered_with_nothing()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
 
@@ -104,7 +103,6 @@ public class WorkItemAttachmentRefusalTests
     [Fact]
     public async Task A_request_with_more_parts_than_the_form_reader_will_take_is_refused_and_stores_nothing()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
 
@@ -129,7 +127,6 @@ public class WorkItemAttachmentRefusalTests
         // MVC parses a form request for its value providers before the action
         // runs, so a cap raised inside the action arrives after the host default
         // has already decided. It has to be a filter, and only here.
-        await using var factory = new ApiFactory();
         _ = factory.CreateClient();
 
         var raising = factory.Services.GetRequiredService<EndpointDataSource>().Endpoints
@@ -144,7 +141,6 @@ public class WorkItemAttachmentRefusalTests
     [Fact]
     public async Task A_request_that_is_not_multipart_is_refused_with_the_field_it_wanted()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
 

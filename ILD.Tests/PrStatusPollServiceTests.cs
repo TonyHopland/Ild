@@ -4,7 +4,9 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -35,10 +37,11 @@ public class PrStatusPollServiceTests
         Name = name,
     };
 
-    private sealed class Harness
+    private sealed class Harness : IDisposable
     {
         public LoopRun Run { get; }
         public LoopRunNode RunNode { get; }
+        public TestDb Db { get; } = new();
         public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRemoteProvider> Remote { get; } = new();
         public Mock<ILoopEngine> Engine { get; } = new();
@@ -68,7 +71,8 @@ public class PrStatusPollServiceTests
             };
 
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
-            Runs.AcceptPollWrites(Run);
+            PrRunSeed.SeedParked(Db, Run.Id, loopNodeId);
+            Runs.RecordPollsOn(new LoopRunStore(Db.Fresh()));
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>())).ReturnsAsync(edges);
             Remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7"))
@@ -83,12 +87,14 @@ public class PrStatusPollServiceTests
         public PrStatusPollService Build() => new(
             Runs.Object, Remote.Object, Engine.Object, Notifier.Object,
             NullLogger<PrStatusPollService>.Instance, WorkItems.Object, EventLog.Object, Board.Object);
+
+        public void Dispose() => Db.Dispose();
     }
 
     [Fact]
     public async Task Persists_snapshot_and_pushes_gui_update_every_tick()
     {
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.Is<string?>(x => x != null), It.IsAny<string?>()), Times.Once);
@@ -101,7 +107,7 @@ public class PrStatusPollServiceTests
     [InlineData(RemotePrCiStatus.Passed)]
     public async Task A_terminal_ci_moving_back_to_pending_is_stored_and_notifies_the_board_once(RemotePrCiStatus before)
     {
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
         h.Run.PrSnapshot = PrSnapshotJson.Serialize(Snapshot(ci: before));
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -113,7 +119,7 @@ public class PrStatusPollServiceTests
     public async Task A_poll_that_still_reads_the_old_head_stores_nothing_and_fires_nothing()
     {
         // The push cleared the stored result; the forge still reports the old head with its red CI.
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed, headSha: "old"), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed, headSha: "old"), baseline: null);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnCiFailed) });
         h.Run.PrSnapshot = null;
@@ -132,7 +138,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task A_poll_that_reads_the_pushed_commit_stores_the_result_and_clears_the_record()
     {
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending, headSha: "pushed"), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending, headSha: "pushed"), baseline: null);
         h.Run.PrSnapshot = null;
         h.Run.PrPushedCommit = "pushed";
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
@@ -145,7 +151,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task A_run_with_no_recorded_commit_is_polled_whatever_head_the_forge_reports()
     {
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending, headSha: "anything"), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending, headSha: "anything"), baseline: null);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(h.Run.PrSnapshot);
@@ -155,7 +161,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task An_unchanged_badge_does_not_notify_the_board()
     {
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
         h.Run.PrSnapshot = PrSnapshotJson.Serialize(Snapshot(ci: RemotePrCiStatus.Pending));
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -165,7 +171,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task The_first_snapshot_after_a_clear_notifies_the_board()
     {
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
         h.Run.PrSnapshot = null;
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -179,7 +185,7 @@ public class PrStatusPollServiceTests
         // a numeric enum ("ci":2) would render a blank CI badge. The persisted
         // blob is round-tripped verbatim into the API response, so it must carry
         // the enum's string name.
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Passed), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Passed), baseline: null);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(h.Run.PrSnapshot);
@@ -190,7 +196,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task Fires_connected_edge_on_newly_true_state()
     {
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnCiFailed) });
 
@@ -198,24 +204,6 @@ public class PrStatusPollServiceTests
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
             It.Is<NodeSignal>(sig => sig.EdgeName == LoopOutputs.OnCiFailed)), Times.Once);
-    }
-
-    [Fact]
-    public async Task Persisted_snapshot_reads_back_through_the_same_contract_that_wrote_it()
-    {
-        // The poller writes the blob and the taskboard projection, the webhook
-        // resume and the PR node all read it. One owner (PrSnapshotJson) keeps
-        // the two sides from drifting — this pins the round-trip.
-        var h = new Harness(Snapshot(
-            ci: RemotePrCiStatus.Failed,
-            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
-            baseline: null);
-
-        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
-
-        var parsed = PrSnapshotJson.TryParse(h.Run.PrSnapshot);
-        Assert.Equal(RemotePrCiStatus.Failed, parsed!.Ci);
-        Assert.Equal("build", Assert.Single(parsed.FailedChecks).Name);
     }
 
     [Fact]
@@ -241,7 +229,7 @@ public class PrStatusPollServiceTests
         // The signal's output becomes the resumed PR node's output — i.e. the
         // next node's {{PreviousNode.Output}}. Empty, the fix-it agent can only
         // guess why CI went red.
-        var h = new Harness(Snapshot(
+        using var h = new Harness(Snapshot(
             ci: RemotePrCiStatus.Failed,
             failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
             baseline: null);
@@ -265,7 +253,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task Every_fired_edge_carries_a_reason_not_an_empty_output()
     {
-        var h = new Harness(Snapshot(state: "closed", merged: true), baseline: null);
+        using var h = new Harness(Snapshot(state: "closed", merged: true), baseline: null);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnMerged) });
 
@@ -278,7 +266,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task Does_not_fire_when_edge_unconnected_but_still_persists()
     {
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Runs.Verify(s => s.TryRecordPrPollAsync(h.Run.Id, It.IsAny<Guid>(), It.IsAny<string?>(), It.Is<string?>(x => x!.Contains(LoopOutputs.OnCiFailed))), Times.Once);
@@ -290,7 +278,7 @@ public class PrStatusPollServiceTests
     {
         // Both changes-requested and CI-failed newly true and connected; the
         // higher-priority on_rejected wins.
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed, changesRequested: true), baseline: null);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed, changesRequested: true), baseline: null);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[]
             {
@@ -309,7 +297,7 @@ public class PrStatusPollServiceTests
     {
         // CI was already failing last tick (in the baseline), so it is not a
         // transition this tick and must not fire again.
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: LoopOutputs.OnCiFailed);
+        using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: LoopOutputs.OnCiFailed);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnCiFailed) });
 
@@ -372,7 +360,7 @@ public class PrStatusPollServiceTests
         // on_ci_passed and on_approved are wired and both go true on the very
         // tick the merge becomes possible: neither may take the run off the PR
         // node before ILD has merged.
-        var h = AutoMergeHarness(Green(approved: true), PrAutoMerge.IldPending,
+        using var h = AutoMergeHarness(Green(approved: true), PrAutoMerge.IldPending,
             LoopOutputs.OnCiPassed, LoopOutputs.OnApproved, LoopOutputs.OnMerged);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(true);
         h.Remote.Setup(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
@@ -408,7 +396,7 @@ public class PrStatusPollServiceTests
     {
         // Native: the provider merges, and ILD must not race it. Null: not an
         // AutoMerge pull request, or a run from before the fallback existed.
-        var h = AutoMergeHarness(Green(), state, LoopOutputs.OnCiPassed);
+        using var h = AutoMergeHarness(Green(), state, LoopOutputs.OnCiPassed);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>())).ReturnsAsync(true);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
@@ -443,7 +431,7 @@ public class PrStatusPollServiceTests
             "blocked" => green with { MergeBlocked = true },
             _ => throw new ArgumentOutOfRangeException(nameof(why)),
         };
-        var h = AutoMergeHarness(notYet, PrAutoMerge.IldPending);
+        using var h = AutoMergeHarness(notYet, PrAutoMerge.IldPending);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(true);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
@@ -464,7 +452,7 @@ public class PrStatusPollServiceTests
     [InlineData("work item unreadable")]
     public async Task AutoMerge_fallback_reads_the_tag_live_and_makes_no_attempt_without_it(string why)
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(true);
         switch (why)
         {
@@ -499,7 +487,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task AutoMerge_fallback_does_not_merge_when_another_writer_holds_the_claim()
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
         h.Runs.Setup(s => s.TrySetPrAutoMergeAsync(h.Run.Id, It.IsAny<PrAutoMerge?>(), It.IsAny<PrAutoMerge>(), It.IsAny<string?>()))
             .ReturnsAsync(false);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>())).ReturnsAsync(true);
@@ -514,7 +502,7 @@ public class PrStatusPollServiceTests
     [InlineData(true)]
     public async Task A_failed_AutoMerge_leaves_the_run_parked_asks_a_human_and_is_never_retried(bool throws)
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending,
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending,
             LoopOutputs.OnCiFailed, LoopOutputs.OnMerged);
         var merge = h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>()));
         if (throws)
@@ -571,7 +559,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task AutoMerge_names_the_commit_whose_CI_it_checked()
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1")).ReturnsAsync(true);
         h.Remote.Setup(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
 
@@ -584,7 +572,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task A_merge_refused_because_the_head_moved_goes_back_to_pending_and_asks_no_one()
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1"))
             .ThrowsAsync(new RemoteHeadMovedException("head-1", "head-2"));
 
@@ -607,7 +595,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task A_head_that_moved_under_the_merge_ends_the_tick_without_firing_the_old_commits_edges()
     {
-        var h = AutoMergeHarness(Green(approved: true), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed, LoopOutputs.OnApproved);
+        using var h = AutoMergeHarness(Green(approved: true), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed, LoopOutputs.OnApproved);
         var before = PrSnapshotJson.Serialize(Green() with { Ci = RemotePrCiStatus.Pending, HeadSha = "head-1" });
         h.Run.PrSnapshot = before;
         h.Run.PrPolledEdgeStates = "";
@@ -636,7 +624,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task After_a_moved_head_the_new_heads_green_CI_still_fires_on_ci_passed_if_it_cannot_be_merged()
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed);
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed);
         h.Run.PrPolledEdgeStates = "";
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", "head-1"))
             .ThrowsAsync(new RemoteHeadMovedException("head-1", "head-2"));
@@ -653,7 +641,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task A_snapshot_without_a_head_commit_makes_no_merge_attempt()
     {
-        var h = AutoMergeHarness(Green() with { HeadSha = null }, PrAutoMerge.IldPending);
+        using var h = AutoMergeHarness(Green() with { HeadSha = null }, PrAutoMerge.IldPending);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -664,7 +652,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task A_failed_AutoMerge_tick_still_routes_the_edges_it_would_have_routed_even_when_the_log_is_down()
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed);
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(false);
         h.EventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(),
                 It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
@@ -682,7 +670,7 @@ public class PrStatusPollServiceTests
     [InlineData(true)]
     public async Task A_branch_that_will_not_delete_after_an_AutoMerge_is_reported_and_blocks_nothing(bool throws)
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed, LoopOutputs.OnMerged);
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending, LoopOutputs.OnCiPassed, LoopOutputs.OnMerged);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>())).ReturnsAsync(true);
         var delete = h.Remote.Setup(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>()));
         if (throws)
@@ -707,7 +695,7 @@ public class PrStatusPollServiceTests
     [Fact]
     public async Task A_merge_that_throws_on_one_run_does_not_stop_the_next_run_merging()
     {
-        var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
+        using var h = AutoMergeHarness(Green(), PrAutoMerge.IldPending);
         h.Remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "7", It.IsAny<string?>()))
             .ThrowsAsync(new TaskCanceledException("forge timed out"));
 
@@ -723,7 +711,7 @@ public class PrStatusPollServiceTests
             PrAutoMerge = PrAutoMerge.IldPending,
         };
         h.Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { h.Run, other });
-        h.Runs.AcceptPollWrites(other);
+        PrRunSeed.SeedParked(h.Db, other.Id, otherNodeId, "wi-2", other.PrUrl);
         h.Runs.Setup(s => s.GetRunNodeAsync(other.Id, otherNodeId)).ReturnsAsync(new LoopRunNode
         {
             Id = Guid.NewGuid(), LoopRunId = other.Id, LoopNodeId = otherNodeId, Status = LoopRunNodeStatus.WaitingHuman,

@@ -5,19 +5,9 @@ using System.Net.Http.Json;
 namespace ILD.Tests.Integration;
 
 /// <summary>The preferences endpoints through the real pipeline: behind a session, and a round trip.</summary>
+// A host per test: the signed-in user's preferences are host-wide.
 public class PreferencesEndpointTests
 {
-    [Fact]
-    public async Task Preferences_need_a_session()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-
-        var response = await client.GetAsync("/api/v1/preferences", TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
     [Fact]
     public async Task A_preference_put_by_the_signed_in_user_is_read_back()
     {

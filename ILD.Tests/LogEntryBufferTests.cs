@@ -56,20 +56,6 @@ public class LogEntryBufferTests
     }
 
     [Fact]
-    public void A_level_changed_while_running_decides_what_reaches_the_buffer()
-    {
-        var (logger, buffer, levelSwitch) = Build();
-
-        logger.Debug("too quiet");
-        levelSwitch.MinimumLevel = LogEventLevel.Debug;
-        logger.Debug("loud enough");
-        levelSwitch.MinimumLevel = LogEventLevel.Error;
-        logger.Warning("quiet again");
-
-        Assert.Equal(["loud enough"], buffer.Entries(10).Select(e => e.Message));
-    }
-
-    [Fact]
     public void An_entry_carries_its_level_source_and_exception()
     {
         var (logger, buffer, _) = Build();

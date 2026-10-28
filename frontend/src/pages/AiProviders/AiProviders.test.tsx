@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { AdapterModelSupport, ConfigFieldType } from "../../types";
 import AiProviders from "./index";
+import { reply as respond, stubFetch, type Call } from "../../test-support";
 
 // What each adapter declares about a model, mirroring the real backend:
 // the BYO-endpoint types require one, the CLI-auth types treat it as optional,
@@ -55,6 +56,7 @@ function adapterList(types: string[]) {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 // The MCP-capable adapters (opencode, claude-code) advertise a single
@@ -134,14 +136,6 @@ function renderRouted(fetchMock: ReturnType<typeof routingFetch>) {
   );
 }
 
-function mockFetch(json: unknown, status = 200) {
-  return vi.fn().mockResolvedValue({
-    ok: status < 400,
-    status,
-    text: () => Promise.resolve(JSON.stringify(json)),
-  });
-}
-
 function jsonResponse(json: unknown, status = 200) {
   return Promise.resolve({
     ok: status < 400,
@@ -150,22 +144,85 @@ function jsonResponse(json: unknown, status = 200) {
   });
 }
 
-// The page loads three resources on mount, in this fetch order:
-// providers, supported types, managed agents.
-function queueInitialLoad(
-  fetchMock: ReturnType<typeof mockFetch>,
-  providers: unknown[],
-  agents: unknown[] = [],
-) {
-  fetchMock
-    .mockReturnValueOnce(jsonResponse(providers))
-    .mockReturnValueOnce(jsonResponse(adapterList(["opencode", "pi"])))
-    .mockReturnValueOnce(jsonResponse(agents));
+interface Backend {
+  providers: Record<string, unknown>[];
+  types: string[];
+  agents: Record<string, unknown>[];
+  updateAgent: (key: string) => Response;
 }
 
-function renderPage(mockFetchFn: ReturnType<typeof mockFetch>) {
-  vi.stubGlobal("fetch", mockFetchFn);
+/** A backend holding `providers` and `agents`, applying each create, update and set-default to them. */
+function serveProviders(init: Partial<Backend> = {}) {
+  const backend: Backend = {
+    providers: [],
+    types: ["opencode", "pi"],
+    agents: [],
+    updateAgent: () => respond(404),
+    ...init,
+  };
+  const calls = stubFetch(({ method, path, body }) => {
+    const lower = path.toLowerCase();
+    const provider = /\/aiproviders\/([^/]+)(\/set-default)?$/.exec(lower);
+    const agent = /\/managedagents\/([^/]+)\/update$/.exec(lower);
+    if (method === "GET" && lower.includes("config-schema")) return respond(200, []);
+    if (method === "GET" && lower.endsWith("/agentadapters"))
+      return respond(200, adapterList(backend.types));
+    if (method === "GET" && lower.endsWith("/managedagents")) return respond(200, backend.agents);
+    if (method === "GET" && lower.endsWith("/aiproviders")) return respond(200, backend.providers);
+    if (method === "POST" && agent) return backend.updateAgent(agent[1]);
+    if (method === "POST" && lower.endsWith("/aiproviders")) {
+      const created = {
+        id: "ai-new-1",
+        isDefault: false,
+        createdAt: "2025-03-01T00:00:00Z",
+        ...body,
+      };
+      backend.providers = [...backend.providers, created];
+      return respond(201, created);
+    }
+    if (method === "POST" && provider?.[2]) {
+      backend.providers = backend.providers.map((p) => ({
+        ...p,
+        isDefault: p.id === path.split("/")[4],
+      }));
+      return respond(
+        200,
+        backend.providers.find((p) => p.isDefault),
+      );
+    }
+    if (method === "PUT" && provider) {
+      const id = path.split("/")[4];
+      backend.providers = backend.providers.map((p) => (p.id === id ? { ...p, ...body } : p));
+      return respond(
+        200,
+        backend.providers.find((p) => p.id === id),
+      );
+    }
+    return respond(404);
+  });
+  return { backend, calls };
+}
 
+const writesTo = (calls: Call[], method: string, pathEnd: string) =>
+  calls.filter((c) => c.method === method && c.path.endsWith(pathEnd));
+
+const piAgent = (over: Record<string, unknown> = {}) => ({
+  key: "pi",
+  displayName: "Pi",
+  npmPackage: "@earendil-works/pi-coding-agent",
+  installedVersion: "0.80.1",
+  latestVersion: "0.80.2",
+  updateAvailable: true,
+  error: null,
+  ...over,
+});
+
+function renderPage(mockFetchFn: ReturnType<typeof vi.fn>) {
+  vi.stubGlobal("fetch", mockFetchFn);
+  renderProviders();
+}
+
+function renderProviders() {
   const authValue = {
     user: { id: "1", username: "test", createdAt: "" },
     token: "test-token",
@@ -217,23 +274,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(providers)),
-      }),
-    );
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-      }),
-    );
-
-    renderPage(fetchMock);
+    serveProviders({ providers });
+    renderProviders();
 
     await waitFor(() => {
       expect(screen.getByText("AI Providers")).toBeTruthy();
@@ -258,23 +300,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(providers)),
-      }),
-    );
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-      }),
-    );
-
-    renderPage(fetchMock);
+    serveProviders({ providers });
+    renderProviders();
 
     await waitFor(() => {
       expect(screen.getByText("AI Providers")).toBeTruthy();
@@ -285,36 +312,8 @@ describe("AI Providers page", () => {
   });
 
   test("create form opens, fills fields, and calls API on submit", async () => {
-    const providers: unknown[] = [];
-
-    const createdProvider = {
-      id: "ai-new-1",
-      name: "Pi Local",
-      type: "pi",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      apiKey: "new-key",
-      model: "gemini-pro",
-      isDefault: false,
-      createdAt: "2025-03-01T00:00:00Z",
-    };
-
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(providers)),
-      }),
-    );
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-      }),
-    );
-
-    renderPage(fetchMock);
+    const { calls } = serveProviders();
+    renderProviders();
 
     await waitFor(() => {
       expect(screen.getByText("AI Providers")).toBeTruthy();
@@ -344,52 +343,25 @@ describe("AI Providers page", () => {
       target: { value: "gemini-pro" },
     });
 
-    // Mock the POST and subsequent reload
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 201,
-          text: () => Promise.resolve(JSON.stringify(createdProvider)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([createdProvider])),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-        }),
-      );
-
-    // Submit
     fireEvent.click(screen.getByText("Create"));
 
     await waitFor(() => {
       expect(screen.queryByText("New Provider")).toBeFalsy();
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/aiproviders"),
-      expect.objectContaining({ method: "POST" }),
-    );
+    const posts = writesTo(calls, "POST", "/aiproviders");
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body).toMatchObject({
+      name: "Pi Local",
+      type: "pi",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      model: "gemini-pro",
+    });
   });
 
   test("selecting the copilot CLI-auth type hides the auth fields but keeps the model", async () => {
-    const fetchMock = mockFetch(null);
-    // Initial load order: providers, supported types (incl. copilot), agents.
-    fetchMock
-      .mockReturnValueOnce(jsonResponse([]))
-      .mockReturnValueOnce(jsonResponse(adapterList(["opencode", "pi", "claude-code", "copilot"])))
-      .mockReturnValueOnce(jsonResponse([]));
-
-    renderPage(fetchMock);
+    serveProviders({ types: ["opencode", "pi", "claude-code", "copilot"] });
+    renderProviders();
 
     await waitFor(() => {
       expect(screen.getByText("AI Providers")).toBeTruthy();
@@ -439,28 +411,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const updatedProvider = {
-      ...providers[0],
-      name: "Pi Updated",
-    };
-
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(providers)),
-      }),
-    );
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-      }),
-    );
-
-    renderPage(fetchMock);
+    const { calls } = serveProviders({ providers });
+    renderProviders();
 
     await waitFor(() => {
       expect(screen.getByText("AI Providers")).toBeTruthy();
@@ -481,41 +433,20 @@ describe("AI Providers page", () => {
       target: { value: "Pi Updated" },
     });
 
-    // Mock the PUT and subsequent reload
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(updatedProvider)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([updatedProvider])),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-        }),
-      );
-
-    // Submit
     fireEvent.click(screen.getByText("Update"));
 
     await waitFor(() => {
       expect(screen.queryByText("Edit Provider")).toBeFalsy();
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/aiproviders/ai-1"),
-      expect.objectContaining({ method: "PUT" }),
-    );
+    const puts = writesTo(calls, "PUT", "/aiproviders/ai-1");
+    expect(puts).toHaveLength(1);
+    expect(puts[0].body).toMatchObject({
+      name: "Pi Updated",
+      type: "pi",
+      baseUrl: "http://pi.local",
+      model: "gpt-4",
+    });
   });
 
   test("Set as default button only shows on non-default providers and calls API", async () => {
@@ -542,23 +473,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(providers)),
-      }),
-    );
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-      }),
-    );
-
-    renderPage(fetchMock);
+    const { calls } = serveProviders({ providers });
+    renderProviders();
 
     await waitFor(() => {
       expect(screen.getByText("AI Providers")).toBeTruthy();
@@ -568,40 +484,12 @@ describe("AI Providers page", () => {
     const buttons = screen.getAllByText("Set as default");
     expect(buttons.length).toBe(1);
 
-    const promoted = { ...providers[1], isDefault: true };
-    const demoted = { ...providers[0], isDefault: false };
-
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(promoted)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([demoted, promoted])),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-        }),
-      );
-
     fireEvent.click(buttons[0]);
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/aiproviders/ai-2/set-default"),
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
+    await waitFor(() =>
+      expect(writesTo(calls, "POST", "/aiproviders/ai-2/set-default")).toHaveLength(1),
+    );
+    expect(writesTo(calls, "POST", "/aiproviders/ai-2/set-default")[0].body).toEqual({});
   });
 
   test("shows installed + latest version and an enabled Update button when behind", async () => {
@@ -617,9 +505,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    serveProviders({ agents });
+    renderProviders();
 
     await openAgentsPopover();
 
@@ -641,9 +528,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    serveProviders({ agents });
+    renderProviders();
 
     await openAgentsPopover();
 
@@ -666,9 +552,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    serveProviders({ agents });
+    renderProviders();
 
     const bell = await screen.findByRole("button", { name: /Coding agents/i });
     expect(bell.getAttribute("aria-label")).toBe("Coding agents — all up to date");
@@ -703,9 +588,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    serveProviders({ agents });
+    renderProviders();
 
     const bell = await screen.findByRole("button", { name: /Coding agents/i });
     expect(bell.getAttribute("aria-label")).toBe("Coding agents — 1 update available");
@@ -731,9 +615,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    serveProviders({ agents });
+    renderProviders();
 
     await openAgentsPopover();
 
@@ -743,48 +626,21 @@ describe("AI Providers page", () => {
   });
 
   test("clicking Install installs the agent and reflects the new version", async () => {
-    const agents = [
-      {
-        key: "pi",
-        displayName: "Pi",
-        npmPackage: "@earendil-works/pi-coding-agent",
-        installedVersion: null,
-        latestVersion: "0.80.2",
-        updateAvailable: true,
-        error: null,
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    const { calls } = serveProviders({
+      agents: [piAgent({ installedVersion: null })],
+      updateAgent: () =>
+        respond(200, piAgent({ installedVersion: "0.80.2", updateAvailable: false })),
+    });
+    renderProviders();
 
     await openAgentsPopover();
-
-    fetchMock.mockReturnValueOnce(
-      jsonResponse({
-        key: "pi",
-        displayName: "Pi",
-        npmPackage: "@earendil-works/pi-coding-agent",
-        installedVersion: "0.80.2",
-        latestVersion: "0.80.2",
-        updateAvailable: false,
-        error: null,
-      }),
-    );
-
     fireEvent.click(screen.getByText("Install 0.80.2"));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/managedagents/pi/update"),
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
 
     await waitFor(() => {
       expect(screen.getByText("Up to date")).toBeTruthy();
     });
+    expect(writesTo(calls, "POST", "/managedagents/pi/update")).toHaveLength(1);
+    expect(writesTo(calls, "POST", "/managedagents/pi/update")[0].body).toEqual({});
   });
 
   test("Install button is disabled when not installed and latest is unknown", async () => {
@@ -800,9 +656,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    serveProviders({ agents });
+    renderProviders();
 
     await openAgentsPopover();
 
@@ -811,71 +666,31 @@ describe("AI Providers page", () => {
   });
 
   test("clicking Update calls the update API and reflects the new version", async () => {
-    const agents = [
-      {
-        key: "pi",
-        displayName: "Pi",
-        npmPackage: "@earendil-works/pi-coding-agent",
-        installedVersion: "0.80.1",
-        latestVersion: "0.80.2",
-        updateAvailable: true,
-        error: null,
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    const { calls } = serveProviders({
+      agents: [piAgent()],
+      updateAgent: () =>
+        respond(200, piAgent({ installedVersion: "0.80.2", updateAvailable: false })),
+    });
+    renderProviders();
 
     await openAgentsPopover();
-
-    fetchMock.mockReturnValueOnce(
-      jsonResponse({
-        key: "pi",
-        displayName: "Pi",
-        npmPackage: "@earendil-works/pi-coding-agent",
-        installedVersion: "0.80.2",
-        latestVersion: "0.80.2",
-        updateAvailable: false,
-        error: null,
-      }),
-    );
-
     fireEvent.click(screen.getByText("Update → 0.80.2"));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/managedagents/pi/update"),
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
 
     await waitFor(() => {
       expect(screen.getByText("Up to date")).toBeTruthy();
     });
+    expect(writesTo(calls, "POST", "/managedagents/pi/update")).toHaveLength(1);
+    expect(writesTo(calls, "POST", "/managedagents/pi/update")[0].body).toEqual({});
   });
 
   test("shows an error when the update fails and leaves the button actionable", async () => {
-    const agents = [
-      {
-        key: "pi",
-        displayName: "Pi",
-        npmPackage: "@earendil-works/pi-coding-agent",
-        installedVersion: "0.80.1",
-        latestVersion: "0.80.2",
-        updateAvailable: true,
-        error: null,
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    queueInitialLoad(fetchMock, [], agents);
-    renderPage(fetchMock);
+    serveProviders({
+      agents: [piAgent()],
+      updateAgent: () => respond(502, { error: "npm install failed" }),
+    });
+    renderProviders();
 
     await openAgentsPopover();
-
-    fetchMock.mockReturnValueOnce(jsonResponse({ error: "npm install failed" }, 502));
-
     fireEvent.click(screen.getByText("Update → 0.80.2"));
 
     await waitFor(() => {
@@ -910,23 +725,8 @@ describe("AI Providers page", () => {
       },
     ];
 
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(providers)),
-      }),
-    );
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
-      }),
-    );
-
-    renderPage(fetchMock);
+    serveProviders({ providers });
+    renderProviders();
 
     await waitFor(() => {
       expect(screen.getByText("AI Providers")).toBeTruthy();
@@ -1783,7 +1583,7 @@ describe("updating several coding agents at once", () => {
 
   test("each clicked agent stays busy until its own request settles, and a failure shows on its row only", async () => {
     const { fetchMock, settle } = deferredUpdates();
-    renderPage(fetchMock as unknown as ReturnType<typeof mockFetch>);
+    renderPage(fetchMock as unknown as ReturnType<typeof vi.fn>);
     await openAgentsPopover();
 
     fireEvent.click(action("Pi"));
@@ -1825,7 +1625,7 @@ describe("updating several coding agents at once", () => {
 
   test("an agent's own retry clears its error without touching another agent's", async () => {
     const { fetchMock, settle } = deferredUpdates();
-    renderPage(fetchMock as unknown as ReturnType<typeof mockFetch>);
+    renderPage(fetchMock as unknown as ReturnType<typeof vi.fn>);
     await openAgentsPopover();
 
     fireEvent.click(action("Pi"));

@@ -16,6 +16,7 @@ namespace ILD.Tests.Integration;
 /// scheduler pass and turn runner on a scripted agent: when it fires, what the
 /// turn is given, which chat it lands in, and how each firing is recorded.
 /// </summary>
+// A host per test: each test drives its own manual clock and scheduler passes.
 public sealed class ChatScheduleFiringTests
 {
     private static readonly string[] AllToolGroups = ["read", "write", "execute", "ild"];
@@ -36,7 +37,7 @@ public sealed class ChatScheduleFiringTests
         await host.RunDueAsync();
         Assert.Equal(JsonValueKind.Null, (await host.LastFiringAsync(id)).ValueKind);
 
-        host.Clock.Set("2026-07-06T06:00:30Z");
+        host.Clock.Now = ParseUtc("2026-07-06T06:00:30Z");
         await host.RunDueAsync();
         var turn = await host.Adapter.NextTurnAsync();
 
@@ -124,7 +125,7 @@ public sealed class ChatScheduleFiringTests
 
         var first = await RunAndCompleteAsync(host, continuing);
 
-        host.Clock.Set("2026-07-07T09:15:00Z");
+        host.Clock.Now = ParseUtc("2026-07-07T09:15:00Z");
         var second = await RunAndCompleteAsync(host, continuing);
         Assert.Equal(first.ChatSessionId, second.ChatSessionId);
         Assert.Contains("2026-07-06", second.Prompt);
@@ -174,7 +175,7 @@ public sealed class ChatScheduleFiringTests
         await host.SetPausedAsync(true);
         Assert.True((await host.ListPageAsync()).GetProperty("schedulerPaused").GetBoolean());
 
-        host.Clock.Set("2026-07-06T08:00:30Z");
+        host.Clock.Now = ParseUtc("2026-07-06T08:00:30Z");
         await host.RunDueAsync();
         var skipped = await host.LastFiringAsync(id);
         Assert.True(IsOutcome(skipped, "Skipped"), skipped.ToString());
@@ -182,7 +183,7 @@ public sealed class ChatScheduleFiringTests
         Assert.Equal(JsonValueKind.Null, skipped.GetProperty("chatSessionId").ValueKind);
 
         // A week later it is due again and still paused: skipped again, nothing runs.
-        host.Clock.Set("2026-07-13T08:00:30Z");
+        host.Clock.Now = ParseUtc("2026-07-13T08:00:30Z");
         await host.RunDueAsync();
         var skippedAgain = await host.LastFiringAsync(id);
         Assert.True(IsOutcome(skippedAgain, "Skipped"), skippedAgain.ToString());
@@ -191,7 +192,7 @@ public sealed class ChatScheduleFiringTests
         Assert.Empty(await host.ChatHistoryAsync());
 
         // Unpaused the next day, before its next time: it fires once now.
-        host.Clock.Set("2026-07-14T10:00:00Z");
+        host.Clock.Now = ParseUtc("2026-07-14T10:00:00Z");
         await host.SetPausedAsync(false);
         Assert.False((await host.ListPageAsync()).GetProperty("schedulerPaused").GetBoolean());
         await host.RunDueAsync();
@@ -214,7 +215,7 @@ public sealed class ChatScheduleFiringTests
         var id = await host.CreateAsync(Body(cron: "0 * * * *", timeZone: "UTC"));
 
         // Three days of hourly firings missed.
-        host.Clock.Set("2026-07-09T06:30:00Z");
+        host.Clock.Now = ParseUtc("2026-07-09T06:30:00Z");
         await host.RunDueAsync();
         var turn = await host.Adapter.NextTurnAsync();
         var fired = await host.LastFiringEndedAsync(id, "Completed");
@@ -259,11 +260,11 @@ public sealed class ChatScheduleFiringTests
         await host.ChatIdleAsync(chatId);
 
         // Still running: the next Run now is skipped and the running turn left alone.
-        host.Clock.Set("2026-07-07T09:00:00Z");
+        host.Clock.Now = ParseUtc("2026-07-07T09:00:00Z");
         var running = await host.RunNowAsync(id);
         var runningTurn = await host.Adapter.NextTurnAsync();
         var turnsSoFar = host.Adapter.ChatTurns;
-        host.Clock.Set("2026-07-07T09:30:00Z");
+        host.Clock.Now = ParseUtc("2026-07-07T09:30:00Z");
         var stillRunning = await host.RunNowAsync(id);
         Assert.True(IsOutcome(stillRunning, "Skipped"), stillRunning.ToString());
         Assert.Contains("still running", Reason(stillRunning), StringComparison.OrdinalIgnoreCase);
@@ -279,7 +280,7 @@ public sealed class ChatScheduleFiringTests
         var ownersTurnId = (await host.ChatAsync(chatId)).GetProperty("activeTurnId").GetGuid();
 
         // The owner's turn is running in the schedule's chat: busy, recorded and answered at once.
-        host.Clock.Set("2026-07-08T09:00:00Z");
+        host.Clock.Now = ParseUtc("2026-07-08T09:00:00Z");
         var busy = await host.RunNowAsync(id);
         Assert.True(IsOutcome(busy, "Skipped"), busy.ToString());
         Assert.Contains("chat busy", Reason(busy), StringComparison.OrdinalIgnoreCase);
@@ -291,7 +292,7 @@ public sealed class ChatScheduleFiringTests
         await host.ChatIdleAsync(chatId);
 
         // The previous firing is the last one that started a turn, not a skip.
-        host.Clock.Set("2026-07-09T09:00:00Z");
+        host.Clock.Now = ParseUtc("2026-07-09T09:00:00Z");
         await host.RunNowAsync(id);
         var next = await host.Adapter.NextTurnAsync();
         Assert.Contains("2026-07-07", next.Prompt);
@@ -308,11 +309,11 @@ public sealed class ChatScheduleFiringTests
         await host.SeedProviderAsync("main", isDefault: true);
         var id = await host.CreateAsync(Body(cron: "0 8 * * 1", timeZone: "UTC", continueSession: false));
         await host.SetPausedAsync(true);
-        host.Clock.Set("2026-07-06T08:00:30Z");
+        host.Clock.Now = ParseUtc("2026-07-06T08:00:30Z");
         await host.RunDueAsync();
         Assert.True(IsOutcome(await host.LastFiringAsync(id), "Skipped"));
 
-        host.Clock.Set("2026-07-06T09:00:00Z");
+        host.Clock.Now = ParseUtc("2026-07-06T09:00:00Z");
         var manual = await RunAndCompleteAsync(host, id);
 
         await host.SetPausedAsync(false);

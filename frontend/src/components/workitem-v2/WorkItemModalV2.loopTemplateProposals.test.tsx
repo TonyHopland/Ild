@@ -17,6 +17,7 @@ import {
   makeLoopTemplateProposal,
   reply,
   stubFetch,
+  routeEveryHub,
 } from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
@@ -112,7 +113,7 @@ function stubProposals(answer: (workItemId: string | null) => unknown[]) {
 /** Serves `run` and run-1's conversation `messages`. */
 function mockServices(run: LoopRun | null = null, messages: RunConversationMessage[] = []) {
   const hub = fakeHub();
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
+  routeEveryHub(signalRHook, hub);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);

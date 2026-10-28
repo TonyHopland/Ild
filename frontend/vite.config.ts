@@ -25,6 +25,13 @@ export default defineConfig({
   build: {
     outDir: "dist",
     rolldownOptions: {
+      // userPreferences.ts imports the auth service dynamically so a test setup file can seed the
+      // store before a test's mocks are in place, not to split a chunk; skip that one warning only.
+      onLog(level, log, handler) {
+        if (log.code === "INEFFECTIVE_DYNAMIC_IMPORT" && log.id?.endsWith("/src/services/auth.ts"))
+          return;
+        handler(level, log);
+      },
       output: {
         // Third-party code in its own chunks, so the app chunk stays small and a
         // release that only changes app code leaves the vendor chunks cached.
@@ -50,10 +57,16 @@ export default defineConfig({
     },
   },
   test: {
-    environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
     exclude: ["**/node_modules/**", "dist/**"],
+    // .ts tests run in node; one that needs a DOM opts in with a "// @vitest-environment jsdom" docblock.
+    projects: [
+      {
+        extends: true,
+        test: { name: "jsdom", environment: "jsdom", include: ["src/**/*.test.tsx"] },
+      },
+      { extends: true, test: { name: "node", environment: "node", include: ["src/**/*.test.ts"] } },
+    ],
   },
 });

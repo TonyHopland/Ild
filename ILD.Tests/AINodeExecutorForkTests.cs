@@ -4,6 +4,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -17,23 +18,6 @@ namespace ILD.Tests;
 /// </summary>
 public class AINodeExecutorForkTests
 {
-    /// <summary>Captures the context the executor hands the adapter, and echoes the dest id back as the session id.</summary>
-    private sealed class CapturingAdapter : IAgentAdapter
-    {
-        public AgentExecutionContext? Captured { get; private set; }
-        public string Name => "stub";
-        public string[] SupportedProviderTypes => ["stub"];
-        public ConfigFieldDescriptor[] ConfigSchema => [];
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            Captured = context;
-            return Task.FromResult(NodeExecutionResult.Ok("done", sessionId: context.SessionId));
-        }
-    }
-
     private static (IServiceProvider sp, CapturingAdapter adapter, Mock<ILoopRunStore> runStore) BuildServices(
         LoopRunSessionBinding? forkSourceBinding)
     {
@@ -50,9 +34,6 @@ public class AINodeExecutorForkTests
         providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
 
         var adapter = new CapturingAdapter();
-        var registry = Mock.Of<IAgentAdapterRegistry>(r =>
-            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
-
         var runStore = new Mock<ILoopRunStore>();
         runStore.Setup(s => s.GetSessionBindingAsync(It.IsAny<Guid>(), "AI", "base"))
             .ReturnsAsync(forkSourceBinding);
@@ -67,7 +48,7 @@ public class AINodeExecutorForkTests
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(runStore.Object);
         services.AddSingleton(workItems);
-        services.AddSingleton(registry);
+        services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
         return (services.BuildServiceProvider(), adapter, runStore);
     }
 

@@ -11,6 +11,7 @@ import {
   mockTaskboardServer,
   reply,
   stubFetch,
+  routeEveryHub,
 } from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
@@ -63,7 +64,7 @@ function suggestion(id: string, rationale: string) {
 }
 
 function mockDialogServices(item: WorkItem) {
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(fakeHub().connection);
+  routeEveryHub(signalRHook, fakeHub());
   mockTaskboardServer([item]);
   vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(item);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);

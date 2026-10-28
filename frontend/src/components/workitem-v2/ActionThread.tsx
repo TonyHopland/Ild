@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { LoopRunStatus, TurnVariableChange, WorkItem } from "../../types";
+import { TurnVariableChange, WorkItem } from "../../types";
 import { useEditProposals } from "../../hooks/useEditProposals";
 import { useGlobalVariableProposals } from "../../hooks/useGlobalVariableProposals";
 import { useHumanInputProposals } from "../../hooks/useHumanInputProposals";
@@ -14,6 +14,7 @@ import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
 import HaltSteerControls from "./HaltSteerControls";
 import Icon from "../Icon";
+import { asksForManualMerge } from "./offers";
 import { FeedbackBanner, PrView, QueuedPrWrites, feedbackFor } from "./panels";
 import { variablesSetByTurn } from "./turnVariables";
 import { useRunView } from "./useRunView";
@@ -149,12 +150,7 @@ function PrDetails({
   const snapshot = run?.prSnapshot ?? null;
   const pending = run?.prQueuedWrites?.length ?? 0;
   const open = chosen ?? pending > 0;
-  // Only while the run still waits on the merge: a PR closed since, or a run
-  // that has moved on, needs no one to merge it.
-  const autoMergeFailed =
-    run?.prAutoMerge === "IldFailed" &&
-    run.status === LoopRunStatus.WaitingHuman &&
-    snapshot?.state !== "closed";
+  const autoMergeFailed = run ? asksForManualMerge(run) : false;
   if (!hasPrDetails(workItem, detail, runId)) return null;
   return (
     <section ref={panelRef} className="wiv2-pr-details">

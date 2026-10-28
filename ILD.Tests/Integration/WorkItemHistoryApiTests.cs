@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Reflection;
 using System.Text.Json;
 using System.Web;
 using ILD.Core.Services.Interfaces;
@@ -9,7 +8,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
-using ILD.McpServer;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Moq;
@@ -26,20 +25,29 @@ namespace ILD.Tests.Integration;
 /// proposal), the user and agent routes that read it, and the MCP tool option
 /// that asks for it.
 /// </summary>
-public class WorkItemHistoryApiTests
+public class WorkItemHistoryApiTests : IClassFixture<WorkItemHistoryApiTests.Host>
 {
     private const string RunHeader = "X-ILD-Run-Id";
     private const string ChatHeader = "X-ILD-Chat-Session-Id";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private sealed class Host : IAsyncDisposable
+    private readonly Host _host;
+
+    public WorkItemHistoryApiTests(Host host) => _host = host;
+
+    public sealed class Host : IAsyncLifetime
     {
         public ApiFactory Factory { get; }
         public HttpClient Human { get; private set; } = null!;
         public Guid RepositoryId { get; private set; }
 
-        public Host(Action<IServiceCollection>? configureServices = null)
+        public Host()
+            : this(null)
+        {
+        }
+
+        internal Host(Action<IServiceCollection>? configureServices)
         {
             Factory = new ApiFactory(configureServices: services =>
             {
@@ -49,7 +57,9 @@ public class WorkItemHistoryApiTests
             });
         }
 
-        public async Task<Host> StartAsync()
+        public async ValueTask InitializeAsync() => await StartAsync();
+
+        internal async Task<Host> StartAsync()
         {
             Human = await Factory.CreateAuthenticatedClientAsync();
             RepositoryId = await SeedRepositoryAsync(Factory);
@@ -119,7 +129,7 @@ public class WorkItemHistoryApiTests
     [Fact]
     public async Task A_human_in_the_UI_is_recorded_by_their_username_and_a_manual_park_carries_its_reason()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var id = await CreateAsHumanAsync(host, "Original title");
 
         var rename = await host.Human.PutAsJsonAsync($"/api/v1/workitems/{id}", new
@@ -149,7 +159,7 @@ public class WorkItemHistoryApiTests
     [Fact]
     public async Task A_loop_runs_changes_are_recorded_as_the_instance_user_naming_the_step_and_the_item_the_run_works_on()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var parent = await CreateAsHumanAsync(host, "The item the run works on");
         var runId = await SeedRunAsync(host.Factory, parent, runningStepLabel: "AI Coder");
         var agent = host.Agent(runId: runId);
@@ -169,7 +179,7 @@ public class WorkItemHistoryApiTests
     [Fact]
     public async Task A_chats_changes_are_recorded_as_the_chats_user_naming_the_chat()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var chatId = await SeedChatSessionAsync(host.Factory, "carol");
 
         var id = await CreateAsAgentAsync(host, host.Agent(chatSessionId: chatId), "Raised in a chat");
@@ -186,7 +196,7 @@ public class WorkItemHistoryApiTests
     [InlineData(Proposer.Chat)]
     public async Task An_approved_proposal_is_recorded_as_the_approver_naming_the_proposal_and_its_proposer(Proposer proposer)
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var id = await CreateAsHumanAsync(host, "Old title");
         var parent = await CreateAsHumanAsync(host, "The proposing run's item");
         Guid? runId = null, chatId = null;
@@ -217,6 +227,7 @@ public class WorkItemHistoryApiTests
     public async Task A_baseline_made_by_a_run_of_this_instance_is_served_with_the_runs_work_item()
     {
         using var server = new FakeWorkItemServerHarness();
+        // Own host: it swaps the WorkItem server client for the whole host.
         await using var host = await new Host(services =>
         {
             services.RemoveAll<IWorkItemServerClient>();
@@ -268,7 +279,7 @@ public class WorkItemHistoryApiTests
     [Fact]
     public async Task History_of_an_unknown_item_is_404()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
 
         Assert.Equal(HttpStatusCode.NotFound, (await host.Human.GetAsync("/api/v1/workitems/999999/history", Ct)).StatusCode);
     }
@@ -282,6 +293,7 @@ public class WorkItemHistoryApiTests
             .ThrowsAsync(outage);
         client.Setup(c => c.GetHistoryAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(outage);
+        // Own host: it swaps the WorkItem server client for the whole host.
         await using var factory = new ApiFactory(configureServices: services => services.ReplaceSingleton(client.Object));
         var human = await factory.CreateAuthenticatedClientAsync();
 
@@ -294,7 +306,7 @@ public class WorkItemHistoryApiTests
     [Fact]
     public async Task Get_workitem_carries_history_only_when_asked_for()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var id = await CreateAsHumanAsync(host, "Original title");
         await host.Human.PutAsJsonAsync($"/api/v1/workitems/{id}", new
         {
@@ -325,7 +337,7 @@ public class WorkItemHistoryApiTests
     [Fact]
     public async Task A_deleted_items_history_stays_readable_and_names_who_deleted_it()
     {
-        await using var host = await new Host().StartAsync();
+        var host = _host;
         var id = await CreateAsHumanAsync(host, "Soon gone");
 
         Assert.Equal(HttpStatusCode.OK, (await host.Human.DeleteAsync($"/api/v1/workitems/{id}", Ct)).StatusCode);
@@ -350,42 +362,13 @@ public class WorkItemHistoryApiTests
     [InlineData(null, "false")]
     public async Task The_get_workitem_tool_passes_includeHistory_through(bool? includeHistory, string expected)
     {
-        HttpRequestMessage? seen = null;
-        var handler = new StubHandler(req =>
-        {
-            seen = req;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") });
-        });
-        const string baseAddress = "http://ild-host:8080/";
-        var ild = new IldClient(
-            new HttpClient(handler) { BaseAddress = new Uri(baseAddress) },
-            new IldClientOptions(baseAddress.TrimEnd('/'), "the-agent-token", LoopRunId: null));
-        var method = typeof(ILD.McpServer.Tools.ListingTools).GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Single(m => m.CustomAttributes.Any(a =>
-                a.AttributeType.Name == "McpServerToolAttribute"
-                && a.NamedArguments.Any(n => n.MemberName == "Name" && (string?)n.TypedValue.Value == "get_workitem")));
-        var parameter = Assert.Single(method.GetParameters(), p => p.Name == "includeHistory");
-        Assert.Equal(false, parameter.DefaultValue);
-        var args = method.GetParameters()
-            .Select(p => p.Name switch
-            {
-                "id" => "42",
-                "includeHistory" when includeHistory is { } given => given,
-                _ => p.DefaultValue,
-            })
-            .ToArray();
+        var args = new Dictionary<string, object?> { ["id"] = "42" };
+        if (includeHistory is { } given) args["includeHistory"] = given;
 
-        await (Task<string>)method.Invoke(new ILD.McpServer.Tools.ListingTools(ild), args)!;
+        var (_, seen, _) = await McpToolInvoker.InvokeAsync("get_workitem", args);
 
-        Assert.NotNull(seen);
-        Assert.Equal("/api/v1/agent/workitems/42", seen!.RequestUri!.AbsolutePath);
+        Assert.Equal("/api/v1/agent/workitems/42", seen.RequestUri!.AbsolutePath);
         Assert.Equal(expected, HttpUtility.ParseQueryString(seen.RequestUri.Query)["includeHistory"] ?? "false");
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => respond(request);
     }
 
     // ── Seeding ────────────────────────────────────────────────────────────

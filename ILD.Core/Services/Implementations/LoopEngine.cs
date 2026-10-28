@@ -836,7 +836,10 @@ public sealed class LoopEngine : ILoopEngine
         await LaunchAsync(runId).ConfigureAwait(false);
     }
 
-    private Task LaunchAsync(Guid runId)
+    /// <summary>The task driving the run in the background, or null when none is stored.</summary>
+    internal Task? DriveOf(Guid runId) => _runTasks.TryGetValue(runId, out var drive) ? drive : null;
+
+    internal Task LaunchAsync(Guid runId)
     {
         // Ahead of the ownership gate below, because a claim, resume or webhook
         // landing mid-shutdown would otherwise spawn a driver the drain has
@@ -901,7 +904,7 @@ public sealed class LoopEngine : ILoopEngine
         return Task.CompletedTask;
     }
 
-    private async Task RunUntilParkAsync(Guid runId, CancellationToken ct)
+    internal async Task RunUntilParkAsync(Guid runId, CancellationToken ct)
     {
         using var scope = _sp.CreateScope();
         var sp = scope.ServiceProvider;

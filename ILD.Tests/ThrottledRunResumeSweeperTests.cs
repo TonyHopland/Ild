@@ -314,8 +314,6 @@ public class ThrottledRunResumeSweeperTests
             provider.GetRequiredService<IServiceScopeFactory>(), engine,
             NullLogger<ThrottledRunResumeSweeper>.Instance);
 
-        return (Task)typeof(ThrottledRunResumeSweeper)
-            .GetMethod("SweepOnceAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .Invoke(sweeper, new object?[] { CancellationToken.None })!;
+        return sweeper.SweepOnceAsync(CancellationToken.None);
     }
 }

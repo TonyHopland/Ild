@@ -5,13 +5,12 @@ import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import { WorkItem, WorkItemAttachment, WorkItemStatus } from "../../types";
 import { formatBytes } from "../../utils/attachments";
-import { REVOKE_DELAY_MS } from "../../utils/saveBlob";
+import * as saveBlobModule from "../../utils/saveBlob";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
-  vi.useRealTimers();
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
@@ -151,38 +150,16 @@ describe("the overview's attachment list", () => {
     const download = vi
       .spyOn(authServices.workItemService, "downloadAttachment")
       .mockResolvedValue(blob);
-    // jsdom only turns its own Blob implementation into an object URL, so the
-    // URL is stubbed: what is under test is that the saved link carries it.
-    const objectUrl = "blob:http://localhost/attachment";
-    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue(objectUrl);
-    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const save = vi.spyOn(saveBlobModule, "saveBlob").mockImplementation(() => {});
     const open = vi.spyOn(window, "open").mockReturnValue(null);
-    const clicks: { download: string; href: string }[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      clicks.push({ download: this.download, href: this.href });
-    });
     await renderDialog(makeWorkItem());
 
-    // The saved file's URL is kept alive for a while after the click: only that timer is faked, and only
-    // from here, since the testing library's own waiting needs real ones.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await click(screen.getByRole("button", { name: "Download shot.png" }));
 
-    await vi.advanceTimersByTimeAsync(0);
-    expect(clicks).toHaveLength(1);
-    // Fetched through the API client — which carries the token in a header —
-    // and then saved, never opened in a tab.
+    // Fetched through the API client, which carries the token in a header, and then saved, never opened in a tab.
     expect(download).toHaveBeenCalledWith("wi-1", "att-1");
-    expect(createObjectURL).toHaveBeenCalledWith(blob);
-    expect(clicks[0].download).toBe("shot.png");
-    expect(clicks[0].href.startsWith("blob:")).toBe(true);
-    expect(clicks[0].href).toBe(objectUrl);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(REVOKE_DELAY_MS);
-    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
-    vi.useRealTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(blob, "shot.png");
     expect(open).not.toHaveBeenCalled();
   });
 

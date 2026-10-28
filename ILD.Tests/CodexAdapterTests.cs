@@ -10,6 +10,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,7 +41,7 @@ public sealed class CodexAdapterTests : IDisposable
     private readonly string _out;
     private readonly string _fakeDll;
     private readonly TestProcessEnvironment _environment;
-    private readonly RecordingLogger _logger = new();
+    private readonly RecordingLogger<CodexAdapter> _logger = new();
 
     public CodexAdapterTests()
     {
@@ -955,26 +956,6 @@ public sealed class CodexAdapterTests : IDisposable
 
     private static string Success(string text, string threadId = "0199a213-81c0-7800-8aa1-bbab2a035a53")
         => Lines(ThreadStarted(threadId), TurnStarted, AgentMessage("item_0", text), TurnCompleted(5, 1));
-
-    private sealed class RecordingLogger : ILogger<CodexAdapter>
-    {
-        private readonly List<string> _warnings = new();
-
-        public IReadOnlyList<string> Warnings
-        {
-            get { lock (_warnings) return _warnings.ToList(); }
-        }
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel >= LogLevel.Warning)
-                lock (_warnings) _warnings.Add(formatter(state, exception));
-        }
-    }
 
     /// <summary>
     /// The real snapshot store on an in-memory database. A broken one has no schema,

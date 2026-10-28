@@ -25,72 +25,104 @@ public class LoopTemplateProposedDocumentTests
           {"id":"e2","sourceNodeId":"a","targetNodeId":"c","edgeType":"OnSuccess"}]
         """;
 
-    public static TheoryData<string, string> Refusals => new()
+    public static TheoryData<string, string, bool> Refusals => new()
     {
         {
             "{ not json",
-            "The document is not valid JSON: 'n' is an invalid start of a property name. Expected a '\"'. LineNumber: 0 | BytePositionInLine: 2."
+            "The document is not valid JSON: ",
+            true
         },
         {
             "[1,2]",
-            "The document must be a JSON object: the whole ild-loop-template/v2 document get_loop_template returns."
+            "The document must be a JSON object: the whole ild-loop-template/v2 document get_loop_template returns.",
+            false
         },
         {
             "null",
-            "The document must be a JSON object: the whole ild-loop-template/v2 document get_loop_template returns."
+            "The document must be a JSON object: the whole ild-loop-template/v2 document get_loop_template returns.",
+            false
         },
         {
             """{"name":"x","nodes":[],"edges":[]}""",
-            "The document has no $schema. Send the whole ild-loop-template/v2 document get_loop_template returns, with your changes."
+            "The document has no $schema. Send the whole ild-loop-template/v2 document get_loop_template returns, with your changes.",
+            false
         },
         {
             """{"$schema":"ild-loop-template/v9","name":"x","recoveryPolicy":"AutoResume","nodes":[],"edges":[]}""",
-            "$schema must be \"ild-loop-template/v2\" (a ild-loop-template/v1 document is upgraded to it)."
+            "$schema must be \"ild-loop-template/v2\" (a ild-loop-template/v1 document is upgraded to it).",
+            false
         },
         {
             """{"$schema":2,"name":"x","recoveryPolicy":"AutoResume","nodes":[],"edges":[]}""",
-            "$schema must be \"ild-loop-template/v2\" (a ild-loop-template/v1 document is upgraded to it)."
+            "$schema must be \"ild-loop-template/v2\" (a ild-loop-template/v1 document is upgraded to it).",
+            false
         },
         {
             """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"Sometimes","nodes":[],"edges":[]}""",
-            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel."
+            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel.",
+            false
         },
         {
             """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"99","nodes":[],"edges":[]}""",
-            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel."
+            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel.",
+            false
         },
         {
             """{"$schema":"ild-loop-template/v2","name":"x","nodes":[],"edges":[]}""",
-            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel."
+            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel.",
+            false
         },
         {
             """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"AutoResume","nodes":"all of them","edges":[]}""",
-            "The document's nodes or edges are not in the ild-loop-template/v2 shape: The JSON value could not be converted to System.Collections.Generic.List`1[ILD.Data.DTOs.LoopNodeDto]. Path: $.nodes | LineNumber: 0 | BytePositionInLine: 96."
+            "The document's nodes or edges are not in the ild-loop-template/v2 shape: ",
+            true
         },
         {
             """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"AutoResume","nodes":[],"edges":[{"sourceNodeId":5}]}""",
-            "The document's nodes or edges are not in the ild-loop-template/v2 shape: The JSON value could not be converted to System.String. Path: $.edges[0].sourceNodeId | LineNumber: 0 | BytePositionInLine: 112."
+            "The document's nodes or edges are not in the ild-loop-template/v2 shape: ",
+            true
         },
         {
             $$"""{"$schema":"ild-loop-template/v2","name":"","recoveryPolicy":"AutoResume",{{Graph}}}""",
-            "The Name field is required."
+            "The Name field is required.",
+            false
         },
         {
             $$"""{"$schema":"ild-loop-template/v2","name":7,"recoveryPolicy":"AutoResume",{{Graph}}}""",
-            "The Name field is required."
+            "The Name field is required.",
+            false
         },
     };
 
     [Theory]
     [MemberData(nameof(Refusals))]
-    public void A_document_a_save_cannot_read_is_refused_with_what_is_wrong(string document, string error)
+    public void A_document_a_save_cannot_read_is_refused_with_what_is_wrong(string document, string error, bool onlyTheStartIsPinned)
     {
         var result = Manager.CheckProposedDocument(document);
 
-        Assert.Equal(error, result.Error);
+        if (onlyTheStartIsPinned) Assert.StartsWith(error, result.Error);
+        else Assert.Equal(error, result.Error);
         Assert.Null(result.Request);
         Assert.Null(result.Document);
         Assert.Empty(result.ValidationErrors);
+    }
+
+    public static TheoryData<string, string> OversizedOrAmbiguous => new()
+    {
+        { "name over 256", $$"""{"$schema":"ild-loop-template/v2","name":"{{new string('n', 257)}}","recoveryPolicy":"AutoResume",{{Graph}}}""" },
+        { "description over 8192", $$"""{"$schema":"ild-loop-template/v2","name":"x","description":"{{new string('d', 8193)}}","recoveryPolicy":"AutoResume",{{Graph}}}""" },
+        { "a key given twice", $$"""{"name":"Twice","$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"AutoResume",{{Graph}}}""" },
+    };
+
+    [Theory]
+    [MemberData(nameof(OversizedOrAmbiguous))]
+    public void A_document_with_an_oversized_field_or_a_repeated_key_is_refused(string _, string document)
+    {
+        var result = Manager.CheckProposedDocument(document);
+
+        Assert.False(string.IsNullOrWhiteSpace(result.Error), "the refusal gives no reason");
+        Assert.Null(result.Request);
+        Assert.Null(result.Document);
     }
 
     [Fact]

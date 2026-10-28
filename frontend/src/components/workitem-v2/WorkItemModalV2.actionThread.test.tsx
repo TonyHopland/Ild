@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, within, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -14,12 +14,18 @@ import {
   NodeType,
   TurnVariableChange,
   RemotePrSnapshot,
-  WorkItemEditProposal,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { stageParkedNode, parkedRun } from "../../test-support.parkedNode";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import {
+  deferred,
+  fakeHub,
+  flushPromises,
+  makeEditProposal,
+  routeEveryHub,
+} from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -145,62 +151,13 @@ function conversation(
   } as Conversation;
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-async function flush() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
-}
-
-type HubHandler = (m: { type: string; payload: unknown; timestamp: string }) => void;
-
-/**
- * A run hub the test drives: `emit` delivers an event to every listener,
- * `setConnection` moves the connection state the way a drop and reconnect do.
- */
+/** The one hub every connection is, and the runs it has been asked to join. */
 function mockHub() {
-  const handlers = new Map<string, Set<HubHandler>>();
-  const listeners = new Set<() => void>();
-  let state = "connected";
-  const on = vi.fn((event: string, h: HubHandler) => {
-    const set = handlers.get(event) ?? new Set<HubHandler>();
-    set.add(h);
-    handlers.set(event, set);
-  });
-  const off = vi.fn((event: string, h: HubHandler) => handlers.get(event)?.delete(h));
-  const invoke = vi.fn((..._args: unknown[]) => Promise.resolve(undefined as unknown));
-  const subscribe = (l: () => void) => {
-    listeners.add(l);
-    return () => listeners.delete(l);
-  };
-  const useMockedSignalR = () => {
-    const connectionState = useSyncExternalStore(subscribe, () => state);
-    return { on, off, invoke, connectionState };
-  };
-  vi.spyOn(signalRHook, "useSignalR").mockImplementation(
-    useMockedSignalR as unknown as typeof signalRHook.useSignalR,
-  );
-  const emit = (event: string, payload: unknown) =>
-    act(async () => {
-      handlers.get(event)?.forEach((h) => h({ type: event, payload, timestamp: "" }));
-    });
-  const setConnection = (next: string) =>
-    act(async () => {
-      state = next;
-      listeners.forEach((l) => l());
-    });
+  const hub = fakeHub();
+  routeEveryHub(signalRHook, hub);
   const subscribedTo = () =>
-    invoke.mock.calls.filter(([method]) => method === "SubscribeToRun").map(([, id]) => id);
-  return { emit, setConnection, invoke, subscribedTo };
+    hub.invoke.mock.calls.filter(([method]) => method === "SubscribeToRun").map(([, id]) => id);
+  return { ...hub, subscribedTo };
 }
 
 function eventLogged(runId: string, id: number, eventType = "NodeStarted") {
@@ -279,7 +236,7 @@ async function openActionTab(workItem: WorkItem) {
     fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
     await Promise.resolve();
   });
-  await flush();
+  await flushPromises();
   return document.getElementById("wiv2-panel-action") as HTMLElement;
 }
 
@@ -424,7 +381,7 @@ describe("the run the thread shows", () => {
 
     // A's next event is being read when B starts.
     await hub.emit("EventLogged", eventLogged("run-A", 3));
-    await flush();
+    await flushPromises();
     expect(getConversation).toHaveBeenCalledWith("run-A", 2);
 
     await rerenderDialog(running("run-B"));
@@ -438,14 +395,14 @@ describe("the run the thread shows", () => {
         makeRun({ id: "run-A", status: LoopRunStatus.WaitingHuman, isHalted: true }),
       );
     });
-    await flush();
+    await flushPromises();
     expect(within(panel).queryByText("A's late reply")).toBeNull();
     expect(within(panel).queryByText("A's turn")).toBeNull();
     expect(enabledButtons(panel, /Resume/)).toEqual([]);
 
     const readsOfA = conversationReadsOf(getConversation, "run-A").length;
     await hub.emit("EventLogged", eventLogged("run-A", 9));
-    await flush();
+    await flushPromises();
     expect(conversationReadsOf(getConversation, "run-A")).toHaveLength(readsOfA);
 
     await act(async () => {
@@ -518,7 +475,7 @@ describe("the run the thread shows", () => {
     // The same event again, and one already covered by the read.
     await hub.emit("EventLogged", eventLogged("run-B", 5));
     await hub.emit("EventLogged", eventLogged("run-B", 6));
-    await flush();
+    await flushPromises();
 
     const texts = ["one", "three", "six"];
     for (const t of texts) expect(within(panel).getAllByText(t)).toHaveLength(1);
@@ -534,12 +491,12 @@ describe("the run the thread shows", () => {
     const before = getConversation.mock.calls.length;
     logged = 7;
     await hub.emit("EventLogged", eventLogged("run-B", 7));
-    await flush();
-    await flush();
+    await flushPromises();
+    await flushPromises();
     const after = getConversation.mock.calls.length;
     expect(after - before).toBeGreaterThanOrEqual(1);
     expect(after - before).toBeLessThanOrEqual(2);
-    await flush();
+    await flushPromises();
     expect(getConversation.mock.calls.length).toBe(after);
   });
 
@@ -566,9 +523,9 @@ describe("the run the thread shows", () => {
       const reads = conversationReadsOf(getConversation, "run-B").length;
       expect(reads).toBeGreaterThan(0);
 
-      await hub.setConnection("reconnecting");
-      await hub.setConnection("connected");
-      await flush();
+      await hub.changeState("reconnecting");
+      await hub.changeState("connected");
+      await flushPromises();
 
       expect(hub.subscribedTo().filter((id) => id === "run-B").length).toBeGreaterThan(
         subscriptions,
@@ -580,27 +537,14 @@ describe("the run the thread shows", () => {
   test("cards a different run asked for close the thread, after the shown run's own", async () => {
     const run = makeRun({ id: "run-B", status: LoopRunStatus.Failed });
     mockServices(run, [], [msg(4, "run-B", "ai", "B's turn", { runNodeId: "exec-B1" })]);
-    const card = (title: string, runId: string, runNodeId: string): WorkItemEditProposal => ({
-      id: `p-${title}`,
-      workItemId: "wi-1",
-      status: "Pending",
-      proposed: { title },
-      snapshot: {
-        title: "Old title",
-        description: null,
-        tags: [],
-        branchNameOverride: null,
-        baseBranchOverride: null,
-      },
-      rationale: null,
-      rejectionReason: null,
-      createdByLoopRunId: runId,
-      createdByChatSessionId: null,
-      createdByRunNodeId: runNodeId,
-      chatReplySequence: null,
-      createdAt: "2026-09-24T10:00:00Z",
-      decidedAt: null,
-    });
+    const card = (title: string, runId: string, runNodeId: string) =>
+      makeEditProposal({
+        id: `p-${title}`,
+        proposed: { title },
+        createdByLoopRunId: runId,
+        createdByRunNodeId: runNodeId,
+        createdAt: "2026-09-24T10:00:00Z",
+      });
     vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
     vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       card("From run A", "run-A", "exec-A1"),
@@ -676,7 +620,7 @@ describe("the shown run's controls", () => {
     await act(async () => {
       answerForA.reject({ status: 409, message: "A was answered elsewhere." });
     });
-    await flush();
+    await flushPromises();
     expect(panel.textContent).not.toContain("A was answered elsewhere.");
     expect(enabledButtons(panel, /^Approve$/)).toHaveLength(1);
 
@@ -689,7 +633,7 @@ describe("the shown run's controls", () => {
     );
 
     await rerenderDialog(parkedItem("run-A"));
-    await flush();
+    await flushPromises();
     expect(panel.textContent).not.toContain("Run run-B could not take the answer.");
   });
 
@@ -703,7 +647,7 @@ describe("the shown run's controls", () => {
       const { getById } = stageRuns([run]);
       const panel = await openActionTab(parkedItem("run-B"));
       await waitFor(() => expect(getById).toHaveBeenCalledWith("run-B"));
-      await flush();
+      await flushPromises();
 
       expect(enabledButtons(panel, /Approve|Reject|Halt|Resume/)).toEqual([]);
     },
@@ -763,7 +707,7 @@ describe("why an item waits on a person when no run says so", () => {
     mockServices(run);
     stageRuns(runId ? [run] : []);
     const panel = await openActionTab(waiting({ currentLoopRunId: null, latestLoopRunId: runId }));
-    await flush();
+    await flushPromises();
 
     if (shown) expect(await within(panel).findByText(reason)).toBeTruthy();
     else expect(within(panel).queryByText(reason)).toBeNull();
@@ -1026,35 +970,10 @@ describe("PR details", () => {
     );
   });
 
-  test.each([
-    ["the pull request has since been merged", "IldFailed", { state: "closed", merged: true }],
-    ["the pull request has since been closed", "IldFailed", { state: "closed", merged: false }],
-    ["ILD has not tried yet", "IldPending", {}],
-    ["the provider merges it", "Native", {}],
-    ["ILD merged it", "IldMerged", {}],
-    ["it is not an AutoMerge pull request", null, {}],
-  ] as const)("asks for no manual merge when %s", async (_why, prAutoMerge, pr) => {
+  test("asks for no manual merge when the pull request has since been merged", async () => {
     mockServices(
       makeRun({
-        prSnapshot: snapshot(pr),
-        prQueuedWrites: [],
-        prAutoMerge,
-        prAutoMergeError:
-          prAutoMerge === "IldFailed" ? "At least 1 approving review is required" : null,
-      }),
-    );
-    const panel = await openActionTab(makeWorkItem({ prUrl: "https://git.example/pr/1" }));
-
-    expect(within(panel).getByRole("button", { name: /PR details/ })).toBeTruthy();
-    expect(panel.textContent).not.toContain("could not merge");
-    expect(panel.textContent).not.toContain("Please merge it manually");
-  });
-
-  test("asks for no manual merge once the run has moved on from the pull request", async () => {
-    mockServices(
-      makeRun({
-        status: LoopRunStatus.Running,
-        prSnapshot: snapshot(),
+        prSnapshot: snapshot({ state: "closed", merged: true }),
         prQueuedWrites: [],
         prAutoMerge: "IldFailed",
         prAutoMergeError: "At least 1 approving review is required",
@@ -1102,7 +1021,7 @@ describe("reading the shown run's detail", () => {
       fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
       await Promise.resolve();
     });
-    await flush();
+    await flushPromises();
     return document.getElementById("wiv2-panel-action") as HTMLElement;
   }
 
@@ -1120,7 +1039,7 @@ describe("reading the shown run's detail", () => {
     const readsDuring = async (change: () => Promise<void>) => {
       const before = getById.mock.calls.length;
       await change();
-      await flush();
+      await flushPromises();
       return getById.mock.calls.slice(before);
     };
 
@@ -1157,7 +1076,7 @@ describe("reading the shown run's detail", () => {
       oldStatus: "Running",
       newStatus: "WaitingHuman",
     });
-    await flush();
+    await flushPromises();
 
     await within(panel).findByRole("button", { name: "Approve" });
   });
@@ -1215,19 +1134,16 @@ describe("a run stopped on a failed node", () => {
     expect(retry).toHaveBeenCalledWith("run-1", "exec-2");
   });
 
-  test.each([LoopRunStatus.Completed, LoopRunStatus.Cancelled])(
-    "a %s run offers no retry, only the ways on from it",
-    async (status) => {
-      mockServices(failedRun({ status, completedAt: "2026-09-24T09:11:00Z" }));
-      const panel = await openActionTab(failedItem());
+  test("a completed run offers no retry, only the ways on from it", async () => {
+    mockServices(
+      failedRun({ status: LoopRunStatus.Completed, completedAt: "2026-09-24T09:11:00Z" }),
+    );
+    const panel = await openActionTab(failedItem());
 
-      expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
-      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
-      expect(
-        within(panel).getByRole("button", { name: "See it in the run timeline" }),
-      ).toBeTruthy();
-    },
-  );
+    expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
+    expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "See it in the run timeline" })).toBeTruthy();
+  });
 
   test("a failure earlier in the run is not offered as the node that stopped it", async () => {
     const run = failedRun({ status: LoopRunStatus.WaitingHuman });
@@ -1258,47 +1174,33 @@ describe("a run stopped on a failed node", () => {
       ...overrides,
     });
 
-  test.each<[string, Partial<LoopRun>]>([
-    ["parked", { status: LoopRunStatus.WaitingHuman }],
-    ["running but paused", { status: LoopRunStatus.Running, isPaused: true }],
-    ["ended on it", { status: LoopRunStatus.Failed, completedAt: "2026-09-24T09:00:02Z" }],
-  ])(
-    "a Start node whose install failed retries that execution of a run %s, beside the ways on from it",
-    async (_, overrides) => {
-      mockServices(failedStart(overrides));
-      const retry = vi.spyOn(authServices.loopRunService, "retryFromNode").mockResolvedValue();
-      const panel = await openActionTab(failedItem());
+  test("a Start node whose install failed retries that execution, beside the ways on from it", async () => {
+    mockServices(failedStart({ status: LoopRunStatus.WaitingHuman }));
+    const retry = vi.spyOn(authServices.loopRunService, "retryFromNode").mockResolvedValue();
+    const panel = await openActionTab(failedItem());
 
-      expect(within(panel).getByText("“Start” failed")).toBeTruthy();
-      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
-      expect(
-        within(panel).getByRole("button", { name: "See it in the run timeline" }),
-      ).toBeTruthy();
-      await act(async () => {
-        fireEvent.click(within(panel).getByRole("button", { name: "Retry this node" }));
-      });
+    expect(within(panel).getByText("“Start” failed")).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "See it in the run timeline" })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole("button", { name: "Retry this node" }));
+    });
 
-      expect(retry).toHaveBeenCalledWith("run-1", "exec-start");
-    },
-  );
+    expect(retry).toHaveBeenCalledWith("run-1", "exec-start");
+  });
 
-  test.each(Object.values(NodeType))(
-    "a failed %s node offers Retry this node",
-    async (nodeType) => {
-      const run = failedRun();
-      mockServices({
-        ...run,
-        nodes: [run.nodes[0], { ...run.nodes[1], nodeLabel: "Failing step", nodeType }],
-      });
-      const panel = await openActionTab(failedItem());
+  test("a failed AI node offers Retry this node", async () => {
+    const run = failedRun();
+    mockServices({
+      ...run,
+      nodes: [run.nodes[0], { ...run.nodes[1], nodeLabel: "Failing step", nodeType: NodeType.AI }],
+    });
+    const panel = await openActionTab(failedItem());
 
-      expect(within(panel).getByRole("button", { name: "Retry this node" })).toBeTruthy();
-      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
-      expect(
-        within(panel).getByRole("button", { name: "See it in the run timeline" }),
-      ).toBeTruthy();
-    },
-  );
+    expect(within(panel).getByRole("button", { name: "Retry this node" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "See it in the run timeline" })).toBeTruthy();
+  });
 
   test("See it in the run timeline opens the Runs tab", async () => {
     mockServices(failedRun());

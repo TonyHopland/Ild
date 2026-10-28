@@ -15,8 +15,21 @@ namespace ILD.Tests.Integration;
 /// is sitting safely in a database nobody can currently reach, and a delete
 /// answered 204 or 404 would have them believe it is gone.
 /// </summary>
-public class WorkItemAttachmentOutageTests
+public sealed class WorkItemAttachmentOutageTests : IClassFixture<WorkItemAttachmentOutageTests.Host>
 {
+    public sealed class Host : IAsyncLifetime
+    {
+        public ApiFactory Factory { get; } = UnreachableWorkItemServer();
+
+        public ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+        public async ValueTask DisposeAsync() => await Factory.DisposeAsync();
+    }
+
+    private readonly ApiFactory _factory;
+
+    public WorkItemAttachmentOutageTests(Host host) => _factory = host.Factory;
+
     private const string WorkItemId = "42";
 
     /// <summary>An ILD API whose WorkItem server refuses every attachment call the way a dead one does.</summary>
@@ -47,7 +60,7 @@ public class WorkItemAttachmentOutageTests
     [Fact]
     public async Task Listing_attachments_while_the_server_is_unreachable_is_reported_as_the_outage()
     {
-        await using var factory = UnreachableWorkItemServer();
+        var factory = _factory;
         var client = await factory.CreateAuthenticatedClientAsync();
 
         await AssertReportsTheOutageAsync(await client.GetAsync($"/api/v1/workitems/{WorkItemId}/attachments", TestContext.Current.CancellationToken));
@@ -56,7 +69,7 @@ public class WorkItemAttachmentOutageTests
     [Fact]
     public async Task Uploading_while_the_server_is_unreachable_is_reported_as_the_outage_and_not_as_a_refusal()
     {
-        await using var factory = UnreachableWorkItemServer();
+        var factory = _factory;
         var client = await factory.CreateAuthenticatedClientAsync();
 
         using var body = AttachmentUpload.Of("sketch.png", "image/png", Encoding.UTF8.GetBytes("a sketch"));
@@ -66,7 +79,7 @@ public class WorkItemAttachmentOutageTests
     [Fact]
     public async Task Downloading_while_the_server_is_unreachable_is_reported_as_the_outage()
     {
-        await using var factory = UnreachableWorkItemServer();
+        var factory = _factory;
         var client = await factory.CreateAuthenticatedClientAsync();
 
         await AssertReportsTheOutageAsync(
@@ -76,7 +89,7 @@ public class WorkItemAttachmentOutageTests
     [Fact]
     public async Task Deleting_while_the_server_is_unreachable_is_the_outage_and_never_a_404()
     {
-        await using var factory = UnreachableWorkItemServer();
+        var factory = _factory;
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var resp = await client.DeleteAsync($"/api/v1/workitems/{WorkItemId}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
@@ -88,7 +101,7 @@ public class WorkItemAttachmentOutageTests
     [Fact]
     public async Task An_agent_downloading_while_the_server_is_unreachable_is_told_so_too()
     {
-        await using var factory = UnreachableWorkItemServer();
+        var factory = _factory;
         var client = await factory.CreateAuthenticatedClientAsync();
 
         await AssertReportsTheOutageAsync(

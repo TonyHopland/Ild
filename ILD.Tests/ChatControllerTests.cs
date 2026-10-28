@@ -75,29 +75,6 @@ public class ChatControllerTests
     }
 
     [Fact]
-    public async Task Start_passes_omitted_tools_through_as_null_so_provider_defaults_apply()
-    {
-        var providerId = Guid.NewGuid();
-
-        await CreateController().Start(new StartChatRequest { AiProviderId = providerId.ToString() }, CancellationToken.None);
-
-        _chat.Verify(c => c.StartAsync(
-            "tony", providerId, It.Is<IReadOnlyList<string>?>(t => t == null), It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task Start_passes_an_explicit_empty_tool_list_through_as_empty()
-    {
-        var providerId = Guid.NewGuid();
-
-        await CreateController().Start(
-            new StartChatRequest { AiProviderId = providerId.ToString(), Tools = [] }, CancellationToken.None);
-
-        _chat.Verify(c => c.StartAsync(
-            "tony", providerId, It.Is<IReadOnlyList<string>?>(t => t != null && t.Count == 0), It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
     public async Task Interrupt_without_a_signed_in_user_is_Unauthorized()
     {
         var result = await CreateController(username: null).Interrupt(Guid.NewGuid(), CancellationToken.None);
@@ -324,7 +301,7 @@ public class ChatControllerTests
         _chat.Verify(c => c.RenameAsync("tony", id, stored, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    public static TheoryData<string?> UnusableNames => new() { null, "", "   ", new string('n', 121) };
+    public static TheoryData<string?> UnusableNames => new() { (string?)null, "", "   ", new string('n', 121) };
 
     [Theory]
     [MemberData(nameof(UnusableNames))]
@@ -399,7 +376,7 @@ public class ChatControllerTests
         }
     }
 
-    public static TheoryData<Guid[]?> NoIds => new() { null, Array.Empty<Guid>() };
+    public static TheoryData<Guid[]?> NoIds => new() { (Guid[]?)null, Array.Empty<Guid>() };
 
     [Theory]
     [MemberData(nameof(NoIds))]

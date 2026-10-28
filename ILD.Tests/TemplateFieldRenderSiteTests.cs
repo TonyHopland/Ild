@@ -6,6 +6,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -27,18 +28,6 @@ namespace ILD.Tests;
 public class TemplateFieldRenderSiteTests
 {
     private const string Title = "Fix the widget";
-
-    /// <summary>
-    /// Stand-in renderer resolving the two placeholders these tests exercise,
-    /// which is enough to tell "the site rendered" from "the site did not".
-    /// </summary>
-    private sealed class FakeRendering : IPromptRenderingService
-    {
-        public Task<string> RenderAsync(string? template, Guid runId, WorkItemView workItem, string? previousNodeOutput)
-            => Task.FromResult((template ?? string.Empty)
-                .Replace("{{WorkItem.Title}}", workItem.Title)
-                .Replace("{{Node.Input}}", previousNodeOutput ?? string.Empty));
-    }
 
     private static WorkItemView Wi(Guid? repositoryId = null) => new()
     {
@@ -78,23 +67,6 @@ public class TemplateFieldRenderSiteTests
 
     // ---- 1. AI node prompt -------------------------------------------------
 
-    /// <summary>Adapter that records the prompt it was handed and returns a fixed reply.</summary>
-    private sealed class CapturingAdapter : IAgentAdapter
-    {
-        public string? SeenPrompt { get; private set; }
-        public string Name => "capture";
-        public string[] SupportedProviderTypes => ["stub"];
-        public ConfigFieldDescriptor[] ConfigSchema => [];
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            SeenPrompt = context.Prompt;
-            return Task.FromResult(NodeExecutionResult.Ok("done"));
-        }
-    }
-
     [Fact]
     public async Task AI_node_renders_its_prompt_before_handing_it_to_the_adapter()
     {
@@ -114,8 +86,7 @@ public class TemplateFieldRenderSiteTests
         var services = BaseServices(Wi());
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(Mock.Of<ILoopRunStore>());
-        services.AddSingleton(Mock.Of<IAgentAdapterRegistry>(r =>
-            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter)));
+        services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
 
         await RunAsync(
             new AINodeExecutor(),
@@ -123,7 +94,7 @@ public class TemplateFieldRenderSiteTests
             new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1" },
             services.BuildServiceProvider());
 
-        Assert.Equal($"Work on {Title}", adapter.SeenPrompt);
+        Assert.Equal($"Work on {Title}", adapter.Captured?.Prompt);
     }
 
     // ---- 2. Prompt node ----------------------------------------------------

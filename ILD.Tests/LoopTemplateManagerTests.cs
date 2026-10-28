@@ -346,7 +346,7 @@ public class LoopTemplateManagerTests
         var result = new LoopTemplateManager(Mock.Of<ILoopTemplateStore>()).CheckProposedDocument(
             """{"$schema":"ild-loop-template/v2","name":"","recoveryPolicy":"AutoResume","nodes":[null],"edges":[]}""");
 
-        Assert.Equal("The Name field is required.", result.Error);
+        Assert.Contains(nameof(LoopTemplateCreateRequest.Name), result.Error, StringComparison.Ordinal);
         Assert.Null(result.Request);
         Assert.Null(result.Document);
         Assert.Empty(result.ValidationErrors);

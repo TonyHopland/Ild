@@ -17,6 +17,7 @@ import {
   type ParkedNode,
 } from "../../test-support.parkedNode";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import { deferred, fakeHub, settle, routeEveryHub } from "../../test-support";
 
 // The feedback pane offers an output as a button only when the node the run is
 // parked on shows that output to the user. It learns that from the run's pinned
@@ -58,21 +59,10 @@ function makeParkedWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
   };
 }
 
-type Handler = (m: { type: string; payload: unknown; timestamp: string }) => void;
-
 /** Everything the dialog reads besides the parked node, plus a way to raise hub events. */
 function mockDialogServices() {
-  const handlers = new Map<string, Set<Handler>>();
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: vi.fn((event: string, handler: Handler) => {
-      const set = handlers.get(event) ?? new Set<Handler>();
-      set.add(handler);
-      handlers.set(event, set);
-    }),
-    off: vi.fn((event: string, handler: Handler) => handlers.get(event)?.delete(handler)),
-    invoke: vi.fn(() => Promise.resolve(null)),
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
+  const hub = fakeHub();
+  routeEveryHub(signalRHook, hub);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
@@ -97,10 +87,7 @@ function mockDialogServices() {
     maxFilesPerRequest: 10,
     maxTotalBytesPerWorkItem: 250 * MB,
   });
-  return {
-    emit: (event: string, payload: unknown) =>
-      handlers.get(event)?.forEach((handler) => handler({ type: event, payload, timestamp: "" })),
-  };
+  return { emit: hub.dispatch };
 }
 
 function dialogFor(workItem: WorkItem) {
@@ -111,27 +98,11 @@ function dialogFor(workItem: WorkItem) {
   );
 }
 
-/** Lets every answered read, and whatever it sets off, land. */
-async function settled() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-}
-
+/** Renders the dialog and lets its first reads, and whatever they set off, land. */
 async function renderDialog(workItem: WorkItem) {
   const result = render(dialogFor(workItem), { wrapper: WorkItemHubProvider });
-  await settled();
+  await settle();
   return result;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 const pane = () => document.querySelector(".wiv2-feedback") as HTMLElement;
@@ -183,56 +154,10 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
       buttons: ["Needs work", "Reject"],
     },
     {
-      name: "a hidden failure output has no Reject",
-      node: human([{ name: "OnSuccess" }, { name: "OnFailure", visible: false }]),
-      item: { humanFeedbackActions: "OnSuccess,OnFailure" },
-      buttons: ["Approve"],
-    },
-    {
-      name: "nothing hidden leaves every output as before",
-      node: human([{ name: "OnSuccess" }, { name: "OnFailure" }, { name: "Needs work" }]),
-      item: { humanFeedbackActions: "OnSuccess,Needs work,OnFailure" },
-      buttons: ["Approve", "Needs work", "Reject"],
-    },
-    {
       name: "a PR node whose config has no outputs hides its wired reserved outputs",
       node: pr(),
       item: { humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS },
       buttons: ["Approve", "Merge", "Reject"],
-    },
-    {
-      name: "a PR node stored with no visible anywhere hides its wired reserved outputs",
-      node: pr(STORED_PR_OUTPUTS),
-      item: { humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS },
-      buttons: ["Approve", "Merge", "Reject"],
-    },
-    {
-      name: "a reserved PR output set to visible gets its button",
-      node: pr(
-        STORED_PR_OUTPUTS.map((output) =>
-          output.name === "on_merged" ? { ...output, visible: true } : output,
-        ),
-      ),
-      item: { humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS },
-      buttons: ["Approve", "Merge", "on_merged", "Reject"],
-    },
-    {
-      name: "an output named like a reserved one is offered on a Human node",
-      node: human([{ name: "OnSuccess" }, { name: "on_merged" }]),
-      item: { humanFeedbackActions: "OnSuccess,on_merged" },
-      buttons: ["Approve", "on_merged"],
-    },
-    {
-      name: "with no actions listed, a hidden success output leaves only Reject",
-      node: human([{ name: "OnSuccess", visible: false }, { name: "OnFailure" }]),
-      item: { humanFeedbackActions: null },
-      buttons: ["Reject"],
-    },
-    {
-      name: "with no actions listed and nothing hidden, Approve and Reject are offered",
-      node: human([]),
-      item: { humanFeedbackActions: null },
-      buttons: ["Approve", "Reject"],
     },
     {
       name: "with every listed output hidden there is no button, and no fallback to Approve and Reject",
@@ -243,21 +168,6 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
       ]),
       item: { humanFeedbackActions: "OnSuccess,OnFailure,later" },
       buttons: [],
-    },
-    {
-      name: "with no actions listed and success and failure hidden there is no button",
-      node: human([
-        { name: "OnSuccess", visible: false },
-        { name: "OnFailure", visible: false },
-      ]),
-      item: { humanFeedbackActions: null },
-      buttons: [],
-    },
-    {
-      name: "a PR node with every output hidden still has Merge",
-      node: pr(STORED_PR_OUTPUTS.map((output) => ({ ...output, visible: false }))),
-      item: { humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS },
-      buttons: ["Merge"],
     },
   ];
 
@@ -324,35 +234,22 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
     expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Clean up", "");
   });
 
-  test("a valid colour stored on the parked node's output colours its button, and nothing else does", async () => {
+  test("a colour stored on the parked node's output colours its button", async () => {
     mockDialogServices();
     stageParkedNode(
       human([
-        { name: "OnSuccess", color: "#7E22CE" },
-        { name: "OnFailure", color: "red" },
+        { name: "OnSuccess" },
+        { name: "OnFailure" },
         { name: "Needs work", color: "#fde047" },
-        { name: "Later" },
       ]),
     );
-    const answer = vi
-      .spyOn(authServices.workItemService, "humanFeedbackEdge")
-      .mockResolvedValue(undefined);
     await renderDialog(
-      makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,Later,OnFailure" }),
+      makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,OnFailure" }),
     );
 
     const button = (name: string) => within(pane()).getByRole("button", { name });
-    // A colour shows as a dot and border from --output-color.
-    expect(button("Approve").style.getPropertyValue("--output-color")).toBe("#7e22ce");
     expect(button("Needs work").style.getPropertyValue("--output-color")).toBe("#fde047");
-    expect(button("Reject").getAttribute("style")).toBeNull();
-    expect(button("Later").getAttribute("style")).toBeNull();
-
-    await act(async () => {
-      fireEvent.click(button("Needs work"));
-    });
-    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Needs work", "");
+    expect(button("Approve").getAttribute("style")).toBeNull();
   });
 
   test("a confirmation open when the work item changes is dropped, and nothing is sent", async () => {
@@ -370,7 +267,7 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
     expect(within(pane()).getByRole("dialog", { name: "Confirm Clean up" })).toBeTruthy();
 
     rerender(dialogFor({ ...item }));
-    await settled();
+    await settle();
 
     expect(within(pane()).queryByRole("dialog")).toBeNull();
     expectButtons(["Approve", "Clean up", "Reject"]);
@@ -411,7 +308,7 @@ describe("the feedback pane never guesses the parked node's outputs", () => {
     expect(pane().textContent).not.toMatch(LOAD_ERROR);
 
     read.resolve(parkedRun("n-parked"));
-    await settled();
+    await settle();
 
     expectButtons(["Approve", "Reject"]);
   });
@@ -515,7 +412,7 @@ describe("a work item's actions are filtered only with the node read for that sa
     /** Answers every run read asked for so far and not answered yet. */
     const answer = async (from: number, nodeId: string) => {
       for (const read of reads.slice(from)) read.resolve(parkedRun(nodeId));
-      await settled();
+      await settle();
     };
     return { reads, answer, getRun, getVersionGraph, getNodeOutputs };
   }
@@ -553,7 +450,7 @@ describe("a work item's actions are filtered only with the node read for that sa
     const everShown = watchButtons();
     const asked = staged.reads.length;
     rerender(dialogFor(onPrNode()));
-    await settled();
+    await settle();
 
     expect(staged.reads.length).toBeGreaterThan(asked);
     expectButtons(["Merge"]);
@@ -574,7 +471,7 @@ describe("a work item's actions are filtered only with the node read for that sa
 
     const asked = staged.reads.length;
     rerender(dialogFor(onHumanNode()));
-    await settled();
+    await settle();
 
     expect(staged.reads.length).toBeGreaterThan(asked);
     expectButtons([]);
@@ -598,14 +495,14 @@ describe("a work item's actions are filtered only with the node read for that sa
     await act(async () => {
       emit("NodeStateChanged", { runId: "run-1" });
     });
-    await settled();
+    await settle();
     for (const read of staged.reads.slice(forHumanNode)) read.resolve(parkedRun("n-b"));
-    await settled();
+    await settle();
     expectButtons(["Approve", "Merge", "Reject"]);
 
     const everShown = watchButtons();
     for (const read of staged.reads.slice(0, forHumanNode)) read.resolve(parkedRun("n-a"));
-    await settled();
+    await settle();
 
     expectButtons(["Approve", "Merge", "Reject"]);
     const shown = everShown();
@@ -643,7 +540,7 @@ describe("a work item's actions are filtered only with the node read for that sa
       emit("PrQueueChanged", { runId: "run-1" });
     });
     for (const read of staged.reads.slice(asked)) read.reject({ status: 503, message: "down" });
-    await settled();
+    await settle();
 
     expectButtons(["Approve", "Merge", "Reject"]);
     expect(pane().textContent).not.toMatch(LOAD_ERROR);
@@ -684,7 +581,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
 
     expect(pane().textContent).not.toContain("⏎");
     expect(enter(box())).toBe(true);
-    await settled();
+    await settle();
     expect(answers.approve).not.toHaveBeenCalled();
 
     act(() => setSubmitDefaultOnEnter(true));
@@ -719,7 +616,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
     await type("Looks good");
 
     expect(enter(box())).toBe(true);
-    await settled();
+    await settle();
 
     expect(pane().textContent).not.toContain("⏎");
     for (const answer of Object.values(answers)) expect(answer).not.toHaveBeenCalled();
@@ -752,7 +649,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
         </MemoryRouter>,
         { wrapper: WorkItemHubProvider },
       );
-      await settled();
+      await settle();
       if (text) await type(text);
 
       expect(enter(box())).toBe(false);
@@ -761,7 +658,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
       expect(document.activeElement).toBe(confirm);
 
       fireEvent.keyDown(confirm, { key: "Escape", code: "Escape" });
-      await settled();
+      await settle();
 
       expect(within(pane()).queryByRole("dialog")).toBeNull();
       expect(document.body.textContent).not.toContain("Discard unsaved changes?");

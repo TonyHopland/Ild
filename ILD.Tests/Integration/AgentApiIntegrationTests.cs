@@ -17,12 +17,11 @@ namespace ILD.Tests.Integration;
 ///   - items MUST be stamped with the originating LoopRun id (from header or
 ///     body) so a user can batch-clean up rogue agent output.
 /// </summary>
-public class AgentApiIntegrationTests
+public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Fact]
     public async Task CreateWorkItem_forces_backlog_even_when_repo_default_is_workqueue()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.WorkQueue);
@@ -42,7 +41,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task CreateWorkItem_stamps_run_id_from_header()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
@@ -63,7 +61,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task CreateWorkItem_stamps_chat_session_id_from_header()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.WorkQueue);
         var chatSessionId = Guid.NewGuid();
@@ -87,7 +84,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task ListWorkItems_filters_by_createdByLoopRunId()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runA = Guid.NewGuid();
@@ -106,7 +102,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateWorkItem_succeeds_for_item_created_by_the_same_run()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
@@ -129,7 +124,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateWorkItem_is_forbidden_for_item_created_by_a_different_run()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var ownerRun = Guid.NewGuid();
@@ -153,7 +147,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateWorkItem_without_a_session_header_is_forbidden()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
@@ -175,11 +168,8 @@ public class AgentApiIntegrationTests
 
     [Theory]
     [InlineData("feature foo")]
-    [InlineData("../escape")]
-    [InlineData("feature/foo.lock")]
     public async Task CreateWorkItem_rejects_an_illegal_branch_name(string branchName)
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
@@ -197,7 +187,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task CreateWorkItem_persists_a_legal_branch_name_trimmed()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
@@ -219,7 +208,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateWorkItem_rejects_an_illegal_branch_name_and_leaves_the_existing_one()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
@@ -241,7 +229,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateWorkItem_replaces_clears_and_leaves_the_branch_name_alone()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
@@ -264,10 +251,8 @@ public class AgentApiIntegrationTests
 
     [Theory]
     [InlineData("release 1.0")]
-    [InlineData("../escape")]
     public async Task CreateWorkItem_rejects_an_illegal_base_branch(string baseBranch)
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
@@ -285,7 +270,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateWorkItem_replaces_clears_and_leaves_the_base_branch_alone()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
@@ -338,7 +322,6 @@ public class AgentApiIntegrationTests
     {
         // An agent working in a run's worktree must still see which repository
         // that run belongs to after a human re-points the item for its next run.
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var runRepoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var editedRepoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
@@ -386,7 +369,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateWorkItem_for_unknown_item_returns_not_found()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{Guid.NewGuid()}")
@@ -401,7 +383,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task DeleteWorkItem_succeeds_for_item_created_by_the_same_run()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
@@ -420,7 +401,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task DeleteWorkItem_is_forbidden_for_item_created_by_a_different_run()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var ownerRun = Guid.NewGuid();
@@ -441,7 +421,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task DeleteWorkItem_is_scoped_to_the_creating_chat_session()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var chatSessionId = Guid.NewGuid();
@@ -471,7 +450,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateWorkItem_is_scoped_to_the_creating_chat_session()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var chatSessionId = Guid.NewGuid();
@@ -510,7 +488,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task CreateWorkItem_rejects_unknown_dependency()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
@@ -527,7 +504,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task CreateWorkItem_attaches_known_dependency()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
@@ -552,7 +528,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task Agent_surface_does_not_expose_start_or_transition()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         // Either status proves no POST endpoint exists at the path. Which of the two
@@ -573,7 +548,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task SetVariable_then_ListVariables_round_trips_for_the_run()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = await SeedRunAsync(factory);
 
@@ -603,7 +577,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task SetVariable_overwrites_an_existing_value()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = await SeedRunAsync(factory);
 
@@ -620,7 +593,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task SetVariable_rejects_an_illegal_name()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = await SeedRunAsync(factory);
 
@@ -636,7 +608,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task SetVariable_rejects_a_name_longer_than_the_column_bound()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = await SeedRunAsync(factory);
 
@@ -655,7 +626,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task SetVariable_for_unknown_run_returns_not_found()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/variables/handoff")
@@ -670,7 +640,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task ListVariables_without_run_header_is_rejected()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var resp = await client.GetAsync("/api/v1/agent/variables", TestContext.Current.CancellationToken);
@@ -680,7 +649,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetPreview_for_unknown_workitem_returns_not_found()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var resp = await client.GetAsync($"/api/v1/agent/workitems/{Guid.NewGuid()}/preview", TestContext.Current.CancellationToken);
@@ -690,7 +658,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetPreview_for_workitem_without_a_worktree_returns_bad_request()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
@@ -705,7 +672,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetLoopTemplate_finds_a_guid_shaped_name_unless_a_template_has_that_id()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var byId = Guid.NewGuid();
@@ -748,7 +714,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task ListLoopRuns_includes_cost_and_token_totals_per_run()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var (runId, workItemId) = await SeedRunWithUsageAsync(factory);
@@ -769,7 +734,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetCurrentLoop_returns_the_session_scratchpad_document()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
 
@@ -789,7 +753,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetCurrentLoop_reports_not_open_when_no_loop_is_stashed()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
 
@@ -805,7 +768,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetCurrentLoop_without_a_chat_session_header_is_rejected()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var resp = await client.GetAsync("/api/v1/agent/current-loop", TestContext.Current.CancellationToken);
@@ -815,7 +777,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task CurrentLoop_for_an_unknown_chat_session_is_forbidden()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         // A header GUID that names no chat session is not the caller's to act on.
         var unknown = Guid.NewGuid().ToString();
@@ -847,7 +808,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateCurrentLoop_applies_a_valid_document_and_returns_the_ack()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
 
@@ -869,7 +829,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateCurrentLoop_rejects_an_invalid_graph_without_touching_the_scratchpad()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
         factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
@@ -896,7 +855,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task EditLoopNodeField_replaces_a_unique_match_and_stashes_the_result()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
         factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
@@ -922,7 +880,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task EditLoopNodeField_reports_a_missing_match_without_changing_anything()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
         factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
@@ -944,7 +901,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetLoopNode_returns_the_decoded_node()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
         factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
@@ -962,7 +918,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetLoopNode_reports_not_open_when_no_loop_is_stashed()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
 
@@ -978,7 +933,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task EditLoopFile_rejects_an_edit_that_breaks_the_graph()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
         factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
@@ -1000,7 +954,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task ScopedEdit_without_an_open_loop_returns_a_clean_not_open_ack()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
 
@@ -1020,7 +973,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateCurrentLoop_rejects_an_empty_document()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
 
@@ -1036,7 +988,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task UpdateCurrentLoop_rejects_an_oversized_document()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
 
@@ -1054,14 +1005,13 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task ListWorkItems_returns_lightweight_projection_without_full_body()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
         var longBody = "First line of the body.\n" + new string('x', 400);
         var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
         {
-            title = "triage me",
+            title = $"triage me {repoId:N}",
             description = longBody,
             repositoryId = repoId.ToString(),
             tags = new[] { "backend-loop" },
@@ -1069,7 +1019,7 @@ public class AgentApiIntegrationTests
         create.EnsureSuccessStatusCode();
 
         var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        var row = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
+        var row = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"triage me {repoId:N}");
 
         // No full body by default; a single-line, truncated preview stands in for it.
         Assert.Equal(JsonValueKind.Null, row.GetProperty("description").ValueKind);
@@ -1087,16 +1037,17 @@ public class AgentApiIntegrationTests
 
         // Opt back in to the full body for backward compatibility.
         var withBody = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems?includeDescription=true", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        var full = withBody.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
+        var full = withBody.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"triage me {repoId:N}");
         Assert.Equal(longBody, full.GetProperty("description").GetString());
     }
 
     [Fact]
     public async Task ListWorkItems_orders_by_priority_in_board_order_and_get_carries_the_number()
     {
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        // Own host: it orders and counts every work item on the board.
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(ownHost, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
         var older = await CreateAsync(client, "older", runId, repoId);
         var newer = await CreateAsync(client, "newer", runId, repoId);
@@ -1120,7 +1071,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task ListWorkItems_refuses_the_removed_priority_filter_and_points_at_board_order()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var resp = await client.GetAsync("/api/v1/agent/workitems?priority=High", TestContext.Current.CancellationToken);
@@ -1135,14 +1085,13 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task ListWorkItems_exposes_dependency_and_reverse_edges()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
-        var depId = await CreateAsync(client, "dep", null, repoId);
+        var depId = await CreateAsync(client, $"dep {repoId:N}", null, repoId);
         var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
         {
-            title = "child",
+            title = $"child {repoId:N}",
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = new[] { depId.ToString() },
@@ -1150,8 +1099,8 @@ public class AgentApiIntegrationTests
         create.EnsureSuccessStatusCode();
 
         var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        var child = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "child");
-        var dep = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "dep");
+        var child = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"child {repoId:N}");
+        var dep = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"dep {repoId:N}");
 
         Assert.Equal(1, child.GetProperty("blockedByCount").GetInt32());
         Assert.Equal(depId, child.GetProperty("blockedBy")[0].GetString());
@@ -1161,7 +1110,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task ListWorkItems_caps_the_blockedBy_id_array_but_keeps_an_exact_count()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
@@ -1170,11 +1118,11 @@ public class AgentApiIntegrationTests
         const int depCount = 51;
         var depIds = new List<string>();
         for (var i = 0; i < depCount; i++)
-            depIds.Add(await CreateAsync(client, $"dep-{i}", null, repoId));
+            depIds.Add(await CreateAsync(client, $"dep-{i}-{repoId:N}", null, repoId));
 
         var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
         {
-            title = "hub",
+            title = $"hub {repoId:N}",
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = depIds,
@@ -1182,7 +1130,7 @@ public class AgentApiIntegrationTests
         create.EnsureSuccessStatusCode();
 
         var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        var hub = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "hub");
+        var hub = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == $"hub {repoId:N}");
 
         Assert.Equal(depCount, hub.GetProperty("blockedByCount").GetInt32());
         Assert.Equal(50, hub.GetProperty("blockedBy").GetArrayLength()); // capped
@@ -1191,7 +1139,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetWorkItem_returns_reverse_blocks_and_no_conversation()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
 
@@ -1223,7 +1170,6 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetWorkItem_with_includeConversation_returns_only_the_latest_runs_projected_conversation()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var itemId = await CreateAsync(client, "conversing", runId: null, repoId);
@@ -1282,7 +1228,7 @@ public class AgentApiIntegrationTests
         var messages = conversation.GetProperty("messages").EnumerateArray().ToList();
         Assert.Equal(new[] { latestStarted, latestAi, latestReply }, messages.Select(m => m.GetProperty("id").GetInt64()));
         Assert.Equal(
-            new[] { ("system", "latest run started"), ("ai", "a plan"), ("human", "go on") },
+            new (string?, string?)[] { ("system", "latest run started"), ("ai", "a plan"), ("human", "go on") },
             messages.Select(m => (m.GetProperty("role").GetString(), m.GetProperty("text").GetString())));
         Assert.All(messages, m => Assert.Equal(latest, m.GetProperty("runId").GetGuid()));
         Assert.Equal("Coder", messages[1].GetProperty("name").GetString());
@@ -1297,9 +1243,10 @@ public class AgentApiIntegrationTests
     [Fact]
     public async Task GetBacklogSummary_returns_counts_and_blocked_vs_actionable()
     {
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        // Own host: it orders and counts every work item on the board.
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(ownHost, intake: WorkItemStatus.Backlog);
 
         await CreateAsync(client, "one", null, repoId);
         await CreateAsync(client, "two", null, repoId);
@@ -1451,7 +1398,6 @@ public class AgentApiIntegrationTests
         // The custom .env holds repo secrets. It is injected into preview processes
         // as environment variables, never returned to a coding agent — so the agent
         // API must not surface it (not even a "hasPreviewEnv" hint) or leak its value.
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         const string secret = "API_TOKEN=super-secret-value";

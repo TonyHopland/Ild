@@ -120,27 +120,6 @@ public class LoopEngineRoutingTests
     }
 
     [Fact]
-    public async Task Fail_without_OnFailure_edge_parks_run_in_HumanFeedback()
-    {
-        using var h = new LoopEngineHarness();
-        h.AddNode("a", NodeType.Cmd);
-
-        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
-            new NodeOutcome.NodeStarting("a"),
-            new NodeOutcome.Fail(EdgeType.OnFailure, "boom")));
-
-        h.SeedRun("a");
-        await h.RunAsync();
-
-        var run = h.ReloadRun();
-        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
-        Assert.Null(run.CompletedAt);
-        h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.AtLeastOnce);
-    }
-
-    [Fact]
     public async Task WaitingAction_parks_run_in_WaitingHuman_status()
     {
         using var h = new LoopEngineHarness();

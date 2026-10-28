@@ -9,8 +9,8 @@ namespace ILD.Tests;
 /// <summary>
 /// The MCP configs handed to the Copilot and Claude Code CLIs carry the ILD API
 /// token, so they are written into the agent read root — readable by the agent
-/// group, changeable by the orchestrator only — and the ones a dead process left
-/// behind are swept at startup.
+/// group, changeable by the orchestrator only — deleted with their run, and the
+/// ones a dead process left behind are swept at startup.
 /// </summary>
 public sealed class IldMcpConfigFileTests : IDisposable
 {

@@ -1,17 +1,10 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Remote;
 using ILD.WorkItemServer;
-using ILD.WorkItemServer.Auth;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using RemoteActor = ILD.Core.Services.Remote.WorkItemActor;
 
@@ -24,54 +17,25 @@ namespace ILD.Tests.WorkItemServer;
 /// entry for the field, and ILD's typed client — which takes the actor on every
 /// mutation — sends what the server then records.
 /// </summary>
-public sealed class WorkItemServerHistoryApiTests : IAsyncLifetime
+public sealed class WorkItemServerHistoryApiTests : IClassFixture<WorkItemServerHistoryApiTests.Server>
 {
     private const string ApiKey = "history-test-key";
     private const string ActorHeader = "X-ILD-Actor";
 
-    private readonly SqliteConnection _connection = new("DataSource=:memory:");
-    private WebApplicationFactory<WorkItemServerProgram> _factory = null!;
-    private HttpClient _http = null!;
-    private WorkItemServerClient _client = null!;
+    public sealed class Server() : WorkItemServerFactory(ApiKey);
+
+    private readonly Server _factory;
+    private readonly HttpClient _http;
+    private readonly WorkItemServerClient _client;
     private readonly WorkItemServerOptions _opts = new() { BaseUrl = "http://localhost", ApiKey = ApiKey };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    public ValueTask InitializeAsync()
+    public WorkItemServerHistoryApiTests(Server server)
     {
-        _connection.Open();
-        Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-        _factory = new WebApplicationFactory<WorkItemServerProgram>().WithWebHostBuilder(b =>
-        {
-            b.UseEnvironment("Testing");
-            b.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["WorkItemServer:ApiKeys"] = ApiKey,
-                ["Serilog:WriteToConsole"] = "false",
-            }));
-            b.ConfigureServices(services =>
-            {
-                services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
-                services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
-                var existing = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                if (existing != null) services.Remove(existing);
-                services.AddDbContext<WorkItemServerDbContext>(o =>
-                {
-                    o.UseSqlite(_connection);
-                    o.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
-                });
-            });
-        });
-        _http = _factory.CreateClient();
-        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-        _client = new WorkItemServerClient(_factory.CreateClient());
-        return ValueTask.CompletedTask;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await _factory.DisposeAsync();
-        _connection.Dispose();
+        _factory = server;
+        _http = server.KeyedClient();
+        _client = new WorkItemServerClient(server.CreateClient());
     }
 
     private static string Encode(object actor) => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(actor));
@@ -302,7 +266,7 @@ public sealed class WorkItemServerHistoryApiTests : IAsyncLifetime
         Assert.NotNull(history);
         var newestFirst = history!.Where(e => e.Kind.ToString() == "Changed").ToList();
         Assert.Equal(
-            new (string?, string?, string?, string?, string?)[]
+            new (string, string?, string?, string?, string?)[]
             {
                 ("status", "instance-user", "System", "system: scheduler", null),
                 ("title", "carol", "Chat", $"chat {chat}", null),

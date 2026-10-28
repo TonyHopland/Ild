@@ -5,6 +5,7 @@ using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Dtos;
 using ILD.WorkItemServer.Hosting;
 using ILD.WorkItemServer.Services;
+using ILD.Tests.Fakes;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -61,13 +62,6 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
     {
         await _db.DisposeAsync();
         await _conn.DisposeAsync();
-    }
-
-    private sealed class TestClock : TimeProvider
-    {
-        public DateTime Now;
-        public TestClock(DateTime now) => Now = now;
-        public override DateTimeOffset GetUtcNow() => new(Now, TimeSpan.Zero);
     }
 
     /// <summary>Fails every insert into the history table while armed.</summary>

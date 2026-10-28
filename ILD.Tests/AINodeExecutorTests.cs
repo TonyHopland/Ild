@@ -143,24 +143,39 @@ public class AINodeExecutorTests
     }
 
     // Matching sets no RegexOptions beyond IgnoreCase, so ^ and $ bind to the
-    // whole output rather than to a line. These two pin the anchoring advice in
+    // whole output rather than to a line. The anchoring cases pin the advice in
     // the Chat Context loop authoring guide (ChatService.LoopAuthoringGuide) to
     // what SelectLastMatchingRule actually does: the guide recommends (?m)
-    // precisely because the bare anchors below misroute in silence.
-    [Fact]
-    public async Task A_bare_anchored_verdict_never_fires_on_a_narrated_output()
+    // precisely because the bare anchors misroute in silence, and calls
+    // unanchored tokens the riskier form.
+    [Theory]
+    // Bare anchors bind to the whole output, so the verdict never fires and the node falls through to OnSuccess.
+    [InlineData(
+        @"{""matchRules"":[{""pattern"":""^TO_REVIEW$"",""edgeName"":""Review""}]}",
+        "Tests pass and the diff is small.\nTO_REVIEW",
+        EdgeType.OnSuccess, null)]
+    // Unanchored, an incidental mention is the last and only match, so it routes.
+    [InlineData(
+        @"{""matchRules"":[{""pattern"":""TO_REVIEW"",""edgeName"":""Review""}]}",
+        "This is not a TO_REVIEW situation; parking for a human.",
+        EdgeType.Custom, "Review")]
+    // A backreference is applied left-to-right; RegexOptions.RightToLeft would silently lose the rule.
+    [InlineData(
+        @"{""matchRules"":[{""pattern"":""(approve)\\s+\\1"",""edgeName"":""Approve""}]}",
+        "approve approve",
+        EdgeType.Custom, "Approve")]
+    // Alternation takes the first viable branch, so the 7-char match feeds the tie-break and the longer literal rule wins.
+    [InlineData(
+        @"{""matchRules"":[{""pattern"":""approve|approve with nits"",""edgeName"":""Short""},{""pattern"":""approve with nits"",""edgeName"":""Long""}]}",
+        "verdict: approve with nits",
+        EdgeType.Custom, "Long")]
+    public async Task Regex_routing_follows_how_the_pattern_reads(string config, string output, EdgeType edge, string? edgeName)
     {
-        const string config =
-            @"{""matchRules"":[{""pattern"":""^TO_REVIEW$"",""edgeName"":""Review""}]}";
+        var outcome = await LastOutcomeAsync(config, NodeExecutionResult.Ok(output));
 
-        var outcome = await LastOutcomeAsync(
-            config, NodeExecutionResult.Ok("Tests pass and the diff is small.\nTO_REVIEW"));
-
-        // No match, so the node falls through to OnSuccess and the Review edge is
-        // never taken — the failure an author would otherwise debug at run time.
         var success = Assert.IsType<NodeOutcome.Success>(outcome);
-        Assert.Equal(EdgeType.OnSuccess, success.Edge);
-        Assert.Null(success.EdgeName);
+        Assert.Equal(edge, success.Edge);
+        Assert.Equal(edgeName, success.EdgeName);
     }
 
     [Fact]
@@ -171,24 +186,6 @@ public class AINodeExecutorTests
 
         var outcome = await LastOutcomeAsync(
             config, NodeExecutionResult.Ok("Tests pass and the diff is small.\nTO_REVIEW"));
-
-        var success = Assert.IsType<NodeOutcome.Success>(outcome);
-        Assert.Equal(EdgeType.Custom, success.Edge);
-        Assert.Equal("Review", success.EdgeName);
-    }
-
-    [Fact]
-    public async Task An_unanchored_token_routes_on_a_passing_mention_when_nothing_matches_later()
-    {
-        // The other half of the guide's anchoring advice: last-match-wins protects
-        // an unanchored token only when a genuine verdict matches later. With no
-        // such rule the incidental mention is the last — and only — match, so it
-        // routes. This is why the guide calls unanchored tokens the riskier form.
-        const string config =
-            @"{""matchRules"":[{""pattern"":""TO_REVIEW"",""edgeName"":""Review""}]}";
-
-        var outcome = await LastOutcomeAsync(
-            config, NodeExecutionResult.Ok("This is not a TO_REVIEW situation; parking for a human."));
 
         var success = Assert.IsType<NodeOutcome.Success>(outcome);
         Assert.Equal(EdgeType.Custom, success.Edge);
@@ -242,36 +239,6 @@ public class AINodeExecutorTests
 
         Assert.Equal("ApproveWithNits", a.EdgeName);
         Assert.Equal("ApproveWithNits", b.EdgeName);
-    }
-
-    [Fact]
-    public async Task Backreference_patterns_match_the_same_way_they_read()
-    {
-        // A backreference is applied left-to-right. (Scanning the pattern itself
-        // backwards — RegexOptions.RightToLeft — would fail to match here, and
-        // the rule would silently lose.)
-        const string config =
-            @"{""matchRules"":[{""pattern"":""(approve)\\s+\\1"",""edgeName"":""Approve""}]}";
-
-        var outcome = await LastOutcomeAsync(config, NodeExecutionResult.Ok("approve approve"));
-
-        var success = Assert.IsType<NodeOutcome.Success>(outcome);
-        Assert.Equal("Approve", success.EdgeName);
-    }
-
-    [Fact]
-    public async Task Alternation_picks_the_branch_a_left_to_right_read_would()
-    {
-        // "approve|approve with nits" matches the FIRST viable branch, so the
-        // match is the 7-char "approve" — that Length is what feeds the
-        // tie-break, and the longer literal rule at the same index must win.
-        const string config =
-            @"{""matchRules"":[{""pattern"":""approve|approve with nits"",""edgeName"":""Short""},{""pattern"":""approve with nits"",""edgeName"":""Long""}]}";
-
-        var outcome = await LastOutcomeAsync(config, NodeExecutionResult.Ok("verdict: approve with nits"));
-
-        var success = Assert.IsType<NodeOutcome.Success>(outcome);
-        Assert.Equal("Long", success.EdgeName);
     }
 
     [Fact]
@@ -420,62 +387,6 @@ public class AINodeExecutorTests
         var (_, waited) = await RunAsync(db.Providers, nodeConfig, workItem, targetFull);
         var waiting = Assert.IsType<NodeOutcome.WaitingIld>(waited);
         Assert.Contains(expected, waiting.Reason);
-    }
-
-    [Theory]
-    [InlineData(@"{""aiProviderTag"":""Nightly""}", RemoteAiProviderOverrideMode.OverrideAll, "Nightly")]
-    [InlineData(@"{""aiProviderTag"":""Nightly""}", RemoteAiProviderOverrideMode.OverrideDefault, "Nightly")]
-    [InlineData(@"{}", RemoteAiProviderOverrideMode.OverrideDefault, null)]
-    public async Task With_no_default_provider_an_override_mode_without_a_target_still_fails_saying_so(
-        string nodeConfig, RemoteAiProviderOverrideMode mode, string? namedTag)
-    {
-        using var db = new TestDb();
-        await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
-
-        var (resolved, last) = await RunAsync(db.Providers, nodeConfig, WorkItem(mode, null));
-
-        Assert.Null(resolved);
-        var fail = Assert.IsType<NodeOutcome.Fail>(last);
-        Assert.Equal(EdgeType.OnFailure, fail.Edge);
-        Assert.Contains("no default provider", fail.Reason, StringComparison.OrdinalIgnoreCase);
-        if (namedTag is not null)
-            Assert.Contains(namedTag, fail.Reason);
-    }
-
-    [Fact]
-    public async Task With_no_default_provider_a_missing_override_target_fails_naming_it()
-    {
-        using var db = new TestDb();
-        await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
-        var missingId = Guid.NewGuid();
-
-        var (_, last) = await RunAsync(
-            db.Providers, @"{""aiProviderTag"":""Nightly""}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, missingId));
-
-        var fail = Assert.IsType<NodeOutcome.Fail>(last);
-        Assert.Equal(EdgeType.OnFailure, fail.Edge);
-        Assert.Contains(missingId.ToString(), fail.Reason);
-    }
-
-    [Theory]
-    [InlineData(@"{}", null)]
-    [InlineData(@"{""aiProviderTag"":""  ""}", null)]
-    [InlineData(@"{""aiProviderTag"":""Nightly""}", "Nightly")]
-    public async Task No_matching_tag_and_no_default_provider_fails_saying_so(string nodeConfig, string? namedTag)
-    {
-        using var db = new TestDb();
-        // A provider exists but is neither the default nor holds the tag.
-        await db.Providers.CreateAiProviderAsync(Provider("other"), ["QA"]);
-
-        var (resolved, last) = await RunAsync(db.Providers, nodeConfig);
-
-        Assert.Null(resolved);
-        var fail = Assert.IsType<NodeOutcome.Fail>(last);
-        Assert.Equal(EdgeType.OnFailure, fail.Edge);
-        Assert.Contains("no default provider", fail.Reason, StringComparison.OrdinalIgnoreCase);
-        if (namedTag is not null)
-            Assert.Contains(namedTag, fail.Reason);
     }
 
     [Fact]

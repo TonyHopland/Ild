@@ -1,3 +1,4 @@
+using ILD.Tests.Fakes;
 using System.Net;
 using System.Text;
 using ILD.Core.Services.Implementations;
@@ -18,56 +19,6 @@ namespace ILD.Tests;
 public class RemotePrReviewLedgerPagingTests
 {
     private const string Head = "7e932b3de2ddb0648519528fdffbd6fdd11d1b16";
-
-    private sealed class RoutingHandler : HttpMessageHandler
-    {
-        private readonly List<(Func<string, bool> Match, Func<string> Body)> _rules = new();
-        public List<string> GraphQlBodies { get; } = new();
-        public List<string> Urls { get; } = new();
-        public List<(HttpMethod Method, string Url, string Body)> Bodies { get; } = new();
-
-        private readonly List<(Func<string, bool> Match, Func<string, HttpResponseMessage> Respond)> _urlRules = new();
-
-        public RoutingHandler Map(Func<string, bool> match, Func<string> body)
-        {
-            _rules.Add((match, body));
-            return this;
-        }
-
-        /// <summary>A rule that can see the URL, so a test can answer page 1 and page 2 differently.</summary>
-        public RoutingHandler MapUrl(Func<string, bool> match, Func<string, HttpResponseMessage> respond)
-        {
-            _urlRules.Add((match, respond));
-            return this;
-        }
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var url = request.RequestUri!.ToString();
-            Urls.Add(url);
-            if (request.Content is not null)
-            {
-                var sent = await request.Content.ReadAsStringAsync(cancellationToken);
-                Bodies.Add((request.Method, url, sent));
-                if (url.EndsWith("/graphql", StringComparison.Ordinal))
-                    GraphQlBodies.Add(sent);
-            }
-
-            foreach (var (match, respond) in _urlRules)
-                if (match(url))
-                    return respond(url);
-
-            foreach (var (match, body) in _rules)
-            {
-                if (match(url))
-                    return new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(body(), Encoding.UTF8, "application/json"),
-                    };
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        }
-    }
 
     private static RemoteProviderService CreateService(TestDb db, HttpMessageHandler handler, string type, string url)
     {
@@ -155,8 +106,8 @@ public class RemotePrReviewLedgerPagingTests
         return value is null ? 1 : int.Parse(value["page=".Length..]);
     }
 
-    private static RoutingHandler PagedIssueComments(Func<string, HttpResponseMessage> secondPage) =>
-        new RoutingHandler()
+    private static RoutingHttpHandler PagedIssueComments(Func<string, HttpResponseMessage> secondPage) =>
+        new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
@@ -165,75 +116,59 @@ public class RemotePrReviewLedgerPagingTests
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
     /// <summary>A ledger read where only the thread query behaves differently.</summary>
-    private static RoutingHandler WithThreads(Func<string> graphql) =>
-        new RoutingHandler()
+    private static RoutingHttpHandler WithThreads(Func<string> graphql) =>
+        new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => Comments("4049159495"))
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
             .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), graphql)
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
-    private static async Task<RemotePrReviewLedger> ThreadReadAsync(TestDb db, RoutingHandler handler)
+    private static async Task<RemotePrReviewLedger> ThreadReadAsync(TestDb db, RoutingHttpHandler handler)
         => await CreateService(db, handler, "GitHub", "https://github.com")
             .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
 
-    [Fact]
-    public async Task A_thread_query_the_forge_refuses_is_a_message_rather_than_a_ledger_without_threads()
+    // Half a thread list is not a shorter answer, it is a wrong one: every comment whose thread
+    // went missing comes back keyed by the root of its reply chain and reported unresolved, so a
+    // resolve is aimed at the wrong handle and a settled thread reads as open — under a ledger
+    // that says it succeeded. A pull request with no threads answers with the path and no nodes,
+    // so a missing path is a failure however healthy the status line is.
+    public static TheoryData<string> UnreadableThreadQueries => new()
     {
-        // Half a thread list is not a shorter answer, it is a wrong one: every
-        // comment whose thread went missing comes back keyed by the root of its
-        // reply chain and reported unresolved, so a resolve is aimed at the
-        // wrong handle and a settled thread reads as open — under a ledger that
-        // says it succeeded.
+        "forge_refuses",
+        "graphql_error_with_http_200",
+        "nonsense",
+        "more_to_come_without_a_cursor",
+        "no_thread_endpoint",
+    };
+
+    [Theory]
+    [MemberData(nameof(UnreadableThreadQueries))]
+    public async Task A_thread_query_that_cannot_be_read_is_a_message_rather_than_a_ledger_without_threads(string answer)
+    {
         using var db = new TestDb();
-        var handler = new RoutingHandler()
-            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
-            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => Comments("4049159495"))
-            .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
-            .MapUrl(u => u.EndsWith("/graphql", StringComparison.Ordinal),
-                _ => new HttpResponseMessage(HttpStatusCode.Unauthorized))
-            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+        var handler = answer switch
+        {
+            "forge_refuses" => new RoutingHttpHandler()
+                .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+                .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => Comments("4049159495"))
+                .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
+                .MapUrl(u => u.EndsWith("/graphql", StringComparison.Ordinal),
+                    _ => new HttpResponseMessage(HttpStatusCode.Unauthorized))
+                .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}"),
+            "graphql_error_with_http_200" => WithThreads(() => "{\"data\":null,\"errors\":[{\"message\":\"Bad credentials\"}]}"),
+            "nonsense" => WithThreads(() => "not json at all"),
+            "more_to_come_without_a_cursor" => WithThreads(
+                () => ThreadPage("PRRT_one", hasNext: true, cursor: null, "4049159495")),
+            "no_thread_endpoint" => new RoutingHttpHandler()
+                .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+                .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => Comments("1"))
+                .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
+                .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}"),
+            _ => throw new ArgumentOutOfRangeException(nameof(answer), answer, null),
+        };
 
         var ledger = await ThreadReadAsync(db, handler);
-
-        Assert.Empty(ledger.Items);
-        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task A_thread_query_that_answers_with_no_thread_data_is_unreadable_too()
-    {
-        // What a GraphQL error looks like on the wire: HTTP 200, data null.
-        // A pull request with no threads answers with the path and no nodes,
-        // so a missing path is a failure however healthy the status line is.
-        using var db = new TestDb();
-
-        var ledger = await ThreadReadAsync(db, WithThreads(() => "{\"data\":null,\"errors\":[{\"message\":\"Bad credentials\"}]}"));
-
-        Assert.Empty(ledger.Items);
-        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task A_thread_query_that_answers_with_nonsense_is_unreadable_rather_than_fatal()
-    {
-        using var db = new TestDb();
-
-        var ledger = await ThreadReadAsync(db, WithThreads(() => "not json at all"));
-
-        Assert.Empty(ledger.Items);
-        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task A_thread_walk_with_more_to_come_and_no_cursor_to_ask_with_is_unreadable()
-    {
-        // There is no way to finish the list from here, so what was read is a
-        // prefix of the threads and nothing says so.
-        using var db = new TestDb();
-
-        var ledger = await ThreadReadAsync(db, WithThreads(
-            () => ThreadPage("PRRT_one", hasNext: true, cursor: null, "4049159495")));
 
         Assert.Empty(ledger.Items);
         Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
@@ -333,7 +268,7 @@ public class RemotePrReviewLedgerPagingTests
         // loses everything past the first page; the Link header is what says
         // whether more exists.
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), u => PageOf(u) switch
@@ -361,7 +296,7 @@ public class RemotePrReviewLedgerPagingTests
         // once someone has resolved it.
         const string repo = "https://gitea.example/team/repo.git";
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/5/reviews/41/comments", StringComparison.Ordinal), () =>
                 "[{\"id\":901,\"path\":\"src/A.cs\",\"position\":10,\"original_position\":10,"
                 + "\"original_commit_id\":\"" + Head + "\",\"user\":{\"login\":\"alice\"},"
@@ -397,7 +332,7 @@ public class RemotePrReviewLedgerPagingTests
     {
         const string repo = "https://gitea.example/team/repo.git";
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/5/reviews/41/comments", StringComparison.Ordinal), () =>
                 "[{\"id\":901,\"path\":\"src/A.cs\",\"position\":10,\"original_position\":10,"
                 + "\"user\":{\"login\":\"alice\"},\"created_at\":\"2026-09-18T17:34:44Z\",\"body\":\"wrong\"}]")
@@ -421,7 +356,7 @@ public class RemotePrReviewLedgerPagingTests
     public async Task Forgejo_cannot_resolve_a_thread_and_says_so_without_asking()
     {
         using var db = new TestDb();
-        var handler = new RoutingHandler();
+        var handler = new RoutingHttpHandler();
 
         var result = await CreateService(db, handler, "Forgejo", "https://gitea.example")
             .ResolveReviewThreadAsync("https://gitea.example/team/repo.git", "5", "41");
@@ -435,7 +370,7 @@ public class RemotePrReviewLedgerPagingTests
     public async Task A_page_that_fills_what_was_asked_for_without_a_link_header_is_not_assumed_to_be_the_last()
     {
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
@@ -459,7 +394,7 @@ public class RemotePrReviewLedgerPagingTests
         // its own answer as a reviewer's and start another round.
         using var db = new TestDb();
         var longAnswer = PrCommentMarker.Stamp(new string('x', 4000), Guid.NewGuid());
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
@@ -486,7 +421,7 @@ public class RemotePrReviewLedgerPagingTests
     public async Task A_list_that_fits_on_one_page_is_still_one_request()
     {
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
@@ -505,7 +440,7 @@ public class RemotePrReviewLedgerPagingTests
     {
         using var db = new TestDb();
         var pages = 0;
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => Comments("1", "2"))
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
@@ -523,29 +458,6 @@ public class RemotePrReviewLedgerPagingTests
     }
 
     [Fact]
-    public async Task A_forge_with_no_thread_endpoint_at_all_is_read_as_unavailable()
-    {
-        // This used to keep the comments and drop the threads, on the reasoning
-        // that half a thread map beats no ledger. It does not: the half that is
-        // missing is silent. Every comment whose thread was on it comes back
-        // keyed by its reply chain and reported unresolved, so the round resolves
-        // the wrong handle and reads a settled thread as open — and the ledger
-        // says it succeeded, so nothing anywhere knows to distrust it.
-        using var db = new TestDb();
-        var handler = new RoutingHandler()
-            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
-            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => Comments("1"))
-            .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
-            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
-
-        var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
-            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
-
-        Assert.Empty(ledger.Items);
-        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public async Task With_no_threads_reported_a_reply_chain_still_shares_one_thread_id()
     {
         // GraphQL can answer with no threads at all — a stripped response, a
@@ -553,7 +465,7 @@ public class RemotePrReviewLedgerPagingTests
         // only thread identity there is. The repeat suppression needs items in
         // one conversation to agree on it.
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () =>
                 "[{\"id\":1,\"path\":\"src/A.cs\",\"line\":10,\"original_commit_id\":\"" + Head + "\","
@@ -578,7 +490,7 @@ public class RemotePrReviewLedgerPagingTests
         using var db = new TestDb();
         var stamped = System.Text.Json.JsonSerializer.Serialize(
             PrCommentMarker.Stamp("Answered every point.", Guid.NewGuid()));
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () =>
@@ -603,7 +515,7 @@ public class RemotePrReviewLedgerPagingTests
         // An empty ledger read as "nothing on this PR" would seed a first watch
         // that had seen nothing, and the next tick would deliver the lot.
         using var db = new TestDb();
-        var handler = new RoutingHandler();
+        var handler = new RoutingHttpHandler();
 
         var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
             .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
@@ -626,7 +538,7 @@ public class RemotePrReviewLedgerPagingTests
         + "{\"id\":78,\"status\":\"fixed\",\"comments\":[{\"id\":1,\"content\":\"a note on the pull request\","
         + "\"commentType\":\"text\",\"author\":{\"displayName\":\"Tony\"},\"publishedDate\":\"2026-09-18T19:00:00Z\"}]}]}";
 
-    private static RoutingHandler AzurePr() => new RoutingHandler()
+    private static RoutingHttpHandler AzurePr() => new RoutingHttpHandler()
         // The query string is what separates the thread LIST from a route under
         // it; matching the prefix alone would shadow /threads/77/comments.
         .Map(u => u.Contains("/pullrequests/7/threads?", StringComparison.Ordinal), AzureThreads)

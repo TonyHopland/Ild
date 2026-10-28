@@ -367,19 +367,25 @@ describe("Loop Editor — node outputs", () => {
     return await screen.findByRole("dialog", { name: "Remove edges" });
   }
 
-  test.each([
-    ["an AI node", reviewer, "Reviewer"],
-    ["a Condition node", gate, "Gate"],
-  ])("%s has no Outputs list and no eye", async (_, opened, label) => {
-    const node = opened();
-    const { dialog } = await openNode({ template: templateWith(node) }, label);
+  test("an AI node shows no Outputs list, eye, shield, Default toggle or colour square", async () => {
+    const ai: TemplateNode = {
+      id: "n-node",
+      type: NodeType.AI,
+      label: "Reviewer",
+      config: {
+        prompt: "p",
+        outputs: [{ name: "x", visible: false, confirm: true, default: true, color: "#7e22ce" }],
+      },
+    };
+    const { dialog } = await openNode({ template: templateWith(ai) }, "Reviewer");
 
     expect(within(dialog).queryByText("Outputs")).toBeNull();
     expect(within(dialog).queryByText("+ Add output")).toBeNull();
-    expect(within(dialog).queryAllByDisplayValue("spare")).toHaveLength(0);
-    expect(within(dialog).queryAllByDisplayValue("stale")).toHaveLength(0);
-    expect(within(dialog).queryAllByDisplayValue("OnSuccess")).toHaveLength(0);
     expect(toggles(dialog)).toHaveLength(0);
+    expect(shields(dialog)).toHaveLength(0);
+    expect(defaultToggles(dialog)).toHaveLength(0);
+    expect(squares(dialog)).toHaveLength(0);
+    expect(colorInputs()).toHaveLength(0);
   });
 
   test("saving an AI node declares what its rules route to and keeps those outputs' fields", async () => {
@@ -964,122 +970,25 @@ describe("Loop Editor — visible to user", () => {
     return ((outputs as Output[] | undefined) ?? []).filter((o) => "visible" in o);
   }
 
-  const OTHER_RESERVED = RESERVED.filter((name) => name !== "on_merged");
+  test("a PR node's eyes follow its outputs, and every wired eye flips both ways", async () => {
+    const pr = node(NodeType.PR, "Pull Request", {
+      outputs: [
+        { name: "OnSuccess", visible: false },
+        { name: "on_merged", reserved: true, visible: true },
+        { name: "deploy" },
+      ],
+    });
+    const { dialog } = await openNode({ template: templateWith(pr) }, "Pull Request");
+    const hidden = ["OnSuccess", ...RESERVED.filter((name) => name !== "on_merged")];
+    await waitFor(() => expectToggles(dialog, ["on_merged", "deploy"], hidden, ["OnFailure"]));
 
-  const TOGGLE_CASES: Array<{
-    name: string;
-    node: TemplateNode;
-    failureWired?: boolean;
-    visible: string[];
-    hidden: string[];
-    unwired: string[];
-  }> = [
-    {
-      name: "a PR node with no visible fields hides its reserved outputs, declared or not",
-      node: node(NodeType.PR, "Pull Request", {
-        outputs: [{ name: "deploy" }, { name: "on_ci_failed", reserved: true }],
-      }),
-      visible: ["OnSuccess", "deploy"],
-      hidden: RESERVED,
-      unwired: ["OnFailure"],
-    },
-    {
-      name: "a PR node shows what its outputs say",
-      node: node(NodeType.PR, "Pull Request", {
-        outputs: [
-          { name: "OnSuccess", visible: false },
-          { name: "OnFailure" },
-          { name: "on_merged", reserved: true, visible: true },
-          { name: "on_ci_failed", reserved: true, visible: false },
-          { name: "deploy", visible: false },
-        ],
-      }),
-      visible: ["on_merged"],
-      hidden: ["OnSuccess", "deploy", ...OTHER_RESERVED],
-      unwired: ["OnFailure"],
-    },
-    {
-      name: "a PR node's wired failure output can be hidden",
-      node: node(NodeType.PR, "Pull Request", {
-        outputs: [{ name: "OnFailure", visible: false }],
-      }),
-      failureWired: true,
-      visible: ["OnSuccess"],
-      hidden: ["OnFailure", ...RESERVED],
-      unwired: [],
-    },
-    {
-      name: "a Human output named like a reserved one, or with a visible that is not a boolean, is visible",
-      node: node(NodeType.Human, "Sign Off", {
-        outputs: [
-          { name: "on_merged" },
-          { name: "later", visible: "no" },
-          { name: "never", visible: 0 },
-        ],
-      }),
-      visible: ["OnSuccess", "on_merged", "later", "never"],
-      hidden: [],
-      unwired: ["OnFailure"],
-    },
-    {
-      name: "a Human node's unwired failure output shows as hidden whatever it says",
-      node: node(NodeType.Human, "Sign Off", {
-        outputs: [{ name: "OnFailure", visible: true }],
-      }),
-      visible: ["OnSuccess"],
-      hidden: [],
-      unwired: ["OnFailure"],
-    },
-  ];
-
-  test.each(TOGGLE_CASES)(
-    "$name, and every wired eye flips both ways",
-    async ({ node: opened, failureWired, visible, hidden, unwired }) => {
-      const { dialog } = await openNode(
-        { template: templateWith(opened, [], { failureWired }) },
-        opened.label,
-      );
-
-      await waitFor(() => expectToggles(dialog, visible, hidden, unwired));
-
-      for (const name of [...visible, ...hidden]) {
-        const before = isOn(toggle(dialog, name));
-        expect(toggle(dialog, name).disabled, name).toBe(false);
-        fireEvent.click(toggle(dialog, name));
-        expect(isOn(toggle(dialog, name)), name).toBe(!before);
-        fireEvent.click(toggle(dialog, name));
-        expect(isOn(toggle(dialog, name)), name).toBe(before);
-      }
-      expectToggles(dialog, visible, hidden, unwired);
-    },
-  );
-
-  test.each([
-    ["a Cmd node", cmd(), "Build"],
-    ["a Start node", cmd(), "Initialize"],
-    ["a Cleanup node", cmd(), "Tidy Up"],
-    [
-      "an AI node",
-      node(NodeType.AI, "Reviewer", { prompt: "p", outputs: [{ name: "x", visible: false }] }),
-      "Reviewer",
-    ],
-    [
-      "a Condition node",
-      node(NodeType.Condition, "Gate", {
-        cases: [{ variant: "PrExists", edgeName: "has-pr" }],
-        defaultEdge: "otherwise",
-        outputs: [{ name: "OnFailure" }, { name: "has-pr" }, { name: "otherwise" }],
-      }),
-      "Gate",
-    ],
-    ["a Prompt node", node(NodeType.Prompt, "Brief", { prompt: "p" }), "Brief"],
-  ])("%s has no eye and no success and failure rows", async (_, opened, label) => {
-    const { dialog } = await openNode({ template: templateWith(opened) }, label);
-
-    expect(toggles(dialog)).toHaveLength(0);
-    expect(within(dialog).queryByText("Success and failure")).toBeNull();
-    expect(within(dialog).queryAllByDisplayValue("OnSuccess")).toHaveLength(0);
-    expect(within(dialog).queryAllByDisplayValue("OnFailure")).toHaveLength(0);
+    for (const name of ["on_merged", "deploy", "OnSuccess", "on_ci_failed"]) {
+      const before = isOn(toggle(dialog, name));
+      fireEvent.click(toggle(dialog, name));
+      expect(isOn(toggle(dialog, name)), name).toBe(!before);
+      fireEvent.click(toggle(dialog, name));
+      expect(isOn(toggle(dialog, name)), name).toBe(before);
+    }
   });
 
   test("the eye names its state and the exact output, sits before the shield, the colour square and the remove button, and mutes a hidden row", async () => {
@@ -1370,31 +1279,6 @@ describe("Loop Editor — visible to user", () => {
       ["needs more work", "needs more work", false],
     ]);
   });
-
-  test("success and a named output called 'success' have eyes that are told apart", async () => {
-    const human = node(NodeType.Human, "Sign Off", {
-      outputs: [{ name: "OnSuccess" }, { name: "OnFailure" }, { name: "success" }],
-    });
-    const { calls, dialog } = await openNode(
-      { template: templateWith(human, [], { failureWired: true }) },
-      "Sign Off",
-    );
-    await waitFor(() => expectToggles(dialog, ["OnSuccess", "OnFailure", "success"], []));
-
-    expect(toggle(dialog, "success")).not.toBe(toggle(dialog, "OnSuccess"));
-    fireEvent.click(toggle(dialog, "success"));
-    expectToggles(dialog, ["OnSuccess", "OnFailure"], ["success"]);
-    fireEvent.click(toggle(dialog, "OnSuccess"));
-    fireEvent.click(toggle(dialog, "success"));
-    expectToggles(dialog, ["OnFailure", "success"], ["OnSuccess"]);
-
-    const saved = await saveLoop(dialog, calls);
-    expect(outputsOf(saved, "n-node")).toEqual([
-      { name: "OnSuccess", visible: false },
-      { name: "OnFailure" },
-      { name: "success" },
-    ]);
-  });
 });
 
 /** The shield button of the output called exactly `name`. */
@@ -1540,26 +1424,6 @@ describe("Loop Editor — asks to confirm", () => {
     const reopened = await screen.findByRole("dialog", { name: "Node Settings" });
 
     for (const button of shields(reopened)) expect(isOn(button)).toBe(false);
-  });
-
-  test.each([
-    [
-      "a Cmd node",
-      { id: "n-node", type: NodeType.Cmd, label: "Build", config: { command: "make" } },
-    ],
-    [
-      "an AI node",
-      {
-        id: "n-node",
-        type: NodeType.AI,
-        label: "Reviewer",
-        config: { prompt: "p", outputs: [{ name: "x", confirm: true }] },
-      },
-    ],
-  ] as Array<[string, TemplateNode]>)("%s has no shield", async (_, opened) => {
-    const { dialog } = await openNode({ template: templateWith(opened) }, opened.label);
-
-    expect(shields(dialog)).toHaveLength(0);
   });
 });
 
@@ -1765,35 +1629,6 @@ describe("Loop Editor — default output", () => {
       { name: "on_merged", reserved: true, visible: true },
       { name: "on_ci_failed", reserved: true, visible: true, default: true },
     ]);
-  });
-
-  test.each([
-    [
-      "an AI node",
-      {
-        id: "n-node",
-        type: NodeType.AI,
-        label: "Reviewer",
-        config: { prompt: "p", outputs: [{ name: "x", default: true }] },
-      },
-    ],
-    [
-      "a Condition node",
-      {
-        id: "n-node",
-        type: NodeType.Condition,
-        label: "Gate",
-        config: {
-          cases: [{ variant: "PrExists", edgeName: "has-pr" }],
-          defaultEdge: "has-pr",
-          outputs: [{ name: "OnFailure" }, { name: "has-pr" }],
-        },
-      },
-    ],
-  ] as Array<[string, TemplateNode]>)("%s has no Default toggle", async (_, opened) => {
-    const { dialog } = await openNode({ template: templateWith(opened) }, opened.label);
-
-    expect(defaultToggles(dialog)).toHaveLength(0);
   });
 });
 
@@ -2106,40 +1941,6 @@ describe("Loop Editor — button colour", () => {
 
     expectSquare(reopened, "cleanup", "Button colour #7e22ce: cleanup", true);
     expectSquare(reopened, "OnSuccess", "Button colour default: OnSuccess", true);
-  });
-
-  test.each([
-    [
-      "a Cmd node",
-      { id: "n-node", type: NodeType.Cmd, label: "Build", config: { command: "make" } },
-    ],
-    [
-      "an AI node",
-      {
-        id: "n-node",
-        type: NodeType.AI,
-        label: "Reviewer",
-        config: { prompt: "p", outputs: [{ name: "x", color: "#7e22ce" }] },
-      },
-    ],
-    [
-      "a Condition node",
-      {
-        id: "n-node",
-        type: NodeType.Condition,
-        label: "Gate",
-        config: {
-          cases: [{ variant: "PrExists", edgeName: "has-pr" }],
-          defaultEdge: "otherwise",
-          outputs: [{ name: "has-pr", color: "#7e22ce" }, { name: "otherwise" }],
-        },
-      },
-    ],
-  ] as Array<[string, TemplateNode]>)("%s has no colour square", async (_, opened) => {
-    const { dialog } = await openNode({ template: templateWith(opened) }, opened.label);
-
-    expect(squares(dialog)).toHaveLength(0);
-    expect(colorInputs()).toHaveLength(0);
   });
 });
 

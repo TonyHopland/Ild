@@ -17,6 +17,7 @@ namespace ILD.Tests.Integration;
 /// never reported as failed because a read that follows it could not be made.
 /// A run whose pending proposals cannot be withdrawn is not deleted.
 /// </summary>
+// A host per test: each test stubs the WorkItem server for the whole host.
 public class WorkItemEditProposalOutageTests
 {
     private const string WorkItemId = "42";

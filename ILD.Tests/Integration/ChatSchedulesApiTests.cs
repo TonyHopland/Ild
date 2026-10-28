@@ -13,6 +13,7 @@ namespace ILD.Tests.Integration;
 /// fires next. Schedules belong to the user who made them and nobody else can
 /// reach them.
 /// </summary>
+// A host per test: each test drives its own manual clock and scheduler passes.
 public sealed class ChatSchedulesApiTests
 {
     [Fact]
@@ -220,7 +221,7 @@ public sealed class ChatSchedulesApiTests
         Assert.Null(Utc((await host.GetAsync(id)).GetProperty("nextFireAt")));
 
         // Three Mondays go by while it is off, and the scheduler passes over it.
-        host.Clock.Set("2026-07-22T12:00:00Z");
+        host.Clock.Now = ParseUtc("2026-07-22T12:00:00Z");
         await host.RunDueAsync();
         body["enabled"] = true;
         await host.UpdateAsync(id, body);
@@ -228,7 +229,7 @@ public sealed class ChatSchedulesApiTests
         await host.RunDueAsync();
 
         // Moved to another zone in winter: counted from now in that zone.
-        host.Clock.Set("2026-12-01T00:00:00Z");
+        host.Clock.Now = ParseUtc("2026-12-01T00:00:00Z");
         body["timeZone"] = "America/New_York";
         await host.UpdateAsync(id, body);
         Assert.Equal(ParseUtc("2026-12-07T13:00:00Z"), Utc((await host.GetAsync(id)).GetProperty("nextFireAt")));

@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -162,7 +163,7 @@ public class LoopEngineRunEventsTests
     public async Task Parking_at_the_AI_step_cap_records_the_full_reason()
     {
         using var h = new LoopEngineHarness();
-        await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "1");
+        await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "1", TestContext.Current.CancellationToken);
         h.AddNode("ai", NodeType.AI, "Coder");
         h.Registry.Register(new ScriptedExecutor(NodeType.AI, new NodeOutcome.NodeStarting("x"), new NodeOutcome.Terminal("x")));
         var run = h.SeedRun("ai");
@@ -333,7 +334,7 @@ public class LoopEngineRunEventsTests
     [Fact]
     public async Task An_event_the_engine_could_not_record_is_logged_and_the_run_goes_on()
     {
-        var logger = new RecordingLogger();
+        var logger = new RecordingLogger<LoopEngine>();
         var eventLog = new Mock<IEventLogService>();
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(),
                 It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
@@ -346,23 +347,8 @@ public class LoopEngineRunEventsTests
         await h.RunAsync();
 
         Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
-        var warning = Assert.Single(logger.Warnings, w => w.Text.Contains(nameof(EventType.LoopRunCompleted)));
+        var warning = Assert.Single(logger.Entries, w => w.Level == LogLevel.Warning && w.Text.Contains(nameof(EventType.LoopRunCompleted)));
         Assert.Contains(h.RunId.ToString(), warning.Text);
         Assert.Equal("database unavailable", warning.Exception?.Message);
-    }
-
-    private sealed class RecordingLogger : ILogger<LoopEngine>
-    {
-        public List<(string Text, Exception? Exception)> Warnings { get; } = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning) Warnings.Add((formatter(state, exception), exception));
-        }
     }
 }

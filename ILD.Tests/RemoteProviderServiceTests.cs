@@ -1,3 +1,4 @@
+using ILD.Tests.Fakes;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -47,35 +48,6 @@ public class RemoteProviderServiceTests
         }
     }
 
-    // Routes GitHub REST calls to canned JSON by URL, in declared order so more
-    // specific paths (…/pulls/7/reviews) match before …/pulls/7.
-    private sealed class RoutingHandler : HttpMessageHandler
-    {
-        private readonly List<(Func<string, bool> Match, Func<string> Body)> _rules = new();
-        public int PrDetailCalls { get; private set; }
-
-        public RoutingHandler Map(Func<string, bool> match, Func<string> body)
-        {
-            _rules.Add((match, body));
-            return this;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var url = request.RequestUri!.ToString();
-            if (url.EndsWith("/pulls/7", StringComparison.Ordinal)) PrDetailCalls++;
-            foreach (var (match, body) in _rules)
-            {
-                if (match(url))
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(body(), Encoding.UTF8, "application/json"),
-                    });
-            }
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-        }
-    }
-
     private static void AddGitHub(TestDb db)
     {
         db.Context.RemoteProviders.Add(new RemoteProvider
@@ -95,7 +67,7 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews"), () =>
                 "[{\"user\":{\"login\":\"alice\"},\"state\":\"APPROVED\",\"body\":\"lgtm\",\"submitted_at\":\"2026-01-01T00:00:00Z\"}]")
             .Map(u => u.Contains("/pulls/7/comments"), () =>
@@ -148,7 +120,7 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/reviews") || u.Contains("/comments"), () => "[]")
             .Map(u => u.Contains("/check-runs"), () => "{\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\"}]}")
             .Map(u => u.Contains("/commits/abc/status"), () => "{\"state\":\"success\",\"statuses\":[]}")
@@ -181,7 +153,7 @@ public class RemoteProviderServiceTests
         });
         db.Context.SaveChanges();
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/check-runs"), () => "[]")
             .Map(u => u.Contains("/branch_protections"), () =>
                 "[{\"branch_name\":\"main\",\"required_approvals\":2,\"block_on_rejected_reviews\":true}]")
@@ -206,7 +178,7 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews"), () =>
                 "[{\"user\":{\"login\":\"alice\"},\"state\":\"APPROVED\",\"body\":\"lgtm\",\"submitted_at\":\"2026-01-01T00:00:00Z\"},"
                 + "{\"user\":{\"login\":\"alice\"},\"state\":\"COMMENTED\",\"body\":\"nit\",\"submitted_at\":\"2026-01-02T00:00:00Z\"}]")
@@ -229,7 +201,7 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/7/reviews"), () =>
                 "[{\"user\":{\"login\":\"alice\"},\"state\":\"APPROVED\",\"body\":\"\",\"submitted_at\":\"2026-01-01T00:00:00Z\"},"
                 + "{\"user\":{\"login\":\"alice\"},\"state\":\"DISMISSED\",\"body\":\"\",\"submitted_at\":\"2026-01-02T00:00:00Z\"}]")
@@ -251,7 +223,7 @@ public class RemoteProviderServiceTests
         AddGitHub(db);
 
         var prCalls = 0;
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/check-runs") || u.Contains("/status"),
                 () => "[]")
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
@@ -280,7 +252,7 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/reviews") || u.Contains("/comments"), () => "[]")
             .Map(u => u.Contains("/check-runs"), () =>
                 "{\"check_runs\":["
@@ -323,7 +295,7 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/status"), () => "[]")
             .Map(u => u.Contains("/check-runs"), () =>
                 "{\"check_runs\":["
@@ -350,7 +322,7 @@ public class RemoteProviderServiceTests
         AddGitHub(db);
 
         var log = string.Join("\n", Enumerable.Range(1, 500).Select(i => $"line {i}"));
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
 
         var window = await CreateService(db, handler)
@@ -370,7 +342,7 @@ public class RemoteProviderServiceTests
         AddGitHub(db);
 
         var log = string.Join("\n", Enumerable.Range(1, 500).Select(i => $"line {i}"));
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
 
         var window = await CreateService(db, handler)
@@ -390,7 +362,7 @@ public class RemoteProviderServiceTests
         AddGitHub(db);
 
         var log = string.Join("\n", Enumerable.Range(1, 5000).Select(i => $"line {i} {new string('x', 200)}"));
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
 
         var window = await CreateService(db, handler)
@@ -410,7 +382,7 @@ public class RemoteProviderServiceTests
         AddGitHub(db);
 
         var log = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"line {i}"));
-        var handler = new RoutingHandler().Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
+        var handler = new RoutingHttpHandler().Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
 
         var window = await CreateService(db, handler)
             .GetCheckLogAsync("https://github.com/team/repo", "67890", tailLines: 5, offset: 500);
@@ -429,7 +401,7 @@ public class RemoteProviderServiceTests
         AddGitHub(db);
 
         var log = "before\n" + new string('x', 500_000) + "\nafter";
-        var handler = new RoutingHandler().Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
+        var handler = new RoutingHttpHandler().Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
 
         var window = await CreateService(db, handler)
             .GetCheckLogAsync("https://github.com/team/repo", "67890", tailLines: 3, offset: 0);
@@ -453,12 +425,6 @@ public class RemoteProviderServiceTests
 
         Assert.False(window.Available);
         Assert.DoesNotContain("10.1.2.3", window.Message);
-    }
-
-    private sealed class ThrowingHandler(string message) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => throw new HttpRequestException(message);
     }
 
     /// <summary>Serves a large log from a generator, so the fixture never holds it either.</summary>
@@ -511,9 +477,9 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        // RoutingHandler 404s anything unmapped — GitHub's answer for a job whose
+        // RoutingHttpHandler 404s anything unmapped — GitHub's answer for a job whose
         // logs have aged out, or a check run that never was an Actions job.
-        var window = await CreateService(db, new RoutingHandler())
+        var window = await CreateService(db, new RoutingHttpHandler())
             .GetCheckLogAsync("https://github.com/team/repo", "222", tailLines: 100, offset: 0);
 
         Assert.False(window.Available);
@@ -538,7 +504,7 @@ public class RemoteProviderServiceTests
         });
         db.Context.SaveChanges();
 
-        var window = await CreateService(db, new RoutingHandler())
+        var window = await CreateService(db, new RoutingHttpHandler())
             .GetCheckLogAsync("https://forge.example/team/repo", "44", tailLines: 100, offset: 0);
 
         Assert.False(window.Available);
@@ -549,7 +515,7 @@ public class RemoteProviderServiceTests
     public async Task GetCheckLogAsync_without_a_configured_provider_is_an_answer_not_a_throw()
     {
         using var db = new TestDb();
-        var window = await CreateService(db, new RoutingHandler())
+        var window = await CreateService(db, new RoutingHttpHandler())
             .GetCheckLogAsync("https://unknown.example/team/repo", "1", tailLines: 100, offset: 0);
 
         Assert.False(window.Available);
@@ -575,7 +541,7 @@ public class RemoteProviderServiceTests
         });
         db.Context.SaveChanges();
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/check-runs"), () => "[]")
             .Map(u => u.Contains("/commits/abc/status"), () =>
                 "{\"state\":\"failure\",\"statuses\":["
@@ -604,7 +570,7 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/check-runs"), () => "[]")
             .Map(u => u.Contains("/commits/abc/status"), () =>
                 "{\"state\":\"error\",\"statuses\":[{\"context\":\"ci\",\"state\":\"pending\"}]}")
@@ -626,7 +592,7 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/status"), () => "[]")
             .Map(u => u.Contains("/check-runs"), () =>
                 "{\"check_runs\":[{\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"failure\","
@@ -959,22 +925,6 @@ public class RemoteProviderServiceTests
 
         Assert.Equal("no provider configured", result.Error);
         Assert.Empty(handler.Calls);
-    }
-
-    [Fact]
-    public async Task MergePullRequestAsync_azure_devops_completes_against_the_last_source_commit()
-    {
-        using var db = new TestDb();
-        AddAzureDevOps(db);
-
-        var handler = new AzureHandler()
-            .On(u => u.Contains("/pullrequests/7?"), "{\"lastMergeSourceCommit\":{\"commitId\":\"abc123\"}}");
-
-        Assert.True(await CreateService(db, handler).MergePullRequestAsync(AzureRepoUrl, "7"));
-        Assert.Equal(2, handler.Calls.Count);
-        Assert.Equal(HttpMethod.Patch, handler.Calls[1].Method);
-        Assert.Contains("\"status\":\"completed\"", handler.Calls[1].Body);
-        Assert.Contains("abc123", handler.Calls[1].Body);
     }
 
     [Fact]

@@ -124,45 +124,17 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(KillAndDescribe(process, "claude-code stream read timed out"));
             }
 
-            var effectiveSessionId = stdout.SessionId ?? ctx.SessionId;
-            var response = stdout.Content;
-
-            if (string.IsNullOrWhiteSpace(response))
-            {
-                if (!stdout.SawJsonEvents)
-                    response = stdout.RawStdout;
-                else if (!string.IsNullOrWhiteSpace(stdout.ErrorMessage))
-                    response = $"[claude-code-error] {stdout.ErrorMessage}";
-                else if (!string.IsNullOrWhiteSpace(stderr))
-                    response = $"[claude-code] no assistant text response. stderr: {stderr.Trim()}";
-                else
-                    response = "[claude-code] no assistant text response from model";
-            }
-
-            if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(stdout.ErrorMessage))
-                // The result event's own error text is the provider's message,
-                // isolated — classify from it (same rationale as OpenCodeAdapter).
-                return NodeExecutionResult.Fail(
-                    $"claude-code session error: {stdout.ErrorMessage}", response,
-                    AiFailureClassifier.ClassifyProviderMessage(stdout.ErrorMessage));
-
-            if (process.ExitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
-                return NodeExecutionResult.Fail(response);
+            var result = AssembleResult(stdout, stderr, process.ExitCode, ctx.Prompt, ctx.SessionId, ctx.IncomingSessionId, sessionCostBefore);
 
             // On a successful managed-session turn, copy the JSONL claude
             // wrote at $HOME/.claude/projects/<encoded-cwd>/<sid>.jsonl into
             // the snapshot store. This is what surfaces the run's session in
             // the "Available AI Sessions" panel and lets us rehydrate the
             // on-disk file on a later turn (see TryRestoreSessionJsonlAsync).
-            if (process.ExitCode == 0 && ctx.ManageSession && !string.IsNullOrWhiteSpace(effectiveSessionId))
-                await TryPersistSessionJsonlAsync(ctx, effectiveSessionId!, worktreePath);
+            if (result.Success && ctx.ManageSession && !string.IsNullOrWhiteSpace(result.SessionId))
+                await TryPersistSessionJsonlAsync(ctx, result.SessionId!, worktreePath);
 
-            // The earlier total only counts when Claude answered on the session it was asked to resume.
-            var costBeforeThisRun = stdout.SessionId is null || stdout.SessionId == ctx.SessionId ? sessionCostBefore : 0m;
-
-            return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.ParseClaude(stdout.RawStdout, costBeforeThisRun))
-                : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
+            return result;
         }
         catch (Exception ex)
         {
@@ -175,6 +147,44 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 try { File.Delete(mcpConfigPath); } catch { /* best effort */ }
             }
         }
+    }
+
+    /// <summary>Turns a finished run's parsed output, stderr and exit code into the node's result.</summary>
+    internal static NodeExecutionResult AssembleResult(
+        ClaudeStreamOutput stdout, string stderr, int exitCode, string prompt,
+        string? requestedSessionId, string? incomingSessionId, decimal sessionCostBefore)
+    {
+        var effectiveSessionId = stdout.SessionId ?? requestedSessionId;
+        var response = stdout.Content;
+
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            if (!stdout.SawJsonEvents)
+                response = stdout.RawStdout;
+            else if (!string.IsNullOrWhiteSpace(stdout.ErrorMessage))
+                response = $"[claude-code-error] {stdout.ErrorMessage}";
+            else if (!string.IsNullOrWhiteSpace(stderr))
+                response = $"[claude-code] no assistant text response. stderr: {stderr.Trim()}";
+            else
+                response = "[claude-code] no assistant text response from model";
+        }
+
+        if (exitCode == 0 && !string.IsNullOrWhiteSpace(stdout.ErrorMessage))
+            // The result event's own error text is the provider's message,
+            // isolated — classify from it (same rationale as OpenCodeAdapter).
+            return NodeExecutionResult.Fail(
+                $"claude-code session error: {stdout.ErrorMessage}", response,
+                AiFailureClassifier.ClassifyProviderMessage(stdout.ErrorMessage));
+
+        if (exitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
+            return NodeExecutionResult.Fail(response);
+
+        // The earlier total only counts when Claude answered on the session it was asked to resume.
+        var costBeforeThisRun = stdout.SessionId is null || stdout.SessionId == requestedSessionId ? sessionCostBefore : 0m;
+
+        return exitCode == 0
+            ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParseClaude(stdout.RawStdout, costBeforeThisRun))
+            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
@@ -349,7 +359,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 logger ?? NullLogger.Instance, environment);
     }
 
-    private static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(
+    internal static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(
         StreamReader reader,
         Func<string, Task>? progressCallback,
         Action<string>? onSessionId,
@@ -568,7 +578,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     // rule, restore/persist still no-op (path miss) rather than misbehave.
     public static string EncodeWorktreePath(string path) => path.Replace('/', '-').Replace('.', '-');
 
-    private sealed record ClaudeStreamOutput(
+    internal sealed record ClaudeStreamOutput(
         string RawStdout,
         string Content,
         string? SessionId,

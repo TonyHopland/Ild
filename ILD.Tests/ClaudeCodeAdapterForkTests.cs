@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data;
@@ -16,6 +17,7 @@ namespace ILD.Tests;
 /// Fork coverage for the claude-code adapter. The adapter is given its own
 /// <c>HOME</c>, because claude stores session JSONL under <c>$HOME/.claude/projects</c>.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public class ClaudeCodeAdapterForkTests
 {
     [Fact]

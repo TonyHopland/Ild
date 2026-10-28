@@ -1,5 +1,6 @@
 // Shared helpers for tests. Not a test file itself, so it is outside the
 // `src/**/*.test.{ts,tsx}` include and never collected as a suite.
+import { useSyncExternalStore } from "react";
 import { act, fireEvent, screen, within } from "@testing-library/react";
 import { vi, type Mock } from "vite-plus/test";
 import type { SignalRConnection } from "./hooks/useSignalR";
@@ -15,6 +16,7 @@ import type {
   GlobalVariableProposal,
   LoopTemplateProposal,
   WorkItem,
+  WorkItemEditProposal,
 } from "./types";
 import type { TypedSignalRMessage } from "./types/signalr";
 
@@ -104,11 +106,6 @@ export async function openChatList(): Promise<HTMLElement> {
 /** Opens a chat from the chat bubble's list, by the name its row shows. */
 export async function openChatFromList(name: string): Promise<void> {
   fireEvent.click(await within(await openChatList()).findByText(name));
-}
-
-/** Leaves the open chat for the start form, from the chat bubble's list. */
-export async function startNewChat(): Promise<void> {
-  fireEvent.click(within(await openChatList()).getByRole("button", { name: "New chat" }));
 }
 
 /** Shows the favourite, rename and delete actions of a chat in the chat bubble's list. */
@@ -245,6 +242,14 @@ export interface FakeHub {
   /** The same object for the hub's whole life; a hook re-rendered after `setState` sees the new state. */
   connection: SignalRConnection;
   setState: (state: HubConnectionState) => void;
+  /**
+   * Moves the connection to `state` inside act, re-rendering every component
+   * holding it through {@link routeHubs} or {@link routeEveryHub}, as a drop or a
+   * reconnect of the real hub does.
+   */
+  changeState: (state: HubConnectionState) => Promise<void>;
+  /** Calls `listener` on every {@link FakeHub.changeState}; returns how to stop. */
+  subscribe: (listener: () => void) => () => void;
   /** Calls every listener for `event`, outside act. */
   dispatch: (event: string, payload: unknown) => void;
   /** Calls every listener for `event`, inside an async act. */
@@ -277,13 +282,25 @@ export function fakeHub(state: HubConnectionState = "connected"): FakeHub {
   const setState = (next: HubConnectionState) => {
     connection.connectionState = next;
   };
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+  const changeState = (next: HubConnectionState) =>
+    act(async () => {
+      setState(next);
+      for (const listener of Array.from(listeners)) listener();
+    });
   const reset = () => {
     for (const event of Object.keys(handlers)) delete handlers[event];
     connection.connectionState = state;
     invoke.mockReset();
     invoke.mockImplementation((..._args: unknown[]) => Promise.resolve());
   };
-  return { handlers, invoke, connection, setState, dispatch, emit, reset };
+  return { handlers, invoke, connection, setState, changeState, subscribe, dispatch, emit, reset };
 }
 
 /**
@@ -299,11 +316,27 @@ export function routeHubs(
 ): (string | null)[] {
   const asked: (string | null)[] = [];
   const unrouted = fakeHub("disconnected");
-  vi.spyOn(signalRModule, "useSignalR").mockImplementation((hubUrl: string | null) => {
+  const useRoutedConnection = (hubUrl: string | null) => {
     asked.push(hubUrl);
-    return (hubUrl ? (hubs[hubUrl] ?? unrouted) : unrouted).connection;
-  });
+    return useFakeConnection(hubUrl ? (hubs[hubUrl] ?? unrouted) : unrouted);
+  };
+  vi.spyOn(signalRModule, "useSignalR").mockImplementation(useRoutedConnection);
   return asked;
+}
+
+/** Answers `useSignalR` with the connection of `hub`, whatever hub is asked for. */
+export function routeEveryHub(
+  signalRModule: { useSignalR: (hubUrl: string | null) => SignalRConnection },
+  hub: FakeHub,
+): void {
+  const useEveryConnection = () => useFakeConnection(hub);
+  vi.spyOn(signalRModule, "useSignalR").mockImplementation(useEveryConnection);
+}
+
+/** The connection of `hub`, rendered again whenever its state changes. */
+function useFakeConnection(hub: FakeHub): SignalRConnection {
+  useSyncExternalStore(hub.subscribe, () => hub.connection.connectionState);
+  return hub.connection;
 }
 
 /**
@@ -384,9 +417,83 @@ export function makeGlobalVariableProposal(
   };
 }
 
+/** A pending edit proposal p-1 retitling work item wi-1, made by neither a run nor a chat. */
+export function makeEditProposal(
+  overrides: Partial<WorkItemEditProposal> = {},
+): WorkItemEditProposal {
+  return {
+    id: "p-1",
+    workItemId: "wi-1",
+    status: "Pending",
+    proposed: { title: "New title" },
+    snapshot: {
+      title: "Old title",
+      description: null,
+      tags: [],
+      branchNameOverride: null,
+      baseBranchOverride: null,
+    },
+    rationale: null,
+    rejectionReason: null,
+    createdByLoopRunId: null,
+    createdByChatSessionId: null,
+    createdAt: "2026-09-26T10:00:00Z",
+    decidedAt: null,
+    ...overrides,
+  };
+}
+
 /** The proposal card `element` is in; throws when it is in none. */
 export function proposalCardAround(element: Element): HTMLElement {
   const card = element.closest<HTMLElement>('[data-testid="proposal-card"]');
   if (card === null) throw new Error("The element is not inside a proposal card.");
   return card;
+}
+
+/** Delivers a hub event to every listener of {@link signalRHub}, inside act. */
+export function emitHubEvent(event: string, payload: unknown): void {
+  act(() => {
+    signalRHub.dispatch(event, payload);
+  });
+}
+
+/**
+ * Lets every answer already given reach the view, and every effect it causes run.
+ * `rounds` is for a chain of reads, each started by an effect of the one before.
+ */
+export async function settle(rounds = 1): Promise<void> {
+  for (let round = 0; round < rounds; round++) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
+/**
+ * Like {@link settle}, but lets no timer fire: for a test on fake timers, or one
+ * whose next step must come before a timer the view has set.
+ */
+export async function flushPromises(): Promise<void> {
+  for (let round = 0; round < 5; round++) {
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick++) await Promise.resolve();
+    });
+  }
+}
+
+/** A promise a test settles by hand. */
+export interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+}
+
+export function deferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }

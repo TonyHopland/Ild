@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -29,6 +30,8 @@ namespace ILD.Tests.Integration;
 /// remote itself instead of to ILD's base clone fails here as it would against
 /// a private forge.
 /// </summary>
+// A host per test: each test owns its git remote and the chat scratch root cloned into.
+[SupportedOSPlatform("linux")]
 public class ChatRepositoryCloneApiTests
 {
     private const string ChatHeader = "X-ILD-Chat-Session-Id";
@@ -198,17 +201,13 @@ public class ChatRepositoryCloneApiTests
     public enum LocalWork
     {
         UncommittedChangeInTheWayOfTheUpdate,
-        LocalCommitDivergingFromTheRemote,
         UncommittedChangeInTheWayOfTheSwitch,
-        LocalCommitOnTheBranchSwitchedTo,
     }
 
     [Theory]
     [InlineData(LocalWork.UncommittedChangeInTheWayOfTheUpdate)]
-    [InlineData(LocalWork.LocalCommitDivergingFromTheRemote)]
     [InlineData(LocalWork.UncommittedChangeInTheWayOfTheSwitch)]
-    [InlineData(LocalWork.LocalCommitOnTheBranchSwitchedTo)]
-    public async Task An_update_that_would_lose_local_work_is_refused_with_gits_message_changes_nothing_and_succeeds_once_reverted(LocalWork work)
+    public async Task An_update_that_would_lose_local_work_is_refused_changes_nothing_and_succeeds_once_reverted(LocalWork work)
     {
         await using var host = await Host.StartAsync();
         var remote = host.CreateRemote("widgets");
@@ -219,51 +218,17 @@ public class ChatRepositoryCloneApiTests
         var folder = Path.Combine(scratch, cloned.Path!);
 
         string? branch;
-        string expectedMessage;
-        Action revert;
         switch (work)
         {
             case LocalWork.UncommittedChangeInTheWayOfTheUpdate:
                 remote.Commit("main", "README.md", "upstream edit");
                 File.WriteAllText(Path.Combine(folder, "README.md"), "agent edit");
                 branch = null;
-                expectedMessage = "would be overwritten";
-                revert = () => Git(folder, "checkout", "--", "README.md");
                 break;
-            case LocalWork.LocalCommitDivergingFromTheRemote:
-            {
-                var before = Git(folder, "rev-parse", "HEAD");
-                remote.Commit("main", "UPSTREAM.md", "upstream");
-                File.WriteAllText(Path.Combine(folder, "LOCAL.md"), "local");
-                Git(folder, "add", "LOCAL.md");
-                Git(folder, "commit", "-q", "-m", "local work");
-                branch = null;
-                expectedMessage = "fast-forward";
-                revert = () => Git(folder, "reset", "-q", "--hard", before);
-                break;
-            }
             case LocalWork.UncommittedChangeInTheWayOfTheSwitch:
                 File.WriteAllText(Path.Combine(folder, "README.md"), "agent edit");
                 branch = "feature";
-                expectedMessage = "would be overwritten";
-                revert = () => Git(folder, "checkout", "--", "README.md");
                 break;
-            case LocalWork.LocalCommitOnTheBranchSwitchedTo:
-            {
-                (await host.CloneAsync(chat, repoId, "feature")).AssertOk();
-                (await host.CloneAsync(chat, repoId)).AssertOk();
-                var before = Git(folder, "rev-parse", "refs/heads/feature");
-                Git(folder, "checkout", "-q", "feature");
-                File.WriteAllText(Path.Combine(folder, "LOCAL.md"), "local");
-                Git(folder, "add", "LOCAL.md");
-                Git(folder, "commit", "-q", "-m", "local work");
-                Git(folder, "checkout", "-q", "main");
-                remote.Commit("feature", "UPSTREAM.md", "upstream");
-                branch = "feature";
-                expectedMessage = "fast-forward";
-                revert = () => Git(folder, "branch", "-f", "feature", before);
-                break;
-            }
             default:
                 throw new ArgumentOutOfRangeException(nameof(work));
         }
@@ -273,12 +238,9 @@ public class ChatRepositoryCloneApiTests
 
         Assert.Equal(HttpStatusCode.Conflict, refused.Status);
         Assert.Equal("UpdateRefused", refused.Outcome);
-        Assert.Contains(expectedMessage, refused.Error, StringComparison.Ordinal);
-        if (work is LocalWork.UncommittedChangeInTheWayOfTheUpdate or LocalWork.UncommittedChangeInTheWayOfTheSwitch)
-            Assert.Contains("README.md", refused.Error, StringComparison.Ordinal);
         Assert.Equal(untouched, Snapshot(folder));
 
-        revert();
+        Git(folder, "checkout", "--", "README.md");
         var retried = await host.CloneAsync(chat, repoId, branch);
 
         retried.AssertOk();

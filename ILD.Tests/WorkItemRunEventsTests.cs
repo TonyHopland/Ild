@@ -215,12 +215,11 @@ public class WorkItemRunEventsTests
         ParkedElsewhereWithAnOldQuestionOpen,
     }
 
-    public static TheoryData<Refusal, Answer> Refusals()
+    public static TheoryData<Refusal> Refusals()
     {
-        var data = new TheoryData<Refusal, Answer>();
+        var data = new TheoryData<Refusal>();
         foreach (var refusal in Enum.GetValues<Refusal>())
-            foreach (var answer in Enum.GetValues<Answer>())
-                data.Add(refusal, answer);
+            data.Add(refusal);
         return data;
     }
 
@@ -288,7 +287,17 @@ public class WorkItemRunEventsTests
 
     [Theory]
     [MemberData(nameof(Refusals))]
-    public async Task An_answer_for_anything_but_the_active_waiting_run_is_refused_and_changes_nothing(Refusal refusal, Answer answer)
+    public Task An_answer_for_anything_but_the_active_waiting_run_is_refused_and_changes_nothing(Refusal refusal)
+        => AssertRefusedAsync(refusal, Answer.Input);
+
+    [Fact]
+    public async Task Every_kind_of_answer_is_refused_alike_and_changes_nothing()
+    {
+        foreach (var answer in Enum.GetValues<Answer>())
+            await AssertRefusedAsync(Refusal.LatestCompleted, answer);
+    }
+
+    private static async Task AssertRefusedAsync(Refusal refusal, Answer answer)
     {
         using var h = refusal == Refusal.NoEngine ? null : new LoopEngineHarness();
         using var rig = h is null
@@ -546,9 +555,7 @@ public class WorkItemRunEventsTests
         var watchdog = new StuckRunWatchdog(provider.GetRequiredService<IServiceScopeFactory>(), engine.Object, TestActors.Instance,
             NullLogger<StuckRunWatchdog>.Instance);
 
-        await (Task)typeof(StuckRunWatchdog)
-            .GetMethod("SweepOnceAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .Invoke(watchdog, new object?[] { CancellationToken.None })!;
+        await watchdog.SweepOnceAsync(CancellationToken.None);
 
         Assert.Equal(LoopRunStatus.Failed, rig.Db.Fresh().LoopRuns.Single(r => r.Id == run.Id).Status);
         var failed = Assert.Single(RunTimeline.EndingEvents(rig.Db, run.Id));

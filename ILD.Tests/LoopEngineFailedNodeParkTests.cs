@@ -121,7 +121,7 @@ public class LoopEngineFailedNodeParkTests
         h.Registry.Register(agent);
         h.SeedRun("a");
         var stale = RunTimeline.SeedRunNode(h.Db, h.RunId, h.NodesById["a"], LoopRunNodeStatus.Running);
-        var recovery = new RecoveryManager(h.WorkItemsMock.Object, h.Db.LoopRuns, h.Db.Providers, h.Db.LoopTemplates,
+        var recovery = new RecoveryManager(h.WorkItemsMock.Object, h.Db.LoopRuns, h.Db.Providers,
             new Mock<IRepositoryManager>().Object, h.Engine, EventLog(h), TestActors.Instance);
 
         Assert.Contains(h.RunId, await recovery.GetRecoverableRunIdsAsync());

@@ -1,6 +1,7 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
@@ -61,9 +62,8 @@ public class EventLogRunClosureTests
 
         var refused = await Record.ExceptionAsync(() => f.AppendAsync(late, "too late"));
 
-        Assert.IsAssignableFrom<InvalidOperationException>(refused);
-        Assert.Equal("RunClosedException", refused!.GetType().Name);
-        Assert.Contains(f.Run.Id.ToString(), refused.Message);
+        var closed = Assert.IsType<RunClosedException>(refused);
+        Assert.Contains(f.Run.Id.ToString(), closed.Message);
         Assert.DoesNotContain(RunTimeline.Events(f.Db, f.Run.Id), e => e.Data == "too late");
     }
 
@@ -75,7 +75,7 @@ public class EventLogRunClosureTests
 
         var refused = await Record.ExceptionAsync(() => f.AppendAsync(EventType.NodeCompleted, "late answer", f.AiRunNode));
 
-        Assert.Equal("RunClosedException", refused?.GetType().Name);
+        Assert.IsType<RunClosedException>(refused);
         Assert.DoesNotContain(RunTimeline.Events(f.Db, f.Run.Id), e => e.Data == "late answer");
     }
 
@@ -92,7 +92,7 @@ public class EventLogRunClosureTests
 
         var refused = await Record.ExceptionAsync(() => f.AppendAsync(EventType.HumanFeedbackReceived, "too late"));
 
-        Assert.Equal("RunClosedException", refused?.GetType().Name);
+        Assert.IsType<RunClosedException>(refused);
         Assert.DoesNotContain(RunTimeline.Events(f.Db, f.Run.Id), e => e.Data == "too late");
 
         await f.AppendAsync(ending, "the end");

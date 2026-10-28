@@ -1,12 +1,27 @@
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import Taskboard from "./index";
-import { fakeHub, mockTaskboardServer } from "../../test-support";
+import {
+  fakeHub,
+  mockTaskboardServer,
+  routeHubs,
+  signalRHub,
+  deferred,
+  flushPromises,
+} from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 import { WorkItemStatus, WorkItem, Repository } from "../../types";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
+
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
+
+beforeEach(() => {
+  signalRHub.reset();
+});
 
 afterEach(() => {
   cleanup();
@@ -50,24 +65,7 @@ function makeRepo(n: number): Repository {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
-
 function mockBoard(items: WorkItem[], repositories: Repository[] = [makeRepo(1)]) {
-  const handlers: Record<string, ((msg: unknown) => void)[]> = {};
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: vi.fn((event: string, handler: (msg: unknown) => void) => {
-      (handlers[event] ??= []).push(handler);
-    }),
-    off: vi.fn(),
-    invoke: vi.fn(),
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
   const server = mockTaskboardServer(items);
   vi.spyOn(authServices.workItemService, "getById").mockImplementation(async (id: string) => ({
     ...server.items.find((wi) => wi.id === id)!,
@@ -82,12 +80,7 @@ function mockBoard(items: WorkItem[], repositories: Repository[] = [makeRepo(1)]
     key: "scheduler.isPaused",
     value: "false",
   });
-  const emit = async (event: string, payload: unknown) => {
-    await act(async () => {
-      for (const handler of handlers[event] ?? []) handler({ payload });
-    });
-  };
-  return { server, emit, getRepositories };
+  return { server, emit: signalRHub.emit, getRepositories };
 }
 
 function renderTaskboard() {
@@ -116,14 +109,6 @@ function backlogTitles(): string[] {
   return Array.from(column.querySelectorAll(".work-item-card")).map(
     (card) => card.getAttribute("aria-label")!.split(", status ")[0],
   );
-}
-
-async function settle() {
-  for (let i = 0; i < 5; i++) {
-    await act(async () => {
-      await Promise.resolve();
-    });
-  }
 }
 
 describe("Taskboard filter options", () => {
@@ -199,12 +184,12 @@ describe("Taskboard filter options", () => {
     server.items[0] = { ...server.items[0], tags: [] };
     await emit("WorkItemStateChanged", edited("a"));
     await emit("WorkItemStateChanged", edited("b"));
-    await settle();
+    await flushPromises();
     expect(server.getTags.mock.calls.length).toBe(before + 1);
 
     await act(async () => held[0].resolve());
     await waitFor(() => expect(server.getTags.mock.calls.length).toBe(before + 2));
-    await settle();
+    await flushPromises();
     expect(server.getTags.mock.calls.length).toBe(before + 2);
 
     armed = false;
@@ -230,14 +215,14 @@ describe("Taskboard live updates", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /^a, next step,/ })).toBeTruthy(),
     );
-    await settle();
+    await flushPromises();
     expect(server.getTags.mock.calls.length).toBe(before);
     expect(server.getCounts.mock.calls.length).toBe(countsBefore);
 
     // A run event for an item the board never placed adds no card it cannot count.
     server.items.push({ ...makeItem("unheard", []), createdAt: "2026-02-01T00:00:00Z" });
     await emit("WorkItemRunProgressed", { workItemId: "unheard" });
-    await settle();
+    await flushPromises();
     expect(screen.queryByRole("button", { name: /^unheard,/ })).toBeNull();
     expect(server.getCounts.mock.calls.length).toBe(countsBefore);
   });
@@ -288,7 +273,7 @@ describe("Taskboard live updates", () => {
 
       await emit("WorkItemStateChanged", edited("a"));
       await emit("WorkItemRunProgressed", { workItemId: "a" });
-      await settle();
+      await flushPromises();
 
       expect(chips()).toEqual(["one"]);
       expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1);
@@ -321,7 +306,7 @@ describe("Taskboard live updates", () => {
     await act(async () => nextPage.resolve());
 
     await waitFor(() => expect(backlogTitles()).toHaveLength(25));
-    await settle();
+    await flushPromises();
     expect(server.getPage.mock.calls.slice(pagesBefore).map(([q]) => [q.skip, q.take])).toEqual([
       [20, 20],
     ]);
@@ -331,11 +316,7 @@ describe("Taskboard live updates", () => {
   test("inside the app's work-item hub provider the board listens on the shared connection and opens none of its own", async () => {
     const { server } = mockBoard([makeItem("a", [])]);
     const shared = fakeHub();
-    const unused = fakeHub();
-    // The provider asks for the hub by URL; a hook handed a connection asks for none.
-    const useSignalR = vi
-      .spyOn(signalRHook, "useSignalR")
-      .mockImplementation((url) => (url === null ? unused.connection : shared.connection));
+    const asked = routeHubs(signalRHook, { "/hubs/work-item": shared });
 
     render(
       <MemoryRouter initialEntries={["/taskboard"]}>
@@ -352,8 +333,7 @@ describe("Taskboard live updates", () => {
     await shared.emit("WorkItemRunProgressed", { workItemId: "a" });
 
     await waitFor(() => expect(backlogTitles()).toEqual(["a, next step"]));
-    expect(Object.keys(unused.handlers)).toEqual([]);
-    expect(useSignalR.mock.calls.filter(([url]) => url !== null)).toEqual([["/hubs/work-item"]]);
+    expect(asked.filter((url) => url !== null)).toEqual(["/hubs/work-item"]);
   });
 });
 

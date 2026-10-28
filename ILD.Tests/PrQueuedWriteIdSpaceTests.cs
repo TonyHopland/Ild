@@ -1,3 +1,4 @@
+using ILD.Tests.Fakes;
 using System.Net;
 using System.Text;
 using ILD.Core.Services.Implementations;
@@ -23,38 +24,6 @@ namespace ILD.Tests;
 public class PrQueuedWriteIdSpaceTests
 {
     private const string Head = "7e932b3de2ddb0648519528fdffbd6fdd11d1b16";
-
-    private sealed class RoutingHandler : HttpMessageHandler
-    {
-        private readonly List<(HttpMethod? Method, Func<string, bool> Match, Func<string> Body)> _rules = new();
-        public List<string> Urls { get; } = new();
-
-        public RoutingHandler Map(Func<string, bool> match, Func<string> body)
-        {
-            _rules.Add((null, match, body));
-            return this;
-        }
-
-        /// <summary>A list GET and a create POST share a URL on both forges, so the method has to be part of the match.</summary>
-        public RoutingHandler MapMethod(HttpMethod method, Func<string, bool> match, Func<string> body)
-        {
-            _rules.Insert(0, (method, match, body));
-            return this;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        {
-            var url = request.RequestUri!.ToString();
-            Urls.Add(url);
-            foreach (var (method, match, body) in _rules)
-                if ((method is null || method == request.Method) && match(url))
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(body(), Encoding.UTF8, "application/json"),
-                    });
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-        }
-    }
 
     private static RemoteProviderService CreateService(TestDb db, HttpMessageHandler handler, string type, string url)
     {
@@ -89,7 +58,7 @@ public class PrQueuedWriteIdSpaceTests
         // and 91 here is deliberately also a real review comment's id.
         const string repo = "https://gitea.example/team/repo.git";
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/5/reviews/91/comments", StringComparison.Ordinal), () =>
                 "[{\"id\":5001,\"path\":\"src/A.cs\",\"position\":10,\"original_commit_id\":\"" + Head + "\","
                 + "\"user\":{\"login\":\"ild\"},\"created_at\":\"2026-09-20T12:00:00Z\",\"body\":\"That compiles.\"}]")
@@ -124,7 +93,7 @@ public class PrQueuedWriteIdSpaceTests
     {
         const string repo = "https://gitea.example/team/repo.git";
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pulls/5/reviews/40/comments", StringComparison.Ordinal), () =>
                 "[{\"id\":91,\"path\":\"src/A.cs\",\"position\":10,\"user\":{\"login\":\"alice\"},"
                 + "\"created_at\":\"2026-09-18T17:34:44Z\",\"body\":\"a human finding\"}]")
@@ -148,7 +117,7 @@ public class PrQueuedWriteIdSpaceTests
         using var db = new TestDb();
         var created = "{\"id\":77,\"status\":\"active\",\"comments\":[{\"id\":1,\"content\":\"Answered.\","
             + "\"commentType\":\"text\",\"author\":{\"displayName\":\"ILD\"},\"publishedDate\":\"2026-09-20T12:00:00Z\"}]}";
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             // Creating a thread answers with the thread itself; listing wraps them in "value".
             .MapMethod(HttpMethod.Post, u => u.Contains("/pullrequests/7/threads?", StringComparison.Ordinal), () => created)
             .Map(u => u.Contains("/pullrequests/7/threads?", StringComparison.Ordinal), () => "{\"value\":[" + created + "]}")
@@ -174,7 +143,7 @@ public class PrQueuedWriteIdSpaceTests
         // that would record the whole existing review as history already seen.
         const string repo = "https://dev.azure.com/org/project/_git/repo";
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pullrequests/7?", StringComparison.Ordinal),
                 () => "{\"lastMergeSourceCommit\":{\"commitId\":\"" + Head + "\"}}");
         // The threads URL is mapped nowhere, so the handler answers 404.
@@ -192,7 +161,7 @@ public class PrQueuedWriteIdSpaceTests
     {
         const string repo = "https://dev.azure.com/org/project/_git/repo";
         using var db = new TestDb();
-        var handler = new RoutingHandler()
+        var handler = new RoutingHttpHandler()
             .Map(u => u.Contains("/pullrequests/7/threads?", StringComparison.Ordinal), () => "{\"value\":[]}")
             .Map(u => u.Contains("/pullrequests/7?", StringComparison.Ordinal),
                 () => "{\"lastMergeSourceCommit\":{\"commitId\":\"" + Head + "\"}}");

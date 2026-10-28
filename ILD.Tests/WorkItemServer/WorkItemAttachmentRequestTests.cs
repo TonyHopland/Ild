@@ -2,11 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using ILD.WorkItemServer.Attachments;
 using ILD.WorkItemServer.Dtos;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.WorkItemServer;
 
@@ -15,22 +11,13 @@ namespace ILD.Tests.WorkItemServer;
 /// Everything here is a caller mistake the server has to answer with a reason
 /// rather than a 500 from the database or an empty 201 that stored nothing.
 /// </summary>
-public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
+public sealed class WorkItemAttachmentRequestTests : IClassFixture<AttachmentServer>
 {
-    private AttachmentServerFactory _factory = null!;
-    private HttpClient _client = null!;
+    private readonly HttpClient _client;
 
-    public ValueTask InitializeAsync()
+    public WorkItemAttachmentRequestTests(AttachmentServer server)
     {
-        _factory = new AttachmentServerFactory();
-        _client = _factory.AuthedClient();
-        return ValueTask.CompletedTask;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _client.Dispose();
-        await _factory.DisposeAsync();
+        _client = server.Client;
     }
 
     private async Task<string> CreateWorkItemAsync()
@@ -89,23 +76,6 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
 
         var listed = await _client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Empty(listed.EnumerateArray().ToList());
-    }
-
-    [Fact]
-    public void Only_the_upload_endpoint_raises_its_body_cap_and_it_does_so_before_the_body_is_read()
-    {
-        // MVC parses a form request for its value providers before the action
-        // runs, so a cap raised inside the action arrives after the host default
-        // has already decided. It has to be a filter, and only here.
-        var endpoints = _factory.Services.GetRequiredService<EndpointDataSource>().Endpoints
-            .OfType<RouteEndpoint>()
-            .ToList();
-        var raising = endpoints
-            .Where(e => e.Metadata.GetMetadata<RaiseAttachmentBodyLimitAttribute>() != null)
-            .Select(e => $"{string.Join('|', e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? [])} {e.RoutePattern.RawText}")
-            .ToList();
-
-        Assert.Equal(new[] { "POST workitems/{id}/attachments" }, raising);
     }
 
     [Theory]

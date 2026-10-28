@@ -1,10 +1,8 @@
-using System.Net;
-using System.Reflection;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
-using ILD.McpServer;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Configuration;
 using Moq;
 
@@ -176,40 +174,9 @@ public sealed class BaseRepoCloneTests : IDisposable
 /// <summary>clone_repository as the agent sees it: its name and parameters, and the agent-API call it makes.</summary>
 public sealed class CloneRepositoryToolTests
 {
-    private const string BaseAddress = "http://ild-host:8080/";
-
-    private static async Task<(string Result, HttpRequestMessage Request, string? Body)> InvokeAsync(IReadOnlyDictionary<string, object?> args)
-    {
-        HttpRequestMessage? seen = null;
-        string? body = null;
-        var handler = new StubHandler(async req =>
-        {
-            seen = req;
-            body = req.Content is null ? null : await req.Content.ReadAsStringAsync();
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""{"outcome":"Cloned","path":"repos/widgets","branch":"main","commit":"abc123","previousCommit":null,"changed":true}"""),
-            };
-        });
-        var ild = new IldClient(
-            new HttpClient(handler) { BaseAddress = new Uri(BaseAddress) },
-            new IldClientOptions(BaseAddress.TrimEnd('/'), "the-agent-token", LoopRunId: null));
-
-        var method = typeof(IldClient).Assembly.GetTypes()
-            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-            .Single(m => m.CustomAttributes.Any(a =>
-                a.AttributeType.Name == "McpServerToolAttribute"
-                && a.NamedArguments.Any(n => n.MemberName == "Name" && (string?)n.TypedValue.Value == "clone_repository")));
-        var tools = Activator.CreateInstance(method.DeclaringType!, ild)!;
-        var parameters = method.GetParameters();
-        Assert.All(args.Keys, name => Assert.Contains(parameters, p => p.Name == name));
-        var values = parameters
-            .Select(p => args.TryGetValue(p.Name!, out var v) ? v : p.HasDefaultValue ? p.DefaultValue : null)
-            .ToArray();
-
-        var result = await (Task<string>)method.Invoke(tools, values)!;
-        return (result, seen!, body);
-    }
+    private static Task<(string Result, HttpRequestMessage Request, string? Body)> InvokeAsync(IReadOnlyDictionary<string, object?> args)
+        => McpToolInvoker.InvokeAsync("clone_repository", args,
+            """{"outcome":"Cloned","path":"repos/widgets","branch":"main","commit":"abc123","previousCommit":null,"changed":true}""");
 
     [Fact]
     public async Task clone_repository_posts_the_branch_to_the_repositorys_clone_endpoint()
@@ -221,7 +188,7 @@ public sealed class CloneRepositoryToolTests
         });
 
         Assert.Equal(HttpMethod.Post, request.Method);
-        Assert.Equal($"{BaseAddress}api/v1/agent/chat/repositories/3f2c%20a%2Fb/clone", request.RequestUri!.AbsoluteUri);
+        Assert.Equal($"{McpToolInvoker.BaseAddress}api/v1/agent/chat/repositories/3f2c%20a%2Fb/clone", request.RequestUri!.AbsoluteUri);
         Assert.Equal("release/1.2", JsonDocument.Parse(body!).RootElement.GetProperty("branch").GetString());
         Assert.Contains("repos/widgets", result);
     }
@@ -231,14 +198,8 @@ public sealed class CloneRepositoryToolTests
     {
         var (_, request, body) = await InvokeAsync(new Dictionary<string, object?> { ["repositoryId"] = "3f2c" });
 
-        Assert.Equal($"{BaseAddress}api/v1/agent/chat/repositories/3f2c/clone", request.RequestUri!.AbsoluteUri);
+        Assert.Equal($"{McpToolInvoker.BaseAddress}api/v1/agent/chat/repositories/3f2c/clone", request.RequestUri!.AbsoluteUri);
         var json = JsonDocument.Parse(body!).RootElement;
         Assert.True(!json.TryGetProperty("branch", out var branch) || branch.ValueKind == JsonValueKind.Null);
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => respond(request);
     }
 }

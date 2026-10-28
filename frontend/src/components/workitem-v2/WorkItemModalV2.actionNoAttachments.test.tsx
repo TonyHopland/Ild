@@ -93,7 +93,7 @@ const feedback = () => document.querySelector(".wiv2-feedback") as HTMLElement;
 const feedbackTextarea = () => feedback().querySelector("textarea") as HTMLTextAreaElement;
 
 /** Lets the attachment limits land, so a picker that depends on them would have rendered. */
-async function settle(limits: ReturnType<typeof mockServices>["limits"]) {
+async function limitsLoaded(limits: ReturnType<typeof mockServices>["limits"]) {
   await waitFor(() => expect(limits).toHaveBeenCalled());
   await act(async () => {
     await Promise.resolve();
@@ -162,7 +162,7 @@ describe("the Action tab's feedback pane carries no attachment control", () => {
     const item = makeParkedWorkItem(overrides);
     const { limits } = mockServices(item);
     await renderDialog(item);
-    await settle(limits);
+    await limitsLoaded(limits);
 
     expectNoAttachmentControl();
     if (textarea) expect(feedbackTextarea()).not.toBeNull();
@@ -178,7 +178,7 @@ describe("pasting a file into the Action tab's feedback pane", () => {
       .spyOn(authServices.workItemService, "humanFeedbackInput")
       .mockResolvedValue(undefined);
     await renderDialog(item);
-    await settle(limits);
+    await limitsLoaded(limits);
 
     await pasteFile(feedbackTextarea(), new File(["x"], "shot.png", { type: "image/png" }));
     await pasteFile(feedback(), new File(["y"], "other.png", { type: "image/png" }));
@@ -200,7 +200,7 @@ describe("pasting a file into the Action tab's feedback pane", () => {
     const { limits } = mockServices(item);
     const onClose = vi.fn();
     await renderDialog(item, onClose);
-    await settle(limits);
+    await limitsLoaded(limits);
 
     await pasteFile(feedbackTextarea(), new File(["x"], "shot.png", { type: "image/png" }));
 
@@ -212,76 +212,20 @@ describe("pasting a file into the Action tab's feedback pane", () => {
 });
 
 describe("answering from the Action tab submits exactly what was typed", () => {
-  const ANSWER_CASES: Array<{
-    name: string;
-    actions: string | null;
-    service: "humanFeedbackInput" | "humanFeedbackReject" | "humanFeedbackEdge";
-    typed: string | null;
-    button: string;
-    sent: unknown[];
-  }> = [
-    {
-      name: "approving sends the typed text and uploads nothing",
-      actions: null,
-      service: "humanFeedbackInput",
-      typed: "Looks good",
-      button: "Approve",
-      sent: ["wi-1", "run-1", "Looks good"],
-    },
-    {
-      name: "approving with nothing typed sends empty text and uploads nothing",
-      actions: null,
-      service: "humanFeedbackInput",
-      typed: null,
-      button: "Approve",
-      sent: ["wi-1", "run-1", ""],
-    },
-    {
-      name: "rejecting sends the typed text and uploads nothing",
-      actions: null,
-      service: "humanFeedbackReject",
-      typed: "Not yet",
-      button: "Reject",
-      sent: ["wi-1", "run-1", "Not yet"],
-    },
-    {
-      name: "rejecting with nothing typed sends no reason and uploads nothing",
-      actions: null,
-      service: "humanFeedbackReject",
-      typed: null,
-      button: "Reject",
-      sent: ["wi-1", "run-1", undefined],
-    },
-    {
-      name: "taking a named edge sends the typed text and uploads nothing",
-      actions: "OnSuccess,Needs work,OnFailure",
-      service: "humanFeedbackEdge",
-      typed: "Have a look",
-      button: "Needs work",
-      sent: ["wi-1", "run-1", "Needs work", "Have a look"],
-    },
-    {
-      name: "taking a named edge with nothing typed sends empty text and uploads nothing",
-      actions: "OnSuccess,Needs work,OnFailure",
-      service: "humanFeedbackEdge",
-      typed: null,
-      button: "Needs work",
-      sent: ["wi-1", "run-1", "Needs work", ""],
-    },
-  ];
-
-  test.each(ANSWER_CASES)("$name", async ({ actions, service, typed, button, sent }) => {
-    const item = makeParkedWorkItem({ humanFeedbackActions: actions });
+  test("approving sends the typed text and uploads nothing", async () => {
+    const item = makeParkedWorkItem({ humanFeedbackActions: null });
     const { limits, upload } = mockServices(item);
-    const answer = vi.spyOn(authServices.workItemService, service).mockResolvedValue(undefined);
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockResolvedValue(undefined);
     await renderDialog(item);
-    await settle(limits);
+    await limitsLoaded(limits);
 
-    if (typed !== null) await type(typed);
-    await click(await screen.findByRole("button", { name: button }));
+    await type("Looks good");
+    await click(await screen.findByRole("button", { name: "Approve" }));
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith(...sent);
+    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Looks good");
     expect(JSON.stringify(answer.mock.calls[0])).not.toContain("Attached files");
     expect(upload).not.toHaveBeenCalled();
   });

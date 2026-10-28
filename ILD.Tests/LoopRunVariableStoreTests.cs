@@ -1,8 +1,11 @@
+using System.Data.Common;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace ILD.Tests;
 
@@ -337,24 +340,73 @@ public class LoopRunVariableStoreTests
         Assert.Empty(await new LoopRunStore(db.Fresh()).GetTurnVariableChangesForWorkItemAsync(run.WorkItemId));
     }
 
+    /// <summary>
+    /// Commits a competing write to the variable inside the first writer's own
+    /// transaction, right after that writer read the value it means to replace.
+    /// </summary>
+    private sealed class CompetitorAfterFirstVariableRead : DbCommandInterceptor
+    {
+        private int _fired;
+
+        public override async ValueTask<InterceptionResult> DataReaderClosingAsync(
+            DbCommand command, DataReaderClosingEventData eventData, InterceptionResult result)
+        {
+            if (command.CommandText.Contains("\"LoopRunVariables\"", StringComparison.Ordinal)
+                && !command.CommandText.StartsWith("UPDATE", StringComparison.Ordinal)
+                && Interlocked.Exchange(ref _fired, 1) == 0)
+            {
+                await using var competitor = command.Connection!.CreateCommand();
+                competitor.Transaction = command.Transaction;
+                competitor.CommandText = "UPDATE \"LoopRunVariables\" SET \"Value\" = 'y'";
+                await competitor.ExecuteNonQueryAsync();
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// The first writer's miss rolls its transaction back, taking the competitor's
+    /// uncommitted update with it; the competitor then commits for real, on the
+    /// connection the rollback just freed, before the first writer tries again.
+    /// </summary>
+    private sealed class CompetitorCommitsAfterRollback : DbTransactionInterceptor
+    {
+        private readonly Func<Task> _competitor;
+        private int _fired;
+
+        public CompetitorCommitsAfterRollback(Func<Task> competitor) => _competitor = competitor;
+
+        public override async Task TransactionRolledBackAsync(
+            DbTransaction transaction, TransactionEndEventData eventData, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _fired, 1) == 0) await _competitor();
+        }
+    }
+
     [Fact]
-    public async Task Writes_racing_on_one_variable_each_record_the_value_they_actually_replaced()
+    public async Task A_write_that_loses_the_variable_to_a_competitor_retries_and_records_the_value_it_replaced()
     {
         using var db = new TestDb();
         var run = await SeedRunAsync(db);
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "x");
 
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(i =>
-            new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", $"v{i}")));
+        var writerA = new LoopRunStore(new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(db.Context.Database.GetDbConnection())
+            .WithPostgresSemantics()
+            .AddInterceptors(
+                new CompetitorAfterFirstVariableRead(),
+                new CompetitorCommitsAfterRollback(() =>
+                    new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "y")))
+            .Options));
 
-        // The writes form one unbroken chain: each replaced the value the one
-        // before it left, and the last is what the variable holds now.
+        await writerA.SetVariableAsync(run.Id, "handoff", "z");
+
+        // Every write names the value it actually replaced, the competitor's included,
+        // and the variable ends on the writer that retried.
         var writes = await WritesAsync(db, run.WorkItemId);
-        Assert.Equal(8, writes.Count);
-        Assert.Null(writes[0].PreviousValue);
-        for (var i = 1; i < writes.Count; i++)
-            Assert.Equal(writes[i - 1].Value, writes[i].PreviousValue);
-        var current = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariablesAsync(run.Id));
-        Assert.Equal(writes[^1].Value, current.Value);
+        Assert.Equal(new[] { "x", "y", "z" }, writes.Select(w => w.Value));
+        Assert.Equal(new string?[] { null, "x", "y" }, writes.Select(w => w.PreviousValue));
+        Assert.Equal("z", Assert.Single(await new LoopRunStore(db.Fresh()).GetVariablesAsync(run.Id)).Value);
     }
 
     [Fact]

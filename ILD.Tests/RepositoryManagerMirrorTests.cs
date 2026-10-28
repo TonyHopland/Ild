@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 
@@ -10,7 +11,8 @@ namespace ILD.Tests;
 /// (ADR-0014). Every test runs once per mode, with each git call checked by
 /// <see cref="AuditingRunner"/>.
 /// </summary>
-[Collection("Git")]
+[Collection(GitBundleScratchCollection.Name)]
+[SupportedOSPlatform("linux")]
 public class RepositoryManagerMirrorTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.

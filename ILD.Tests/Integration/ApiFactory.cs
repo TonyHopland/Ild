@@ -18,11 +18,11 @@ namespace ILD.Tests.Integration;
 /// <summary>
 /// Per-instance <see cref="WebApplicationFactory{TEntryPoint}"/> that boots the
 /// real ILD API pipeline against an isolated in-memory SQLite database and a
-/// per-instance temporary data directory. Each test should `new` one of these
-/// (or use it as an <c>IClassFixture</c>) so the database, file system, and
-/// singleton service instances cannot leak between tests.
+/// per-instance temporary data directory. A test that changes anything host-wide
+/// (settings, the clock, the file system root) should `new` one of its own so that state cannot
+/// leak into other tests; the rest share one per class through <see cref="SharedApiFactory"/>.
 /// </summary>
-public sealed class ApiFactory : WebApplicationFactory<Program>
+public class ApiFactory : WebApplicationFactory<Program>
 {
     private readonly SqliteConnection _connection;
     private readonly FakeWorkItemServerHarness _serverHarness;
@@ -214,4 +214,13 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         public AgentAdapterTraits GetTraits(string? providerType)
             => DeclaredTraits.For(providerType);
     }
+}
+
+/// <summary>
+/// The default <see cref="ApiFactory"/> as an <c>IClassFixture</c> type, which xunit only accepts
+/// with a single public constructor. One host serves every test in the class, so a test there
+/// leaves nothing host-wide behind (settings, clock, filesystem root) and reads only its own data.
+/// </summary>
+public sealed class SharedApiFactory : ApiFactory
+{
 }

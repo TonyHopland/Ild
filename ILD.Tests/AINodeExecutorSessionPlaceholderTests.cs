@@ -4,6 +4,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -18,23 +19,6 @@ namespace ILD.Tests;
 /// </summary>
 public class AINodeExecutorSessionPlaceholderTests
 {
-    /// <summary>Captures the context handed to the adapter and echoes a stable session id back.</summary>
-    private sealed class CapturingAdapter : IAgentAdapter
-    {
-        public AgentExecutionContext? Captured { get; private set; }
-        public string Name => "stub";
-        public string[] SupportedProviderTypes => ["stub"];
-        public ConfigFieldDescriptor[] ConfigSchema => [];
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            Captured = context;
-            return Task.FromResult(NodeExecutionResult.Ok("done", sessionId: context.SessionId ?? "new-sess"));
-        }
-    }
-
     private static (IServiceProvider sp, CapturingAdapter adapter, Mock<ILoopRunStore> runStore) BuildServices(
         IReadOnlyDictionary<string, string>? variables = null,
         IReadOnlyDictionary<string, string>? bindings = null)
@@ -51,10 +35,7 @@ public class AINodeExecutorSessionPlaceholderTests
         var providerStore = new Mock<IProviderStore>();
         providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
 
-        var adapter = new CapturingAdapter();
-        var registry = Mock.Of<IAgentAdapterRegistry>(r =>
-            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
-
+        var adapter = new CapturingAdapter(newSessionId: "new-sess");
         var runStore = new Mock<ILoopRunStore>();
         runStore.Setup(s => s.GetVariablesAsync(It.IsAny<Guid>()))
             .ReturnsAsync(() => (variables ?? new Dictionary<string, string>())
@@ -76,7 +57,7 @@ public class AINodeExecutorSessionPlaceholderTests
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(runStore.Object);
         services.AddSingleton(workItems);
-        services.AddSingleton(registry);
+        services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
         return (services.BuildServiceProvider(), adapter, runStore);
     }
 

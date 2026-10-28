@@ -14,7 +14,7 @@ namespace ILD.Tests.Integration;
 /// SPA shell, its bundle, the probes — still do, and if the clients that cannot
 /// send an Authorization header can still authenticate.
 /// </summary>
-public class AuthorizationPolicyTests
+public class AuthorizationPolicyTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Theory]
     [InlineData("/")]                    // UseDefaultFiles -> index.html
@@ -24,7 +24,6 @@ public class AuthorizationPolicyTests
     {
         // Nobody can log in through a UI that itself demands a login, and the
         // fallback file is a routed endpoint, so it needs the explicit opt-out.
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
@@ -37,7 +36,6 @@ public class AuthorizationPolicyTests
     [InlineData("/metrics")]
     public async Task An_operational_endpoint_answers_without_a_session(string path)
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
@@ -55,7 +53,6 @@ public class AuthorizationPolicyTests
         // can only travel in the query string. Sent as an ordinary GET here: each
         // action's first act is to reject a non-upgrade request, so a 400 means
         // authorization let it through — which is the whole of what this pins.
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
         var token = await factory.GetAdminTokenAsync();
 
@@ -75,7 +72,6 @@ public class AuthorizationPolicyTests
         // The SPA fallback is a catch-all over every extensionless path, so
         // without a narrower fallback ahead of it a mistyped API route would come
         // back as 200 text/html — and to an anonymous caller at that.
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var anonymous = await client.GetAsync(path, TestContext.Current.CancellationToken);
@@ -89,7 +85,6 @@ public class AuthorizationPolicyTests
     [Fact]
     public async Task A_rejected_request_keeps_the_401_body_clients_already_parse()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var missing = await client.GetAsync("/api/v1/repositories", TestContext.Current.CancellationToken);
@@ -114,7 +109,6 @@ public class AuthorizationPolicyTests
         // A browser cannot put a header on a WebSocket handshake, so SignalR
         // appends the token to the query string instead. Both legs are separate
         // requests through the whole pipeline and both have to be let in.
-        await using var factory = new ApiFactory();
         var token = await factory.GetAdminTokenAsync();
         var client = factory.CreateClient();
 
@@ -149,7 +143,6 @@ public class AuthorizationPolicyTests
     [InlineData("/hubs/work-item")]
     public async Task The_agent_token_is_refused_at_every_hub(string path)
     {
-        await using var factory = new ApiFactory();
         var agentToken = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
         var client = factory.CreateClient();
 
@@ -190,7 +183,6 @@ public class AuthorizationPolicyTests
     [InlineData("/api/v1/agent/analytics/templates?from=2026-01-01&to=2026-12-31&provider=claude")]
     public async Task The_agent_token_reaches_the_agent_surface(string path)
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
         var token = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
@@ -210,7 +202,6 @@ public class AuthorizationPolicyTests
     [InlineData("X-ILD-Chat-Session-Id")]
     public async Task The_agent_token_reaches_the_loop_retro_read_routes_from_a_run_and_from_a_chat(string sessionHeader)
     {
-        await using var factory = new ApiFactory();
         var templateId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         var chatSessionId = Guid.NewGuid();
@@ -273,7 +264,6 @@ public class AuthorizationPolicyTests
     public async Task An_azure_devops_webhook_authenticates_from_the_query_while_basic_auth_carries_its_own_secret()
     {
         const string webhookSecret = "azure-hook-secret";
-        await using var factory = new ApiFactory();
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>();
@@ -324,7 +314,6 @@ public class AuthorizationPolicyTests
     [Fact]
     public async Task Reading_the_log_takes_a_session_while_the_level_stays_anonymous()
     {
-        await using var factory = new ApiFactory();
         var anonymous = factory.CreateClient();
 
         Assert.Equal(HttpStatusCode.OK, (await anonymous.GetAsync("/api/v1/logging/level", TestContext.Current.CancellationToken)).StatusCode);
@@ -339,7 +328,6 @@ public class AuthorizationPolicyTests
     [Fact]
     public async Task The_chat_mark_read_route_is_on_the_user_only_surface()
     {
-        await using var factory = new ApiFactory();
         var route = $"/api/v1/chat/{Guid.NewGuid()}/read";
         var agent = factory.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(

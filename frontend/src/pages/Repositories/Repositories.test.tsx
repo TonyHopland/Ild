@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import Repositories from "./index";
 import * as services from "../../services/auth";
+import { reply, stubFetch, type Call } from "../../test-support";
 
 // The feed list is its own request, made on mount; stubbing it keeps the queued
 // fetch responses below in step with the requests they answer.
@@ -14,19 +15,15 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
-function mockFetch(json: unknown, status = 200) {
-  return vi.fn().mockResolvedValue({
-    ok: status < 400,
-    status,
-    text: () => Promise.resolve(JSON.stringify(json)),
-  });
+function renderPage(mockFetchFn: ReturnType<typeof vi.fn>) {
+  vi.stubGlobal("fetch", mockFetchFn);
+  renderPageOnly();
 }
 
-function renderPage(mockFetchFn: ReturnType<typeof mockFetch>) {
-  vi.stubGlobal("fetch", mockFetchFn);
-
+function renderPageOnly() {
   const authValue = {
     user: { id: "1", username: "test", createdAt: "" },
     token: "test-token",
@@ -46,921 +43,286 @@ function renderPage(mockFetchFn: ReturnType<typeof mockFetch>) {
 }
 
 describe("Repositories page", () => {
+  const provider = {
+    id: "prov-1",
+    name: "Forgejo",
+    type: "gitea",
+    baseUrl: "https://git.example.com",
+    apiKey: "",
+    webhookSecret: "",
+    createdAt: "2025-01-01T00:00:00Z",
+  };
+
+  const storedRepo = (id: string, name: string, extra: Record<string, unknown> = {}) => ({
+    ...repo(id, name),
+    ...extra,
+  });
+
+  interface Server {
+    repos: Record<string, unknown>[];
+    previewEnv: Response | string;
+    inspection: { name: string | null; defaultBranch: string | null };
+  }
+
+  /** A server holding `server.repos`, applying each create, update and delete to them. */
+  function serve(init: Partial<Server> = {}) {
+    const server: Server = {
+      repos: [],
+      previewEnv: "",
+      inspection: { name: null, defaultBranch: null },
+      ...init,
+    };
+    const calls = stubFetch((call) => {
+      const { method, path, body } = call;
+      const one = /\/repositories\/([^/]+)$/.exec(path);
+      const env = /\/repositories\/([^/]+)\/preview-env$/.exec(path);
+      if (path.endsWith("/remoteproviders")) return reply(200, [provider]);
+      if (path.endsWith("/repositories/inspect-remote")) return reply(200, server.inspection);
+      if (env && method === "GET")
+        return typeof server.previewEnv === "string"
+          ? reply(200, { previewEnv: server.previewEnv })
+          : server.previewEnv;
+      if (env && method === "DELETE")
+        return reply(200, { ...server.repos.find((r) => r.id === env[1]), hasPreviewEnv: false });
+      if (one && method === "PUT")
+        return reply(
+          200,
+          server.repos.find((r) => r.id === one[1]),
+        );
+      if (one && method === "DELETE") {
+        server.repos = server.repos.filter((r) => r.id !== one[1]);
+        return reply(204);
+      }
+      if (path.endsWith("/repositories") && method === "POST") {
+        const created = { ...repo("repo-new", String(body?.name)), ...body };
+        server.repos = [...server.repos, created];
+        return reply(201, created);
+      }
+      if (path.endsWith("/repositories")) return reply(200, server.repos);
+      return reply(404);
+    });
+    return { server, calls };
+  }
+
+  const requestsOf = (calls: Call[], method: string, pathEnd: string) =>
+    calls.filter((c) => c.method === method && c.path.endsWith(pathEnd));
+
+  async function openEditorOf(name: string) {
+    await waitFor(() => expect(screen.getByText(name)).toBeTruthy());
+    fireEvent.click(within(repoRow(name)).getByText("Edit"));
+    await screen.findByText("Edit Repository");
+  }
+
+  async function openCreateForm() {
+    await waitFor(() => expect(screen.getByText("Repositories")).toBeTruthy());
+    fireEvent.click(screen.getByText("+ Add repository"));
+    await screen.findByText("New Repository");
+  }
+
+  function fillIdentity(name: string, cloneUrl: string) {
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: name } });
+    fireEvent.change(screen.getByLabelText("Clone URL"), { target: { value: cloneUrl } });
+    fireEvent.change(screen.getByLabelText("Remote Provider"), { target: { value: "prov-1" } });
+  }
+
   test("renders repository list with name, clone URL, provider, and gating setting", async () => {
-    const repos = [
-      {
-        id: "repo-1",
-        name: "my-repo",
-        cloneUrl: "https://git.example.com/my-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "main",
-        worktreesPath: null,
-        defaultIntakeStatus: "Backlog",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-      {
-        id: "repo-2",
-        name: "other-repo",
-        cloneUrl: "https://git.example.com/other-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "develop",
-        worktreesPath: "/worktrees",
-        defaultIntakeStatus: "WorkQueue",
-        createdAt: "2025-02-01T00:00:00Z",
-      },
-    ];
-
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("my-repo")).toBeTruthy();
+    serve({
+      repos: [
+        storedRepo("repo-1", "my-repo", { defaultIntakeStatus: "Backlog" }),
+        storedRepo("repo-2", "other-repo", { defaultIntakeStatus: "WorkQueue" }),
+      ],
     });
 
-    expect(screen.getByText("my-repo")).toBeTruthy();
+    renderPageOnly();
+
+    await waitFor(() => expect(screen.getByText("my-repo")).toBeTruthy());
     expect(screen.getByText("other-repo")).toBeTruthy();
     expect(screen.getByText("https://git.example.com/my-repo.git")).toBeTruthy();
     expect(screen.getByText("Backlog")).toBeTruthy();
     expect(screen.getByText("WorkQueue")).toBeTruthy();
   });
 
-  test("create form opens, validates required fields, and calls API on submit", async () => {
-    const repos: unknown[] = [];
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const createdRepo = {
-      id: "new-repo-1",
-      name: "new-repo",
-      cloneUrl: "https://git.example.com/new-repo.git",
-      remoteProviderId: "prov-1",
-      defaultBranch: "main",
-      worktreesPath: null,
-      defaultIntakeStatus: "Backlog",
-      createdAt: "2025-03-01T00:00:00Z",
-    };
-
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("Repositories")).toBeTruthy();
-    });
-
-    // Open create form
-    fireEvent.click(screen.getByText("+ Add repository"));
-    await waitFor(() => {
-      expect(screen.getByText("New Repository")).toBeTruthy();
-    });
-
-    // Fill in required fields
-    fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "new-repo" },
-    });
-    fireEvent.change(screen.getByLabelText("Clone URL"), {
-      target: { value: "https://git.example.com/new-repo.git" },
-    });
-    fireEvent.change(screen.getByLabelText("Remote Provider"), {
-      target: { value: "prov-1" },
-    });
-
-    // Mock the POST and subsequent reload
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 201,
-          text: () => Promise.resolve(JSON.stringify(createdRepo)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([createdRepo])),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    // Submit
-    fireEvent.click(screen.getByText("Create"));
-
-    await waitFor(() => {
-      expect(screen.queryByText("New Repository")).toBeFalsy();
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/repositories"),
-      expect.objectContaining({ method: "POST" }),
-    );
-  });
-
   test("create form renders the Custom .env field and submits its value", async () => {
-    const repos: unknown[] = [];
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
+    const { calls } = serve();
+    renderPageOnly();
+    await openCreateForm();
 
-    const createdRepo = {
-      id: "new-repo-1",
+    const envField = screen.getByLabelText("Custom .env") as HTMLTextAreaElement;
+    fillIdentity("new-repo", "https://git.example.com/new-repo.git");
+    fireEvent.change(envField, { target: { value: "API_TOKEN=secret\nFOO=bar" } });
+    fireEvent.click(screen.getByText("Create"));
+
+    await waitFor(() => expect(screen.queryByText("New Repository")).toBeFalsy());
+    const posts = requestsOf(calls, "POST", "/repositories");
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body).toMatchObject({
       name: "new-repo",
       cloneUrl: "https://git.example.com/new-repo.git",
       remoteProviderId: "prov-1",
-      defaultBranch: "main",
-      worktreesPath: null,
-      defaultIntakeStatus: "Backlog",
-      hasPreviewEnv: true,
-      createdAt: "2025-03-01T00:00:00Z",
-    };
-
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("Repositories")).toBeTruthy();
+      previewEnv: "API_TOKEN=secret\nFOO=bar",
     });
 
-    fireEvent.click(screen.getByText("+ Add repository"));
-    await waitFor(() => {
-      expect(screen.getByText("New Repository")).toBeTruthy();
-    });
-
-    // The field is present…
-    const envField = screen.getByLabelText("Custom .env") as HTMLTextAreaElement;
-    expect(envField).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "new-repo" },
-    });
-    fireEvent.change(screen.getByLabelText("Clone URL"), {
-      target: { value: "https://git.example.com/new-repo.git" },
-    });
-    fireEvent.change(screen.getByLabelText("Remote Provider"), {
-      target: { value: "prov-1" },
-    });
-    fireEvent.change(envField, {
-      target: { value: "API_TOKEN=secret\nFOO=bar" },
-    });
-
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 201,
-          text: () => Promise.resolve(JSON.stringify(createdRepo)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([createdRepo])),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    fireEvent.click(screen.getByText("Create"));
-
-    await waitFor(() => {
-      expect(screen.queryByText("New Repository")).toBeFalsy();
-    });
-
-    // …and its value rides along in the POST body.
-    const postCall = fetchMock.mock.calls.find(
-      (c: unknown[]) =>
-        typeof c[0] === "string" &&
-        (c[0] as string).includes("/repositories") &&
-        (c[1] as { method?: string })?.method === "POST",
-    );
-    expect(postCall).toBeTruthy();
-    const body = JSON.parse((postCall![1] as { body: string }).body);
-    expect(body.previewEnv).toBe("API_TOKEN=secret\nFOO=bar");
-
-    // A second New Repository form starts blank — the previous repository's .env
+    // A second New Repository form starts blank: the previous repository's .env
     // must not be sitting in it, silently unsent because it looks unchanged.
     fireEvent.click(screen.getByText("+ Add repository"));
-    await waitFor(() => {
-      expect(screen.getByText("New Repository")).toBeTruthy();
-    });
+    await screen.findByText("New Repository");
     expect((screen.getByLabelText("Custom .env") as HTMLTextAreaElement).value).toBe("");
   });
 
   test("edit form prefills the stored Custom .env and omits it when unchanged", async () => {
-    const repos = [
-      {
-        id: "repo-1",
-        name: "my-repo",
-        cloneUrl: "https://git.example.com/my-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "main",
-        worktreesPath: null,
-        defaultIntakeStatus: "Backlog",
-        hasPreviewEnv: true,
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("my-repo")).toBeTruthy();
+    const { calls } = serve({
+      repos: [storedRepo("repo-1", "my-repo", { hasPreviewEnv: true })],
+      previewEnv: "API_TOKEN=stored",
     });
+    renderPageOnly();
+    await waitFor(() => expect(screen.getByText("my-repo")).toBeTruthy());
 
     // The list load must not have reached for the plaintext .env.
-    expect(
-      fetchMock.mock.calls.some(
-        (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/preview-env"),
-      ),
-    ).toBe(false);
-
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify({ previewEnv: "API_TOKEN=stored" })),
-      }),
-    );
+    expect(requestsOf(calls, "GET", "/preview-env")).toHaveLength(0);
 
     fireEvent.click(within(repoRow("my-repo")).getByText("Edit"));
-    await waitFor(() => {
-      expect(screen.getByText("Edit Repository")).toBeTruthy();
-    });
-
-    // Opening the editor fetches the stored text and prefills it, so an edit is an
-    // edit rather than a retype.
+    await screen.findByText("Edit Repository");
     const envField = screen.getByLabelText("Custom .env") as HTMLTextAreaElement;
-    await waitFor(() => {
-      expect(envField.value).toBe("API_TOKEN=stored");
-    });
-
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos[0])),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
+    await waitFor(() => expect(envField.value).toBe("API_TOKEN=stored"));
 
     fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Repository")).toBeFalsy());
 
-    await waitFor(() => {
-      expect(screen.queryByText("Edit Repository")).toBeFalsy();
-    });
-
-    const putCall = fetchMock.mock.calls.find(
-      (c: unknown[]) => (c[1] as { method?: string })?.method === "PUT",
-    );
-    expect(putCall).toBeTruthy();
-    const body = JSON.parse((putCall![1] as { body: string }).body);
     // An untouched field must not send previewEnv, so the stored secret is kept.
-    expect("previewEnv" in body).toBe(false);
+    const puts = requestsOf(calls, "PUT", "/repositories/repo-1");
+    expect(puts).toHaveLength(1);
+    expect(puts[0].body).toMatchObject({ name: "my-repo", remoteProviderId: "prov-1" });
+    expect(puts[0].body).not.toHaveProperty("previewEnv");
   });
 
   test("emptying the prefilled Custom .env removes the stored value", async () => {
-    const repos = [
-      {
-        id: "repo-1",
-        name: "my-repo",
-        cloneUrl: "https://git.example.com/my-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "main",
-        worktreesPath: null,
-        defaultIntakeStatus: "Backlog",
-        hasPreviewEnv: true,
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const ok = (json: unknown) =>
-      Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(json)) });
-
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(ok(repos)).mockReturnValueOnce(ok(providers));
-
-    renderPage(fetchMock);
-    await waitFor(() => {
-      expect(screen.getByText("my-repo")).toBeTruthy();
+    const { calls } = serve({
+      repos: [storedRepo("repo-1", "my-repo", { hasPreviewEnv: true })],
+      previewEnv: "API_TOKEN=stored",
     });
-
-    fetchMock.mockReturnValueOnce(ok({ previewEnv: "API_TOKEN=stored" }));
-    fireEvent.click(within(repoRow("my-repo")).getByText("Edit"));
+    renderPageOnly();
+    await openEditorOf("my-repo");
 
     const envField = screen.getByLabelText("Custom .env") as HTMLTextAreaElement;
-    await waitFor(() => {
-      expect(envField.value).toBe("API_TOKEN=stored");
-    });
-
+    await waitFor(() => expect(envField.value).toBe("API_TOKEN=stored"));
     fireEvent.change(envField, { target: { value: "" } });
-
-    fetchMock
-      .mockReturnValueOnce(ok(repos[0]))
-      .mockReturnValueOnce(ok({ ...repos[0], hasPreviewEnv: false }))
-      .mockReturnValueOnce(ok(repos))
-      .mockReturnValueOnce(ok(providers));
-
     fireEvent.click(screen.getByText("Update"));
-    await waitFor(() => {
-      expect(screen.queryByText("Edit Repository")).toBeFalsy();
-    });
+    await waitFor(() => expect(screen.queryByText("Edit Repository")).toBeFalsy());
 
     // The PUT reads a blank .env as "keep it", so removing takes the explicit
     // clear call instead.
-    const putCall = fetchMock.mock.calls.find(
-      (c: unknown[]) => (c[1] as { method?: string })?.method === "PUT",
-    );
-    expect("previewEnv" in JSON.parse((putCall![1] as { body: string }).body)).toBe(false);
-    expect(
-      fetchMock.mock.calls.some(
-        (c: unknown[]) =>
-          typeof c[0] === "string" &&
-          (c[0] as string).endsWith("/repositories/repo-1/preview-env") &&
-          (c[1] as { method?: string })?.method === "DELETE",
-      ),
-    ).toBe(true);
+    const puts = requestsOf(calls, "PUT", "/repositories/repo-1");
+    expect(puts).toHaveLength(1);
+    expect(puts[0].body).not.toHaveProperty("previewEnv");
+    expect(requestsOf(calls, "DELETE", "/repositories/repo-1/preview-env")).toHaveLength(1);
   });
 
   test("a Custom .env that cannot be read says so instead of looking unset", async () => {
-    const repos = [
-      {
-        id: "repo-1",
-        name: "my-repo",
-        cloneUrl: "https://git.example.com/my-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "main",
-        worktreesPath: null,
-        defaultIntakeStatus: "Backlog",
-        hasPreviewEnv: true,
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const ok = (json: unknown) =>
-      Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(json)) });
-
-    const fetchMock = mockFetch(null);
-    fetchMock.mockReturnValueOnce(ok(repos)).mockReturnValueOnce(ok(providers));
-
-    renderPage(fetchMock);
-    await waitFor(() => {
-      expect(screen.getByText("my-repo")).toBeTruthy();
+    const { calls } = serve({
+      repos: [storedRepo("repo-1", "my-repo", { hasPreviewEnv: true })],
+      previewEnv: reply(500),
     });
+    renderPageOnly();
+    await waitFor(() => expect(screen.getByText("my-repo")).toBeTruthy());
 
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: false,
-        status: 500,
-        statusText: "Server Error",
-        text: () => Promise.resolve(""),
-      }),
-    );
     fireEvent.click(within(repoRow("my-repo")).getByText("Edit"));
 
     // An empty field would otherwise be indistinguishable from "no .env stored".
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/Couldn't load the stored custom \.env/);
 
-    fetchMock
-      .mockReturnValueOnce(ok(repos[0]))
-      .mockReturnValueOnce(ok(repos))
-      .mockReturnValueOnce(ok(providers));
-
     fireEvent.click(screen.getByText("Update"));
-    await waitFor(() => {
-      expect(screen.queryByText("Edit Repository")).toBeFalsy();
-    });
+    await waitFor(() => expect(screen.queryByText("Edit Repository")).toBeFalsy());
 
     // The blank field is not read as a removal: nothing about the .env is sent.
-    const putCall = fetchMock.mock.calls.find(
-      (c: unknown[]) => (c[1] as { method?: string })?.method === "PUT",
-    );
-    expect("previewEnv" in JSON.parse((putCall![1] as { body: string }).body)).toBe(false);
-    expect(
-      fetchMock.mock.calls.some(
-        (c: unknown[]) => (c[1] as { method?: string })?.method === "DELETE",
-      ),
-    ).toBe(false);
+    const puts = requestsOf(calls, "PUT", "/repositories/repo-1");
+    expect(puts).toHaveLength(1);
+    expect(puts[0].body).not.toHaveProperty("previewEnv");
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
   });
 
   test("auto-fills name and default branch from the remote on clone-URL blur", async () => {
-    const repos: unknown[] = [];
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("Repositories")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("+ Add repository"));
-    await waitFor(() => {
-      expect(screen.getByText("New Repository")).toBeTruthy();
-    });
-
-    // The remote inspection responds with the advertised default branch + name.
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () =>
-          Promise.resolve(JSON.stringify({ name: "inspect-proj", defaultBranch: "develop" })),
-      }),
-    );
+    const { calls } = serve({ inspection: { name: "inspect-proj", defaultBranch: "develop" } });
+    renderPageOnly();
+    await openCreateForm();
 
     fireEvent.change(screen.getByLabelText("Clone URL"), {
       target: { value: "https://git.example.com/inspect-proj.git" },
     });
     fireEvent.blur(screen.getByLabelText("Clone URL"));
 
-    await waitFor(() => {
-      expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("inspect-proj");
-    });
-    expect((screen.getByLabelText("Default Branch") as HTMLInputElement).value).toBe("develop");
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/repositories/inspect-remote"),
-      expect.objectContaining({ method: "POST" }),
+    await waitFor(() =>
+      expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("inspect-proj"),
     );
+    expect((screen.getByLabelText("Default Branch") as HTMLInputElement).value).toBe("develop");
+    const inspections = requestsOf(calls, "POST", "/repositories/inspect-remote");
+    expect(inspections).toHaveLength(1);
+    expect(inspections[0].body).toMatchObject({
+      cloneUrl: "https://git.example.com/inspect-proj.git",
+    });
   });
 
   test("clone-URL blur degrades gracefully when the remote can't be inspected", async () => {
-    const repos: unknown[] = [];
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("Repositories")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("+ Add repository"));
-    await waitFor(() => {
-      expect(screen.getByText("New Repository")).toBeTruthy();
-    });
-
-    // Unfetchable remote: server returns empty fields; the form keeps its default.
-    fetchMock.mockReturnValueOnce(
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(JSON.stringify({ name: null, defaultBranch: null })),
-      }),
-    );
+    const { calls } = serve({ inspection: { name: null, defaultBranch: null } });
+    renderPageOnly();
+    await openCreateForm();
 
     fireEvent.change(screen.getByLabelText("Clone URL"), {
       target: { value: "https://git.example.com/private.git" },
     });
     fireEvent.blur(screen.getByLabelText("Clone URL"));
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/repositories/inspect-remote"),
-        expect.objectContaining({ method: "POST" }),
-      );
+    await waitFor(() =>
+      expect(requestsOf(calls, "POST", "/repositories/inspect-remote")).toHaveLength(1),
+    );
+    expect(requestsOf(calls, "POST", "/repositories/inspect-remote")[0].body).toMatchObject({
+      cloneUrl: "https://git.example.com/private.git",
     });
-
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("Default Branch") as HTMLInputElement).value).toBe("main");
   });
 
   test("delete shows confirmation and removes repository on confirm", async () => {
-    const repos = [
-      {
-        id: "repo-1",
-        name: "my-repo",
-        cloneUrl: "https://git.example.com/my-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "main",
-        worktreesPath: null,
-        defaultIntakeStatus: "Backlog",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-      {
-        id: "repo-2",
-        name: "other-repo",
-        cloneUrl: "https://git.example.com/other-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "develop",
-        worktreesPath: "/worktrees",
-        defaultIntakeStatus: "WorkQueue",
-        createdAt: "2025-02-01T00:00:00Z",
-      },
-    ];
-
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("my-repo")).toBeTruthy();
+    const { calls } = serve({
+      repos: [storedRepo("repo-1", "my-repo"), storedRepo("repo-2", "other-repo")],
     });
+    renderPageOnly();
+    await waitFor(() => expect(screen.getByText("my-repo")).toBeTruthy());
 
-    // Click delete on first repo
-    const deleteButtons = screen.getAllByText("Delete");
-    fireEvent.click(deleteButtons[0]);
+    fireEvent.click(screen.getAllByText("Delete")[0]);
+    await screen.findByText("Confirm");
+    expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
 
-    // Confirm dialog appears
-    await waitFor(() => {
-      expect(screen.getByText("Confirm")).toBeTruthy();
-    });
-
-    // Mock the DELETE and subsequent reload
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 204,
-          text: () => Promise.resolve(""),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([repos[1]])),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    // Confirm delete
     fireEvent.click(screen.getByText("Confirm"));
 
-    await waitFor(() => {
-      expect(screen.queryByText("my-repo")).toBeFalsy();
-    });
-
-    expect(screen.queryByText("my-repo")).toBeFalsy();
+    await waitFor(() => expect(screen.queryByText("my-repo")).toBeFalsy());
     expect(screen.getByText("other-repo")).toBeTruthy();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/repositories/repo-1"),
-      expect.objectContaining({ method: "DELETE" }),
-    );
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.path)).toEqual([
+      "/api/v1/repositories/repo-1",
+    ]);
   });
 
   test("delete does not open the repository form dialog", async () => {
-    const repos = [
-      {
-        id: "repo-1",
-        name: "my-repo",
-        cloneUrl: "https://git.example.com/my-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "main",
-        worktreesPath: null,
-        defaultIntakeStatus: "Backlog",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("my-repo")).toBeTruthy();
-    });
+    serve({ repos: [storedRepo("repo-1", "my-repo")] });
+    renderPageOnly();
+    await waitFor(() => expect(screen.getByText("my-repo")).toBeTruthy());
 
     // Clicking delete should reveal the inline confirmation only — not the
     // create/edit form modal, which would otherwise overlay and block the
     // Confirm button.
     fireEvent.click(screen.getByText("Delete"));
 
-    await waitFor(() => {
-      expect(screen.getByText("Confirm")).toBeTruthy();
-    });
-
+    await screen.findByText("Confirm");
     expect(screen.queryByText("New Repository")).toBeFalsy();
     expect(screen.queryByText("Edit Repository")).toBeFalsy();
   });
 
   test("edit button opens modal with repository data pre-filled", async () => {
-    const repos = [
-      {
-        id: "repo-1",
-        name: "my-repo",
-        cloneUrl: "https://git.example.com/my-repo.git",
-        remoteProviderId: "prov-1",
-        defaultBranch: "main",
-        worktreesPath: null,
-        defaultIntakeStatus: "Backlog",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
+    serve({ repos: [storedRepo("repo-1", "my-repo")] });
+    renderPageOnly();
 
-    const providers = [
-      {
-        id: "prov-1",
-        name: "Forgejo",
-        type: "gitea",
-        baseUrl: "https://git.example.com",
-        apiKey: "",
-        webhookSecret: "",
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
+    await openEditorOf("my-repo");
 
-    const fetchMock = mockFetch(null);
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(repos)),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(providers)),
-        }),
-      );
-
-    renderPage(fetchMock);
-
-    await waitFor(() => {
-      expect(screen.getByText("my-repo")).toBeTruthy();
-    });
-
-    // Click edit button
-    fireEvent.click(within(repoRow("my-repo")).getByText("Edit"));
-
-    // Modal should open with "Edit Repository" title
-    await waitFor(() => {
-      expect(screen.getByText("Edit Repository")).toBeTruthy();
-    });
-
-    // Form fields should be pre-filled with repository data
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("my-repo");
     expect((screen.getByLabelText("Clone URL") as HTMLInputElement).value).toBe(
       "https://git.example.com/my-repo.git",
@@ -968,12 +330,6 @@ describe("Repositories page", () => {
     expect((screen.getByLabelText("Default Branch") as HTMLInputElement).value).toBe("main");
   });
 });
-
-type FakeResponse = { ok: boolean; status: number; text: () => Promise<string> };
-
-function reply(body: unknown, status = 200): FakeResponse {
-  return { ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) };
-}
 
 const testProviders = [
   {
@@ -1004,24 +360,25 @@ function repo(id: string, name: string) {
 /** Answers the page's list/update/.env calls from `state`; test calls go to `onTest`. */
 function routedFetch(
   state: { repos: Record<string, unknown>[] },
-  onTest: (id: string) => Promise<FakeResponse>,
+  onTest: (id: string) => Promise<Response>,
 ) {
   return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const test = /\/repositories\/([^/]+)\/test$/.exec(url);
     if (test && method === "POST") return onTest(test[1]);
     if (/\/repositories\/[^/]+\/preview-env$/.test(url))
-      return Promise.resolve(reply({ previewEnv: null }));
+      return Promise.resolve(reply(200, { previewEnv: null }));
     const one = /\/repositories\/([^/?]+)$/.exec(url);
     if (one && method === "PUT") {
       state.repos = state.repos.map((r) =>
         r.id === one[1] ? { ...r, updatedAt: new Date(Date.now() + 60_000).toISOString() } : r,
       );
-      return Promise.resolve(reply(state.repos.find((r) => r.id === one[1])));
+      const updated = state.repos.find((r) => r.id === one[1]);
+      return Promise.resolve(reply(200, updated));
     }
-    if (url.includes("/remoteproviders")) return Promise.resolve(reply(testProviders));
-    if (url.includes("/repositories")) return Promise.resolve(reply(state.repos));
-    return Promise.resolve(reply(null, 404));
+    if (url.includes("/remoteproviders")) return Promise.resolve(reply(200, testProviders));
+    if (url.includes("/repositories")) return Promise.resolve(reply(200, state.repos));
+    return Promise.resolve(reply(404));
   });
 }
 
@@ -1034,7 +391,7 @@ describe("Repositories page — Test button", () => {
     const state = { repos: [repo("repo-1", "alpha-app"), repo("repo-2", "beta-app")] };
     const fetchMock = routedFetch(state, () =>
       Promise.resolve(
-        reply({
+        reply(200, {
           ok: false,
           outcome: "BranchMissing",
           message: "The default branch 'main' is not on the remote.",
@@ -1066,7 +423,7 @@ describe("Repositories page — Test button", () => {
     renderPage(
       routedFetch(state, () =>
         Promise.resolve(
-          reply({ ok: true, outcome: "Ok", message: "Reached branch main.", detail: null }),
+          reply(200, { ok: true, outcome: "Ok", message: "Reached branch main.", detail: null }),
         ),
       ),
     );
@@ -1087,28 +444,29 @@ describe("Repositories page — Test button", () => {
 /** The page's list/update/create/.env calls, plus the preview-data reset, answered from `state`. */
 function previewDataFetch(
   state: { repos: Record<string, unknown>[] },
-  onReset: (id: string) => Promise<FakeResponse> = () => Promise.resolve(reply({})),
+  onReset: (id: string) => Promise<Response> = () => Promise.resolve(reply(200, {})),
 ) {
   return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const reset = /\/storage\/preview-data\/([^/]+)$/.exec(url);
     if (reset && method === "DELETE") return onReset(reset[1]);
     if (/\/repositories\/[^/]+\/preview-env$/.test(url))
-      return Promise.resolve(reply({ previewEnv: null }));
+      return Promise.resolve(reply(200, { previewEnv: null }));
     const one = /\/repositories\/([^/?]+)$/.exec(url);
     if (one && method === "PUT") {
-      const sent = JSON.parse(String(init?.body));
+      const sent = JSON.parse(init?.body as string);
       state.repos = state.repos.map((r) => (r.id === one[1] ? { ...r, ...sent, id: r.id } : r));
-      return Promise.resolve(reply(state.repos.find((r) => r.id === one[1])));
+      const updated = state.repos.find((r) => r.id === one[1]);
+      return Promise.resolve(reply(200, updated));
     }
     if (url.endsWith("/repositories") && method === "POST") {
-      const created = { ...repo("repo-new", "new-repo"), ...JSON.parse(String(init?.body)) };
+      const created = { ...repo("repo-new", "new-repo"), ...JSON.parse(init?.body as string) };
       state.repos = [...state.repos, created];
-      return Promise.resolve(reply(created, 201));
+      return Promise.resolve(reply(201, created));
     }
-    if (url.includes("/remoteproviders")) return Promise.resolve(reply(testProviders));
-    if (url.includes("/repositories")) return Promise.resolve(reply(state.repos));
-    return Promise.resolve(reply(null, 404));
+    if (url.includes("/remoteproviders")) return Promise.resolve(reply(200, testProviders));
+    if (url.includes("/repositories")) return Promise.resolve(reply(200, state.repos));
+    return Promise.resolve(reply(404));
   });
 }
 
@@ -1213,7 +571,7 @@ describe("Repositories page — preview data", () => {
       ],
     };
     const fetchMock = previewDataFetch(state, () =>
-      Promise.resolve(reply({ error: refusal }, 409)),
+      Promise.resolve(reply(409, { error: refusal })),
     );
     renderPage(fetchMock);
     await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());

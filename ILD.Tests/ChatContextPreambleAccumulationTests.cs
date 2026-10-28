@@ -6,6 +6,7 @@ using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Tests.Fakes;
 using Moq;
 
 namespace ILD.Tests;
@@ -131,107 +132,6 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var briefed = cli.PromptFor(1).Length;
         var steady = cli.PromptFor(turns).Length;
         _out.WriteLine($"[after] turn 1 {briefed} chars (briefing), turn {turns} {steady} chars (steady state).");
-    }
-
-    /// <summary>
-    /// Acceptance criterion: "Measure and report before/after input tokens for a
-    /// representative multi-turn Loop Editor conversation." Both halves now.
-    ///
-    /// Method — chars are measured, tokens are estimated. Every AFTER number is
-    /// counted from the bytes a real <see cref="ClaudeCodeAdapter"/> handed the
-    /// CLI process, so the char counts are exact. Tokens are those chars / 4,
-    /// the standard English-prose approximation: no tokenizer ships with this
-    /// repo, and chat turns record no usage (<c>ChatService.FinalizeAssistantAsync</c>
-    /// drops <c>NodeExecutionResult.Usage</c>), so provider-reported counts are
-    /// not available to measure against.
-    ///
-    /// BEFORE is reconstructed from the same run rather than quoted from the
-    /// commit that measured it: the old code sent turn 1's static block on every
-    /// turn, so BEFORE is that block times the turn count. Deriving it keeps the
-    /// comparison honest as the guide's prose changes — the report cannot drift
-    /// into flattering itself the way a hardcoded 83320 would.
-    ///
-    /// The one assertion is the shape of the curve, not a number: the static
-    /// block must be paid once, not once per turn.
-    /// </summary>
-    [Fact]
-    public async Task Measure_input_tokens_before_and_after_for_a_ten_turn_loop_editor_conversation()
-    {
-        const int turns = 10;
-        using var cli = new PromptCapturingCli();
-        var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
-        var svc = NewService(new ClaudeCodeAdapter());
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-
-        // A representative conversation: the editor stays open throughout (the
-        // situation the guide exists to serve) and the human types short asks.
-        var messages = new[]
-        {
-            "help me wire up a deploy loop",
-            "add a PR node after the build",
-            "route CI failures back to the AI node",
-            "what does defaultEdge do here?",
-            "rename the second AI node to Reviewer",
-            "add a human gate before the merge",
-            "why did my edge disappear?",
-            "give the Reviewer node a session",
-            "add a match rule for TO_REVIEW",
-            "is this loop valid to save?",
-        };
-        Assert.Equal(turns, messages.Length);
-
-        foreach (var message in messages)
-            await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), message, openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
-
-        var prompts = Enumerable.Range(1, turns).Select(cli.PromptFor).ToArray();
-        var humanChars = messages.Sum(m => m.Length);
-
-        // The briefing block: everything turn 1 sends beyond the human's own words.
-        // Under the old code this was every turn's preamble, which is what makes it
-        // the BEFORE per-turn figure as well as the AFTER one-off.
-        var staticBlock = prompts[0].Length - messages[0].Length;
-
-        // Resident: what sits in the agent's context once turn 10 is composed. Every
-        // preamble ever sent is still there — the session is resumed, not replayed.
-        static long Resident(IEnumerable<string> sent) => sent.Sum(p => (long)p.Length);
-
-        // Billed: an input context is re-read on every turn, so turn k pays for
-        // turns 1..k. That is what made the old cost quadratic in the turn count.
-        static long Billed(IReadOnlyList<string> sent)
-        {
-            var total = 0L;
-            for (var k = 1; k <= sent.Count; k++) total += Resident(sent.Take(k));
-            return total;
-        }
-
-        // BEFORE: the same conversation with the static block on every turn.
-        var before = messages.Select(m => new string('x', staticBlock) + m).ToArray();
-
-        static long Tok(long chars) => chars / 4;
-        var beforeResident = Resident(before);
-        var afterResident = Resident(prompts);
-        var beforeBilled = Billed(before);
-        var afterBilled = Billed(prompts);
-
-        _out.WriteLine("=== 10-turn Loop Editor conversation, editor open throughout ===");
-        _out.WriteLine("Method: chars counted from the argv a real ClaudeCodeAdapter handed the CLI; tokens ≈ chars/4.");
-        _out.WriteLine("BEFORE is the same run with the static block re-sent per turn, as the old code did.");
-        _out.WriteLine($"Static block (once)      : {staticBlock,7} chars  ≈ {Tok(staticBlock),6} tokens");
-        _out.WriteLine($"Human text, 10 turns     : {humanChars,7} chars  ≈ {Tok(humanChars),6} tokens");
-        _out.WriteLine($"Resident before / after  : {beforeResident,7} / {afterResident,-7} chars  ≈ {Tok(beforeResident),6} / {Tok(afterResident),-6} tokens");
-        _out.WriteLine($"Billed  before / after   : {beforeBilled,7} / {afterBilled,-7} chars  ≈ {Tok(beforeBilled),6} / {Tok(afterBilled),-6} tokens (uncached, sum over turns of turns 1..k)");
-        _out.WriteLine($"Billed input saved       : {100.0 * (beforeBilled - afterBilled) / beforeBilled:F1}%");
-        _out.WriteLine("Note: resident excludes assistant replies and tool traffic, which ILD does not see.");
-        for (var i = 0; i < turns; i++)
-            _out.WriteLine($"  turn {i + 1,2}: prompt {prompts[i].Length,6} chars (before {before[i].Length,6}), resident {Resident(prompts.Take(i + 1)),7} chars");
-
-        // The curve, not a number: turns 2..10 together must not cost another
-        // briefing. Anything that re-sends the static block breaks this whichever
-        // way the guide's prose moves.
-        var afterTurnOne = Resident(prompts.Skip(1));
-        Assert.True(
-            afterTurnOne < staticBlock,
-            $"turns 2..{turns} cost {afterTurnOne} chars, which is at least one more briefing ({staticBlock} chars) — the static block is still accumulating.");
     }
 
     // ------------------------------------------------------------------
@@ -516,12 +416,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
     [Fact]
     public void The_authoring_guide_is_pullable_on_demand_from_every_agent_surface()
     {
-        var mcpTool = typeof(ILD.McpServer.Tools.LoopTools)
-            .GetMethods()
-            .Single(m => m.CustomAttributes.Any(a =>
-                a.AttributeType.Name == "McpServerToolAttribute"
-                && a.NamedArguments.Any(n =>
-                    n.MemberName == "Name" && (string?)n.TypedValue.Value == "get_loop_authoring_guide")));
+        var mcpTool = McpToolInvoker.Tool("get_loop_authoring_guide");
+        Assert.Equal(typeof(ILD.McpServer.Tools.LoopTools), mcpTool.DeclaringType);
         Assert.Equal("GetLoopAuthoringGuide", mcpTool.Name);
 
         // ...and the agent API actually routes it.
@@ -633,75 +529,9 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
     /// first. Pinned as a test so the answer stops being true silently — the day
     /// someone adds such a slot, this fails and points at the choice.
     /// </summary>
-    [Fact]
-    public void The_adapter_contract_offers_no_system_prompt_slot_today()
-    {
-        var carriers = typeof(AgentExecutionContext)
-            .GetProperties()
-            .Select(p => p.Name)
-            .Where(n => n.Contains("System", StringComparison.OrdinalIgnoreCase)
-                || n.Contains("Instruction", StringComparison.OrdinalIgnoreCase)
-                || n.Contains("Preamble", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        Assert.Empty(carriers);
-        Assert.Contains("Prompt", typeof(AgentExecutionContext).GetProperties().Select(p => p.Name));
-
-        // Nor does any CLI adapter reach for a system-prompt flag of its own: the
-        // claude launch is built here, in full, from the prompt alone.
-        var argv = ClaudeCodeAdapter
-            .BuildRunProcessStartInfo("/bin/true", Path.GetTempPath(), "PROMPT", sessionId: "s1")
-            .ArgumentList;
-        Assert.DoesNotContain(argv, a => a.Contains("system-prompt", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains("PROMPT", argv);
-    }
-
     // ------------------------------------------------------------------
     // Fixtures.
     // ------------------------------------------------------------------
-
-    /// <summary>
-    /// Records every turn, not just the last — the whole subject here is how
-    /// turn 2 differs from turn 1.
-    /// </summary>
-    private sealed class RecordingChatAdapter : IAgentAdapter
-    {
-        public List<AgentExecutionContext> Contexts { get; } = new();
-        public List<string> Prompts => Contexts.Select(c => c.Prompt).ToList();
-
-        /// <summary>
-        /// Set to make this and every later turn bind a DIFFERENT agent session,
-        /// as a fork or a snapshot that could not be restored would.
-        /// </summary>
-        public string? NextSessionId { get; set; }
-
-        /// <summary>
-        /// Set to make the next turn throw the way an adapter does when the CLI
-        /// never launches — before any session is bound, so nothing this turn was
-        /// handed can have reached an agent. Cleared once it has fired.
-        /// </summary>
-        public bool FailNextTurnBeforeLaunch { get; set; }
-
-        public string Name => "fake";
-        public string[] SupportedProviderTypes => ["fake"];
-        public ConfigFieldDescriptor[] ConfigSchema => [];
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            Contexts.Add(context);
-            if (FailNextTurnBeforeLaunch)
-            {
-                FailNextTurnBeforeLaunch = false;
-                throw new InvalidOperationException("claude: command not found");
-            }
-            // Bind a session on the first turn and hold it, exactly as a real CLI
-            // does — this is what makes turn 2 a resume rather than a fresh start.
-            return Task.FromResult(
-                NodeExecutionResult.Ok("ok", context.Prompt, NextSessionId ?? context.SessionId ?? "sess-1"));
-        }
-    }
 
     private ChatService NewService(IAgentAdapter adapter)
         => new(

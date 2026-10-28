@@ -1,6 +1,10 @@
 using System.Buffers.Binary;
 
+#if WORKITEM_SERVER
+namespace ILD.WorkItemServer.Backup;
+#else
 namespace ILD.Data.Backup;
+#endif
 
 /// <summary>
 /// The rows of a table as a run of length-prefixed frames ended by an empty one, so a reader can

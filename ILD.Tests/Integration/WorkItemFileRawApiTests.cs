@@ -14,6 +14,7 @@ namespace ILD.Tests.Integration;
 /// file as it is stored, served so the browser saves it and never renders it,
 /// and nothing past the worktree's edge.
 /// </summary>
+// A host per test: each test serves its own worktree directory through its own WorkItem stub.
 public sealed class WorkItemFileRawApiTests : IDisposable
 {
     private const string ItemWithWorktree = "WI-7";
@@ -28,9 +29,6 @@ public sealed class WorkItemFileRawApiTests : IDisposable
         _tmp = Path.Combine(Path.GetTempPath(), "ild-raw-" + Guid.NewGuid().ToString("N"));
         _worktree = Path.Combine(_tmp, "wt");
         Directory.CreateDirectory(_worktree);
-        var git = Process.Start(new ProcessStartInfo("git", ["init", "-q", _worktree]) { UseShellExecute = false })!;
-        git.WaitForExit();
-        Assert.Equal(0, git.ExitCode);
         _outside = Path.Combine(_tmp, "outside.txt");
         File.WriteAllText(_outside, "outside-secret\n");
     }
@@ -151,7 +149,7 @@ public sealed class WorkItemFileRawApiTests : IDisposable
         agent.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer", factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
         var asAgent = await agent.GetAsync(Raw(ItemWithWorktree, "a.txt"), Ct);
-        Assert.Contains(asAgent.StatusCode, new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden });
+        Assert.Equal(HttpStatusCode.Forbidden, asAgent.StatusCode);
         Assert.DoesNotContain("worktree-bytes", await asAgent.Content.ReadAsStringAsync(Ct));
     }
 }

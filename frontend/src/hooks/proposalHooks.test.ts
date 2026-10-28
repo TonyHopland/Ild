@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi, type MockInstance } from "vite-plus/test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useGlobalVariableProposals } from "./useGlobalVariableProposals";
@@ -6,41 +7,33 @@ import { usePendingGlobalVariableProposalCount } from "./usePendingGlobalVariabl
 import { usePendingLoopTemplateProposalCounts } from "./usePendingLoopTemplateProposalCounts";
 import * as signalRHook from "./useSignalR";
 import { WorkItemHubProvider } from "./useWorkItemHub";
-import { globalVariableService, loopTemplateProposalService } from "../services/auth";
+import { useEditProposals } from "./useEditProposals";
 import {
+  globalVariableService,
+  loopTemplateProposalService,
+  workItemService,
+} from "../services/auth";
+import {
+  deferred,
   fakeHub,
+  makeEditProposal,
   makeGlobalVariableProposal,
   makeLoopTemplateProposal,
   routeHubs,
-  type FakeHub,
+  type Deferred,
 } from "../test-support";
-import type { GlobalVariableProposal, LoopTemplateProposal } from "../types";
+import type { GlobalVariableProposal, LoopTemplateProposal, WorkItemEditProposal } from "../types";
 
-// The list and pending-count hooks of the two local proposal kinds (global
-// variable suggestions, loop template proposals) keep one set of rules: join
+// The list hooks of the proposal kinds (work item edits, global variable
+// suggestions, loop template proposals) and the pending-count hooks of the two
+// local ones keep one set of rules: join
 // the hub group before every snapshot read, on connect and reconnect; re-read
 // on a hint for the target; never show a late answer for an older read or an
 // earlier target; for counts, the latest read wins and a failed one shows none.
 
-function emit(hub: FakeHub, event: string, payload: unknown) {
-  act(() => {
-    hub.dispatch(event, payload);
-  });
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (err: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 /** Reads the test answers one by one, in any order. */
 function heldReads<T>() {
-  const reads: ReturnType<typeof deferred<T>>[] = [];
+  const reads: Deferred<T>[] = [];
   const read = () => {
     const next = deferred<T>();
     reads.push(next);
@@ -49,7 +42,7 @@ function heldReads<T>() {
   return { reads, read };
 }
 
-type Proposal = GlobalVariableProposal | LoopTemplateProposal;
+type Proposal = WorkItemEditProposal | GlobalVariableProposal | LoopTemplateProposal;
 type Target = { workItemId: string } | { chatSessionId: string };
 type ListFilter = { workItemId?: string; chatSessionId?: string };
 
@@ -66,6 +59,25 @@ interface ListKind {
 }
 
 const listKinds: ListKind[] = [
+  {
+    name: "work item edit proposals",
+    use: (target) => useEditProposals(target),
+    // One read per target kind; both land in the one mock the table checks.
+    spyList: () => {
+      const list = vi.fn<(filter: ListFilter) => Promise<Proposal[]>>();
+      vi.spyOn(workItemService, "listEditProposals").mockImplementation(
+        async (workItemId) => (await list({ workItemId })) as WorkItemEditProposal[],
+      );
+      vi.spyOn(workItemService, "listEditProposalsFor").mockImplementation(
+        async (filter) => (await list(filter)) as WorkItemEditProposal[],
+      );
+      return list;
+    },
+    make: (id) => makeEditProposal({ id }),
+    itemHint: "WorkItemEditProposalsChanged",
+    chatHint: "ChatEditProposalsChanged",
+    itemPayload: { workItemId: "wi-1" },
+  },
   {
     name: "global variable suggestions",
     use: (target) => useGlobalVariableProposals(target),
@@ -116,7 +128,7 @@ describe.each(listKinds)("the list of $name", (kind) => {
     expect(list).toHaveBeenCalledWith({ workItemId: "wi-1" });
 
     onServer = [kind.make("p-1"), kind.make("p-2")];
-    emit(board, kind.itemHint, kind.itemPayload);
+    await board.emit(kind.itemHint, kind.itemPayload);
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1", "p-2"]));
 
     const rejoin = deferred<void>();
@@ -172,9 +184,9 @@ describe.each(listKinds)("the list of $name", (kind) => {
 
     const readsBefore = list.mock.calls.length;
     onServer = [kind.make("p-1"), kind.make("p-2")];
-    emit(chatHub, kind.chatHint, { chatSessionId: "chat-other" });
+    await chatHub.emit(kind.chatHint, { chatSessionId: "chat-other" });
     expect(list).toHaveBeenCalledTimes(readsBefore);
-    emit(chatHub, kind.chatHint, { chatSessionId: "chat-1" });
+    await chatHub.emit(kind.chatHint, { chatSessionId: "chat-1" });
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1", "p-2"]));
 
     unmount();
@@ -191,7 +203,7 @@ describe.each(listKinds)("the list of $name", (kind) => {
       wrapper: WorkItemHubProvider,
     });
     await waitFor(() => expect(reads.length).toBe(1));
-    emit(board, kind.itemHint, kind.itemPayload);
+    await board.emit(kind.itemHint, kind.itemPayload);
     await waitFor(() => expect(reads.length).toBe(2));
 
     await act(async () => reads[1].resolve([kind.make("p-new")]));
@@ -222,6 +234,34 @@ describe.each(listKinds)("the list of $name", (kind) => {
     await act(async () => forFirst.resolve([kind.make("p-1")]));
     expect(ids(result.current.proposals)).toEqual(["p-2"]);
   });
+
+  test("a join for the previous chat that lands late neither reads nor displaces the next chat's read", async () => {
+    const chatHub = fakeHub("connected");
+    routeHubs(signalRHook, { "/hubs/work-item": fakeHub("connected"), "/hubs/chat": chatHub });
+    const firstJoin = deferred();
+    chatHub.invoke.mockImplementation((method: unknown, chatId: unknown) =>
+      method === "SubscribeToChat" && chatId === "chat-1" ? firstJoin.promise : Promise.resolve(),
+    );
+    const secondRead = deferred<Proposal[]>();
+    const list = kind
+      .spyList()
+      .mockImplementation(async (filter) =>
+        filter.chatSessionId === "chat-2" ? secondRead.promise : [kind.make("p-1")],
+      );
+
+    const { result, rerender } = renderHook(
+      ({ chatSessionId }: { chatSessionId: string }) => kind.use({ chatSessionId }),
+      { initialProps: { chatSessionId: "chat-1" }, wrapper: WorkItemHubProvider },
+    );
+    rerender({ chatSessionId: "chat-2" });
+    await waitFor(() => expect(list).toHaveBeenCalledWith({ chatSessionId: "chat-2" }));
+
+    await act(async () => firstJoin.resolve());
+    expect(list).not.toHaveBeenCalledWith({ chatSessionId: "chat-1" });
+
+    await act(async () => secondRead.resolve([kind.make("p-2")]));
+    expect(ids(result.current.proposals)).toEqual(["p-2"]);
+  });
 });
 
 describe("the pending loop template proposals of one template", () => {
@@ -243,9 +283,9 @@ describe("the pending loop template proposals of one template", () => {
 
     const readsBefore = list.mock.calls.length;
     onServer = [lt("p-1"), lt("p-2")];
-    emit(shared, "LoopTemplateProposalsChanged", { templateId: "tpl-other" });
+    await shared.emit("LoopTemplateProposalsChanged", { templateId: "tpl-other" });
     expect(list).toHaveBeenCalledTimes(readsBefore);
-    emit(shared, "LoopTemplateProposalsChanged", { templateId: "tpl-1" });
+    await shared.emit("LoopTemplateProposalsChanged", { templateId: "tpl-1" });
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1", "p-2"]));
   });
 });
@@ -303,7 +343,7 @@ function describePendingCount<T extends Count>(kind: CountKind<T>) {
       await waitFor(() => expect(result.current).toEqual(kind.some));
 
       onServer = kind.more;
-      emit(board, kind.hint, kind.hintPayload);
+      await board.emit(kind.hint, kind.hintPayload);
       await waitFor(() => expect(result.current).toEqual(kind.more));
 
       const rejoin = deferred<void>();
@@ -333,15 +373,15 @@ function describePendingCount<T extends Count>(kind: CountKind<T>) {
       await act(async () => reads[0].resolve(kind.some));
       await waitFor(() => expect(result.current).toEqual(kind.some));
 
-      emit(board, kind.hint, kind.hintPayload);
-      emit(board, kind.hint, kind.hintPayload);
+      await board.emit(kind.hint, kind.hintPayload);
+      await board.emit(kind.hint, kind.hintPayload);
       await waitFor(() => expect(reads.length).toBe(3));
       await act(async () => reads[2].resolve(kind.more));
       await waitFor(() => expect(result.current).toEqual(kind.more));
       await act(async () => reads[1].resolve(kind.some));
       expect(result.current).toEqual(kind.more);
 
-      emit(board, kind.hint, kind.hintPayload);
+      await board.emit(kind.hint, kind.hintPayload);
       await waitFor(() => expect(reads.length).toBe(4));
       await act(async () => reads[3].reject(new Error("read failed")));
       await waitFor(() => expect(result.current).toEqual(kind.none));
@@ -367,7 +407,7 @@ describe("the pending loop template proposal counts", () => {
     expect(asked.filter((url) => url !== null)).toEqual(["/hubs/work-item"]);
 
     onServer = { "tpl-1": 3 };
-    emit(shared, "LoopTemplateProposalsChanged", { templateId: "tpl-1" });
+    await shared.emit("LoopTemplateProposalsChanged", { templateId: "tpl-1" });
     await waitFor(() => expect(result.current).toEqual({ "tpl-1": 3 }));
   });
 });

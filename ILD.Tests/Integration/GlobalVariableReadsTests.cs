@@ -11,6 +11,7 @@ namespace ILD.Tests.Integration;
 /// and parked runs there are: one query for the templates' latest nodes, and one
 /// node read per template version a page of runs shares.
 /// </summary>
+// A host per test: each test counts every SQL statement the host runs.
 public class GlobalVariableReadsTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
