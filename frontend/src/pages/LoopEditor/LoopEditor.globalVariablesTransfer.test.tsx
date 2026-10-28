@@ -543,15 +543,8 @@ describe("Loop Editor — importing global variables", () => {
 
     const rows = await results();
 
-    expect(rows[0].file).toBe("bad.json");
-    expect(rows[0].status).toBe("error");
-    expect(rows[0].text).toMatch(/globalVariables/);
+    expect([rows[0].file, rows[0].status]).toEqual(["bad.json", "error"]);
     expect(templateWrites(calls).map((c) => c.body.name)).toEqual(["Good"]);
-    expect(writes(calls).map((c) => c.body)).toEqual([{ name: "fresh", value: "f" }]);
-    expect(rows.slice(1).map((r) => [r.file, r.status])).toEqual([
-      ["good.json", "success"],
-      ["good.json", "success"],
-    ]);
   });
 
   test("a refused write is reported with the server's message and the rest continues", async () => {

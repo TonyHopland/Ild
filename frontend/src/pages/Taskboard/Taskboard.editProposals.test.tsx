@@ -1,12 +1,19 @@
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, act, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import Taskboard from "./index";
 import { WorkItem, WorkItemStatus } from "../../types";
-import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
-import { mockTaskboardServer } from "../../test-support";
+import { mockTaskboardServer, signalRHub } from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
+
+beforeEach(() => {
+  signalRHub.reset();
+});
 
 afterEach(() => {
   cleanup();
@@ -53,15 +60,6 @@ function renderTaskboard() {
 
 describe("the board's pending edit proposal indicator", () => {
   test("shows the pending count on the card and follows the item as proposals are decided", async () => {
-    const handlers: Record<string, ((msg: { payload: unknown }) => void)[]> = {};
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: vi.fn((event: string, handler: (msg: { payload: unknown }) => void) => {
-        (handlers[event] ??= []).push(handler);
-      }),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    } as unknown as ReturnType<typeof signalRHook.useSignalR>);
     mockTaskboardServer([
       makeItem({ pendingEditProposalCount: 2 }),
       makeItem({ id: "wi-2", title: "Untouched item", pendingEditProposalCount: 0 }),
@@ -75,11 +73,7 @@ describe("the board's pending edit proposal indicator", () => {
     expect(await screen.findByTitle("2 proposed edits")).toBeTruthy();
     expect(screen.queryAllByTitle(/proposed edit/)).toHaveLength(1);
 
-    await act(async () => {
-      handlers["WorkItemEditProposalsChanged"]?.forEach((h) =>
-        h({ payload: { workItemId: "wi-1" } }),
-      );
-    });
+    await signalRHub.emit("WorkItemEditProposalsChanged", { workItemId: "wi-1" });
 
     await waitFor(() => expect(screen.queryByTitle(/proposed edit/)).toBeNull());
     expect(getById).toHaveBeenCalledWith("wi-1");

@@ -96,7 +96,7 @@ function stubApi(
 function mockHub() {
   const hub = fakeHub();
   vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
-  return hub.emit;
+  return hub;
 }
 
 function renderPage() {
@@ -108,7 +108,7 @@ function renderPage() {
     login: vi.fn(),
     logout: vi.fn(),
   };
-  render(
+  return render(
     <MemoryRouter>
       <AuthContext.Provider value={authValue}>
         <GlobalVariables />
@@ -245,7 +245,7 @@ describe("suggestions on the Global Variables page", () => {
   });
 
   test("a hint that suggestions changed brings in a new one and the variable's value without a reload", async () => {
-    const hint = mockHub();
+    const { emit: hint } = mockHub();
     const server = { variables: [rules] as unknown[], proposals: [] as { status: string }[] };
     stubApi(server);
     renderPage();
@@ -264,5 +264,16 @@ describe("suggestions on the Global Variables page", () => {
 
     await cardOf("Made just now.");
     await waitFor(() => expect(document.body.textContent).toContain("Edited elsewhere."));
+  });
+
+  test("leaving the page takes its listener off the shared hub", async () => {
+    const hub = mockHub();
+    stubApi({ variables: [rules] as unknown[], proposals: [] as { status: string }[] });
+    const { unmount } = renderPage();
+    await waitFor(() => expect(hub.handlers["GlobalVariableProposalsChanged"]?.size).toBe(1));
+
+    unmount();
+
+    expect(hub.handlers["GlobalVariableProposalsChanged"]?.size ?? 0).toBe(0);
   });
 });

@@ -422,6 +422,21 @@ describe("The schedules list in the Chat tab", () => {
     await waitFor(() => expect(pausedNotices().length).toBeGreaterThan(0));
   });
 
+  test("leaving the page takes its scheduler listener off the shared hub", async () => {
+    seed();
+    renderAt("/chat/schedules");
+    await scheduleRow("Weekly retro");
+    const listeners = () => handlers["SchedulerStateChanged"]?.size ?? 0;
+    const onPage = listeners();
+
+    act(() => {
+      window.history.pushState(null, "", "/repositories");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    await waitFor(() => expect(listeners()).toBe(onPage - 1));
+  });
+
   test("a change announced on the chat hub is read back into the list", async () => {
     seed();
     renderAt("/chat/schedules");

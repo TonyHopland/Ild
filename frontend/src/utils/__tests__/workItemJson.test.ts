@@ -2,25 +2,14 @@ import { describe, expect, test } from "vite-plus/test";
 import { makeLoopTagMatcher } from "../workItemJson";
 
 describe("makeLoopTagMatcher", () => {
-  test("matches a tag that names a loop template", () => {
-    const isLoopTag = makeLoopTagMatcher(["Bug Fix", "Feature"]);
-    expect(isLoopTag("Bug Fix")).toBe(true);
-    expect(isLoopTag("Feature")).toBe(true);
-  });
-
-  test("does not match a free-form tag", () => {
-    const isLoopTag = makeLoopTagMatcher(["Bug Fix"]);
-    expect(isLoopTag("urgent")).toBe(false);
-  });
-
-  test("matches case-insensitively, mirroring the backend resolver", () => {
-    const isLoopTag = makeLoopTagMatcher(["Bug Fix"]);
-    expect(isLoopTag("bug fix")).toBe(true);
-    expect(isLoopTag("BUG FIX")).toBe(true);
-  });
-
-  test("never matches when there are no loop templates", () => {
-    const isLoopTag = makeLoopTagMatcher([]);
-    expect(isLoopTag("Bug Fix")).toBe(false);
+  test.each([
+    [["Bug Fix", "Feature"], "Bug Fix", true],
+    [["Bug Fix", "Feature"], "Feature", true],
+    [["Bug Fix"], "urgent", false],
+    [["Bug Fix"], "bug fix", true],
+    [["Bug Fix"], "BUG FIX", true],
+    [[], "Bug Fix", false],
+  ])("with templates %j, the tag %s is a loop tag: %s", (templates, tag, expected) => {
+    expect(makeLoopTagMatcher(templates)(tag)).toBe(expected);
   });
 });
