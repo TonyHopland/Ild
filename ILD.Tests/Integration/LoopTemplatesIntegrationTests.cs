@@ -76,7 +76,7 @@ public class LoopTemplatesIntegrationTests(SharedApiFactory factory) : IClassFix
         Assert.Equal("SetVariable", keep.GetProperty("type").GetString());
         var config = keep.GetProperty("config");
         Assert.Equal(
-            new[] { ("handoff", "{{Node.Input}}"), ("phase", "review") },
+            new (string?, string?)[] { ("handoff", "{{Node.Input}}"), ("phase", "review") },
             config.GetProperty("assignments").EnumerateArray().Select(a => (a.GetProperty("name").GetString(), a.GetProperty("value").GetString())));
         Assert.Equal(
             new[] { "OnSuccess", "OnFailure" },

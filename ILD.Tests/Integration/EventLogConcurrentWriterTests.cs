@@ -334,7 +334,7 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
         {
             CommitGate.ActAs(CommitGate.Contender);
             await engine.SignalNodeResultAsync(runId, waitingNode, NodeSignal.Custom(LoopOutputs.OnCiFailed, "CI is red"));
-        });
+        }, TestContext.Current.CancellationToken);
         await Within(_gate.ContenderStarted, "The signal never touched the database.");
 
         _gate.Release();

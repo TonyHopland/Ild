@@ -1633,12 +1633,12 @@ public class WorkItemManagerTests
         var run = RunTimeline.SeedRun(db, id, RunTimeline.SeedVersion(db), LoopRunStatus.Running);
         await using (var other = db.Fresh())
             await other.LoopRuns.Where(r => r.Id == run.Id)
-                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, LoopRunStatus.Cancelled));
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, LoopRunStatus.Cancelled), cancellationToken: TestContext.Current.CancellationToken);
 
         await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
 
         await using var read = db.Fresh();
-        Assert.Equal(LoopRunStatus.Cancelled, (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).Status);
+        Assert.Equal(LoopRunStatus.Cancelled, (await read.LoopRuns.SingleAsync(r => r.Id == run.Id, TestContext.Current.CancellationToken)).Status);
     }
 
     [Fact]
@@ -1652,12 +1652,12 @@ public class WorkItemManagerTests
         await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "Need approval", currentLoopRunId: run.Id);
 
         await using (var read = db.Fresh())
-            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
+            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id, TestContext.Current.CancellationToken)).HumanFeedbackReason);
         // A later save of the caller's copy must not put the old reason back.
         Assert.Equal("Need approval", run.HumanFeedbackReason);
         await db.LoopRuns.UpdateRunAsync(run);
         await using (var read = db.Fresh())
-            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
+            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id, TestContext.Current.CancellationToken)).HumanFeedbackReason);
     }
 
     [Fact]
@@ -2604,7 +2604,7 @@ public class WorkItemManagerTests
                 Assert.Equal(expected[view.Id], (view.CurrentLoopRunId, view.IsPreviewRunning, view.StatusReason));
         }
 
-        var opts = await db.ServerOptions.ResolveForWorkItemAsync(target);
+        var opts = await db.ServerOptions.ResolveForWorkItemAsync(target, TestContext.Current.CancellationToken);
 
         await mgr.AddDependencyAsync(TestActors.Human, target, a);
         var oneDependency = await Measure(() => mgr.GetDependenciesAsync(target));
@@ -2618,10 +2618,10 @@ public class WorkItemManagerTests
         var threeDependencies = await Measure(() => mgr.GetDependenciesAsync(target));
         var twoDependents = await Measure(() => mgr.GetDependentsAsync(a));
 
-        var dependencyOrder = (await db.ServerClient.GetAsync(opts, target))!.Dependencies;
+        var dependencyOrder = (await db.ServerClient.GetAsync(opts, target, TestContext.Current.CancellationToken))!.Dependencies;
         Assert.Equal(3, dependencyOrder.Count);
         AssertViews(dependencyOrder, threeDependencies.Views);
-        var dependentOrder = (await db.ServerClient.ListAsync(opts, status: null, tags: null))
+        var dependentOrder = (await db.ServerClient.ListAsync(opts, status: null, tags: null, ct: TestContext.Current.CancellationToken))
             .Where(w => w.Dependencies.Contains(a)).Select(w => w.Id).ToList();
         Assert.Equal(2, dependentOrder.Count);
         AssertViews(dependentOrder, twoDependents.Views);

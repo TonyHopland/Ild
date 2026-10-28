@@ -150,7 +150,7 @@ public sealed class ChatTitleRetryTests : IDisposable
     {
         var ct = TestContext.Current.CancellationToken;
         var provider = await SeedProviderAsync();
-        if (maxAttempts is not null) await _db.Settings.UpsertAsync(AppSettingKeys.ChatTitleMaxAttempts, maxAttempts);
+        if (maxAttempts is not null) await _db.Settings.UpsertAsync(AppSettingKeys.ChatTitleMaxAttempts, maxAttempts, TestContext.Current.CancellationToken);
         // Jobs that never title the chat, so it stays on its fallback.
         var titles = new RecordingScheduler(inner: null);
         var chat = NewChatService(titles);

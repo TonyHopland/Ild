@@ -210,9 +210,9 @@ public sealed class SettingsControllerTests : IDisposable
     [InlineData(AppSettingKeys.GlobalVariableMaxLength, "4000")]
     public async Task A_ranged_setting_reads_its_default_until_one_is_stored(string key, string expected)
     {
-        Assert.Equal(expected, StatedValue(await Build().Get(key, default)));
+        Assert.Equal(expected, StatedValue(await Build().Get(key, TestContext.Current.CancellationToken)));
 
-        var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(default)).Value);
+        var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
         var rows = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(all)!;
         Assert.Equal(expected, rows.Single(r => r["key"] == key)["value"]);
     }

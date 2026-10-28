@@ -25,7 +25,7 @@ public sealed class PackageFeedsControllerTests : IDisposable
             Name = "company",
             FeedUrl = "https://pkgs.dev.azure.com/example-org/_packaging/company",
             Pat = pat,
-        }, default);
+        }, TestContext.Current.CancellationToken);
 
         var created = Assert.IsType<CreatedAtActionResult>(result);
         var json = JsonSerializer.SerializeToElement(created.Value);

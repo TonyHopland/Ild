@@ -377,7 +377,7 @@ public sealed class WorkItemEditProposalClientTests : IClassFixture<WorkItemEdit
         Assert.Equal(stillPending.Id, Assert.Single(await _client.QueryEditProposalsAsync(_opts, undelivered, TestContext.Current.CancellationToken)).Id);
 
         var pending = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery { Status = RemoteEditProposalStatus.Pending }, TestContext.Current.CancellationToken);
-        Assert.Empty(pending.Where(p => p.WorkItemId == item.Id || p.WorkItemId == otherItem.Id));
+        Assert.DoesNotContain(pending, p => p.WorkItemId == item.Id || p.WorkItemId == otherItem.Id);
         var chatsAll = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery { CreatedByChatSessionId = chat }, TestContext.Current.CancellationToken);
         Assert.Equal(new[] { rejected.Id, stillPending.Id }.OrderBy(x => x), chatsAll.Select(p => p.Id).OrderBy(x => x));
     }

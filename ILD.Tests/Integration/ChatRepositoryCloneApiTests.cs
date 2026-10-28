@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -30,6 +31,7 @@ namespace ILD.Tests.Integration;
 /// a private forge.
 /// </summary>
 // A host per test: each test owns its git remote and the chat scratch root cloned into.
+[SupportedOSPlatform("linux")]
 public class ChatRepositoryCloneApiTests
 {
     private const string ChatHeader = "X-ILD-Chat-Session-Id";

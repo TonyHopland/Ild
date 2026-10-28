@@ -301,7 +301,7 @@ public class ChatControllerTests
         _chat.Verify(c => c.RenameAsync("tony", id, stored, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    public static TheoryData<string?> UnusableNames => new() { null, "", "   ", new string('n', 121) };
+    public static TheoryData<string?> UnusableNames => new() { (string?)null, "", "   ", new string('n', 121) };
 
     [Theory]
     [MemberData(nameof(UnusableNames))]
@@ -376,7 +376,7 @@ public class ChatControllerTests
         }
     }
 
-    public static TheoryData<Guid[]?> NoIds => new() { null, Array.Empty<Guid>() };
+    public static TheoryData<Guid[]?> NoIds => new() { (Guid[]?)null, Array.Empty<Guid>() };
 
     [Theory]
     [MemberData(nameof(NoIds))]

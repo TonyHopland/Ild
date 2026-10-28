@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 
@@ -22,6 +23,7 @@ namespace ILD.Tests;
 /// <para>In <see cref="ProcessGlobalStateCollection"/> because it seeds the process environment.</para>
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
+[SupportedOSPlatform("linux")]
 public class RepositoryManagerHookIsolationTests : IDisposable
 {
     private const string ApiKey = "sentinel-api-key";

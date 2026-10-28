@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
@@ -13,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
+[SupportedOSPlatform("linux")]
 public class PiAdapterTests
 {
     [Fact]

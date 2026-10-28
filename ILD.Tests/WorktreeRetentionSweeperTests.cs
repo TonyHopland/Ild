@@ -290,8 +290,8 @@ public class WorktreeRetentionSweeperTests
         await NewSweeper(services.BuildServiceProvider()).SweepOnceAsync(CancellationToken.None);
 
         await using var check = db.Fresh();
-        Assert.False(await check.LoopRuns.AnyAsync(r => r.Id == first.Id));
-        Assert.True(await check.LoopRuns.AnyAsync(r => r.Id == second.Id && r.Retain));
+        Assert.False(await check.LoopRuns.AnyAsync(r => r.Id == first.Id, TestContext.Current.CancellationToken));
+        Assert.True(await check.LoopRuns.AnyAsync(r => r.Id == second.Id && r.Retain, TestContext.Current.CancellationToken));
         reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == second.Id)), Times.Never);
     }
 
@@ -440,8 +440,8 @@ public class WorktreeRetentionSweeperTests
 
         await using (var user = db.Fresh())
         {
-            (await user.LoopRuns.SingleAsync(r => r.Id == run.Id)).Retain = false;
-            await user.SaveChangesAsync();
+            (await user.LoopRuns.SingleAsync(r => r.Id == run.Id, TestContext.Current.CancellationToken)).Retain = false;
+            await user.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
         db.Context.ChangeTracker.Clear();
 

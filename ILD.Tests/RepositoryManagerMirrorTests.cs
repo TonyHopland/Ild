@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 
@@ -11,6 +12,7 @@ namespace ILD.Tests;
 /// <see cref="AuditingRunner"/>.
 /// </summary>
 [Collection(GitBundleScratchCollection.Name)]
+[SupportedOSPlatform("linux")]
 public class RepositoryManagerMirrorTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.

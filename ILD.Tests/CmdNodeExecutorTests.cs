@@ -261,8 +261,7 @@ public class CmdNodeExecutorTests : IDisposable
             "--reuid=agent", "--regid=agent", "--init-groups", "--inh-caps=-all", "--ambient-caps=-all", "--",
             "/bin/sh", "-c", "make test",
         }, psi.ArgumentList);
-        Assert.Empty(AgentIsolation.SecretEnvironmentKeys.Concat(AgentIsolation.OrchestratorTopologyEnvKeys)
-            .Where(psi.Environment.ContainsKey));
+        Assert.DoesNotContain(AgentIsolation.SecretEnvironmentKeys.Concat(AgentIsolation.OrchestratorTopologyEnvKeys), psi.Environment.ContainsKey);
         Assert.Equal("ILD", psi.Environment["GIT_AUTHOR_NAME"]);
         Assert.Equal("http://proxy.test:3128", psi.Environment["HTTPS_PROXY"]);
         Assert.Equal("/home/agent", psi.Environment["HOME"]);

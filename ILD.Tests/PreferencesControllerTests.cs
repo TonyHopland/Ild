@@ -35,7 +35,7 @@ public sealed class PreferencesControllerTests : IDisposable
         };
 
     private static Task<IActionResult> Put(PreferencesController controller, string key, string? value)
-        => controller.Put(key, new PreferencesController.UpdatePreferenceRequest { Value = value }, default);
+        => controller.Put(key, new PreferencesController.UpdatePreferenceRequest { Value = value }, TestContext.Current.CancellationToken);
 
     private static IReadOnlyDictionary<string, string> Stated(IActionResult result)
         => Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(Assert.IsType<OkObjectResult>(result).Value);
@@ -45,7 +45,7 @@ public sealed class PreferencesControllerTests : IDisposable
     {
         await AddUser("user-one");
 
-        Assert.Empty(Stated(await As("user-one").GetAll(default)));
+        Assert.Empty(Stated(await As("user-one").GetAll(TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class PreferencesControllerTests : IDisposable
         Assert.IsType<OkObjectResult>(await Put(As("user-one"), "taskboard.folded.done", "true"));
         Assert.IsType<OkObjectResult>(await Put(As("user-one"), "taskboard.folded.done", "false"));
 
-        var stated = Stated(await As("user-one").GetAll(default));
+        var stated = Stated(await As("user-one").GetAll(TestContext.Current.CancellationToken));
         Assert.Equal("false", Assert.Single(stated).Value);
     }
 
@@ -69,8 +69,8 @@ public sealed class PreferencesControllerTests : IDisposable
         await Put(As("user-one"), "taskboard.folded.done", "user-one's");
         await Put(As("user-two"), "taskboard.folded.done", "user-two's");
 
-        Assert.Equal("user-one's", Stated(await As("user-one").GetAll(default))["taskboard.folded.done"]);
-        Assert.Equal("user-two's", Stated(await As("user-two").GetAll(default))["taskboard.folded.done"]);
+        Assert.Equal("user-one's", Stated(await As("user-one").GetAll(TestContext.Current.CancellationToken))["taskboard.folded.done"]);
+        Assert.Equal("user-two's", Stated(await As("user-two").GetAll(TestContext.Current.CancellationToken))["taskboard.folded.done"]);
     }
 
     [Theory]
@@ -83,7 +83,7 @@ public sealed class PreferencesControllerTests : IDisposable
         await AddUser("user-one");
 
         Assert.IsType<BadRequestObjectResult>(await Put(As("user-one"), key, "v"));
-        Assert.Empty(Stated(await As("user-one").GetAll(default)));
+        Assert.Empty(Stated(await As("user-one").GetAll(TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -104,14 +104,14 @@ public sealed class PreferencesControllerTests : IDisposable
             await Put(As("user-one"), "k", new string('x', PreferencesController.MaxValueLength + 1)));
         Assert.IsType<OkObjectResult>(await Put(As("user-one"), "k", ""));
 
-        Assert.Equal("", Stated(await As("user-one").GetAll(default))["k"]);
+        Assert.Equal("", Stated(await As("user-one").GetAll(TestContext.Current.CancellationToken))["k"]);
     }
 
     [Fact]
     public async Task A_caller_who_is_not_a_known_user_is_turned_away()
     {
-        Assert.IsType<UnauthorizedResult>(await As(null).GetAll(default));
-        Assert.IsType<UnauthorizedResult>(await As("ghost").GetAll(default));
+        Assert.IsType<UnauthorizedResult>(await As(null).GetAll(TestContext.Current.CancellationToken));
+        Assert.IsType<UnauthorizedResult>(await As("ghost").GetAll(TestContext.Current.CancellationToken));
         Assert.IsType<UnauthorizedResult>(await Put(As("ghost"), "k", "v"));
     }
 
@@ -124,7 +124,7 @@ public sealed class PreferencesControllerTests : IDisposable
         using (var ctx = _db.Fresh())
         {
             ctx.Users.Remove(ctx.Users.Single(u => u.Id == id));
-            await ctx.SaveChangesAsync();
+            await ctx.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         using var after = _db.Fresh();
@@ -140,7 +140,7 @@ public sealed class PreferencesControllerTests : IDisposable
 
         Assert.IsType<BadRequestObjectResult>(await Put(As("user-one"), "one-too-many", "v"));
         Assert.IsType<OkObjectResult>(await Put(As("user-one"), "k0", "changed"));
-        Assert.Equal(PreferencesController.MaxKeysPerUser, Stated(await As("user-one").GetAll(default)).Count);
+        Assert.Equal(PreferencesController.MaxKeysPerUser, Stated(await As("user-one").GetAll(TestContext.Current.CancellationToken)).Count);
     }
 
     [Fact]
@@ -152,10 +152,10 @@ public sealed class PreferencesControllerTests : IDisposable
         await Put(As("user-one"), "taskboard.folded.done", "true");
         await Put(As("user-two"), "chat.enabled", "false");
 
-        Assert.IsType<NoContentResult>(await As("user-one").Delete("chat.enabled", default));
+        Assert.IsType<NoContentResult>(await As("user-one").Delete("chat.enabled", TestContext.Current.CancellationToken));
 
-        Assert.Equal(["taskboard.folded.done"], Stated(await As("user-one").GetAll(default)).Keys);
-        Assert.Equal("false", Stated(await As("user-two").GetAll(default))["chat.enabled"]);
+        Assert.Equal(["taskboard.folded.done"], Stated(await As("user-one").GetAll(TestContext.Current.CancellationToken)).Keys);
+        Assert.Equal("false", Stated(await As("user-two").GetAll(TestContext.Current.CancellationToken))["chat.enabled"]);
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public sealed class PreferencesControllerTests : IDisposable
         await AddUser("user-two");
         await Put(As("user-two"), "chat.enabled", "false");
 
-        Assert.IsType<NotFoundResult>(await As("user-one").Delete("chat.enabled", default));
-        Assert.IsType<UnauthorizedResult>(await As("ghost").Delete("chat.enabled", default));
+        Assert.IsType<NotFoundResult>(await As("user-one").Delete("chat.enabled", TestContext.Current.CancellationToken));
+        Assert.IsType<UnauthorizedResult>(await As("ghost").Delete("chat.enabled", TestContext.Current.CancellationToken));
     }
 }

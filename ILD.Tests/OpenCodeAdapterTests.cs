@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -15,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
+[SupportedOSPlatform("linux")]
 public class OpenCodeAdapterTests
 {
     /// <summary>
