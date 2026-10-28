@@ -121,7 +121,9 @@ export default function Chat({ view = "chat" }: { view?: "chat" | "schedules" })
       revealGlobalProposalId={schedules ? null : searchParams.get("globalProposal")}
     >
       {({ title, error, sidebar, content }) => (
-        <div className={`chat-page${phonePaneOf(isMobile, listShown) === "list" ? " chat-page--list" : ""}`}>
+        <div
+          className={`chat-page${phonePaneOf(isMobile, listShown) === "list" ? " chat-page--list" : ""}`}
+        >
           {loaded ? (
             <>
               {sidebar}

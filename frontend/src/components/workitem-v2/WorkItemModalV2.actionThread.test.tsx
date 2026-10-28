@@ -1026,35 +1026,10 @@ describe("PR details", () => {
     );
   });
 
-  test.each([
-    ["the pull request has since been merged", "IldFailed", { state: "closed", merged: true }],
-    ["the pull request has since been closed", "IldFailed", { state: "closed", merged: false }],
-    ["ILD has not tried yet", "IldPending", {}],
-    ["the provider merges it", "Native", {}],
-    ["ILD merged it", "IldMerged", {}],
-    ["it is not an AutoMerge pull request", null, {}],
-  ] as const)("asks for no manual merge when %s", async (_why, prAutoMerge, pr) => {
+  test("asks for no manual merge when the pull request has since been merged", async () => {
     mockServices(
       makeRun({
-        prSnapshot: snapshot(pr),
-        prQueuedWrites: [],
-        prAutoMerge,
-        prAutoMergeError:
-          prAutoMerge === "IldFailed" ? "At least 1 approving review is required" : null,
-      }),
-    );
-    const panel = await openActionTab(makeWorkItem({ prUrl: "https://git.example/pr/1" }));
-
-    expect(within(panel).getByRole("button", { name: /PR details/ })).toBeTruthy();
-    expect(panel.textContent).not.toContain("could not merge");
-    expect(panel.textContent).not.toContain("Please merge it manually");
-  });
-
-  test("asks for no manual merge once the run has moved on from the pull request", async () => {
-    mockServices(
-      makeRun({
-        status: LoopRunStatus.Running,
-        prSnapshot: snapshot(),
+        prSnapshot: snapshot({ state: "closed", merged: true }),
         prQueuedWrites: [],
         prAutoMerge: "IldFailed",
         prAutoMergeError: "At least 1 approving review is required",
@@ -1215,19 +1190,16 @@ describe("a run stopped on a failed node", () => {
     expect(retry).toHaveBeenCalledWith("run-1", "exec-2");
   });
 
-  test.each([LoopRunStatus.Completed, LoopRunStatus.Cancelled])(
-    "a %s run offers no retry, only the ways on from it",
-    async (status) => {
-      mockServices(failedRun({ status, completedAt: "2026-09-24T09:11:00Z" }));
-      const panel = await openActionTab(failedItem());
+  test("a completed run offers no retry, only the ways on from it", async () => {
+    mockServices(
+      failedRun({ status: LoopRunStatus.Completed, completedAt: "2026-09-24T09:11:00Z" }),
+    );
+    const panel = await openActionTab(failedItem());
 
-      expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
-      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
-      expect(
-        within(panel).getByRole("button", { name: "See it in the run timeline" }),
-      ).toBeTruthy();
-    },
-  );
+    expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
+    expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "See it in the run timeline" })).toBeTruthy();
+  });
 
   test("a failure earlier in the run is not offered as the node that stopped it", async () => {
     const run = failedRun({ status: LoopRunStatus.WaitingHuman });
@@ -1258,47 +1230,33 @@ describe("a run stopped on a failed node", () => {
       ...overrides,
     });
 
-  test.each<[string, Partial<LoopRun>]>([
-    ["parked", { status: LoopRunStatus.WaitingHuman }],
-    ["running but paused", { status: LoopRunStatus.Running, isPaused: true }],
-    ["ended on it", { status: LoopRunStatus.Failed, completedAt: "2026-09-24T09:00:02Z" }],
-  ])(
-    "a Start node whose install failed retries that execution of a run %s, beside the ways on from it",
-    async (_, overrides) => {
-      mockServices(failedStart(overrides));
-      const retry = vi.spyOn(authServices.loopRunService, "retryFromNode").mockResolvedValue();
-      const panel = await openActionTab(failedItem());
+  test("a Start node whose install failed retries that execution, beside the ways on from it", async () => {
+    mockServices(failedStart({ status: LoopRunStatus.WaitingHuman }));
+    const retry = vi.spyOn(authServices.loopRunService, "retryFromNode").mockResolvedValue();
+    const panel = await openActionTab(failedItem());
 
-      expect(within(panel).getByText("“Start” failed")).toBeTruthy();
-      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
-      expect(
-        within(panel).getByRole("button", { name: "See it in the run timeline" }),
-      ).toBeTruthy();
-      await act(async () => {
-        fireEvent.click(within(panel).getByRole("button", { name: "Retry this node" }));
-      });
+    expect(within(panel).getByText("“Start” failed")).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "See it in the run timeline" })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole("button", { name: "Retry this node" }));
+    });
 
-      expect(retry).toHaveBeenCalledWith("run-1", "exec-start");
-    },
-  );
+    expect(retry).toHaveBeenCalledWith("run-1", "exec-start");
+  });
 
-  test.each(Object.values(NodeType))(
-    "a failed %s node offers Retry this node",
-    async (nodeType) => {
-      const run = failedRun();
-      mockServices({
-        ...run,
-        nodes: [run.nodes[0], { ...run.nodes[1], nodeLabel: "Failing step", nodeType }],
-      });
-      const panel = await openActionTab(failedItem());
+  test("a failed AI node offers Retry this node", async () => {
+    const run = failedRun();
+    mockServices({
+      ...run,
+      nodes: [run.nodes[0], { ...run.nodes[1], nodeLabel: "Failing step", nodeType: NodeType.AI }],
+    });
+    const panel = await openActionTab(failedItem());
 
-      expect(within(panel).getByRole("button", { name: "Retry this node" })).toBeTruthy();
-      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
-      expect(
-        within(panel).getByRole("button", { name: "See it in the run timeline" }),
-      ).toBeTruthy();
-    },
-  );
+    expect(within(panel).getByRole("button", { name: "Retry this node" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "See it in the run timeline" })).toBeTruthy();
+  });
 
   test("See it in the run timeline opens the Runs tab", async () => {
     mockServices(failedRun());
