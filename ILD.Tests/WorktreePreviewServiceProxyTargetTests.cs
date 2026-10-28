@@ -326,17 +326,14 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var workItems = WorkItemsPointingAtThisWorktree();
 
-        var runtimes = (System.Collections.IDictionary)typeof(WorktreePreviewService)
-            .GetField("_runtimes", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .GetValue(service)!;
-        var runtime = Assert.Single(runtimes.Values.Cast<object>());
-        var held = (System.Collections.IEnumerable)runtime.GetType().GetProperty("Processes")!.GetValue(runtime)!;
-        var before = held.Cast<object>().ToArray();
+        var runtime = Assert.Single(service._runtimes.Values);
+        var held = runtime.Processes;
+        var before = held.ToArray();
 
         await service.StopServiceAsync(_worktree, "api", TestContext.Current.CancellationToken);
         await service.StartServiceAsync(_worktree, "api", cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(before, held.Cast<object>().ToArray());
+        Assert.Equal(before, held.ToArray());
 
         // Both forms: one filters the collection, the other scans it.
         Assert.Equal(PreviewTargetOutcome.Resolved, (await service.ResolvePreviewTargetAsync("wi-7", workItems, TestContext.Current.CancellationToken)).Outcome);

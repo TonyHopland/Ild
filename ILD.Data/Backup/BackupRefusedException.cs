@@ -1,4 +1,8 @@
+#if WORKITEM_SERVER
+namespace ILD.WorkItemServer.Backup;
+#else
 namespace ILD.Data.Backup;
+#endif
 
 /// <summary>
 /// A backup that must not be restored, or a restore that must not start: the message says why

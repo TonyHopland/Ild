@@ -21,9 +21,8 @@ namespace ILD.Tests.WorkItemServer;
 /// size and the heartbeat refresh after an import.
 ///
 /// <para>The database here is SQLite, so the server's PostgreSQL archive is
-/// replaced by a recording stand-in registered as <c>ILD.Data.Backup.IDatabaseArchive</c>
-/// (looked up by name, so the stand-in follows whatever members the interface
-/// has). The endpoints, their gate and the reclaimer are expected to work
+/// replaced by a recording stand-in registered as <c>IDatabaseArchive</c> (a proxy, so the stand-in follows
+/// whatever members the interface has). The endpoints, their gate and the reclaimer are expected to work
 /// whenever such an archive is registered; production registers it only when a
 /// connection string is set.</para>
 /// </summary>
@@ -95,11 +94,7 @@ public sealed class BackupEndpointsTests
         {
             _connection.Open();
             Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-            // Linked into the server from ILD.Data, so the server's own copy of the type is the one it resolves.
-            var assembly = typeof(WorkItemServerProgram).Assembly;
-            var archiveType = assembly.GetType("ILD.Data.Backup.IDatabaseArchive")
-                ?? assembly.GetType("ILD.Data.Backup.IDatabaseArchive`1")?.MakeGenericType(typeof(WorkItemServerDbContext))
-                ?? throw new InvalidOperationException("ILD.Data.Backup.IDatabaseArchive does not exist in the WorkItem Server.");
+            var archiveType = typeof(ILD.WorkItemServer.Backup.IDatabaseArchive);
             ArchiveType = archiveType;
             Archive = (ArchiveProxy)typeof(DispatchProxy).GetMethods()
                 .Single(m => m.Name == nameof(DispatchProxy.Create) && m.GetGenericArguments().Length == 2)

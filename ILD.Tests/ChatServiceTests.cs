@@ -916,24 +916,24 @@ public sealed class ChatServiceTests : IDisposable
         // Opened up front: a context cannot first open the connection while the sweep's read is still on it.
         using var starring = _db.Fresh();
         Assert.Equal(1, await starring.ChatSessions.CountAsync(TestContext.Current.CancellationToken));
-        var starAfterCheck = new StarAfterLastMessageRead(starring, started.Id);
+        var starAfterInactiveRead = new StarAfterInactiveRead(starring, started.Id);
         using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(starAfterCheck).Options);
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(starAfterInactiveRead).Options);
         var sweep = new ChatService(deleting, _db.Providers, Mock.Of<IAgentAdapterRegistry>(), _notifier, Options,
             _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
 
         Assert.False(await sweep.DeleteIfInactiveAsync(started.Id, DateTime.UtcNow.AddDays(1), TestContext.Current.CancellationToken));
 
-        Assert.True(starAfterCheck.Starred);
+        Assert.True(starAfterInactiveRead.Starred);
         using var ctx = _db.Fresh();
         var kept = Assert.Single(ctx.ChatSessions.AsNoTracking());
         Assert.True(kept.IsFavorite);
         Assert.NotEmpty(ctx.ChatMessages.AsNoTracking());
     }
 
-    // Stars the chat once the sweep has read its newest message, the last thing it
-    // checks before deleting: starring does not wait for the chat's turn gate.
-    private sealed class StarAfterLastMessageRead(AppDbContext starring, Guid chatId) : DbCommandInterceptor
+    // Stars the chat once the sweep has read it as inactive, before it deletes:
+    // starring does not wait for the chat's turn gate.
+    private sealed class StarAfterInactiveRead(AppDbContext starring, Guid chatId) : DbCommandInterceptor
     {
         public bool Starred { get; private set; }
 
@@ -943,7 +943,7 @@ public sealed class ChatServiceTests : IDisposable
             System.Data.Common.DbDataReader result,
             CancellationToken cancellationToken = default)
         {
-            if (!Starred && command.CommandText.Contains("MAX(") && command.CommandText.Contains("\"ChatMessages\""))
+            if (!Starred)
             {
                 Starred = true;
                 await starring.ChatSessions.Where(c => c.Id == chatId)

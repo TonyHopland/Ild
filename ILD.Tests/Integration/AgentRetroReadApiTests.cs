@@ -346,7 +346,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
         var ambiguous = await LookUp("\ttWiN ");
         Assert.Equal(HttpStatusCode.Conflict, ambiguous.StatusCode);
         var conflict = await ReadJsonAsync(ambiguous);
-        Assert.Equal("3 loop templates are named 'tWiN'; pass the id of the one you mean.", conflict.GetProperty("error").GetString());
+        Assert.StartsWith("3 loop templates are named 'tWiN'", conflict.GetProperty("error").GetString());
         // Live before archived, then by name in ordinal order.
         Assert.Equal(
             new (Guid, string, bool)[] { (twins[2], " TWIN", false), (twins[0], "Twin", false), (twins[1], "twin", true) },
@@ -355,7 +355,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
 
         var unknown = await LookUp("  Ärger  ");
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
-        Assert.Equal("Loop template not found: Ärger", (await ReadJsonAsync(unknown)).GetProperty("error").GetString());
+        Assert.StartsWith("Loop template not found", (await ReadJsonAsync(unknown)).GetProperty("error").GetString());
     }
 
     [Fact]

@@ -1,4 +1,8 @@
+#if WORKITEM_SERVER
+namespace ILD.WorkItemServer.Backup;
+#else
 namespace ILD.Data.Backup;
+#endif
 
 /// <summary>
 /// A stream that is read or written once, front to back, with no position of its own. A subclass

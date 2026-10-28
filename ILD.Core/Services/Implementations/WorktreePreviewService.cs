@@ -29,7 +29,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private static readonly Regex PreviewHostLabelRegex =
         new(@"^wi-(?<id>[0-9]+)(?:-(?<service>.+))?$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private readonly ConcurrentDictionary<string, PreviewRuntime> _runtimes = new(StringComparer.Ordinal);
+    internal readonly ConcurrentDictionary<string, PreviewRuntime> _runtimes = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
@@ -1908,7 +1908,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     internal sealed record ResolvedStep(string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment);
     private sealed record CommandResult(int ExitCode, string StdOut, string StdErr);
 
-    private sealed class PreviewRuntime
+    internal sealed class PreviewRuntime
     {
         public PreviewRuntime(
             string worktreePath,
@@ -2010,7 +2010,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public PreviewDataClaims.Lease? PreviewDataLease { get; }
     }
 
-    private sealed class ManagedPreviewProcess
+    internal sealed class ManagedPreviewProcess
     {
         public ManagedPreviewProcess(
             PreviewServiceConfig service,

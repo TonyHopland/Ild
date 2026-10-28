@@ -20,7 +20,7 @@ public class NetworkLogRetentionSweeperTests
         var recent = SeedLine(db, "recent.example", DateTime.UtcNow.AddDays(-2));
 
         var notifier = new Mock<INetworkNotifier>();
-        await InvokeSweepOnceAsync(BuildSweeper(db, notifier.Object, retentionDays: 30));
+        await BuildSweeper(db, notifier.Object, retentionDays: 30).SweepOnceAsync(CancellationToken.None);
 
         var remaining = await db.Network.GetLogAsync(100, TestContext.Current.CancellationToken);
         Assert.Equal(new[] { recent }, remaining.Select(l => l.Id));
@@ -33,7 +33,7 @@ public class NetworkLogRetentionSweeperTests
         using var db = new TestDb();
         var edge = SeedLine(db, "edge.example", DateTime.UtcNow.AddDays(-30).AddMinutes(5));
 
-        await InvokeSweepOnceAsync(BuildSweeper(db, new Mock<INetworkNotifier>().Object, retentionDays: 30));
+        await BuildSweeper(db, new Mock<INetworkNotifier>().Object, retentionDays: 30).SweepOnceAsync(CancellationToken.None);
 
         Assert.Equal(new[] { edge }, (await db.Network.GetLogAsync(100, TestContext.Current.CancellationToken)).Select(l => l.Id));
     }
@@ -45,7 +45,7 @@ public class NetworkLogRetentionSweeperTests
         var ancient = SeedLine(db, "ancient.example", DateTime.UtcNow.AddDays(-400));
 
         var notifier = new Mock<INetworkNotifier>();
-        await InvokeSweepOnceAsync(BuildSweeper(db, notifier.Object, retentionDays: 0));
+        await BuildSweeper(db, notifier.Object, retentionDays: 0).SweepOnceAsync(CancellationToken.None);
 
         Assert.Equal(new[] { ancient }, (await db.Network.GetLogAsync(100, TestContext.Current.CancellationToken)).Select(l => l.Id));
         notifier.Verify(n => n.LogClearedAsync(), Times.Never);
@@ -58,11 +58,11 @@ public class NetworkLogRetentionSweeperTests
         SeedLine(db, "recent.example", DateTime.UtcNow.AddDays(-1));
 
         var notifier = new Mock<INetworkNotifier>();
-        await InvokeSweepOnceAsync(BuildSweeper(db, notifier.Object, retentionDays: 30));
+        await BuildSweeper(db, notifier.Object, retentionDays: 30).SweepOnceAsync(CancellationToken.None);
         notifier.Verify(n => n.LogClearedAsync(), Times.Never);
 
         SeedLine(db, "stale.example", DateTime.UtcNow.AddDays(-40));
-        await InvokeSweepOnceAsync(BuildSweeper(db, notifier.Object, retentionDays: 30));
+        await BuildSweeper(db, notifier.Object, retentionDays: 30).SweepOnceAsync(CancellationToken.None);
         notifier.Verify(n => n.LogClearedAsync(), Times.Once);
     }
 
@@ -77,7 +77,7 @@ public class NetworkLogRetentionSweeperTests
         var beyondCeiling = SeedLine(db, "ancient.example", DateTime.UtcNow.AddDays(-4000));
         var withinCeiling = SeedLine(db, "old.example", DateTime.UtcNow.AddDays(-3000));
 
-        await InvokeSweepOnceAsync(BuildSweeper(db, new Mock<INetworkNotifier>().Object, new SchedulerSettingsService(db.Settings)));
+        await BuildSweeper(db, new Mock<INetworkNotifier>().Object, new SchedulerSettingsService(db.Settings)).SweepOnceAsync(CancellationToken.None);
 
         var remaining = (await db.Network.GetLogAsync(100, TestContext.Current.CancellationToken)).Select(l => l.Id).ToList();
         Assert.Equal(new[] { withinCeiling }, remaining);
@@ -115,9 +115,4 @@ public class NetworkLogRetentionSweeperTests
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
         return new NetworkLogRetentionSweeper(scopes, notifier, NullLogger<NetworkLogRetentionSweeper>.Instance);
     }
-
-    private static Task InvokeSweepOnceAsync(NetworkLogRetentionSweeper sweeper) =>
-        (Task)typeof(NetworkLogRetentionSweeper)
-            .GetMethod("SweepOnceAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .Invoke(sweeper, new object?[] { CancellationToken.None })!;
 }

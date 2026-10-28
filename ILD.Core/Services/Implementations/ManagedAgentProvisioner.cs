@@ -26,7 +26,7 @@ public sealed class ManagedAgentProvisioner : IManagedAgentProvisioner, IHostedS
     // Agent keys with an ensure already queued or running. Stops a burst of
     // provider adds (or startup racing an add) from piling up duplicate installs;
     // ManagedAgentService's own static per-agent lock still serializes the npm work.
-    private readonly ConcurrentDictionary<string, byte> _inFlight = new();
+    internal readonly ConcurrentDictionary<string, byte> _inFlight = new();
     private readonly CancellationTokenSource _stopping = new();
 
     public ManagedAgentProvisioner(IServiceScopeFactory scopes, ILogger<ManagedAgentProvisioner> log)

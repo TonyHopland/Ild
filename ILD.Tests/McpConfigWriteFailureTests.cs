@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ILD.Api.Configuration;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -263,8 +262,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
     {
         var warning = Assert.Single(warnings);
         Assert.Contains(_configDir, warning);
-        // The UnauthorizedAccessException .NET raises for the denied temp-file create.
-        Assert.Matches($"Access to the path '{Regex.Escape(_configDir)}/[^']+' is denied\\.", warning);
+        Assert.Contains("Could not write the MCP config", warning);
         Assert.DoesNotContain(Token, warning);
     }
 

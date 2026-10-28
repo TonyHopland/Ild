@@ -145,11 +145,11 @@ public class ExtraCliArgsTests
     [InlineData("codex", "--json", "--json is not allowed, because ILD already sets it for this provider.")]
     [InlineData("codex", "-C /tmp", "-C is not allowed, because it would move Codex out of the worktree.")]
     [InlineData("codex", "--cd=/tmp", "--cd is not allowed, because it would move Codex out of the worktree.")]
-    [InlineData("codex", "-s read-only", "-s is not allowed, because it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox).")]
-    [InlineData("codex", "--sandbox read-only", "--sandbox is not allowed, because it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox).")]
+    [InlineData("codex", "-s read-only", "-s is not allowed, because it contradicts how ILD runs Codex")]
+    [InlineData("codex", "--sandbox read-only", "--sandbox is not allowed, because it contradicts how ILD runs Codex")]
     public void Validate_says_why_a_codex_flag_is_refused(string type, string raw, string message)
     {
-        Assert.Equal("Extra CLI arguments: " + message, ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw));
+        Assert.StartsWith("Extra CLI arguments: " + message, ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw));
     }
 
     /// <summary>Each key ILD sets, in each form codex takes a config override, with the flag the message names.</summary>

@@ -555,9 +555,7 @@ public class WorkItemRunEventsTests
         var watchdog = new StuckRunWatchdog(provider.GetRequiredService<IServiceScopeFactory>(), engine.Object, TestActors.Instance,
             NullLogger<StuckRunWatchdog>.Instance);
 
-        await (Task)typeof(StuckRunWatchdog)
-            .GetMethod("SweepOnceAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .Invoke(watchdog, new object?[] { CancellationToken.None })!;
+        await watchdog.SweepOnceAsync(CancellationToken.None);
 
         Assert.Equal(LoopRunStatus.Failed, rig.Db.Fresh().LoopRuns.Single(r => r.Id == run.Id).Status);
         var failed = Assert.Single(RunTimeline.EndingEvents(rig.Db, run.Id));

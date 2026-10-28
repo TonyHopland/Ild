@@ -62,7 +62,7 @@ public sealed class ChatInactivitySweeper : BackgroundService
         }
     }
 
-    private async Task SweepOnceAsync(CancellationToken ct)
+    internal async Task SweepOnceAsync(CancellationToken ct)
     {
         DateTime cutoff;
         IReadOnlyList<Guid> candidates;

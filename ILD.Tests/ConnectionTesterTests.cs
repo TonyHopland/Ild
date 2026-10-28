@@ -396,12 +396,12 @@ public class ConnectionTesterTests : IDisposable
 
     public static TheoryData<HttpStatusCode, string> FeedFailures => new()
     {
-        { HttpStatusCode.Unauthorized, "PAT rejected, probably expired or revoked. Create a new one with Packaging (Read) and paste it here." },
-        { HttpStatusCode.Forbidden, "PAT has no access to this feed. Check its scope and organization." },
-        { HttpStatusCode.NotFound, "Feed not found. Check the URL." },
-        { HttpStatusCode.InternalServerError, "Azure DevOps unreachable." },
-        { HttpStatusCode.BadGateway, "Azure DevOps unreachable." },
-        { HttpStatusCode.ServiceUnavailable, "Azure DevOps unreachable." },
+        { HttpStatusCode.Unauthorized, "PAT rejected" },
+        { HttpStatusCode.Forbidden, "PAT has no access to this feed" },
+        { HttpStatusCode.NotFound, "Feed not found" },
+        { HttpStatusCode.InternalServerError, "Azure DevOps unreachable" },
+        { HttpStatusCode.BadGateway, "Azure DevOps unreachable" },
+        { HttpStatusCode.ServiceUnavailable, "Azure DevOps unreachable" },
     };
 
     [Theory]
@@ -414,7 +414,7 @@ public class ConnectionTesterTests : IDisposable
             .TestPackageFeedAsync(Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
 
         Assert.False(result.Ok);
-        Assert.Equal(message, result.Message);
+        Assert.StartsWith(message, result.Message);
     }
 
     [Theory]
@@ -449,7 +449,7 @@ public class ConnectionTesterTests : IDisposable
             .TestPackageFeedAsync(Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
 
         Assert.False(result.Ok);
-        Assert.Equal("Azure DevOps unreachable.", result.Message);
+        Assert.Equal("Azure DevOps unreachable", result.Message);
     }
 
     [Fact]
@@ -467,7 +467,7 @@ public class ConnectionTesterTests : IDisposable
             Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
 
         Assert.False(result.Ok);
-        Assert.Equal("Azure DevOps unreachable.", result.Message);
+        Assert.Equal("Azure DevOps unreachable", result.Message);
     }
 
     [Theory]

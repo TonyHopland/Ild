@@ -1,7 +1,11 @@
 using System.Buffers.Binary;
 using System.Text.Json;
 
+#if WORKITEM_SERVER
+namespace ILD.WorkItemServer.Backup;
+#else
 namespace ILD.Data.Backup;
+#endif
 
 public sealed record ArchiveTable(string Name, IReadOnlyList<string> Columns);
 
