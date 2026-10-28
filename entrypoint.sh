@@ -441,11 +441,12 @@ has_cap_net_admin() {
 }
 
 # The agent uid's egress, as a single uid-keyed rule set that carries no domains:
-# loopback (the proxy, ILD's own API for the MCP callback, previews) and DNS are
-# open, everything else is dropped — so a connection that skips the proxy, IP
-# literal or not, goes nowhere. Every allow/deny decision lives in the proxy, which
-# is why editing a list never touches these rules. Idempotent: the table is
-# replaced wholesale, so a restart never stacks a second copy.
+# loopback (the proxy, ILD's own API for the MCP callback, previews) is open, DNS
+# is dropped even on loopback, everything else is dropped — so a connection that
+# skips the proxy, IP literal or not, goes nowhere and the agent looks up no name.
+# Every allow/deny decision lives in the proxy, which is why editing a list never
+# touches these rules. Idempotent: the table is replaced wholesale, so a restart
+# never stacks a second copy.
 install_egress_rules_nft() {
   uid="$1"
   # Tab-indented (<<-) so the table's closing brace is not a column-0 line: the
@@ -457,9 +458,9 @@ install_egress_rules_nft() {
 	  chain output {
 	    type filter hook output priority filter; policy accept;
 	    meta skuid != $uid accept
+	    udp dport 53 drop
+	    tcp dport 53 drop
 	    oif "lo" accept
-	    udp dport 53 accept
-	    tcp dport 53 accept
 	    counter drop
 	  }
 	}
@@ -478,9 +479,9 @@ install_egress_rules_iptables() {
     if ! "$ipt" -w -C OUTPUT -m owner --uid-owner "$uid" -j ILD_AGENT_EGRESS 2>/dev/null; then
       "$ipt" -w -I OUTPUT 1 -m owner --uid-owner "$uid" -j ILD_AGENT_EGRESS || return 1
     fi
+    "$ipt" -w -A ILD_AGENT_EGRESS -p udp --dport 53 -j DROP || return 1
+    "$ipt" -w -A ILD_AGENT_EGRESS -p tcp --dport 53 -j DROP || return 1
     "$ipt" -w -A ILD_AGENT_EGRESS -o lo -j ACCEPT || return 1
-    "$ipt" -w -A ILD_AGENT_EGRESS -p udp --dport 53 -j ACCEPT || return 1
-    "$ipt" -w -A ILD_AGENT_EGRESS -p tcp --dport 53 -j ACCEPT || return 1
     "$ipt" -w -A ILD_AGENT_EGRESS -j DROP || return 1
     installed=1
   done
@@ -522,7 +523,7 @@ install_agent_egress_rules() {
   fi
 
   export ILD_NETWORK_ENFORCEMENT=enforced
-  export ILD_NETWORK_ENFORCEMENT_REASON="$tool rules drop everything uid $agent_uid ($AGENT_USER) sends except loopback and DNS, so only the proxy on 127.0.0.1:$ILD_NETWORK_PROXY_PORT reaches the network."
+  export ILD_NETWORK_ENFORCEMENT_REASON="$tool rules drop everything uid $agent_uid ($AGENT_USER) sends except loopback, and its DNS is blocked, so only the proxy on 127.0.0.1:$ILD_NETWORK_PROXY_PORT reaches the network."
   echo "Agent egress enforced: $ILD_NETWORK_ENFORCEMENT_REASON"
 }
 

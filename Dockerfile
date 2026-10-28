@@ -327,7 +327,7 @@ ENV SHARED_GROUP=ild-agents
 ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid,cap_kill
 # Loopback port of the agent egress proxy (ADR-0019). Read by the app, which
 # listens there and points every agent launch's HTTP(S)_PROXY at it, and by the
-# entrypoint, whose firewall rules let the agent uid reach loopback and DNS only.
+# entrypoint, whose firewall rules let the agent uid reach loopback only, with no DNS.
 # Set it empty to run without the proxy.
 ENV ILD_NETWORK_PROXY_PORT=3128
 # Shared read/write: the agent writes its worktree, and git worktree commits go

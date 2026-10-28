@@ -3,9 +3,10 @@
 # Regression test for entrypoint.sh's agent egress rules (ADR-0019).
 #
 # The rules are what turns the egress proxy from advice into a boundary: they
-# drop everything the agent uid sends except loopback and DNS, so a connection
-# that skips HTTP_PROXY goes nowhere. They are installed once, as root, right
-# before the privilege drop — and their absence has no runtime symptom at all.
+# drop everything the agent uid sends except loopback, and drop DNS even on
+# loopback, so a connection that skips HTTP_PROXY goes nowhere. They are
+# installed once, as root, right before the privilege drop — and their absence
+# has no runtime symptom at all.
 # The agent still reaches the network through the proxy, the log still fills,
 # and only the Settings page says "advisory". So the shape of the rule set, and
 # the honesty of the enforced/advisory report, are pinned here.
@@ -93,7 +94,10 @@ rules="$(cat "$NFT_RULES_LOG" 2>/dev/null)"
 case "${ILD_NETWORK_ENFORCEMENT_REASON:-}" in *10002*3128*) pass "enforced reason names the uid and the proxy port" ;; *) fail "enforced reason lacks uid/port: ${ILD_NETWORK_ENFORCEMENT_REASON:-}" ;; esac
 grep -q 'meta skuid != 10002 accept' <<<"$rules" && pass "rules apply only to the agent uid" || fail "rules do not key on uid 10002: $rules"
 grep -q 'oif "lo" accept' <<<"$rules" && pass "loopback (the proxy, ILD's API) stays open" || fail "no loopback accept"
-grep -q 'udp dport 53 accept' <<<"$rules" && grep -q 'tcp dport 53 accept' <<<"$rules" && pass "DNS stays open" || fail "DNS not accepted"
+! grep -E 'dport[^#]*53[^#]*accept' <<<"$rules" >/dev/null && pass "no rule accepts port 53" || fail "a rule accepts port 53: $rules"
+dns_drop="$(grep -E 'dport 53.*drop' <<<"$rules")"
+grep -q 'udp' <<<"$dns_drop" && grep -q 'tcp' <<<"$dns_drop" && pass "udp and tcp port 53 are dropped" || fail "port 53 not dropped for udp and tcp: $rules"
+case "${ILD_NETWORK_ENFORCEMENT_REASON:-}" in *"and DNS"*|*"DNS allowed"*|*"DNS is open"*) fail "enforced reason still says DNS is allowed: ${ILD_NETWORK_ENFORCEMENT_REASON:-}" ;; *) pass "enforced reason does not advertise DNS as reachable" ;; esac
 grep -q 'counter drop' <<<"$rules" && pass "everything else is dropped" || fail "no terminal drop"
 grep -q 'hook output' <<<"$rules" && pass "rules sit on the output hook" || fail "not an output-hook chain"
 grep -q '^delete table inet ild_agent_egress' <<<"$rules" && pass "table is replaced, not stacked, on restart" || fail "no idempotent delete of the table"
@@ -101,6 +105,11 @@ grep -q '^delete table inet ild_agent_egress' <<<"$rules" && pass "table is repl
 drop_line="$(grep -n 'counter drop' <<<"$rules" | cut -d: -f1)"
 lo_line="$(grep -n 'oif "lo" accept' <<<"$rules" | cut -d: -f1)"
 [ -n "$drop_line" ] && [ -n "$lo_line" ] && [ "$lo_line" -lt "$drop_line" ] && pass "accepts precede the drop" || fail "drop precedes the accepts"
+# Loopback must not carry DNS (Docker's resolver lives on 127.0.0.11).
+dns_line="$(grep -nE 'dport 53.*drop' <<<"$rules" | cut -d: -f1 | sort -n | tail -1)"
+[ -n "$dns_line" ] && [ -n "$lo_line" ] && [ "$dns_line" -lt "$lo_line" ] && pass "port 53 drops precede the loopback accept" || fail "port 53 drop missing or after the loopback accept"
+skuid_line="$(grep -n 'meta skuid != 10002 accept' <<<"$rules" | cut -d: -f1)"
+[ -n "$skuid_line" ] && [ -n "$dns_line" ] && [ "$skuid_line" -lt "$dns_line" ] && pass "other uids are accepted before the port 53 drops" || fail "uid accept does not come first"
 [ ! -e "$IPT_LOG" ] && pass "iptables untouched when nft succeeds" || fail "iptables also invoked on the nft path"
 
 # --- 3. Without NET_ADMIN: nothing is installed, a warning is printed, and the
@@ -121,9 +130,17 @@ ipt="$(cat "$IPT_LOG" 2>/dev/null)"
 [ "${ILD_NETWORK_ENFORCEMENT:-}" = enforced ] && pass "iptables fallback reports enforced" || fail "iptables fallback reported '${ILD_NETWORK_ENFORCEMENT:-}'"
 grep -q -- '-I OUTPUT 1 -m owner --uid-owner 10002 -j ILD_AGENT_EGRESS' <<<"$ipt" && pass "iptables jump keys on the agent uid" || fail "iptables jump missing: $ipt"
 grep -q -- '-A ILD_AGENT_EGRESS -o lo -j ACCEPT' <<<"$ipt" && pass "iptables keeps loopback open" || fail "iptables loopback accept missing"
-grep -q -- '--dport 53 -j ACCEPT' <<<"$ipt" && pass "iptables keeps DNS open" || fail "iptables DNS accept missing"
+! grep -q -- '--dport 53 -j ACCEPT' <<<"$ipt" && pass "iptables accepts no port 53" || fail "iptables accepts port 53: $ipt"
 grep -q -- '-A ILD_AGENT_EGRESS -j DROP' <<<"$ipt" && pass "iptables drops the rest" || fail "iptables terminal DROP missing"
-[ "$(grep -c -- '-j DROP' <<<"$ipt")" = 2 ] && pass "rules installed for IPv4 and IPv6" || fail "expected one DROP per address family, got: $ipt"
+[ "$(grep -c -- '-A ILD_AGENT_EGRESS -j DROP' <<<"$ipt")" = 2 ] && pass "terminal DROP installed for IPv4 and IPv6" || fail "expected one terminal DROP per address family, got: $ipt"
+[ "$(grep -c -- '-p udp --dport 53 -j DROP' <<<"$ipt")" = 2 ] && [ "$(grep -c -- '-p tcp --dport 53 -j DROP' <<<"$ipt")" = 2 ] && pass "udp and tcp port 53 dropped for IPv4 and IPv6" || fail "expected udp and tcp port 53 DROPs per family, got: $ipt"
+# Each family builds its own chain (-N); within it both 53 drops precede the loopback accept.
+awk '
+  / -N ILD_AGENT_EGRESS/ { fam++; n53 = 0 }
+  /-A ILD_AGENT_EGRESS -p (udp|tcp) --dport 53 -j DROP/ { n53++ }
+  /-A ILD_AGENT_EGRESS -o lo -j ACCEPT/ { lo++; if (n53 < 2) bad = 1 }
+  END { exit (fam == 2 && lo == 2 && !bad) ? 0 : 1 }
+' <<<"$ipt" && pass "port 53 drops precede the loopback accept in each family" || fail "port 53 drops not before the loopback accept per family: $ipt"
 
 # --- 5. nft present but failing, iptables absent: honest advisory, not a false enforced.
 reset; with_caps 000001ffffffffff

@@ -208,7 +208,7 @@ A `NetworkForwardEntries` row — a name, a destination host and port, and a loo
 _Avoid_: port forward, tunnel, port mapping, NAT rule
 
 **Network Enforcement**:
-Whether the proxy is a boundary or advice. The container entrypoint, as root and before its privilege drop, installs nftables (or iptables) rules keyed on the agent uid — loopback and DNS accepted, everything else dropped — so a connection that skips the proxy goes nowhere; that needs `NET_ADMIN`, spent once and shed by the drop. It exports `ILD_NETWORK_ENFORCEMENT=enforced|advisory` with a reason, surfaced at `GET /api/v1/network/status` and as a banner in Settings. **Advisory** means the proxy still logs and filters every client that honours `HTTP_PROXY` but a hostile agent could bypass it: no `NET_ADMIN`, uid isolation off, or not running in the container image. Orchestrator traffic is never subject to these rules.
+Whether the proxy is a boundary or advice. The container entrypoint, as root and before its privilege drop, installs nftables (or iptables) rules keyed on the agent uid — loopback accepted but not DNS, everything else dropped — so a connection that skips the proxy goes nowhere; that needs `NET_ADMIN`, spent once and shed by the drop. It exports `ILD_NETWORK_ENFORCEMENT=enforced|advisory` with a reason, surfaced at `GET /api/v1/network/status` and as a banner in Settings. **Advisory** means the proxy still logs and filters every client that honours `HTTP_PROXY` but a hostile agent could bypass it: no `NET_ADMIN`, uid isolation off, or not running in the container image. Orchestrator traffic is never subject to these rules.
 _Avoid_: strict mode, hard/soft mode
 
 ### Package feeds

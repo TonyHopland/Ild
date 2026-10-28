@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Coding agents can no longer make DNS lookups, so data cannot leave that way.**
+
 ### Fixed
 
 - **A chat no longer looks finished while its next reply is still running.**
