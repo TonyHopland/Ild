@@ -213,79 +213,38 @@ describe("User settings signed-in devices", () => {
   });
 });
 
-describe("User settings preferences", () => {
-  test("shows notification toggle enabled by default", () => {
+describe.each([
+  ["browser notifications", PreferenceKeys.NotificationsEnabled, true],
+  ["enable AI chat bubble", PreferenceKeys.ChatEnabled, true],
+  ["submit default on Enter", PreferenceKeys.SubmitDefaultOnEnter, false],
+] as const)("User settings preference %s", (label, key, enabledByDefault) => {
+  const toggle = () =>
+    screen.getByRole("checkbox", { name: new RegExp(label, "i") }) as HTMLInputElement;
+
+  test("is shown at its default when nothing is stored", () => {
     render(<UserSettings />);
 
-    const toggle = screen.getByRole("checkbox", { name: /browser notifications/i });
-    expect((toggle as HTMLInputElement).checked).toBe(true);
+    expect(toggle().checked).toBe(enabledByDefault);
   });
 
-  test("persists notification preference to the preferences when toggled off", () => {
+  test("reads the stored value on mount", () => {
+    setPreference(key, String(!enabledByDefault));
+
     render(<UserSettings />);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /browser notifications/i }));
-    expect(getPreference(PreferenceKeys.NotificationsEnabled)).toBe("false");
+    expect(toggle().checked).toBe(!enabledByDefault);
   });
 
-  test("reads notification preference from the preferences on mount", () => {
-    setPreference(PreferenceKeys.NotificationsEnabled, "false");
-
+  test("stores each toggle in the preferences", () => {
     render(<UserSettings />);
 
-    const toggle = screen.getByRole("checkbox", { name: /browser notifications/i });
-    expect((toggle as HTMLInputElement).checked).toBe(false);
-  });
+    fireEvent.click(toggle());
+    expect(getPreference(key)).toBe(String(!enabledByDefault));
+    expect(toggle().checked).toBe(!enabledByDefault);
 
-  test("shows the chat toggle enabled by default", () => {
-    render(<UserSettings />);
-
-    const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
-    expect((toggle as HTMLInputElement).checked).toBe(true);
-  });
-
-  test("persists the chat preference to the preferences when toggled off", () => {
-    render(<UserSettings />);
-
-    const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
-    fireEvent.click(toggle);
-    expect(getPreference(PreferenceKeys.ChatEnabled)).toBe("false");
-    expect((toggle as HTMLInputElement).checked).toBe(false);
-  });
-
-  test("submit default on Enter is off when nothing is stored, and toggling it stores true then false", () => {
-    render(<UserSettings />);
-
-    const toggle = screen.getByRole("checkbox", {
-      name: /submit default on enter/i,
-    }) as HTMLInputElement;
-    expect(toggle.checked).toBe(false);
-
-    fireEvent.click(toggle);
-    expect(getPreference(PreferenceKeys.SubmitDefaultOnEnter)).toBe("true");
-    expect(toggle.checked).toBe(true);
-
-    fireEvent.click(toggle);
-    expect(getPreference(PreferenceKeys.SubmitDefaultOnEnter)).toBe("false");
-    expect(toggle.checked).toBe(false);
-  });
-
-  test("reads an enabled submit default on Enter preference from the preferences on mount", () => {
-    setPreference(PreferenceKeys.SubmitDefaultOnEnter, "true");
-
-    render(<UserSettings />);
-
-    const toggle = screen.getByRole("checkbox", { name: /submit default on enter/i });
-    expect((toggle as HTMLInputElement).checked).toBe(true);
-  });
-
-  test("reads a disabled chat preference from the preferences on mount", () => {
-    setPreference(PreferenceKeys.ChatEnabled, "false");
-
-    render(<UserSettings />);
-
-    const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
-    expect((toggle as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(toggle());
+    expect(getPreference(key)).toBe(String(enabledByDefault));
+    expect(toggle().checked).toBe(enabledByDefault);
   });
 });
 

@@ -86,39 +86,47 @@ describe("Settings sections", () => {
     expect(nav.getByRole("link", { name: "General" }).getAttribute("aria-current")).toBe("page");
   });
 
-  test("shows the WorkItem Server section at its own URL and marks only it current", async () => {
-    vi.spyOn(services.workItemServerService, "get").mockResolvedValue({
-      url: null,
-      hasApiKey: false,
-      pollIntervalSeconds: 60,
-      graceIntervalSeconds: 5,
-    });
-    renderAt("/settings/work-item-server");
+  test.each([
+    [
+      "WorkItem Server",
+      "work-item-server",
+      () =>
+        vi.spyOn(services.workItemServerService, "get").mockResolvedValue({
+          url: null,
+          hasApiKey: false,
+          pollIntervalSeconds: 60,
+          graceIntervalSeconds: 5,
+        }),
+      async () => {
+        await screen.findByLabelText(/url/i);
+      },
+    ],
+    [
+      "Storage",
+      "storage",
+      () =>
+        vi.spyOn(services.storageService, "getOverview").mockResolvedValue({
+          categories: [],
+          databases: [],
+        }),
+      async (loaded: ReturnType<typeof vi.spyOn>) => {
+        await waitFor(() => expect(loaded).toHaveBeenCalled());
+      },
+    ],
+  ] as const)(
+    "shows the %s section at its own URL and marks only it current",
+    async (name, path, mockService, loaded) => {
+      const spy = mockService();
+      renderAt(`/settings/${path}`);
 
-    expect(screen.getByRole("heading", { level: 2, name: "WorkItem Server" })).toBeTruthy();
-    const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
-    const link = nav.getByRole("link", { name: "WorkItem Server" });
-    expect(link.className).toContain("active");
-    expect(
-      nav.getAllByRole("link").filter((l) => l.getAttribute("aria-current") === "page"),
-    ).toEqual([link]);
-    await screen.findByLabelText(/url/i);
-  });
-
-  test("shows the Storage section at its own URL and marks only it current", async () => {
-    vi.spyOn((services as any).storageService, "getOverview").mockResolvedValue({
-      categories: [],
-      databases: [],
-    });
-    renderAt("/settings/storage");
-
-    expect(screen.getByRole("heading", { level: 2, name: "Storage" })).toBeTruthy();
-    const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
-    const link = nav.getByRole("link", { name: "Storage" });
-    expect(link.className).toContain("active");
-    expect(
-      nav.getAllByRole("link").filter((l) => l.getAttribute("aria-current") === "page"),
-    ).toEqual([link]);
-    await waitFor(() => expect((services as any).storageService.getOverview).toHaveBeenCalled());
-  });
+      expect(screen.getByRole("heading", { level: 2, name })).toBeTruthy();
+      const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
+      const link = nav.getByRole("link", { name });
+      expect(link.className).toContain("active");
+      expect(
+        nav.getAllByRole("link").filter((l) => l.getAttribute("aria-current") === "page"),
+      ).toEqual([link]);
+      await loaded(spy as never);
+    },
+  );
 });

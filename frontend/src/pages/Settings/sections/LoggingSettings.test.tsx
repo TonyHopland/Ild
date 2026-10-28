@@ -5,13 +5,10 @@ import * as signalRHook from "../../../hooks/useSignalR";
 import * as authServices from "../../../services/auth";
 import type { LogEntry } from "../../../types";
 import { WorkItemHubProvider } from "../../../hooks/useWorkItemHub";
+import { fakeHub, routeHubs } from "../../../test-support";
 
-type Handler = (message: { type: string; payload: unknown; timestamp: string }) => void;
-const handlers = new Map<string, Set<Handler>>();
-
-function emit(type: string, payload: unknown) {
-  handlers.get(type)?.forEach((h) => h({ type, payload, timestamp: new Date().toISOString() }));
-}
+const hub = fakeHub();
+const emit = hub.dispatch;
 
 const levelButton = (name: string) =>
   within(screen.getByRole("group", { name: "Log level override" })).getByRole("button", { name });
@@ -46,21 +43,6 @@ const failure = entry({
   detail: "System.Net.Http.HttpRequestException: 529\n   at ILD.Core.Adapters.ClaudeAdapter",
 });
 
-function mockHub() {
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    connectionState: "connected",
-    on: vi.fn((type: string, handler: Handler) => {
-      const set = handlers.get(type) ?? new Set<Handler>();
-      set.add(handler);
-      handlers.set(type, set);
-    }),
-    off: vi.fn((type: string, handler: Handler) => {
-      handlers.get(type)?.delete(handler);
-    }),
-    invoke: vi.fn(),
-  } as any);
-}
-
 /** The level the backend reports it is running at, and what it started at. */
 function mockLevel(level = "Information", startupLevel = "Information") {
   return vi
@@ -79,8 +61,8 @@ const status = (level: string, startupLevel: string) => ({
 });
 
 beforeEach(() => {
-  handlers.clear();
-  mockHub();
+  hub.reset();
+  routeHubs(signalRHook, { "/hubs/work-item": hub });
   mockLevel();
   mockEntries();
 });
@@ -107,22 +89,18 @@ describe("Logging settings level", () => {
     expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
   });
 
-  test("presses the button a level the page has no button for is drawn as", async () => {
-    // Serilog has six levels and the page shows four. A backend at Verbose is
-    // at a real level, so the control has to say so rather than press nothing.
-    mockLevel("Verbose", "Verbose");
+  // Serilog has six levels and the page shows four: a backend at a level without a
+  // button of its own has to press the button it is drawn as, not none.
+  test.each([
+    ["Verbose", "Debug"],
+    ["Fatal", "Error"],
+  ])("a backend at %s presses the %s button and is following", async (level, pressed) => {
+    mockLevel(level, level);
     render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
 
-    await waitFor(() => expect(levelButton("Debug").getAttribute("aria-pressed")).toBe("true"));
+    await waitFor(() => expect(levelButton(pressed).getAttribute("aria-pressed")).toBe("true"));
     expect(screen.getByText(/following/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
-  });
-
-  test("Fatal presses Error", async () => {
-    mockLevel("Fatal", "Fatal");
-    render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
-
-    await waitFor(() => expect(levelButton("Error").getAttribute("aria-pressed")).toBe("true"));
   });
 
   test("Debug against a startup level of Verbose is still an override, and Reset restores Verbose", async () => {
@@ -267,6 +245,15 @@ describe("Logging settings log view", () => {
       .getAllByText(/Reclaimed 3 worktrees|GitHub rate limit/)
       .map((n) => n.textContent);
     expect(messages[0]).toMatch(/Reclaimed 3 worktrees/);
+  });
+
+  test("leaving the page takes its listener off the shared hub", async () => {
+    const { unmount } = render(<LoggingSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(hub.handlers["LogEntryAppended"]?.size).toBe(1));
+
+    unmount();
+
+    expect(hub.handlers["LogEntryAppended"]?.size ?? 0).toBe(0);
   });
 
   test("the minimum level is a query the backend answers, not a filter on what is held", async () => {

@@ -1,19 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useSignalR } from "./useSignalR";
-import { useSharedWorkItemHub } from "./useWorkItemHub";
+import { boardHint, chatHint, useProposalList, type ProposalListKind } from "./useProposalList";
 import { workItemService } from "../services/auth";
 import type { WorkItemEditProposal } from "../types";
-import type { TypedSignalRMessage } from "../types/signalr";
 
 export type EditProposalsTarget =
   | { workItemId: string }
   | { requestedByWorkItemId: string }
   | { chatSessionId: string };
 
-interface ProposalsView {
-  targetKey: string;
-  proposals: WorkItemEditProposal[];
-}
+type Mode = "item" | "requester" | "chat";
 
 function modeOf(target: EditProposalsTarget) {
   if ("workItemId" in target) return ["item", target.workItemId] as const;
@@ -22,89 +16,27 @@ function modeOf(target: EditProposalsTarget) {
   return ["chat", target.chatSessionId] as const;
 }
 
-function read(mode: "item" | "requester" | "chat", id: string) {
-  if (mode === "item") return workItemService.listEditProposals(id);
-  if (mode === "requester") return workItemService.listRequestedEditProposals(id);
-  return workItemService.listEditProposalsFor({ chatSessionId: id });
-}
+const editProposals: ProposalListKind<Mode, WorkItemEditProposal> = {
+  key: "edit",
+  read: (mode, id) => {
+    if (mode === "item") return workItemService.listEditProposals(id);
+    if (mode === "requester") return workItemService.listRequestedEditProposals(id);
+    return workItemService.listEditProposalsFor({ chatSessionId: id });
+  },
+  hint: (mode, id) =>
+    mode === "chat"
+      ? chatHint("ChatEditProposalsChanged", id)
+      : boardHint("WorkItemEditProposalsChanged", (payload) => payload.workItemId === id),
+};
 
 /**
  * The edit proposals for one work item, those its loop runs requested on any
  * item, or those made by one chat, kept current by snapshot reads: on every
  * (re)connect once the hub group is joined, on a hint for this target, and on
- * {@link refresh}. A requesting item is hinted as a work item. Work items are
- * heard on the app's shared work-item hub; a chat on a chat hub connection of
- * its own.
+ * `refresh`. A requesting item is hinted as a work item. Work items are heard on
+ * the app's shared work-item hub; a chat on a chat hub connection of its own.
  */
 export function useEditProposals(target: EditProposalsTarget) {
   const [mode, id] = modeOf(target);
-  const targetKey = `${mode}:${id}`;
-  const shared = useSharedWorkItemHub();
-  const chat = useSignalR(mode === "chat" ? "/hubs/chat" : null);
-  const { connectionState, on, off, invoke } = mode === "chat" ? chat : shared;
-
-  const [view, setView] = useState<ProposalsView | null>(null);
-  const generationRef = useRef(0);
-  const currentTargetRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    currentTargetRef.current = targetKey;
-    return () => {
-      currentTargetRef.current = null;
-      generationRef.current++;
-    };
-  }, [targetKey]);
-
-  const refresh = useCallback(() => {
-    if (currentTargetRef.current !== targetKey) return;
-    const generation = ++generationRef.current;
-    void (async () => {
-      try {
-        const proposals = await read(mode, id);
-        if (generation !== generationRef.current || currentTargetRef.current !== targetKey) return;
-        setView({ targetKey, proposals });
-      } catch (err) {
-        console.error(err);
-      }
-    })();
-  }, [targetKey, mode, id]);
-
-  useEffect(() => {
-    if (connectionState !== "connected") return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        // A read before the join has taken effect could miss a hint sent in the gap.
-        await (mode === "chat" ? invoke("SubscribeToChat", id) : invoke("SubscribeToWorkItems"));
-      } catch (err) {
-        console.error(err);
-        return;
-      }
-      if (!cancelled) refresh();
-    })();
-    return () => {
-      cancelled = true;
-      if (mode === "chat") {
-        void invoke("UnsubscribeFromChat", id)?.catch((err) => console.error(err));
-      }
-    };
-  }, [connectionState, mode, id, invoke, refresh]);
-
-  useEffect(() => {
-    if (mode !== "chat") {
-      const onChanged = (msg: TypedSignalRMessage<"WorkItemEditProposalsChanged">) => {
-        if (msg.payload.workItemId === id) refresh();
-      };
-      on("WorkItemEditProposalsChanged", onChanged);
-      return () => off("WorkItemEditProposalsChanged", onChanged);
-    }
-    const onChanged = (msg: TypedSignalRMessage<"ChatEditProposalsChanged">) => {
-      if (msg.payload.chatSessionId === id) refresh();
-    };
-    on("ChatEditProposalsChanged", onChanged);
-    return () => off("ChatEditProposalsChanged", onChanged);
-  }, [on, off, mode, id, refresh]);
-
-  const proposals = view?.targetKey === targetKey ? view.proposals : undefined;
-  return { proposals, refresh };
+  return useProposalList(editProposals, mode, id);
 }

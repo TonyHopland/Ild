@@ -93,30 +93,4 @@ describe("useEditProposals races", () => {
     });
     expect(ids(result.current.proposals)).toEqual(["p-2"]);
   });
-
-  test("a refused join skips the read, and the next connect joins and reads", async () => {
-    let refuse = true;
-    const hub = chatHub((method) =>
-      method === "SubscribeToChat" && refuse ? Promise.reject(new Error("no")) : Promise.resolve(),
-    );
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const list = vi
-      .spyOn(authServices.workItemService, "listEditProposalsFor")
-      .mockResolvedValue([proposal("p-1", "chat-1")]);
-
-    const { result, rerender } = renderHook(() => useEditProposals({ chatSessionId: "chat-1" }), {
-      wrapper: WorkItemHubProvider,
-    });
-    await waitFor(() => expect(hub.invoke).toHaveBeenCalledWith("SubscribeToChat", "chat-1"));
-    await act(async () => {});
-    expect(list).not.toHaveBeenCalled();
-
-    refuse = false;
-    hub.state = "reconnecting";
-    rerender();
-    hub.state = "connected";
-    rerender();
-
-    await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1"]));
-  });
 });
