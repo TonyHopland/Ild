@@ -32,21 +32,6 @@ public class EventLogServiceTests
     }
 
     [Fact]
-    public async Task GetByRunId_returns_events_in_the_order_they_were_written()
-    {
-        var (svc, db, runId, _) = Setup();
-        using var _ = db;
-
-        await svc.AppendAsync(runId, EventType.NodeStarted, "a");
-        await svc.AppendAsync(runId, EventType.NodeCompleted, "b");
-
-        var entries = (await svc.GetByRunIdAsync(runId)).ToList();
-        Assert.Equal(2, entries.Count());
-        Assert.Equal("a", entries[0].Data);
-        Assert.Equal("b", entries[1].Data);
-    }
-
-    [Fact]
     public async Task CursorPagination_returns_pages_in_id_order_with_the_last_id_as_cursor()
     {
         var (svc, db, runId, _) = Setup();

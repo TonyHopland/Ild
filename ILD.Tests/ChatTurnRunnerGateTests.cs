@@ -30,7 +30,7 @@ public sealed class ChatTurnRunnerGateTests
             .Returns(Task.CompletedTask);
         var services = new ServiceCollection().AddScoped(_ => chat.Object).BuildServiceProvider();
         // The runner announces each turn's start and end itself; what it announces
-        // is ChatTurnLifecycleTests' subject, so here it only counts completions.
+        // is ChatTurnRunnerTests' subject, so here it only counts completions.
         return ActivatorUtilities.CreateInstance<ChatTurnRunner>(
             services, notifier.Object, NullLogger<ChatTurnRunner>.Instance);
     }

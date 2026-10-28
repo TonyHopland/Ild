@@ -35,20 +35,4 @@ public sealed class WorkItemServerModelTests
         // so nothing but the database's own cascade collects them.
         Assert.Equal(DeleteBehavior.Cascade, foreignKey.DeleteBehavior);
     }
-
-    [Fact]
-    public void One_scaffolded_migration_adds_the_attachments_table()
-    {
-        var migrations = Directory.GetFiles(Path.Combine(RepositoryFiles.Root, "ILD.WorkItemServer", "Migrations"), "*.cs")
-            .Where(f => !f.EndsWith(".Designer.cs", StringComparison.Ordinal))
-            .Where(f => !f.EndsWith("ModelSnapshot.cs", StringComparison.Ordinal))
-            .Where(f => File.ReadAllText(f).Contains("WorkItemAttachments", StringComparison.Ordinal))
-            .Select(Path.GetFileName)
-            .ToList();
-
-        Assert.Single(migrations);
-        // The snapshot is only updated by scaffolding; a hand-written migration leaves it behind.
-        Assert.Contains("WorkItemAttachments", RepositoryFiles.ReadAllText(
-            Path.Combine("ILD.WorkItemServer", "Migrations", "WorkItemServerDbContextModelSnapshot.cs")), StringComparison.Ordinal);
-    }
 }

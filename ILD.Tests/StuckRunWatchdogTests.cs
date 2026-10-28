@@ -17,7 +17,7 @@ public class StuckRunWatchdogTests
     [Fact]
     public async Task Recovers_run_running_with_no_live_driver()
     {
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         var run = SeedRun(db, version.Id, LoopRunStatus.Running,
             updatedAt: DateTime.UtcNow.AddMinutes(-10));
@@ -26,7 +26,7 @@ public class StuckRunWatchdogTests
         var recovery = RecoveryReturning(true);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object).SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(run.Id), Times.Once);
     }
@@ -36,7 +36,7 @@ public class StuckRunWatchdogTests
     {
         // The key safety property: a job with a live driving task is exempt no
         // matter how long it has been running (stale UpdatedAt below).
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         var run = SeedRun(db, version.Id, LoopRunStatus.Running,
             updatedAt: DateTime.UtcNow.AddHours(-5));
@@ -45,7 +45,7 @@ public class StuckRunWatchdogTests
         var recovery = RecoveryReturning(true);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object).SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -56,7 +56,7 @@ public class StuckRunWatchdogTests
         // Running, no driver yet, but the row was just written — this is the
         // sub-second window between a status write and its task registering, not
         // a stuck run. Must not be recovered.
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         SeedRun(db, version.Id, LoopRunStatus.Running, updatedAt: DateTime.UtcNow);
 
@@ -64,7 +64,7 @@ public class StuckRunWatchdogTests
         var recovery = RecoveryReturning(true);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object).SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -72,7 +72,7 @@ public class StuckRunWatchdogTests
     [Fact]
     public async Task Skips_paused_run()
     {
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         SeedRun(db, version.Id, LoopRunStatus.Running,
             updatedAt: DateTime.UtcNow.AddMinutes(-10), isPaused: true);
@@ -81,7 +81,7 @@ public class StuckRunWatchdogTests
         var recovery = RecoveryReturning(true);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object).SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -92,7 +92,7 @@ public class StuckRunWatchdogTests
         // A run parked by the capacity gate leaves the run row Running with no
         // driver on purpose; its work item is WaitingForIld and the scheduler
         // owns the resume. The watchdog must not bounce it.
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         SeedRun(db, version.Id, LoopRunStatus.Running,
             updatedAt: DateTime.UtcNow.AddMinutes(-10));
@@ -101,7 +101,7 @@ public class StuckRunWatchdogTests
         var recovery = RecoveryReturning(true);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.WaitingForIld);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object).SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -109,7 +109,7 @@ public class StuckRunWatchdogTests
     [Fact]
     public async Task Skips_run_whose_work_item_is_gone()
     {
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         SeedRun(db, version.Id, LoopRunStatus.Running,
             updatedAt: DateTime.UtcNow.AddMinutes(-10));
@@ -119,7 +119,7 @@ public class StuckRunWatchdogTests
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(x => x.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync((WorkItemView?)null);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object).SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -130,7 +130,7 @@ public class StuckRunWatchdogTests
         // The issue #39 invalid state: a run finalized (CompletedAt stamped) but
         // left Running, with two AI nodes stuck Running and no live driver. The
         // watchdog must finalize it — not re-drive it — and unstick the work item.
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         var run = SeedRun(db, version.Id, LoopRunStatus.Running,
             updatedAt: DateTime.UtcNow.AddMinutes(-10));
@@ -151,7 +151,7 @@ public class StuckRunWatchdogTests
         // the row's DB state, not the seeding context's tracked (CompletedAt-less)
         // instance.
         var watchdog = BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object);
-        await InvokeSweepOnceAsync(watchdog);
+        await watchdog.SweepOnceAsync(CancellationToken.None);
 
         // Finalized, not re-driven.
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
@@ -165,8 +165,6 @@ public class StuckRunWatchdogTests
         var nodes = db.Fresh().LoopRunNodes.AsNoTracking().Where(n => n.LoopRunId == run.Id).ToList();
         Assert.Equal(2, nodes.Count);
         Assert.All(nodes, n => Assert.Equal(LoopRunNodeStatus.Interrupted, n.Status));
-
-        db.Dispose();
     }
 
     [Fact]
@@ -184,8 +182,9 @@ public class StuckRunWatchdogTests
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, DateTime.UtcNow.AddMinutes(-9)), TestContext.Current.CancellationToken);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(new LoopRunStore(db.Fresh()), EngineWithActiveRuns().Object,
-            RecoveryReturning(true).Object, workItems.Object, events));
+        await BuildWatchdog(new LoopRunStore(db.Fresh()), EngineWithActiveRuns().Object,
+            RecoveryReturning(true).Object, workItems.Object, events)
+            .SweepOnceAsync(CancellationToken.None);
 
         Assert.Equal(LoopRunStatus.Failed, db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id).Status);
         workItems.Verify(w => w.TransitionAsync(It.IsAny<WorkItemActor>(), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
@@ -197,7 +196,7 @@ public class StuckRunWatchdogTests
     {
         // A throw while healing one completed-yet-Running run must not strand the
         // other orphaned runs in the same sweep (Copilot review on PR #69).
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
 
         // Stuck run whose heal throws (its work-item transition blows up).
@@ -223,10 +222,9 @@ public class StuckRunWatchdogTests
 
         // The sweep completes despite the heal throwing, and the healthy orphan is
         // still recovered.
-        await InvokeSweepOnceAsync(watchdog);
+        await watchdog.SweepOnceAsync(CancellationToken.None);
         recovery.Verify(r => r.RecoverRunAsync(orphan.Id), Times.Once);
 
-        db.Dispose();
     }
 
     [Fact]
@@ -236,7 +234,7 @@ public class StuckRunWatchdogTests
         // wholesale when the work-item server is unreachable — what happens when
         // one deploy rolls both containers — and swallows its own failures.
         // Without this the tidiest possible shutdown could park a run forever.
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         var run = SeedRun(db, version.Id, LoopRunStatus.WaitingHuman,
             updatedAt: DateTime.UtcNow.AddMinutes(-10),
@@ -246,10 +244,9 @@ public class StuckRunWatchdogTests
         var recovery = RecoveryReturning(true);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object).SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(run.Id), Times.Once);
-        db.Dispose();
     }
 
     [Fact]
@@ -258,7 +255,7 @@ public class StuckRunWatchdogTests
         // Same row shape as above but no shutdown stamp — a person halted this
         // one and is waiting to steer it. Sweeping it up would resume it out from
         // under them a minute later.
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         SeedRun(db, version.Id, LoopRunStatus.WaitingHuman,
             updatedAt: DateTime.UtcNow.AddMinutes(-10), isHalted: true, haltReason: null);
@@ -267,10 +264,9 @@ public class StuckRunWatchdogTests
         var recovery = RecoveryReturning(true);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object).SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
-        db.Dispose();
     }
 
     [Fact]
@@ -279,7 +275,7 @@ public class StuckRunWatchdogTests
         // CompletedAt alone used to trigger the completed-yet-Running heal. A
         // parked run is WaitingHuman, so it is not in that invalid state at all —
         // and healing it would fail the very run the drain parked to keep.
-        var db = new TestDb();
+        using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         var run = SeedRun(db, version.Id, LoopRunStatus.WaitingHuman,
             updatedAt: DateTime.UtcNow.AddMinutes(-10),
@@ -292,12 +288,11 @@ public class StuckRunWatchdogTests
         var recovery = RecoveryReturning(true);
         var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(
-            BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object));
+        await BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object)
+            .SweepOnceAsync(CancellationToken.None);
 
         recovery.Verify(r => r.RecoverRunAsync(run.Id), Times.Once);
         Assert.Equal(LoopRunStatus.WaitingHuman, db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id).Status);
-        db.Dispose();
     }
 
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
@@ -394,9 +389,4 @@ public class StuckRunWatchdogTests
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
         return new StuckRunWatchdog(scopes, engine, TestActors.Instance, NullLogger<StuckRunWatchdog>.Instance);
     }
-
-    private static Task InvokeSweepOnceAsync(StuckRunWatchdog watchdog) =>
-        (Task)typeof(StuckRunWatchdog)
-            .GetMethod("SweepOnceAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .Invoke(watchdog, new object?[] { CancellationToken.None })!;
 }

@@ -725,10 +725,6 @@ public class BackupApiTests
         await service.StopAsync(CancellationToken.None);
     }
 
-    private static Task SweepOnceAsync(object service)
-        => (Task)service.GetType().GetMethod("SweepOnceAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(service, [CancellationToken.None])!;
-
     [Theory]
     [InlineData("work-item scheduler")]
     [InlineData("throttled-resume sweeper")]
@@ -782,10 +778,10 @@ public class BackupApiTests
                     await OnePassAsync(ActivatorUtilities.CreateInstance<ChatScheduleScheduler>(sp, (TimeProvider)time), time);
                     break;
                 case "throttled-resume sweeper":
-                    await SweepOnceAsync(ActivatorUtilities.CreateInstance<ThrottledRunResumeSweeper>(sp));
+                    await ActivatorUtilities.CreateInstance<ThrottledRunResumeSweeper>(sp).SweepOnceAsync(CancellationToken.None);
                     break;
                 case "stuck-run watchdog":
-                    await SweepOnceAsync(ActivatorUtilities.CreateInstance<StuckRunWatchdog>(sp));
+                    await ActivatorUtilities.CreateInstance<StuckRunWatchdog>(sp).SweepOnceAsync(CancellationToken.None);
                     break;
             }
         }

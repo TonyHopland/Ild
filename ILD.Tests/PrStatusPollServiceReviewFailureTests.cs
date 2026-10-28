@@ -4,7 +4,9 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -37,9 +39,10 @@ public class PrStatusPollServiceReviewFailureTests
             new[] { new RemotePrReviewSummary("r1", "COMMENTED", "body", Head, DateTime.UtcNow, "Copilot", false) },
             items, Head, null);
 
-    private sealed class Harness
+    private sealed class Harness : IDisposable
     {
         public LoopRun Run { get; }
+        public TestDb Db { get; } = new();
         public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRemoteProvider> Remote { get; } = new();
         public Mock<ILoopEngine> Engine { get; } = new();
@@ -67,7 +70,8 @@ public class PrStatusPollServiceReviewFailureTests
             };
 
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
-            Runs.AcceptPollWrites(Run);
+            PrRunSeed.SeedParked(Db, Run.Id, loopNodeId);
+            Runs.RecordPollsOn(new LoopRunStore(Db.Fresh()));
             // Compare-and-set, as every writer of this column now is.
             Runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => Run.PrCommentLedger);
             Runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
@@ -96,12 +100,14 @@ public class PrStatusPollServiceReviewFailureTests
         public Task PollAsync() => new PrStatusPollService(
             Runs.Object, Remote.Object, Engine.Object, Notifier.Object,
             NullLogger<PrStatusPollService>.Instance).PollOnceAsync();
+
+        public void Dispose() => Db.Dispose();
     }
 
     [Fact]
     public async Task A_forge_that_could_not_be_read_records_nothing_and_fires_nothing()
     {
-        var h = new Harness(RemotePrReviewLedger.Unavailable("The provider request failed."), runLedger: null);
+        using var h = new Harness(RemotePrReviewLedger.Unavailable("The provider request failed."), runLedger: null);
 
         await h.PollAsync();
 
@@ -113,7 +119,7 @@ public class PrStatusPollServiceReviewFailureTests
     [Fact]
     public async Task A_failed_read_still_persists_the_snapshot_and_pushes_it()
     {
-        var h = new Harness(RemotePrReviewLedger.Unavailable("The provider request failed."), runLedger: null);
+        using var h = new Harness(RemotePrReviewLedger.Unavailable("The provider request failed."), runLedger: null);
 
         await h.PollAsync();
 
@@ -126,10 +132,10 @@ public class PrStatusPollServiceReviewFailureTests
     {
         // The whole point: the failed tick must not have claimed the run had
         // seen an empty pull request.
-        var failed = new Harness(RemotePrReviewLedger.Unavailable("The provider request failed."), runLedger: null);
+        using var failed = new Harness(RemotePrReviewLedger.Unavailable("The provider request failed."), runLedger: null);
         await failed.PollAsync();
 
-        var recovered = new Harness(Readable(Inline("11")), runLedger: failed.Run.PrCommentLedger);
+        using var recovered = new Harness(Readable(Inline("11")), runLedger: failed.Run.PrCommentLedger);
         await recovered.PollAsync();
 
         recovered.Engine.Verify(
@@ -142,7 +148,7 @@ public class PrStatusPollServiceReviewFailureTests
     {
         // A ledger this version cannot parse is the same situation as never
         // having watched: record what is there, fire nothing.
-        var h = new Harness(Readable(Inline("11")), runLedger: "{not json");
+        using var h = new Harness(Readable(Inline("11")), runLedger: "{not json");
 
         await h.PollAsync();
 

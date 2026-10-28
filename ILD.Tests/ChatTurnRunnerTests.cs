@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -8,6 +9,12 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
+/// The runner is the source of truth for whether a chat has a turn in flight, and
+/// the only thing that can name that turn. Every turn it starts announces itself
+/// exactly once and reports itself finished exactly once under the same id, however
+/// it ends, and a replaced turn still reports itself — or the bubble is left with an
+/// indicator and a stop button that never clear.
+///
 /// A stopped turn is not over the moment it is cancelled: it still has to notice,
 /// persist its partial reply and report itself finished. The chat is busy for all
 /// of that, and a read that says otherwise takes the stop button off a turn that is
@@ -17,7 +24,7 @@ namespace ILD.Tests;
 /// a claim exactly one thread can win — the one that then cancels and disposes it,
 /// so no thread can cancel a source another has already disposed.
 /// </summary>
-public sealed class ChatTurnDrainVisibilityTests
+public sealed class ChatTurnRunnerTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
@@ -59,39 +66,71 @@ public sealed class ChatTurnDrainVisibilityTests
         }
     }
 
+    /// <summary>An inbox hint, with the turn a history read would have been told about as it went out.</summary>
+    private sealed record ActivityHint(string UserId, Guid ChatSessionId, Guid? ActiveTurnAtHint);
+
+    public enum TurnEnd { Finishes, Stopped, Throws }
+
     private sealed class Harness
     {
         private readonly object _gate = new();
-        private readonly List<(int Count, TaskCompletionSource Tcs)> _waiters = new();
+        private readonly List<(int Count, TaskCompletionSource Tcs)> _completedWaiters = new();
+        private readonly List<(int Count, TaskCompletionSource Tcs)> _activityWaiters = new();
 
         public required ChatTurnRunner Runner { get; init; }
         public required RecordingLogger Log { get; init; }
         public ConcurrentQueue<Guid> Started { get; } = new();
         public ConcurrentQueue<(Guid TurnId, bool Interrupted)> Completed { get; } = new();
+        public ConcurrentDictionary<Guid, Guid> StartedIn { get; } = new();
+        public ConcurrentDictionary<Guid, Guid> CompletedIn { get; } = new();
+        public ConcurrentQueue<ChatMessageView> Appended { get; } = new();
+        public ConcurrentQueue<ActivityHint> Activity { get; } = new();
 
         public void RecordCompleted(Guid turnId, bool interrupted)
         {
             lock (_gate)
             {
                 Completed.Enqueue((turnId, interrupted));
-                foreach (var waiter in _waiters.Where(w => w.Count <= Completed.Count).ToList())
-                {
-                    waiter.Tcs.TrySetResult();
-                    _waiters.Remove(waiter);
-                }
+                Release(_completedWaiters, Completed.Count);
+            }
+        }
+
+        public void RecordActivity(ActivityHint hint)
+        {
+            lock (_gate)
+            {
+                Activity.Enqueue(hint);
+                Release(_activityWaiters, Activity.Count);
             }
         }
 
         /// <summary>Completes once at least <paramref name="count"/> turns have reported finished.</summary>
         public Task CompletedAtLeast(int count)
         {
-            lock (_gate)
+            lock (_gate) return Waiter(_completedWaiters, Completed.Count, count);
+        }
+
+        /// <summary>Completes once at least <paramref name="count"/> inbox hints have gone out.</summary>
+        public Task ActivityAtLeast(int count)
+        {
+            lock (_gate) return Waiter(_activityWaiters, Activity.Count, count);
+        }
+
+        private static void Release(List<(int Count, TaskCompletionSource Tcs)> waiters, int reached)
+        {
+            foreach (var waiter in waiters.Where(w => w.Count <= reached).ToList())
             {
-                if (Completed.Count >= count) return Task.CompletedTask;
-                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _waiters.Add((count, tcs));
-                return tcs.Task;
+                waiter.Tcs.TrySetResult();
+                waiters.Remove(waiter);
             }
+        }
+
+        private static Task Waiter(List<(int Count, TaskCompletionSource Tcs)> waiters, int reached, int count)
+        {
+            if (reached >= count) return Task.CompletedTask;
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            waiters.Add((count, tcs));
+            return tcs.Task;
         }
     }
 
@@ -103,24 +142,26 @@ public sealed class ChatTurnDrainVisibilityTests
         public void Dispose() => onDispose?.Invoke();
     }
 
+    /// <param name="run">The turn body; ignored when <paramref name="service"/> stands in for the whole service.</param>
+    /// <param name="owner">Who the chat belongs to, or nobody (null), which hints no inbox.</param>
+    /// <param name="failActivityHints">Every inbox hint throws, as a notifier that does not swallow its own failures would.</param>
     private static Harness NewRunner(
-        Func<Guid, string, CancellationToken, Task> run,
+        Func<Guid, string, CancellationToken, Task>? run = null,
         Action<Guid, Guid>? onCompleting = null,
         Func<Guid, Guid, Task>? onStarting = null,
-        Action? onScopeClose = null)
+        Action? onScopeClose = null,
+        string? owner = null,
+        bool failActivityHints = false,
+        Func<IChatNotifier, IChatService>? service = null)
     {
         Harness? harness = null;
-
-        var chat = new Mock<IChatService>();
-        chat.Setup(c => c.ExecuteTurnAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Returns((Guid _, Guid turnId, string message, string? _, string? _, CancellationToken ct) => run(turnId, message, ct));
 
         var notifier = new Mock<IChatNotifier>();
         notifier.Setup(n => n.TurnStartedAsync(It.IsAny<Guid>(), It.IsAny<Guid>()))
             .Returns(async (Guid chatSessionId, Guid turnId) =>
             {
                 harness!.Started.Enqueue(turnId);
+                harness.StartedIn[turnId] = chatSessionId;
                 // The runner announces a start while the turn is only attached and
                 // before it installs it, so a test that holds this open holds the
                 // chat in exactly that state.
@@ -132,16 +173,43 @@ public sealed class ChatTurnDrainVisibilityTests
                 // Runs where a client would hear the turn end, so a test can see what
                 // a read arriving on that news would have been told.
                 onCompleting?.Invoke(chatSessionId, turnId);
-                harness!.RecordCompleted(turnId, interrupted);
+                harness!.CompletedIn[turnId] = chatSessionId;
+                harness.RecordCompleted(turnId, interrupted);
                 return Task.CompletedTask;
             });
+        notifier.Setup(n => n.MessageAppendedAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<ChatMessageView>()))
+            .Returns((Guid _, Guid _, ChatMessageView message) =>
+            {
+                harness!.Appended.Enqueue(message);
+                return Task.CompletedTask;
+            });
+        notifier.Setup(n => n.ActivityChangedAsync(It.IsAny<string>(), It.IsAny<Guid>()))
+            .Returns((string userId, Guid chatSessionId) =>
+            {
+                harness!.RecordActivity(new ActivityHint(userId, chatSessionId, harness.Runner.ActiveTurnId(chatSessionId)));
+                if (failActivityHints) throw new InvalidOperationException("hub down");
+                return Task.CompletedTask;
+            });
+
+        IChatService chat;
+        if (service is not null)
+            chat = service(notifier.Object);
+        else
+        {
+            var mock = new Mock<IChatService>();
+            mock.Setup(c => c.ExecuteTurnAsync(
+                    It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .Returns((Guid _, Guid turnId, string message, string? _, string? _, CancellationToken ct) => run!(turnId, message, ct));
+            mock.Setup(c => c.GetOwnerAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(owner);
+            chat = mock.Object;
+        }
 
         var log = new RecordingLogger();
         var services = new ServiceCollection()
             .AddScoped(_ => new RunsWhenTheTurnsScopeCloses(onScopeClose))
             // Resolved with the service so the scope owns the hook and closes it at
             // the same point, without the runner knowing anything about it.
-            .AddScoped(sp => { sp.GetRequiredService<RunsWhenTheTurnsScopeCloses>(); return chat.Object; })
+            .AddScoped(sp => { sp.GetRequiredService<RunsWhenTheTurnsScopeCloses>(); return chat; })
             .BuildServiceProvider();
         harness = new Harness
         {
@@ -607,5 +675,426 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.Equal(new[] { live }, h.Completed.Select(c => c.TurnId));
         Assert.Contains(live, h.Started);
         Assert.Empty(h.Log.Entries);
+    }
+
+    [Fact]
+    public async Task A_turn_that_finishes_on_its_own_reports_started_and_completed_once_under_one_id()
+    {
+        var h = NewRunner((_, _, _) => Task.CompletedTask);
+        var chatId = Guid.NewGuid();
+
+        await h.Runner.SubmitAsync(chatId, "hello");
+        await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        var started = Assert.Single(h.Started);
+        var (completedId, interrupted) = Assert.Single(h.Completed);
+        Assert.NotEqual(Guid.Empty, started);
+        Assert.Equal(chatId, h.StartedIn[started]);
+        Assert.Equal(chatId, h.CompletedIn[completedId]);
+        Assert.Equal(started, completedId);
+        Assert.False(interrupted);
+    }
+
+    [Fact]
+    public async Task A_turn_cancelled_by_a_stop_reports_interrupted_once_under_its_started_id()
+    {
+        var running = new TaskCompletionSource();
+        // The service swallows the cancellation and finalizes the partial reply, so
+        // the turn ends normally rather than throwing (ChatService.ExecuteTurnAsync).
+        var h = NewRunner(async (_, _, ct) =>
+        {
+            running.TrySetResult();
+            try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { }
+        });
+        var chatId = Guid.NewGuid();
+
+        await h.Runner.SubmitAsync(chatId, "long one");
+        await running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        var started = Assert.Single(h.Started);
+        var completed = Assert.Single(h.Completed);
+        Assert.Equal(started, completed.TurnId);
+        Assert.True(completed.Interrupted, "a turn that ended by cancellation reports interrupted");
+        // The stop awaited the turn's finalization, so the chat is idle again.
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+    }
+
+    [Fact]
+    public async Task A_turn_whose_execution_throws_still_reports_completed_under_its_started_id()
+    {
+        var h = NewRunner((_, _, _) => throw new InvalidOperationException("boom"));
+
+        await h.Runner.SubmitAsync(Guid.NewGuid(), "hello");
+        await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        var started = Assert.Single(h.Started);
+        var completed = Assert.Single(h.Completed);
+        Assert.Equal(started, completed.TurnId);
+    }
+
+    [Fact]
+    public async Task A_turn_for_a_chat_that_no_longer_exists_still_reports_started_and_completed()
+    {
+        using var db = new TestDb();
+        var h = NewRunner(service: notifier => new ChatService(
+            db.Context,
+            db.Providers,
+            Mock.Of<IAgentAdapterRegistry>(),
+            notifier,
+            // Nothing on this path touches the filesystem: the service returns as
+            // soon as it finds no session row.
+            new ChatOptions { ScratchRoot = Path.Combine(Path.GetTempPath(), "ild-chat-lifecycle-tests") },
+            db.LoopRuns,
+            new ChatLoopScratchpad(),
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance));
+
+        await h.Runner.SubmitAsync(Guid.NewGuid(), "hello");
+        await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        // The service had nothing to say about a chat that is not there — which is
+        // exactly why the turn's own completion cannot be left to it.
+        Assert.Empty(h.Appended);
+        var started = Assert.Single(h.Started);
+        var completed = Assert.Single(h.Completed);
+        Assert.Equal(started, completed.TurnId);
+    }
+
+    [Fact]
+    public async Task ActiveTurnId_names_the_running_turn_and_is_null_for_a_chat_with_none()
+    {
+        var running = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        var h = NewRunner(async (_, _, _) =>
+        {
+            running.TrySetResult();
+            await release.Task;
+        });
+        var chatId = Guid.NewGuid();
+
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+
+        await h.Runner.SubmitAsync(chatId, "go");
+        await running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(Assert.Single(h.Started), h.Runner.ActiveTurnId(chatId));
+
+        release.SetResult();
+        await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        // A turn retires before it announces that it finished, so by then the chat
+        // already reads as idle.
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+    }
+
+    [Fact]
+    public async Task Every_send_that_replaces_a_running_turn_still_reports_it_finished_once()
+    {
+        const int sends = 3;
+        // Each turn is still running when the next send arrives, so every send but
+        // the first is a hand-over: the turn it displaces is taken out of the map by
+        // the send rather than by itself, and still has to report itself finished —
+        // a turn that goes quiet instead leaves the bubble with an indicator and a
+        // stop button that never clear.
+        var running = new SemaphoreSlim(0);
+        var h = NewRunner(async (_, _, ct) =>
+        {
+            running.Release();
+            try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { }
+        });
+        var chatId = Guid.NewGuid();
+
+        for (var i = 0; i < sends; i++)
+        {
+            await h.Runner.SubmitAsync(chatId, $"message {i}").WaitAsync(Patience, TestContext.Current.CancellationToken);
+            Assert.True(await running.WaitAsync(Patience, TestContext.Current.CancellationToken), $"turn {i} never started");
+            Assert.NotNull(h.Runner.ActiveTurnId(chatId));
+        }
+
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        await h.CompletedAtLeast(sends).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        Assert.Equal(sends, h.Completed.Count);
+        Assert.Equal(sends, h.Started.Count);
+        Assert.Equal(sends, h.Started.Distinct().Count());
+        Assert.Equal(h.Started.OrderBy(id => id), h.Completed.Select(c => c.TurnId).OrderBy(id => id));
+        Assert.All(h.Completed, c => Assert.True(c.Interrupted, "a turn ended by cancellation reports interrupted"));
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+    }
+
+    [Fact]
+    public async Task A_replacement_turn_waits_for_the_turn_it_interrupts_to_finish()
+    {
+        var firstRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstEnded = false;
+        var secondSawTheFirstEnd = false;
+
+        var h = NewRunner(async (_, message, ct) =>
+        {
+            if (message == "one")
+            {
+                firstRunning.TrySetResult();
+                try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { }
+                firstCancelled.TrySetResult();
+                // Stands in for persisting and announcing the interrupted reply,
+                // which the replacement must not race; held until the test has
+                // looked at the send.
+                await releaseFirst.Task;
+                Volatile.Write(ref firstEnded, true);
+                return;
+            }
+
+            secondSawTheFirstEnd = Volatile.Read(ref firstEnded);
+            secondStarted.TrySetResult();
+        });
+        var chatId = Guid.NewGuid();
+
+        await h.Runner.SubmitAsync(chatId, "one");
+        await firstRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        var send = h.Runner.SubmitAsync(chatId, "two");
+        await firstCancelled.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.False(send.IsCompleted, "the send finished while the turn it interrupted was still finalizing");
+        Assert.False(secondStarted.Task.IsCompleted, "the replacement started while the turn it interrupted was still finalizing");
+
+        releaseFirst.SetResult();
+        await send.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.CompletedAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        Assert.True(secondSawTheFirstEnd, "the replacement turn started before the one it interrupted had finished");
+        Assert.Equal(2, h.Started.Distinct().Count());
+    }
+
+    [Fact]
+    public async Task A_chat_never_reads_as_idle_while_one_turn_hands_over_to_the_next()
+    {
+        var firstRunning = new TaskCompletionSource();
+        var firstCancelled = new TaskCompletionSource();
+        var releaseFirst = new TaskCompletionSource();
+        var secondRunning = new TaskCompletionSource();
+        var releaseSecond = new TaskCompletionSource();
+
+        var h = NewRunner(async (_, message, ct) =>
+        {
+            if (message == "one")
+            {
+                firstRunning.TrySetResult();
+                try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { }
+                firstCancelled.TrySetResult();
+                // Still persisting the interrupted reply: the chat is not idle yet.
+                await releaseFirst.Task;
+                return;
+            }
+
+            secondRunning.TrySetResult();
+            await releaseSecond.Task;
+        });
+        var chatId = Guid.NewGuid();
+
+        await h.Runner.SubmitAsync(chatId, "one");
+        await firstRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var firstTurn = h.Runner.ActiveTurnId(chatId);
+        Assert.NotNull(firstTurn);
+
+        // A message interrupts rather than queues, so this send cancels the turn
+        // above and starts its replacement.
+        var interruptingSend = h.Runner.SubmitAsync(chatId, "two");
+
+        await firstCancelled.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        // The window the bug lives in: the outgoing turn is cancelled and still
+        // finalizing, and the client is about to be told it ended.
+        Assert.NotNull(h.Runner.ActiveTurnId(chatId));
+
+        releaseFirst.SetResult();
+        await interruptingSend.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await secondRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        var secondTurn = h.Runner.ActiveTurnId(chatId);
+        Assert.NotNull(secondTurn);
+        Assert.NotEqual(firstTurn, secondTurn);
+
+        // Two turns, each announced once; the replaced one reported itself
+        // finished exactly once, under its own id rather than its successor's.
+        Assert.Equal([firstTurn, secondTurn], h.Started.Select(s => (Guid?)s));
+        var completed = Assert.Single(h.Completed);
+        Assert.Equal(firstTurn, completed.TurnId);
+        Assert.True(completed.Interrupted);
+
+        releaseSecond.SetResult();
+        await h.CompletedAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        Assert.Equal(secondTurn, h.Completed.ElementAt(1).TurnId);
+        Assert.False(h.Completed.ElementAt(1).Interrupted);
+    }
+
+    [Fact]
+    public async Task A_stop_that_arrives_after_the_turn_ended_adds_no_second_completion()
+    {
+        var h = NewRunner((_, _, _) => Task.CompletedTask);
+        var chatId = Guid.NewGuid();
+
+        await h.Runner.SubmitAsync(chatId, "quick one");
+        await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        // Stopping an idle chat is a no-op; a second completion here would clear the
+        // indicator of whichever turn is running by the time it lands.
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Single(h.Started);
+        Assert.Single(h.Completed);
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+    }
+
+    [Fact]
+    public async Task A_stop_landing_after_the_reply_was_persisted_does_not_report_it_interrupted()
+    {
+        // What the service wrote on the reply. ChatService takes it from the turn's
+        // own token at the moment it persists (ChatService.ExecuteTurnAsync), so a
+        // stop arriving after that leaves a reply flagged as a complete one.
+        bool? persistedInterrupted = null;
+        CancellationToken turnToken = default;
+        Task? stop = null;
+        ChatTurnRunner? runner = null;
+        var chatId = Guid.NewGuid();
+
+        var h = NewRunner(
+            (_, _, ct) =>
+            {
+                turnToken = ct;
+                persistedInterrupted = ct.IsCancellationRequested;
+                return Task.CompletedTask;
+            },
+            onScopeClose: () =>
+            {
+                // The stop lands here, in the gap the turn used to be judged in. It is
+                // not awaited: it cancels before it waits for this very turn, so waiting
+                // for the token is waiting for the part that matters without waiting on
+                // ourselves.
+                stop = runner!.InterruptAsync(chatId);
+                turnToken.WaitHandle.WaitOne(Patience);
+            });
+        runner = h.Runner;
+
+        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await (stop ?? Task.CompletedTask).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.False(persistedInterrupted, "the reply was persisted before the stop, so it is not interrupted");
+        Assert.True(turnToken.IsCancellationRequested, "the stop should have landed while the turn was ending");
+        var (_, interrupted) = Assert.Single(h.Completed);
+        Assert.False(interrupted, "the turn was announced interrupted though its reply was persisted as complete");
+    }
+
+    [Theory]
+    [InlineData(TurnEnd.Finishes)]
+    [InlineData(TurnEnd.Stopped)]
+    [InlineData(TurnEnd.Throws)]
+    public async Task A_turn_hints_the_owners_inbox_once_visible_and_again_once_retired(TurnEnd end)
+    {
+        var running = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        var h = NewRunner(
+            async (_, _, ct) =>
+            {
+                running.TrySetResult();
+                if (end == TurnEnd.Stopped)
+                {
+                    try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { }
+                    return;
+                }
+                await release.Task;
+                if (end == TurnEnd.Throws) throw new InvalidOperationException("boom");
+            },
+            owner: "alice");
+        var chatId = Guid.NewGuid();
+
+        var turnId = await h.Runner.SubmitAsync(chatId, "go");
+        await running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.ActivityAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        // A history read on this hint already sees the chat busy with this turn.
+        var atStart = Assert.Single(h.Activity);
+        Assert.Equal("alice", atStart.UserId);
+        Assert.Equal(chatId, atStart.ChatSessionId);
+        Assert.Equal(turnId, atStart.ActiveTurnAtHint);
+
+        if (end == TurnEnd.Stopped)
+            await h.Runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        else
+            release.SetResult();
+        await h.ActivityAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        // And on this one, idle again.
+        var hints = h.Activity.ToList();
+        Assert.Equal(2, hints.Count);
+        Assert.Equal("alice", hints[1].UserId);
+        Assert.Equal(chatId, hints[1].ChatSessionId);
+        Assert.Null(hints[1].ActiveTurnAtHint);
+        Assert.Single(h.Started);
+    }
+
+    [Fact]
+    public async Task A_chat_with_no_owner_hints_no_inbox_and_its_turns_run_as_usual()
+    {
+        var firstRunning = new TaskCompletionSource();
+        var h = NewRunner(async (_, message, ct) =>
+        {
+            if (message != "one") return;
+            firstRunning.TrySetResult();
+            try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { }
+        });
+        var chatId = Guid.NewGuid();
+
+        await h.Runner.SubmitAsync(chatId, "one");
+        await firstRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        // The send that replaces a turn waits for it to finish to the end, so once it
+        // returns the first turn has done everything it was ever going to do.
+        await h.Runner.SubmitAsync(chatId, "two").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.CompletedAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Empty(h.Activity);
+        Assert.Equal(2, h.Started.Count);
+        Assert.Equal(h.Started, h.Completed.Select(c => c.TurnId));
+    }
+
+    [Fact]
+    public async Task A_failing_inbox_hint_fails_neither_the_send_nor_the_turn()
+    {
+        var firstRunning = new TaskCompletionSource();
+        var releaseSecond = new TaskCompletionSource();
+        var h = NewRunner(
+            async (_, message, ct) =>
+            {
+                if (message == "one")
+                {
+                    firstRunning.TrySetResult();
+                    try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { }
+                    return;
+                }
+                await releaseSecond.Task;
+            },
+            owner: "alice",
+            failActivityHints: true);
+        var chatId = Guid.NewGuid();
+
+        var first = await h.Runner.SubmitAsync(chatId, "one");
+        await firstRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var second = await h.Runner.SubmitAsync(chatId, "two").WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(first, second);
+        Assert.Equal(second, h.Runner.ActiveTurnId(chatId));
+
+        releaseSecond.SetResult();
+        await h.CompletedAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal([first, second], h.Started);
+        Assert.Equal([first, second], h.Completed.Select(c => c.TurnId));
+        Assert.True(h.Completed.ElementAt(0).Interrupted);
+        Assert.False(h.Completed.ElementAt(1).Interrupted);
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+        // The hints were attempted, and their failure went no further.
+        Assert.NotEmpty(h.Activity);
     }
 }

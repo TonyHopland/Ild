@@ -108,7 +108,7 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
         }
     }
 
-    private async Task SweepOnceAsync(CancellationToken ct)
+    internal async Task SweepOnceAsync(CancellationToken ct)
     {
         using var work = _maintenance.TryBeginWork();
         if (work is null) return;

@@ -132,10 +132,7 @@ public sealed class ChatInactivitySweeperTests : IDisposable
     }
 
     private static Task SweepOnceAsync(ChatInactivitySweeper sweeper) =>
-        ((Task)typeof(ChatInactivitySweeper)
-            .GetMethod("SweepOnceAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)!
-            .Invoke(sweeper, new object?[] { CancellationToken.None })!)
-        .WaitAsync(Patience, TestContext.Current.CancellationToken);
+        sweeper.SweepOnceAsync(CancellationToken.None).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
     [Theory]
     [InlineData(null)]

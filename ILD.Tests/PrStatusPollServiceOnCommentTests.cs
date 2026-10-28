@@ -4,7 +4,9 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -56,10 +58,11 @@ public class PrStatusPollServiceOnCommentTests
         Name = name,
     };
 
-    private sealed class Harness
+    private sealed class Harness : IDisposable
     {
         public LoopRun Run { get; }
         public LoopRunNode RunNode { get; }
+        public TestDb Db { get; } = new();
         public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRemoteProvider> Remote { get; } = new();
         public Mock<ILoopEngine> Engine { get; } = new();
@@ -88,7 +91,8 @@ public class PrStatusPollServiceOnCommentTests
             };
 
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
-            Runs.AcceptPollWrites(Run);
+            PrRunSeed.SeedParked(Db, Run.Id, loopNodeId);
+            Runs.RecordPollsOn(new LoopRunStore(Db.Fresh()));
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
                 .ReturnsAsync(wiredEdges.Select(name => CustomEdge(loopNodeId, name)).ToArray());
@@ -122,6 +126,8 @@ public class PrStatusPollServiceOnCommentTests
                 .Returns(Task.CompletedTask);
             return this;
         }
+
+        public void Dispose() => Db.Dispose();
     }
 
     /// <summary>A run that has been watching this PR, with nothing outstanding.</summary>
@@ -132,7 +138,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task A_comment_that_arrived_since_the_last_tick_fires_on_comment()
     {
-        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment).CaptureSignal();
+        using var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment).CaptureSignal();
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -143,7 +149,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task The_signal_says_where_each_item_is_who_wrote_it_what_it_says_and_which_commit_it_ran_against()
     {
-        var h = new Harness(
+        using var h = new Harness(
             Snapshot(),
             Ledger(
                 Inline("4049159495", path: "frontend/src/utils/attachments.ts", line: 30,
@@ -179,7 +185,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task A_review_carrying_many_comments_is_one_firing_not_one_per_comment()
     {
-        var h = new Harness(
+        using var h = new Harness(
             Snapshot(),
             Ledger(Inline("11"), Inline("12", path: "src/B.cs"), Inline("13", path: "src/C.cs"), Issue("14", "and a note")),
             WatchedSince(),
@@ -196,7 +202,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task The_same_items_do_not_fire_again_on_the_next_tick()
     {
-        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment).CaptureSignal();
+        using var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment).CaptureSignal();
         var service = h.Build();
 
         await service.PollOnceAsync(TestContext.Current.CancellationToken);
@@ -215,7 +221,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task A_run_that_has_never_watched_this_pull_request_records_what_is_there_and_fires_nothing()
     {
-        var h = new Harness(Snapshot(), Ledger(Inline("11"), Issue("12", "an old note")), runLedger: null, LoopOutputs.OnComment);
+        using var h = new Harness(Snapshot(), Ledger(Inline("11"), Issue("12", "an old note")), runLedger: null, LoopOutputs.OnComment);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -232,7 +238,7 @@ public class PrStatusPollServiceOnCommentTests
     {
         // Unwired means untouched: no forge call, no persisted ledger, and the
         // snapshot and its GUI push behave exactly as before.
-        var h = new Harness(Snapshot(), ledger: null, runLedger: null, LoopOutputs.OnMerged);
+        using var h = new Harness(Snapshot(), ledger: null, runLedger: null, LoopOutputs.OnMerged);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -248,7 +254,7 @@ public class PrStatusPollServiceOnCommentTests
     {
         // The comments are still outstanding after a ci-failed round; marking
         // them delivered here would lose them for good.
-        var h = new Harness(
+        using var h = new Harness(
             Snapshot(ci: RemotePrCiStatus.Failed, failedChecks: new[] { new RemotePrCheck("build", "failure", null, null, "991") }),
             Ledger(Inline("11")),
             WatchedSince(),
@@ -265,7 +271,7 @@ public class PrStatusPollServiceOnCommentTests
     public async Task A_comment_ild_posted_itself_does_not_fire_the_edge()
     {
         var reply = PrCommentMarker.Stamp("Answered: the build is green.", Guid.NewGuid());
-        var h = new Harness(Snapshot(), Ledger(Issue("500", reply)), WatchedSince(), LoopOutputs.OnComment);
+        using var h = new Harness(Snapshot(), Ledger(Issue("500", reply)), WatchedSince(), LoopOutputs.OnComment);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -275,7 +281,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task A_review_that_was_cut_short_does_not_start_a_round()
     {
-        var h = new Harness(
+        using var h = new Harness(
             Snapshot(),
             new RemotePrReviewLedger(new[] { Review("r9", incomplete: true) }, new[] { Inline("31", reviewId: "r9") }, Head, null),
             WatchedSince(),
@@ -289,7 +295,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task The_snapshot_is_still_persisted_and_pushed_on_a_tick_that_fires_a_comment()
     {
-        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment);
+        using var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 

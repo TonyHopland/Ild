@@ -1,4 +1,4 @@
-using System.Reflection;
+using ILD.Data.Backup;
 using ILD.Data.Entities;
 using ILD.WorkItemServer;
 using Microsoft.EntityFrameworkCore;
@@ -16,11 +16,8 @@ public sealed class BackupSchemaScriptTests
 {
     private static string Script<TContext>(TContext context) where TContext : DbContext
     {
-        // The archive is compiled into each assembly that hosts a context: ILD.Data and the WorkItem Server.
-        var archive = typeof(TContext).Assembly.GetType("ILD.Data.Backup.PostgresDatabaseArchive`1")!.MakeGenericType(typeof(TContext));
-        var migrations = context.Database.GetMigrations().ToList();
-        return (string)archive.GetMethod("BuildSchemaScript", BindingFlags.NonPublic | BindingFlags.Static)!
-            .Invoke(null, [context, migrations.Last()])!;
+        var target = context.Database.GetMigrations().Last();
+        return PostgresDatabaseArchive<TContext>.BuildSchemaScript(context, target);
     }
 
     private static void AssertEveryStatementTerminated(string script)

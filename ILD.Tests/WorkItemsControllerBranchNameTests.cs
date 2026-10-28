@@ -28,74 +28,77 @@ namespace ILD.Tests;
 /// </summary>
 public class WorkItemsControllerBranchNameTests
 {
-    [Fact]
-    public async Task Create_rejects_an_illegal_branch_name()
+    public static TheoryData<string, string, string?> IllegalNames => new()
+    {
+        { "branch", "feature foo", null },
+        { "base", "release 1.0", "Base branch" },
+    };
+
+    public static TheoryData<string, string, string> LegalNames => new()
+    {
+        { "branch", "  feature/foo  ", "feature/foo" },
+        { "base", "  release/1.0  ", "release/1.0" },
+    };
+
+    public static TheoryData<string> FieldNames => new() { "branch", "base" };
+
+    [Theory]
+    [MemberData(nameof(IllegalNames))]
+    public async Task Create_rejects_an_illegal_name(string field, string illegal, string? errorNames)
     {
         var (controller, _, db, repoId) = Setup();
         using var _db = db;
 
-        var result = await controller.Create(new WorkItemCreateRequest
-        {
-            Title = "t",
-            RepositoryId = repoId.ToString(),
-            BranchNameOverride = "feature foo",
-        });
+        var result = await controller.Create(Request(field, repoId, illegal));
 
-        Assert.IsType<BadRequestObjectResult>(result);
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        // Reporting a base branch as "Branch name cannot contain spaces." would point the
+        // human at the wrong one of the two fields.
+        if (errorNames is not null) Assert.Contains(errorNames, Read(bad.Value!, "error"));
     }
 
-    [Fact]
-    public async Task Create_accepts_and_persists_a_legal_branch_name()
+    [Theory]
+    [MemberData(nameof(LegalNames))]
+    public async Task Create_accepts_and_persists_a_legal_name(string field, string legalInput, string legalStored)
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _db = db;
 
-        var result = await controller.Create(new WorkItemCreateRequest
-        {
-            Title = "t",
-            RepositoryId = repoId.ToString(),
-            BranchNameOverride = "  feature/foo  ",
-        });
+        var result = await controller.Create(Request(field, repoId, legalInput));
 
         var created = Assert.IsType<CreatedAtActionResult>(result);
         var id = Assert.IsType<WorkItemView>(created.Value).Id;
-        Assert.Equal("feature/foo", (await mgr.GetWorkItemAsync(id))!.BranchNameOverride);
+        Assert.Equal(legalStored, Stored(field, (await mgr.GetWorkItemAsync(id))!));
     }
 
-    [Fact]
-    public async Task Update_rejects_an_illegal_branch_name()
+    [Theory]
+    [MemberData(nameof(FieldNames))]
+    public async Task Update_rejects_an_illegal_name(string field)
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _db = db;
         var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
 
-        var result = await controller.Update(id, new WorkItemCreateRequest
-        {
-            Title = "t",
-            RepositoryId = repoId.ToString(),
-            BranchNameOverride = "../escape",
-        });
+        var result = await controller.Update(id, Request(field, repoId, "../escape"));
 
         Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Null((await mgr.GetWorkItemAsync(id))!.BranchNameOverride);
+        Assert.Null(Stored(field, (await mgr.GetWorkItemAsync(id))!));
     }
 
-    [Fact]
-    public async Task Update_clears_the_branch_name_when_sent_blank()
+    [Theory]
+    [MemberData(nameof(FieldNames))]
+    public async Task Update_clears_the_name_when_sent_blank(string field)
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _db = db;
-        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId, null, false, branchNameOverride: "feature/foo");
+        var id = field == "branch"
+            ? await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId, null, false, branchNameOverride: "feature/foo")
+            : await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId, null, false, baseBranchOverride: "release/1.0");
 
-        var result = await controller.Update(id, new WorkItemCreateRequest
-        {
-            Title = "t",
-            RepositoryId = repoId.ToString(),
-            BranchNameOverride = "",
-        });
+        var result = await controller.Update(id, Request(field, repoId, ""));
 
         Assert.IsType<OkObjectResult>(result);
-        Assert.Null((await mgr.GetWorkItemAsync(id))!.BranchNameOverride);
+        Assert.Null(Stored(field, (await mgr.GetWorkItemAsync(id))!));
     }
 
     [Fact]
@@ -112,78 +115,16 @@ public class WorkItemsControllerBranchNameTests
         Assert.Contains("already exists on origin", Read(payload, "warning"));
     }
 
-    [Fact]
-    public async Task Create_rejects_an_illegal_base_branch_and_says_which_field()
+    private static WorkItemCreateRequest Request(string field, Guid repoId, string value) => new()
     {
-        var (controller, _, db, repoId) = Setup();
-        using var _db = db;
+        Title = "t",
+        RepositoryId = repoId.ToString(),
+        BranchNameOverride = field == "branch" ? value : null,
+        BaseBranchOverride = field == "base" ? value : null,
+    };
 
-        var result = await controller.Create(new WorkItemCreateRequest
-        {
-            Title = "t",
-            RepositoryId = repoId.ToString(),
-            BaseBranchOverride = "release 1.0",
-        });
-
-        var bad = Assert.IsType<BadRequestObjectResult>(result);
-        // Reporting this as "Branch name cannot contain spaces." would point the
-        // human at the wrong one of the two fields.
-        Assert.Contains("Base branch", Read(bad.Value!, "error"));
-    }
-
-    [Fact]
-    public async Task Create_accepts_and_persists_a_legal_base_branch()
-    {
-        var (controller, mgr, db, repoId) = Setup();
-        using var _db = db;
-
-        var result = await controller.Create(new WorkItemCreateRequest
-        {
-            Title = "t",
-            RepositoryId = repoId.ToString(),
-            BaseBranchOverride = "  release/1.0  ",
-        });
-
-        var created = Assert.IsType<CreatedAtActionResult>(result);
-        var id = Assert.IsType<WorkItemView>(created.Value).Id;
-        Assert.Equal("release/1.0", (await mgr.GetWorkItemAsync(id))!.BaseBranchOverride);
-    }
-
-    [Fact]
-    public async Task Update_rejects_an_illegal_base_branch()
-    {
-        var (controller, mgr, db, repoId) = Setup();
-        using var _db = db;
-        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
-
-        var result = await controller.Update(id, new WorkItemCreateRequest
-        {
-            Title = "t",
-            RepositoryId = repoId.ToString(),
-            BaseBranchOverride = "../escape",
-        });
-
-        Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Null((await mgr.GetWorkItemAsync(id))!.BaseBranchOverride);
-    }
-
-    [Fact]
-    public async Task Update_clears_the_base_branch_when_sent_blank()
-    {
-        var (controller, mgr, db, repoId) = Setup();
-        using var _db = db;
-        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId, null, false, baseBranchOverride: "release/1.0");
-
-        var result = await controller.Update(id, new WorkItemCreateRequest
-        {
-            Title = "t",
-            RepositoryId = repoId.ToString(),
-            BaseBranchOverride = "",
-        });
-
-        Assert.IsType<OkObjectResult>(result);
-        Assert.Null((await mgr.GetWorkItemAsync(id))!.BaseBranchOverride);
-    }
+    private static string? Stored(string field, WorkItemView view)
+        => field == "branch" ? view.BranchNameOverride : view.BaseBranchOverride;
 
     private static string? Read(object payload, string property)
         => payload.GetType().GetProperty(property)!.GetValue(payload) as string;

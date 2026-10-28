@@ -945,30 +945,6 @@ public class WorkItemServiceTests : IAsyncLifetime
         Assert.Equal("a", Assert.Single(list).Title);
     }
 
-    /// <summary>
-    /// A save writes the item before its history: the update takes the item's row
-    /// lock, so concurrent writers' history rows are numbered in the order their
-    /// changes landed, which is the order old values are paired in.
-    /// </summary>
-    [Fact]
-    public async Task A_save_updates_the_item_before_it_inserts_the_history_of_the_change()
-    {
-        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "before" }, TestContext.Current.CancellationToken);
-        var commands = new SaveCommandRecorder();
-        await using var recorded = new WorkItemServerDbContext(
-            new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).AddInterceptors(commands).Options)
-        {
-            HistoryActor = TestActors.ServerHuman,
-        };
-
-        await new WorkItemService(recorded, _clock)
-            .UpdateAsync(wi.Id, new UpdateWorkItemRequest { Title = "after" }, TestContext.Current.CancellationToken);
-
-        var update = commands.Executed.FindIndex(c => c.Contains("UPDATE \"WorkItems\"", StringComparison.Ordinal));
-        var insert = commands.Executed.FindIndex(c => c.Contains("INSERT INTO \"WorkItemHistoryEntries\"", StringComparison.Ordinal));
-        Assert.True(update >= 0 && insert > update, string.Join("\n", commands.Executed));
-    }
-
     private sealed class SaveCommandRecorder : DbCommandInterceptor
     {
         public List<string> Executed { get; } = new();

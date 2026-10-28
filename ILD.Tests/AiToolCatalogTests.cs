@@ -4,10 +4,13 @@ namespace ILD.Tests;
 
 public class AiToolCatalogTests
 {
-    [Fact]
-    public void GetSupportedToolsForProviderType_returns_default_tools_for_opencode()
+    [Theory]
+    [InlineData("opencode")]
+    [InlineData("pi")]
+    [InlineData("  OpenCode  ")]
+    public void GetSupportedToolsForProviderType_returns_default_tools_for_the_default_agents(string providerType)
     {
-        var tools = DeclaredTraits.For("opencode").SupportedTools;
+        var tools = DeclaredTraits.For(providerType).SupportedTools;
         Assert.Equal(4, tools.Count);
         Assert.Contains(tools, t => t.Key == AiToolCatalog.Read);
         Assert.Contains(tools, t => t.Key == AiToolCatalog.Write);
@@ -15,39 +18,15 @@ public class AiToolCatalogTests
         Assert.Contains(tools, t => t.Key == AiToolCatalog.Ild);
     }
 
-    [Fact]
-    public void GetSupportedToolsForProviderType_returns_default_tools_for_pi()
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData(null)]
+    [InlineData("")]
+    public void An_unknown_provider_has_no_tools(string? providerType)
     {
-        var tools = DeclaredTraits.For("pi").SupportedTools;
-        Assert.Equal(4, tools.Count);
-    }
-
-    [Fact]
-    public void GetSupportedToolsForProviderType_returns_default_tools_for_opencode_with_whitespace()
-    {
-        var tools = DeclaredTraits.For("  OpenCode  ").SupportedTools;
-        Assert.Equal(4, tools.Count);
-    }
-
-    [Fact]
-    public void GetSupportedToolsForProviderType_returns_empty_for_unknown_provider()
-    {
-        var tools = DeclaredTraits.For("unknown").SupportedTools;
-        Assert.Empty(tools);
-    }
-
-    [Fact]
-    public void GetSupportedToolsForProviderType_returns_empty_for_null()
-    {
-        var tools = DeclaredTraits.For(null).SupportedTools;
-        Assert.Empty(tools);
-    }
-
-    [Fact]
-    public void GetSupportedToolsForProviderType_returns_empty_for_empty_string()
-    {
-        var tools = DeclaredTraits.For("").SupportedTools;
-        Assert.Empty(tools);
+        Assert.Empty(DeclaredTraits.For(providerType).SupportedTools);
+        Assert.Empty(AiToolCatalog.GetDefaultToolKeys(DeclaredTraits.For(providerType)));
+        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For(providerType), new[] { "read", "write" }));
     }
 
     [Fact]
@@ -61,93 +40,22 @@ public class AiToolCatalogTests
         Assert.Contains(AiToolCatalog.Ild, keys);
     }
 
-    [Fact]
-    public void GetDefaultToolKeysForProviderType_returns_empty_for_unknown_provider()
+    public static TheoryData<string[], int, string[]> Selections => new()
     {
-        var keys = AiToolCatalog.GetDefaultToolKeys(DeclaredTraits.For("unknown"));
-        Assert.Empty(keys);
-    }
+        { ["read", "execute"], 2, ["read", "execute"] },
+        { ["read", "unsupported-tool"], 1, ["read"] },
+        { ["READ", "Execute"], 2, [] },
+        { ["read", "read", "READ"], 1, [] },
+    };
 
-    [Fact]
-    public void NormalizeSelectedToolKeys_returns_valid_selected_keys()
+    [Theory]
+    [MemberData(nameof(Selections))]
+    public void NormalizeSelectedToolKeys_keeps_supported_keys_case_insensitively_without_duplicates(string[] selected, int count, string[] expectedKeys)
     {
-        var result = AiToolCatalog.NormalizeSelectedToolKeys(
-            DeclaredTraits.For("opencode"),
-            new[] { "read", "execute" });
+        var result = AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For("opencode"), selected);
 
-        Assert.Equal(2, result.Count);
-        Assert.Contains("read", result);
-        Assert.Contains("execute", result);
-    }
-
-    [Fact]
-    public void NormalizeSelectedToolKeys_filters_out_unsupported_keys()
-    {
-        var result = AiToolCatalog.NormalizeSelectedToolKeys(
-            DeclaredTraits.For("opencode"),
-            new[] { "read", "unsupported-tool" });
-
-        Assert.Single(result);
-        Assert.Equal("read", result[0]);
-    }
-
-    [Fact]
-    public void NormalizeSelectedToolKeys_falls_back_to_defaults_when_empty()
-    {
-        var result = AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For("opencode"), Array.Empty<string>());
-
-        Assert.Equal(4, result.Count);
-        Assert.Contains(AiToolCatalog.Read, result);
-    }
-
-    [Fact]
-    public void NormalizeSelectedToolKeys_falls_back_to_defaults_when_null()
-    {
-        var result = AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For("opencode"), null);
-
-        Assert.Equal(4, result.Count);
-    }
-
-    [Fact]
-    public void NormalizeSelectedToolKeys_filters_blank_and_whitespace_keys()
-    {
-        string?[] keys = ["", "   ", null];
-        var result = AiToolCatalog.NormalizeSelectedToolKeys(
-            DeclaredTraits.For("opencode"),
-            keys);
-
-        // Falls back to defaults since all keys are blank/null
-        Assert.Equal(4, result.Count);
-    }
-
-    [Fact]
-    public void NormalizeSelectedToolKeys_is_case_insensitive()
-    {
-        var result = AiToolCatalog.NormalizeSelectedToolKeys(
-            DeclaredTraits.For("opencode"),
-            new[] { "READ", "Execute" });
-
-        Assert.Equal(2, result.Count);
-    }
-
-    [Fact]
-    public void NormalizeSelectedToolKeys_returns_empty_for_unknown_provider()
-    {
-        var result = AiToolCatalog.NormalizeSelectedToolKeys(
-            DeclaredTraits.For("unknown"),
-            new[] { "read", "write" });
-
-        Assert.Empty(result);
-    }
-
-    [Fact]
-    public void NormalizeSelectedToolKeys_deduplicates_keys()
-    {
-        var result = AiToolCatalog.NormalizeSelectedToolKeys(
-            DeclaredTraits.For("opencode"),
-            new[] { "read", "read", "READ" });
-
-        Assert.Single(result);
+        Assert.Equal(count, result.Count);
+        foreach (var key in expectedKeys) Assert.Contains(key, result);
     }
 
     /// <summary>Copilot and Codex: their only tool is ild, so an explicit list without it turns ILD off.</summary>
@@ -218,6 +126,7 @@ public class AiToolCatalogTests
         Assert.Equal(defaults, AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For(providerType), null));
         Assert.Equal(defaults, AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For(providerType), Array.Empty<string>()));
         Assert.Equal(defaults, AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For(providerType), new[] { "unsupported-tool" }));
+        Assert.Equal(defaults, AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For(providerType), new string?[] { "", "   ", null }));
     }
 
     [Fact]

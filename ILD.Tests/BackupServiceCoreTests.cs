@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
-using System.Reflection;
 using System.Text.Json;
 using ILD.Core.Services.Backup;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
+using ILD.Data.Backup;
 using ILD.Data.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,18 +24,12 @@ public sealed class BackupServiceCoreTests : IDisposable
 
     private readonly string _dataRoot = Directory.CreateTempSubdirectory("ild-backup-core-").FullName;
     private readonly FakeArchive _archive;
-    private readonly object _archiveObject;
-    private readonly Type _archiveType;
     private readonly MaintenanceState _maintenance = new(TimeSpan.Zero);
     private readonly BackupDirectory _directory;
 
     public BackupServiceCoreTests()
     {
-        _archiveType = typeof(BackupService).GetConstructors().Single().GetParameters().Last().ParameterType;
-        _archiveObject = typeof(DispatchProxy).GetMethods()
-            .Single(m => m.Name == nameof(DispatchProxy.Create) && m.GetGenericArguments().Length == 2)
-            .MakeGenericMethod(_archiveType, typeof(FakeArchive)).Invoke(null, null)!;
-        _archive = (FakeArchive)_archiveObject;
+        _archive = new FakeArchive();
         _directory = new BackupDirectory(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataRoot }).Build());
     }
@@ -46,40 +40,32 @@ public sealed class BackupServiceCoreTests : IDisposable
         Directory.Delete(_dataRoot, recursive: true);
     }
 
-    /// <summary>
-    /// Stands in for the PostgreSQL archive. Built by reflection: the archive types are also compiled into the
-    /// WorkItem Server's assembly, which this project references too, so their names are ambiguous here.
-    /// </summary>
-    public class FakeArchive : DispatchProxy
+    /// <summary>Stands in for the PostgreSQL archive.</summary>
+    private sealed class FakeArchive : IDatabaseArchive
     {
         public int Imports;
 
-        protected override object? Invoke(MethodInfo? method, object?[]? args)
+        public Task<ArchiveInfo> DescribeAsync(CancellationToken cancellationToken)
+            => Task.FromResult(new ArchiveInfo("1.0.0", ["M1"], 100L));
+
+        public Task ExportAsync(Stream output, string? keyCheck, CancellationToken cancellationToken)
         {
-            switch (method!.Name)
+            var manifest = JsonSerializer.SerializeToUtf8Bytes(new
             {
-                case "DescribeAsync":
-                    var info = Activator.CreateInstance(method.ReturnType.GetGenericArguments()[0], "1.0.0", new[] { "M1" }, 100L);
-                    return typeof(Task).GetMethod(nameof(Task.FromResult))!
-                        .MakeGenericMethod(method.ReturnType.GetGenericArguments()[0]).Invoke(null, [info]);
-                case "ExportAsync":
-                    var manifest = JsonSerializer.SerializeToUtf8Bytes(new
-                    {
-                        format = 1, database = "core", appVersion = "1.0.0", migrations = new[] { "M1" },
-                        keyCheck = (string?)args![1], createdAt = DateTime.UtcNow, tables = Array.Empty<object>(),
-                    }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-                    var head = new byte[4];
-                    BinaryPrimitives.WriteInt32BigEndian(head, manifest.Length);
-                    var output = (Stream)args[0]!;
-                    output.Write(head);
-                    output.Write(manifest);
-                    return Task.CompletedTask;
-                case "ImportAsync":
-                    Imports++;
-                    return Task.CompletedTask;
-                default:
-                    throw new NotSupportedException(method.Name);
-            }
+                format = 1, database = "core", appVersion = "1.0.0", migrations = new[] { "M1" },
+                keyCheck, createdAt = DateTime.UtcNow, tables = Array.Empty<object>(),
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            var head = new byte[4];
+            BinaryPrimitives.WriteInt32BigEndian(head, manifest.Length);
+            output.Write(head);
+            output.Write(manifest);
+            return Task.CompletedTask;
+        }
+
+        public Task ImportAsync(Stream input, CancellationToken cancellationToken)
+        {
+            Imports++;
+            return Task.CompletedTask;
         }
     }
 
@@ -92,13 +78,13 @@ public sealed class BackupServiceCoreTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton(client);
         services.AddSingleton(resolver);
-        services.AddScoped(_archiveType, _ => _archiveObject);
+        services.AddScoped<IDatabaseArchive>(_ => _archive);
         var catalog = new DatabaseCatalog(
             services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(), NullLogger<DatabaseCatalog>.Instance);
-        return (BackupService)typeof(BackupService).GetConstructors().Single().Invoke([
+        return new BackupService(
             client, resolver, _directory, _maintenance,
             new BackupOperationLock(), catalog, engine.Object, Mock.Of<IWorktreePreviewService>(), Mock.Of<IChatTurnRunner>(),
-            NullLogger<BackupService>.Instance, _archiveObject]);
+            NullLogger<BackupService>.Instance, _archive);
     }
 
     private async Task<byte[]> BackupAsync(string? key)

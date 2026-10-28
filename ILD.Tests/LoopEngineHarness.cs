@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using System.Reflection;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
@@ -161,41 +159,22 @@ internal sealed class LoopEngineHarness : IDisposable
     /// deliberately bypasses. Everything keyed off run <i>ownership</i> (the launch
     /// gate, <see cref="ILoopEngine.GetActiveRunIdsAsync"/>, the shutdown drain)
     /// only sees a run that got here, because ownership is claimed inside the
-    /// private <c>LaunchAsync</c> that <c>RunUntilParkAsync</c> is invoked beneath.
+    /// <c>LaunchAsync</c> that <c>RunUntilParkAsync</c> is invoked beneath.
     /// Returns as soon as the loop is scheduled — pair it with a
     /// <see cref="BlockingExecutor"/> to know when the node is actually running.
     /// </summary>
-    public Task LaunchAsync()
-    {
-        var method = typeof(LoopEngine).GetMethod("LaunchAsync",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
-        return (Task)method.Invoke(_engine, new object[] { RunId })!;
-    }
+    public Task LaunchAsync() => _engine.LaunchAsync(RunId);
 
     /// <summary>Drives the engine inline until it parks. Returns when no node is currently executing.</summary>
-    public async Task RunAsync()
-    {
-        var method = typeof(LoopEngine).GetMethod("RunUntilParkAsync",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var task = (Task)method.Invoke(_engine, new object[] { RunId, CancellationToken.None })!;
-        await task;
-    }
+    public Task RunAsync() => _engine.RunUntilParkAsync(RunId, CancellationToken.None);
 
     // The signal/retry resume paths do not drive the run inline: they commit the
     // resume and launch RunUntilParkAsync on a fire-and-forget Task.Run
     // (LaunchAfterAwaitAsync). That background drive keeps using this harness's
-    // single shared SqliteConnection after the re-park is observable — it still
-    // reads out-edges and transitions the work item (LoopEngine.RunUntilParkAsync,
-    // after the status write). The engine tracks each run's live drive in the
-    // private _runTasks map; awaiting the stored Task is the only way to know the
-    // shared connection is quiescent, so we reach it the same way RunAsync reaches
-    // RunUntilParkAsync — by reflection (the engine exposes no InternalsVisibleTo).
-    private static readonly FieldInfo RunTasksField =
-        typeof(LoopEngine).GetField("_runTasks", BindingFlags.NonPublic | BindingFlags.Instance)!;
-
+    // single shared SqliteConnection after the re-park is observable, so tests wait
+    // on the engine's stored drive Task to know the connection is quiescent.
     private static Task? OutstandingDriveTask(LoopEngine engine, Guid runId)
-        => ((ConcurrentDictionary<Guid, Task>)RunTasksField.GetValue(engine)!)
-            .TryGetValue(runId, out var t) ? t : null;
+        => engine._runTasks.TryGetValue(runId, out var t) ? t : null;
 
     /// <summary>
     /// Waits until this harness's run has no in-flight drive — i.e. any

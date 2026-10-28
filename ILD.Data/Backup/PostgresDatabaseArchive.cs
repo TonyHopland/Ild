@@ -7,7 +7,11 @@ using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 
 // Also compiled into ILD.WorkItemServer, which does not reference ILD.Data.
+#if WORKITEM_SERVER
+namespace ILD.WorkItemServer.Backup;
+#else
 namespace ILD.Data.Backup;
+#endif
 
 /// <summary>
 /// A PostgreSQL database as an <see cref="IDatabaseArchive"/>: every table of the public schema

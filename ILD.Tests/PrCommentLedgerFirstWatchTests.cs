@@ -1,12 +1,10 @@
 using System.Text.Json;
-using ILD.Core.Services.Implementations.Executors;
-using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
-using ILD.Data.Stores.Interfaces;
-using Microsoft.Extensions.DependencyInjection;
+using ILD.Data.Stores;
+using ILD.Tests.Fakes;
 using Moq;
 
 namespace ILD.Tests;
@@ -36,74 +34,27 @@ public class PrCommentLedgerFirstWatchTests
     /// <summary>Drives the PR node's comment path and hands back the ledger it recorded.</summary>
     private static async Task<(string? Ledger, LoopRun Run)> PostCommentAsync(string? existingLedger)
     {
-        var run = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = "WI-1",
-            PrUrl = PrUrl,
-            CurrentNodeId = Guid.NewGuid(),
-            PrCommentLedger = existingLedger,
-        };
-
-        string? recorded = null;
-        var runs = new Mock<ILoopRunStore>();
+        using var db = new TestDb();
+        var b = new PrNodeBuilder(cloneUrl: CloneUrl);
+        b.Run.WorkItemId = "WI-1";
+        b.Run.PrUrl = PrUrl;
+        b.Run.CurrentNodeId = b.Node.Id;
         // What the round queued: the general comment it decided to write. The
         // node has no comment of its own to post any more, so this is the only
         // way anything reaches the pull request from here.
-        string? queue = PrCommentQueueJson.Serialize(new[]
-        {
-            new PrQueuedWrite("w1", PrQueuedWrite.Comment, string.Empty, "Answered every point.", null, null, DateTime.UtcNow),
-        });
-        runs.Setup(s => s.GetPrCommentQueueAsync(It.IsAny<Guid>())).ReturnsAsync(() => queue);
-        runs.Setup(s => s.TrySetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
-            .ReturnsAsync((Guid _, string? expected, string? json) =>
+        await PrRunSeed.SeedAsync(db, prUrl: PrUrl, workItemId: "WI-1", currentNodeId: b.Node.Id, id: b.Run.Id,
+            ledger: existingLedger,
+            queue: PrCommentQueueJson.Serialize(new[]
             {
-                if (!string.Equals(expected, queue, StringComparison.Ordinal)) return false;
-                queue = json;
-                return true;
-            });
-
-        // Compare-and-set, as every writer of this column now is.
-        runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => run.PrCommentLedger);
-        runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
-            .ReturnsAsync((Guid _, string? expected, string? json) =>
-            {
-                if (!string.Equals(expected, run.PrCommentLedger, StringComparison.Ordinal)) return false;
-                run.PrCommentLedger = json;
-                recorded = json;
-                return true;
-            });
-
-        var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "42", It.IsAny<string>()))
+                new PrQueuedWrite("w1", PrQueuedWrite.Comment, string.Empty, "Answered every point.", null, null, DateTime.UtcNow),
+            }));
+        b.Remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "42", It.IsAny<string>()))
             .ReturnsAsync(new RemotePrWriteResult(true, "4053396920", null));
+        b.Runs = new LoopRunStore(db.Fresh());
 
-        var repoId = Guid.NewGuid();
-        var workItems = new Mock<IWorkItemManager>();
-        workItems.Setup(m => m.GetWorkItemAsync("WI-1"))
-            .ReturnsAsync(new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId });
-        var providerStore = new Mock<IProviderStore>();
-        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(new Repository
-        {
-            Id = repoId, Name = "repo", CloneUrl = CloneUrl, DefaultBranch = "main", RemoteProviderId = Guid.NewGuid(),
-        });
-        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+        await b.RunAsync();
 
-        var services = new ServiceCollection();
-        services.AddSingleton(workItems.Object);
-        services.AddSingleton(providerStore.Object);
-        services.AddSingleton(remote.Object);
-        services.AddSingleton(Mock.Of<IRepositoryManager>());
-        services.AddSingleton(runs.Object);
-
-        var node = new LoopNode { Id = run.CurrentNodeId!.Value, NodeType = NodeType.PR, Config = "{}" };
-
-        await foreach (var _ in new PRNodeExecutor()
-            .ExecuteAsync(new NodeExecutionContext(run, node, services.BuildServiceProvider(), CancellationToken.None)))
-        {
-        }
-
-        return (recorded, run);
+        return ((await PrRunSeed.ReadAsync(db, b.Run.Id)).PrCommentLedger, b.Run);
     }
 
     [Fact]

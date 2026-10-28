@@ -3,7 +3,9 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
-using ILD.Data.Stores.Interfaces;
+using ILD.Data.Stores;
+using ILD.Tests.Fakes;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 
 namespace ILD.Tests;
@@ -30,59 +32,25 @@ public class PrReviewServiceConsumptionTests
             new[] { new RemotePrReviewSummary("r1", "COMMENTED", "body", HeadB, DateTime.UtcNow, "Copilot", false) },
             items, HeadB, null);
 
-    private sealed class Harness
+    private sealed class Harness : IDisposable
     {
+        public TestDb Db { get; } = new();
         public LoopRun Run { get; }
-        public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRemoteProvider> Remote { get; } = new();
-        public string? RecordedLedger { get; private set; }
-        public string? RecordedQueue { get; private set; }
-        public int LedgerWrites { get; private set; }
 
-        public Harness(RemotePrReviewLedger ledger)
+        public string? RecordedLedger => PrRunSeed.LedgerOf(Db, Run.Id);
+        public string? RecordedQueue => PrRunSeed.QueueOf(Db, Run.Id);
+
+        public Harness(RemotePrReviewLedger ledger, string? prUrl = PrUrl)
         {
-            Run = new LoopRun
-            {
-                Id = Guid.NewGuid(),
-                WorkItemId = "wi-1",
-                PrUrl = PrUrl,
-                Status = LoopRunStatus.Running,
-            };
-            Runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(Run);
-            Runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(Run);
-            Runs.Setup(s => s.GetByIdAsync(Run.Id)).ReturnsAsync(() => Run);
-            // The queue is mutated by compare-and-set: the service reads the
-            // column, then writes only if it still holds what it read.
-            Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).ReturnsAsync(() => Run.PrCommentQueue);
-            Runs.Setup(s => s.TrySetPrCommentQueueAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
-                .ReturnsAsync((Guid _, string? expected, string? json) =>
-                {
-                    if (!string.Equals(expected, Run.PrCommentQueue, StringComparison.Ordinal)) return false;
-                    RecordedQueue = json;
-                    Run.PrCommentQueue = json;
-                    return true;
-                });
+            Run = PrRunSeed.Seed(Db, prUrl: prUrl);
             Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(true);
-            Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
-                .Callback<Guid, string?>((_, json) => { RecordedLedger = json; LedgerWrites++; })
-                .Returns(Task.CompletedTask);
-
-            // The ledger is mutated by compare-and-set too: every writer of it
-            // reads the column and writes only if it still holds what it read.
-            Runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => Run.PrCommentLedger);
-            Runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
-                .ReturnsAsync((Guid _, string? expected, string? json) =>
-                {
-                    if (!string.Equals(expected, Run.PrCommentLedger, StringComparison.Ordinal)) return false;
-                    Run.PrCommentLedger = json;
-                    RecordedLedger = json;
-                    LedgerWrites++;
-                    return true;
-                });
             Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(ledger);
         }
 
-        public PrReviewService Build() => new(Runs.Object, Remote.Object);
+        public PrReviewService Build() => new(new LoopRunStore(Db.Fresh()), Remote.Object);
+
+        public void Dispose() => Db.Dispose();
     }
 
     [Fact]
@@ -93,7 +61,7 @@ public class PrReviewServiceConsumptionTests
         var fetched = Ledger(
             Inline("11", body: "an older finding", commit: HeadA),
             Inline("21", body: "and a newer one"));
-        var h = new Harness(fetched);
+        using var h = new Harness(fetched);
 
         await h.Build().ReadAsync("wi-1", sinceCommit: HeadA, callerRunId: h.Run.Id);
 
@@ -107,7 +75,7 @@ public class PrReviewServiceConsumptionTests
     {
         // The ledger is still fetched — that is how the comment id is validated
         // while the agent is listening — but nothing is written.
-        var h = new Harness(Ledger(Inline("11")));
+        using var h = new Harness(Ledger(Inline("11")));
 
         var result = await h.Build().ReplyAsync("wi-1", "11", "Answered.", h.Run.Id);
 
@@ -116,7 +84,7 @@ public class PrReviewServiceConsumptionTests
         h.Remote.Verify(
             r => r.ReplyToReviewThreadAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
             Times.Never);
-        Assert.Equal(0, h.LedgerWrites);
+        Assert.Null(h.RecordedLedger);
     }
 
     [Fact]
@@ -124,7 +92,7 @@ public class PrReviewServiceConsumptionTests
     {
         // A looping agent must not be able to grow a run's column without bound,
         // and the refusal has to be readable rather than a silent drop.
-        var h = new Harness(Ledger(Inline("11")));
+        using var h = new Harness(Ledger(Inline("11")));
         var service = h.Build();
         // General comments, because answering one item again replaces the
         // pending answer rather than growing the queue.
@@ -144,7 +112,7 @@ public class PrReviewServiceConsumptionTests
         // The id check is the scope gate; with no ledger to check against, every
         // id looks absent. Reporting an unreachable forge as "no such comment"
         // sends the agent off inventing ids instead of trying again.
-        var h = new Harness(RemotePrReviewLedger.Unavailable("The provider request failed."));
+        using var h = new Harness(RemotePrReviewLedger.Unavailable("The provider request failed."));
         var service = h.Build();
 
         var reply = await service.ReplyAsync("wi-1", "11", "Answered.", h.Run.Id);
@@ -162,8 +130,7 @@ public class PrReviewServiceConsumptionTests
     [Fact]
     public async Task A_pull_request_url_no_provider_can_be_resolved_from_is_an_answer()
     {
-        var h = new Harness(Ledger(Inline("11")));
-        h.Run.PrUrl = "not-a-url";
+        using var h = new Harness(Ledger(Inline("11")), prUrl: "not-a-url");
         var service = h.Build();
 
         Assert.Empty((await service.ReadAsync("wi-1", null, h.Run.Id)).Items);

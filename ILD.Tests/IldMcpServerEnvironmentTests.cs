@@ -84,6 +84,15 @@ public sealed class IldMcpServerEnvironmentTests : IDisposable
 
         Assert.False(File.Exists(path));
         Assert.True(File.Exists(other));
+
+        var directory = Path.GetDirectoryName(path)!;
+        foreach (var prefix in new[] { "ild-copilot-mcp", "ild-claude-mcp" })
+            File.WriteAllText(Path.Combine(directory, $"{prefix}-{runId:N}-1.json"), "{\"token\":\"t\"}");
+
+        IldMcpServer.DeleteConfigFiles(_root, runId);
+        IldMcpServer.DeleteConfigFiles(Path.Combine(_root, "missing"), runId);
+
+        Assert.Equal(new[] { other }, Directory.GetFiles(directory));
     }
 
     [Fact]

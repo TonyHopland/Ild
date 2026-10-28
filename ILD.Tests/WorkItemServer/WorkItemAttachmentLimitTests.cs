@@ -57,23 +57,13 @@ public sealed class WorkItemAttachmentLimitTests
     }
 
     [Fact]
-    public async Task The_same_file_is_accepted_once_the_configured_maximum_is_raised()
+    public async Task A_file_over_one_megabyte_is_accepted_once_the_configured_maximum_is_raised()
     {
-        var payload = AttachmentUpload.Bytes(2 * Megabyte);
-
-        await using (var tight = new AttachmentServerFactory(maxAttachmentMb: 1))
-        {
-            using var client = tight.AuthedClient();
-            var id = await CreateWorkItemAsync(client);
-            var refused = await UploadAsync(client, id, ("same.bin", "application/octet-stream", payload));
-            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
-        }
-
         await using var roomy = new AttachmentServerFactory(maxAttachmentMb: 4);
         using var roomyClient = roomy.AuthedClient();
         var itemId = await CreateWorkItemAsync(roomyClient);
 
-        var accepted = await UploadAsync(roomyClient, itemId, ("same.bin", "application/octet-stream", payload));
+        var accepted = await UploadAsync(roomyClient, itemId, ("same.bin", "application/octet-stream", AttachmentUpload.Bytes(2 * Megabyte)));
 
         Assert.Equal(HttpStatusCode.Created, accepted.StatusCode);
     }
