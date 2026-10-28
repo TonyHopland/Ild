@@ -7,20 +7,16 @@ import {
   SIDEBAR_OPEN_KEY,
   saveSidebarOpen,
 } from "./chatPlacement";
+import { deferred, emitHubEvent, settle, showChatActions, signalRHub } from "../test-support";
 import {
   chatMessage,
   chatServer,
   chatSession,
   chatSummary,
-  deferred,
-  emitHubEvent,
   openChatPanel,
   renderChatBubble,
-  settle,
-  showChatActions,
-  signalRHub,
   stubChatServices,
-} from "../test-support";
+} from "../test-support.chatBubble";
 import { setPreference, getPreference, seedPreferences } from "../utils/userPreferences";
 
 const { setCurrentChatSessionId } = vi.hoisted(() => ({ setCurrentChatSessionId: vi.fn() }));
@@ -34,12 +30,20 @@ const { chatService } = services;
 const server = chatServer(services);
 
 function msg(chat: string, sequence: number, role: "user" | "assistant"): ChatMessage {
-  return chatMessage(chat, sequence, role, `${role} message ${sequence} of ${chat}`);
+  return chatMessage({
+    id: `${chat}-${sequence}`,
+    role,
+    sequence,
+    content: `${role} message ${sequence} of ${chat}`,
+  });
 }
 
 afterEach(() => {
   vi.useRealTimers();
   server.reset();
+  signalRHub.reset();
+  vi.clearAllMocks();
+  localStorage.clear();
   window.innerWidth = 1024;
   window.innerHeight = 768;
 });
@@ -130,7 +134,11 @@ describe("chat sidebar layout", () => {
   test("wide: the list sits beside a usable chat, the toggle hides it completely, and no Back button remains", async () => {
     widePanel();
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
+    server.sessions.a = chatSession({
+      id: "a",
+      name: "Alpha",
+      messages: [msg("a", 0, "user"), msg("a", 1, "assistant")],
+    });
     await renderChatBubble();
     await openPanel();
 
@@ -171,7 +179,11 @@ describe("chat sidebar layout", () => {
 
   test("narrow: the open list fills the panel; a row or New chat closes it and shows that chat or the start form", async () => {
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
+    server.sessions.a = chatSession({
+      id: "a",
+      name: "Alpha",
+      messages: [msg("a", 0, "user"), msg("a", 1, "assistant")],
+    });
     await renderChatBubble();
     await openPanel();
 
@@ -253,7 +265,7 @@ describe("chat sidebar layout", () => {
   test("the open/closed state survives a reload, including the narrow auto-close", async () => {
     widePanel();
     server.chats = [chatSummary("a", "Alpha")];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
+    server.sessions.a = chatSession({ id: "a", name: "Alpha", messages: [msg("a", 0, "user")] });
     await renderChatBubble();
     await openPanel();
     fireEvent.click(toggle());
@@ -285,7 +297,11 @@ describe("chat sidebar layout", () => {
   test("resizing across the breakpoint switches presentation and keeps the open chat, its turn and the typed draft", async () => {
     widePanel();
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
+    server.sessions.a = chatSession({
+      id: "a",
+      name: "Alpha",
+      messages: [msg("a", 0, "user"), msg("a", 1, "assistant")],
+    });
     await renderChatBubble();
     await openPanel();
     await pick("Alpha");
@@ -324,8 +340,8 @@ describe("chat sidebar list", () => {
       chatSummary("c", null, { createdAt: threeHoursAgo, updatedAt: null }),
       chatSummary("d", "Delta", { isFavorite: true }),
     ];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
-    server.sessions.b = chatSession("b", "Beta", [msg("b", 0, "user")]);
+    server.sessions.a = chatSession({ id: "a", name: "Alpha", messages: [msg("a", 0, "user")] });
+    server.sessions.b = chatSession({ id: "b", name: "Beta", messages: [msg("b", 0, "user")] });
     await renderChatBubble();
     await openPanel();
 
@@ -364,7 +380,7 @@ describe("chat sidebar list", () => {
   test("rename, delete and bulk delete work from the list while a chat is open; deleting the open chat leaves it", async () => {
     widePanel();
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta"), chatSummary("c", "Gamma")];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
+    server.sessions.a = chatSession({ id: "a", name: "Alpha", messages: [msg("a", 0, "user")] });
     await renderChatBubble();
     await openPanel();
     await pick("Alpha");
@@ -589,7 +605,11 @@ describe("chat sidebar unread", () => {
 
   test("narrow: a chat hidden behind the open list is not marked read until the list closes or the panel widens", async () => {
     server.chats = [chatSummary("a", "Alpha")];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
+    server.sessions.a = chatSession({
+      id: "a",
+      name: "Alpha",
+      messages: [msg("a", 0, "user"), msg("a", 1, "assistant")],
+    });
     await renderChatBubble();
     await openPanel();
     fireEvent.click(toggle());
@@ -617,7 +637,7 @@ describe("chat sidebar unread", () => {
   test("wide: a reply in another chat lights its row live, and a reply in the chat beside the list is read", async () => {
     widePanel();
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
+    server.sessions.a = chatSession({ id: "a", name: "Alpha", messages: [msg("a", 0, "user")] });
     await renderChatBubble();
     await openPanel();
     await pick("Alpha");
@@ -678,8 +698,8 @@ describe("bulk delete mode", () => {
   async function openWithThree() {
     widePanel();
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta"), chatSummary("c", null)];
-    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
-    server.sessions.b = chatSession("b", "Beta", [msg("b", 0, "user")]);
+    server.sessions.a = chatSession({ id: "a", name: "Alpha", messages: [msg("a", 0, "user")] });
+    server.sessions.b = chatSession({ id: "b", name: "Beta", messages: [msg("b", 0, "user")] });
     await renderChatBubble();
     await openPanel();
   }
@@ -898,36 +918,42 @@ describe("bulk delete mode", () => {
   test("a failed batch is logged and the list is re-read, so chats the server kept come back", async () => {
     await openWithThree();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    chatService.deleteMany.mockImplementationOnce((ids: string[]) => {
-      server.chats = server.chats.filter((c) => c.id !== ids[0]);
-      return Promise.reject(new Error("boom"));
-    });
-    enterSelecting();
-    fireEvent.click(selectAll());
-    fireEvent.click(deleteButton(3));
-    fireEvent.click(
-      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
-    );
+    try {
+      chatService.deleteMany.mockImplementationOnce((ids: string[]) => {
+        server.chats = server.chats.filter((c) => c.id !== ids[0]);
+        return Promise.reject(new Error("boom"));
+      });
+      enterSelecting();
+      fireEvent.click(selectAll());
+      fireEvent.click(deleteButton(3));
+      fireEvent.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete" }),
+      );
 
-    await waitFor(() => expect(logged).toHaveBeenCalled());
-    await waitFor(() => expect(within(sidebar()).queryAllByRole("listitem")).toHaveLength(2));
-    expect(chatService.deleteMany).toHaveBeenCalledTimes(1);
-    logged.mockRestore();
+      await waitFor(() => expect(logged).toHaveBeenCalled());
+      await waitFor(() => expect(within(sidebar()).queryAllByRole("listitem")).toHaveLength(2));
+      expect(chatService.deleteMany).toHaveBeenCalledTimes(1);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   test("a failed single delete is logged and the list is re-read instead of dropping the chat", async () => {
     await openWithThree();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-    chatService.deleteOne.mockImplementationOnce(() => Promise.reject(new Error("boom")));
-    const reads = chatService.listHistory.mock.calls.length;
+    try {
+      chatService.deleteOne.mockImplementationOnce(() => Promise.reject(new Error("boom")));
+      const reads = chatService.listHistory.mock.calls.length;
 
-    showChatActions("Alpha");
-    fireEvent.click(within(sidebar()).getByRole("button", { name: "Delete chat Alpha" }));
+      showChatActions("Alpha");
+      fireEvent.click(within(sidebar()).getByRole("button", { name: "Delete chat Alpha" }));
 
-    await waitFor(() => expect(logged).toHaveBeenCalled());
-    await waitFor(() => expect(chatService.listHistory.mock.calls.length).toBeGreaterThan(reads));
-    expect(within(sidebar()).getByText("Alpha")).toBeTruthy();
-    logged.mockRestore();
+      await waitFor(() => expect(logged).toHaveBeenCalled());
+      await waitFor(() => expect(chatService.listHistory.mock.calls.length).toBeGreaterThan(reads));
+      expect(within(sidebar()).getByText("Alpha")).toBeTruthy();
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   test("selection mode ends when the last chat goes", async () => {

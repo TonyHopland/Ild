@@ -2,19 +2,17 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { setPreference, getPreference, PreferenceKeys } from "../utils/userPreferences";
 import type { AiProvider } from "../types";
+import { openChatFromList, openChatList, signalRHub } from "../test-support";
 import {
-  chatMessageOf as msg,
-  chatSessionOf as chatSession,
+  chatMessage as msg,
+  chatSession,
   chatSummary,
   emitChatEvent as emit,
   openResumedChat as openResumed,
-  openChatFromList,
-  openChatList,
   renderChatBubble,
-  signalRHub,
   startNewChat,
   stubChatServices,
-} from "../test-support";
+} from "../test-support.chatBubble";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 
 const { getOpenLoopDocument, setCurrentChatSessionId } = vi.hoisted(() => ({
@@ -26,7 +24,8 @@ vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fak
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
-const { chatService, aiProviderService } = stubChatServices();
+const services = stubChatServices();
+const { chatService, aiProviderService } = services;
 
 const provider: AiProvider = {
   id: "p1",
@@ -42,6 +41,7 @@ const provider: AiProvider = {
 
 afterEach(() => {
   signalRHub.reset();
+  services.reset();
   vi.clearAllMocks();
   // clearAllMocks keeps return-value implementations, so a per-test loop document
   // would leak into later tests; reset it back to "no loop open".

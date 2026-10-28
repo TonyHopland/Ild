@@ -1,22 +1,18 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, act } from "@testing-library/react";
 import type { ChatSession, ChatSessionSummary } from "../types";
+import { deferred, openChatFromList, settle, showChatActions, signalRHub } from "../test-support";
 import {
   chatBubbleTree,
-  chatMessageOf as msg,
-  chatSessionOf as chatSession,
+  chatMessage as msg,
+  chatSession,
   chatSummary as summary,
-  deferred,
   emitChatEvent as emit,
-  openChatFromList,
   openResumedChat,
   renderChatBubble,
-  settle,
-  showChatActions,
-  signalRHub,
   startNewChat,
   stubChatServices,
-} from "../test-support";
+} from "../test-support.chatBubble";
 
 // The turn the bubble believes is running outlives every request it makes: a
 // send, a stop and a state read all resolve long after the click that started
@@ -27,7 +23,8 @@ vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fak
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
-const { chatService, aiProviderService } = stubChatServices();
+const services = stubChatServices();
+const { chatService, aiProviderService } = services;
 
 /** Open the bubble on the chat list, with the given chats in the history. */
 async function openList(...chats: ChatSessionSummary[]) {
@@ -79,6 +76,7 @@ async function sendMessageText(text: string) {
 
 afterEach(() => {
   signalRHub.reset();
+  services.reset();
   vi.clearAllMocks();
   localStorage.clear();
 });

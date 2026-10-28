@@ -1,7 +1,20 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, act, within } from "@testing-library/react";
-import type { ChatMessageAppendedPayload, ChatSession, ChatUnreadChangedPayload } from "../types";
+import type {
+  ChatMessage,
+  ChatMessageAppendedPayload,
+  ChatSession,
+  ChatUnreadChangedPayload,
+} from "../types";
 import { setChatEnabled } from "../hooks/useChatEnabled";
+import {
+  deferred,
+  emitHubEvent,
+  openChatList,
+  settle,
+  showChatActions,
+  signalRHub,
+} from "../test-support";
 import {
   backToChatList,
   chatBubbleTree,
@@ -9,17 +22,11 @@ import {
   chatServer,
   chatSession,
   chatSummary,
-  deferred,
-  emitHubEvent,
-  openChatList,
   openChatPanel,
   renderChatBubble,
   resumeChat,
-  settle,
-  showChatActions,
-  signalRHub,
   stubChatServices,
-} from "../test-support";
+} from "../test-support.chatBubble";
 
 vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
@@ -29,7 +36,21 @@ const services = stubChatServices();
 const { chatService } = services;
 const server = chatServer(services);
 
-afterEach(() => server.reset());
+afterEach(() => {
+  server.reset();
+  signalRHub.reset();
+  vi.clearAllMocks();
+  localStorage.clear();
+});
+
+function msg(chat: string, sequence: number, role: "user" | "assistant"): ChatMessage {
+  return chatMessage({
+    id: `${chat}-${sequence}`,
+    role,
+    sequence,
+    content: `${role} message ${sequence}`,
+  });
+}
 
 function emitAppended(payload: ChatMessageAppendedPayload) {
   emitHubEvent("ChatMessageAppended", payload);
@@ -87,20 +108,21 @@ describe("unread chat indicator", () => {
 
   test("send, close: the reply lights the button live, and reopening reads it and clears the dot", async () => {
     server.chats = [chatSummary("a", "Alpha")];
-    server.sessions.a = chatSession("a", "Alpha", [
-      chatMessage("a", 0, "user"),
-      chatMessage("a", 1, "assistant"),
-    ]);
+    server.sessions.a = chatSession({
+      id: "a",
+      name: "Alpha",
+      messages: [msg("a", 0, "user"), msg("a", 1, "assistant")],
+    });
     await renderChatBubble();
     await openChatPanel();
     await resumeChat("Alpha");
 
     await send("do the thing");
-    emitAppended({ chatSessionId: "a", turnId: "t1", message: chatMessage("a", 2, "user") });
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 2, "user") });
     closePanel();
 
     // The reply is finalized while the panel is closed.
-    emitAppended({ chatSessionId: "a", turnId: "t1", message: chatMessage("a", 3, "assistant") });
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 3, "assistant") });
     server.update("a", { hasUnread: true });
     emitUnreadChanged({ chatSessionId: "a" });
 
@@ -120,7 +142,7 @@ describe("unread chat indicator", () => {
 
   test("a reply seen in the open chat is marked read, and a history read taken before that settled cannot bring the dot back", async () => {
     server.chats = [chatSummary("a", "Alpha")];
-    server.sessions.a = chatSession("a", "Alpha", [chatMessage("a", 0, "user")]);
+    server.sessions.a = chatSession({ id: "a", name: "Alpha", messages: [msg("a", 0, "user")] });
     await renderChatBubble();
     await openChatPanel();
     await resumeChat("Alpha");
@@ -131,7 +153,7 @@ describe("unread chat indicator", () => {
     server.holdHistoryReads(2);
 
     // The reply lands and its hint's history read goes out while the reply is unread.
-    emitAppended({ chatSessionId: "a", turnId: "t1", message: chatMessage("a", 1, "assistant") });
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 1, "assistant") });
     server.update("a", { hasUnread: true });
     emitUnreadChanged({ chatSessionId: "a" });
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 1));
@@ -157,19 +179,21 @@ describe("unread chat indicator", () => {
 
   test("a reply for a chat left for the list or for another chat lights that chat's row and the button, never the other chat", async () => {
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
-    server.sessions.a = chatSession("a", "Alpha", [
-      chatMessage("a", 0, "user"),
-      chatMessage("a", 1, "assistant"),
-    ]);
-    server.sessions.b = chatSession("b", "Beta", [
-      chatMessage("b", 0, "user"),
-      chatMessage("b", 1, "assistant"),
-    ]);
+    server.sessions.a = chatSession({
+      id: "a",
+      name: "Alpha",
+      messages: [msg("a", 0, "user"), msg("a", 1, "assistant")],
+    });
+    server.sessions.b = chatSession({
+      id: "b",
+      name: "Beta",
+      messages: [msg("b", 0, "user"), msg("b", 1, "assistant")],
+    });
     await renderChatBubble();
     await openChatPanel();
     await resumeChat("Alpha");
     await send("question for A");
-    emitAppended({ chatSessionId: "a", turnId: "t1", message: chatMessage("a", 2, "user") });
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 2, "user") });
     await backToChatList();
 
     // A's reply lands while the list is on screen.
@@ -199,16 +223,21 @@ describe("unread chat indicator", () => {
       chatSummary("a", "Alpha", { hasUnread: true }),
       chatSummary("b", "Beta", { hasUnread: true }),
     ];
-    server.sessions.a = chatSession("a", "Alpha", [
-      chatMessage("a", 0, "user"),
-      chatMessage("a", 1, "assistant"),
-      chatMessage("a", 2, "user"),
-      chatMessage("a", 3, "assistant"),
-    ]);
-    server.sessions.b = chatSession("b", "Beta", [
-      chatMessage("b", 4, "user"),
-      chatMessage("b", 5, "assistant"),
-    ]);
+    server.sessions.a = chatSession({
+      id: "a",
+      name: "Alpha",
+      messages: [
+        msg("a", 0, "user"),
+        msg("a", 1, "assistant"),
+        msg("a", 2, "user"),
+        msg("a", 3, "assistant"),
+      ],
+    });
+    server.sessions.b = chatSession({
+      id: "b",
+      name: "Beta",
+      messages: [msg("b", 4, "user"), msg("b", 5, "assistant")],
+    });
     await renderChatBubble();
     await openChatPanel();
     await openChatList();
@@ -238,14 +267,16 @@ describe("unread chat indicator", () => {
       chatSummary("a", "Alpha", { hasUnread: true }),
       chatSummary("b", "Beta", { hasUnread: true }),
     ];
-    server.sessions.a = chatSession("a", "Alpha", [
-      chatMessage("a", 0, "user"),
-      chatMessage("a", 1, "assistant"),
-    ]);
-    server.sessions.b = chatSession("b", "Beta", [
-      chatMessage("b", 0, "user"),
-      chatMessage("b", 1, "assistant"),
-    ]);
+    server.sessions.a = chatSession({
+      id: "a",
+      name: "Alpha",
+      messages: [msg("a", 0, "user"), msg("a", 1, "assistant")],
+    });
+    server.sessions.b = chatSession({
+      id: "b",
+      name: "Beta",
+      messages: [msg("b", 0, "user"), msg("b", 1, "assistant")],
+    });
     const markingA = deferred<void>();
     chatService.markRead.mockImplementationOnce(() => markingA.promise);
     await renderChatBubble();
@@ -281,14 +312,14 @@ describe("unread chat indicator", () => {
 
   test("a reply that lands while chat is hidden in settings is read only once the chat is shown again", async () => {
     server.chats = [chatSummary("a", "Alpha")];
-    server.sessions.a = chatSession("a", "Alpha", [chatMessage("a", 0, "user")]);
+    server.sessions.a = chatSession({ id: "a", name: "Alpha", messages: [msg("a", 0, "user")] });
     await renderChatBubble();
     await openChatPanel();
     await resumeChat("Alpha");
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 0));
 
     act(() => setChatEnabled(false));
-    emitAppended({ chatSessionId: "a", turnId: "t1", message: chatMessage("a", 1, "assistant") });
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 1, "assistant") });
     await settle();
     expect(chatService.markRead).not.toHaveBeenCalledWith("a", 1);
 
@@ -298,8 +329,8 @@ describe("unread chat indicator", () => {
 
   test("a chat covered by the narrow list stays unread while another chat picked there is still opening", async () => {
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
-    server.sessions.a = chatSession("a", "Alpha", [chatMessage("a", 0, "user")]);
-    server.sessions.b = chatSession("b", "Beta", [chatMessage("b", 1, "user")]);
+    server.sessions.a = chatSession({ id: "a", name: "Alpha", messages: [msg("a", 0, "user")] });
+    server.sessions.b = chatSession({ id: "b", name: "Beta", messages: [msg("b", 1, "user")] });
     await renderChatBubble();
     await openChatPanel();
     await resumeChat("Alpha");
@@ -308,7 +339,7 @@ describe("unread chat indicator", () => {
 
     // A reply lands in Alpha while the list covers it, and Beta's open is slow.
     const list = await openChatList();
-    emitAppended({ chatSessionId: "a", turnId: "t1", message: chatMessage("a", 2, "assistant") });
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 2, "assistant") });
     const opening = deferred<ChatSession>();
     chatService.getById.mockImplementationOnce(() => opening.promise);
     fireEvent.click(within(list).getByText("Beta"));

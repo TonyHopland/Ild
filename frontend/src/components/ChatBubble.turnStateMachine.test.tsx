@@ -1,18 +1,17 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, act } from "@testing-library/react";
 import type { ChatMessage, ChatSession } from "../types";
+import { openChatFromList, signalRHub } from "../test-support";
 import {
   chatBubbleTree,
-  chatMessageOf,
-  chatSessionOf,
+  chatMessage,
+  chatSession,
   chatSummary,
   emitChatEvent as emit,
-  openChatFromList,
   openChatPanel,
   renderChatBubble,
-  signalRHub,
   stubChatServices,
-} from "../test-support";
+} from "../test-support.chatBubble";
 
 // One table over the whole turn lifecycle. Every case is a sequence of the things
 // that can happen to a chat — a send, the server announcing a turn, streamed text,
@@ -29,15 +28,16 @@ vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fak
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
-const { chatService, aiProviderService } = stubChatServices();
+const services = stubChatServices();
+const { chatService, aiProviderService } = services;
 
 const CHAT = "s1";
 
-const chatSession = (activeTurnId: string | null, messages: ChatMessage[] = []) =>
-  chatSessionOf({ id: CHAT, activeTurnId, messages });
+const serverChat = (activeTurnId: string | null, messages: ChatMessage[] = []) =>
+  chatSession({ id: CHAT, activeTurnId, messages });
 
 const msg = (id: string, content: string, interrupted = false) =>
-  chatMessageOf({ id, content, interrupted, sequence: Number(id.replace(/\D/g, "")) || 1 });
+  chatMessage({ id, content, interrupted, sequence: Number(id.replace(/\D/g, "")) || 1 });
 
 /** What the server would answer a state read with, until a step changes it. */
 let serverTurn: string | null = null;
@@ -282,6 +282,7 @@ function shown() {
 
 afterEach(() => {
   signalRHub.reset();
+  services.reset();
   vi.clearAllMocks();
   serverTurn = null;
   nextRead = "answers";
@@ -307,7 +308,7 @@ describe("ChatBubble turn state machine", () => {
           heldRead = resolve;
         });
       }
-      return Promise.resolve(chatSession(serverTurn));
+      return Promise.resolve(serverChat(serverTurn));
     });
 
     serverTurn = resumeWith ?? null;
@@ -434,7 +435,7 @@ describe("ChatBubble turn state machine", () => {
         heldRead = null;
         expect(answer, `: no read was being held`).not.toBeNull();
         await act(async () => {
-          answer!(chatSession(step.answerHeldRead));
+          answer!(serverChat(step.answerHeldRead));
         });
       }
 

@@ -14,6 +14,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 type FakeResponse = { ok: boolean; status: number; text: () => Promise<string> };
@@ -214,10 +215,11 @@ describe("Repositories page — providers", () => {
     });
     renderPage(fetchMock);
 
-    await screen.findByRole("region", { name: "Forge 500" });
-    expect(within(card("Forge 500")).getByText("late-app")).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Provider not found" })).toBeNull();
-  }, 30_000);
+    const providerOf = (name: string) =>
+      screen.getByText(name).closest("section")?.getAttribute("aria-label");
+    await waitFor(() => expect(providerOf("late-app")).toBe("Forge 500"));
+    expect(document.querySelectorAll("section.provider-card")).toHaveLength(501);
+  });
 
   test("Add repository opens the repository form with that provider chosen", async () => {
     renderPage(

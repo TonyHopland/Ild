@@ -226,13 +226,11 @@ describe("PreviewPanel against the services", () => {
     expect(utils.getByText("State")).toBeTruthy();
     expect(utils.getByText("Link")).toBeTruthy();
 
-    // The running service shows Running, its port, and a clickable link.
     expect(utils.getByText("web")).toBeTruthy();
     expect(utils.getByText("Running")).toBeTruthy();
     const link = utils.getByRole("link", { name: "http://127.0.0.1:5173" });
     expect(link.getAttribute("href")).toBe("http://127.0.0.1:5173");
 
-    // The exited service surfaces as Error with its exit code.
     expect(utils.getByText("api")).toBeTruthy();
     expect(utils.getByText("Error")).toBeTruthy();
     expect(utils.getByText(/exit 1/)).toBeTruthy();
@@ -269,7 +267,6 @@ describe("PreviewPanel against the services", () => {
 
     await renderPreview();
 
-    // The warning makes the repo-wide, persisted-in-ILD scope explicit.
     const warning = await screen.findByRole("note");
     expect(warning.textContent).toMatch(/Repository-wide/);
     expect(warning.textContent).toMatch(/every.*work item that uses it, not just this one/);
@@ -389,7 +386,6 @@ describe("PreviewPanel against the services", () => {
     });
     await renderPreview();
 
-    // The port input is prefilled with the suggested port and is editable.
     const portInput = (await screen.findByLabelText("Port for web")) as HTMLInputElement;
     expect(portInput.value).toBe("5173");
 

@@ -1,20 +1,17 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import type { ChatSessionSummary } from "../types";
+import { emitHubEvent, openChatList, settle, showChatActions, signalRHub } from "../test-support";
 import {
+  backToChatList,
   chatServer,
   chatSession,
   chatSummary,
-  emitHubEvent,
-  backToChatList,
-  openChatList,
   openChatPanel,
   renderChatBubble,
   resumeChat,
-  settle,
-  showChatActions,
   stubChatServices,
-} from "../test-support";
+} from "../test-support.chatBubble";
 
 vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
@@ -24,7 +21,12 @@ const services = stubChatServices();
 const { chatService } = services;
 const server = chatServer(services);
 
-afterEach(() => server.reset());
+afterEach(() => {
+  server.reset();
+  signalRHub.reset();
+  vi.clearAllMocks();
+  localStorage.clear();
+});
 
 function panel() {
   return screen.getByRole("dialog");
@@ -53,7 +55,7 @@ function pressEnter(input: HTMLInputElement) {
 describe("chat titles", () => {
   test("a title saved on the server replaces the open chat's header and the list row without a reload", async () => {
     server.chats = [chatSummary("a", "Could this be solved better by")];
-    server.sessions.a = chatSession("a", "Could this be solved better by");
+    server.sessions.a = chatSession({ id: "a", name: "Could this be solved better by" });
     await renderChatBubble();
     await openChatPanel();
     await resumeChat("Could this be solved better by");
@@ -131,8 +133,8 @@ describe("chat titles", () => {
 
   test("switching chat discards an unsaved rename", async () => {
     server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
-    server.sessions.a = chatSession("a", "Alpha");
-    server.sessions.b = chatSession("b", "Beta");
+    server.sessions.a = chatSession({ id: "a", name: "Alpha" });
+    server.sessions.b = chatSession({ id: "b", name: "Beta" });
     await renderChatBubble();
     await openChatPanel();
     await resumeChat("Alpha");
