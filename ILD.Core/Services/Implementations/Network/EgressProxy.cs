@@ -54,7 +54,7 @@ public sealed class EgressProxy : BackgroundService
     public EgressProxy(EgressProxyOptions options, IEgressPolicy policy, INetworkLogRecorder log, ILogger<EgressProxy> logger,
         Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null)
     {
-        _resolve = resolve ?? ((host, ct) => Dns.GetHostAddressesAsync(host, ct));
+        _resolve = resolve ?? ResolveAsync;
         _options = options;
         _policy = policy;
         _log = log;
@@ -119,6 +119,13 @@ public sealed class EgressProxy : BackgroundService
 
     private void OnPolicyChanged() => _ = _relay.ResetNewlyBlockedAsync();
 
+    /// <summary>
+    /// <see cref="Dns.GetHostAddressesAsync(string, CancellationToken)"/> refuses the
+    /// unspecified addresses as input, so an IP literal is taken as it stands.
+    /// </summary>
+    private static Task<IPAddress[]> ResolveAsync(string host, CancellationToken ct)
+        => IPAddress.TryParse(host, out var literal) ? Task.FromResult(new[] { literal }) : Dns.GetHostAddressesAsync(host, ct);
+
     private async Task HandleConnectionAsync(TcpClient client, CancellationToken stoppingToken)
     {
         using (client)
@@ -153,10 +160,10 @@ public sealed class EgressProxy : BackgroundService
                 {
                     addresses = await _resolve(request.Host, stoppingToken).ConfigureAwait(false);
                 }
-                catch (SocketException ex)
+                catch (Exception ex) when (ex is SocketException or ArgumentException)
                 {
                     _log.Record(request.Host, request.Port, decision, request.AiProviderId);
-                    await WriteUnreachableAsync(stream, request, ex, stoppingToken).ConfigureAwait(false);
+                    await WriteUnreachableAsync(stream, request, (ex as SocketException)?.SocketErrorCode.ToString() ?? "invalid host name", stoppingToken).ConfigureAwait(false);
                     return;
                 }
 
@@ -194,7 +201,7 @@ public sealed class EgressProxy : BackgroundService
         }
         catch (SocketException ex)
         {
-            await WriteUnreachableAsync(client, request, ex, stoppingToken).ConfigureAwait(false);
+            await WriteUnreachableAsync(client, request, ex.SocketErrorCode.ToString(), stoppingToken).ConfigureAwait(false);
             return;
         }
 
@@ -237,10 +244,10 @@ public sealed class EgressProxy : BackgroundService
         }
     }
 
-    private static async Task WriteUnreachableAsync(NetworkStream client, ProxyRequest request, SocketException ex, CancellationToken ct)
+    private static async Task WriteUnreachableAsync(NetworkStream client, ProxyRequest request, string reason, CancellationToken ct)
     {
         if (request.Kind != RequestKind.Tls)
-            await WriteResponseAsync(client, "502 Bad Gateway", $"The egress proxy could not reach {request.Host}:{request.Port} ({ex.SocketErrorCode}).", ct).ConfigureAwait(false);
+            await WriteResponseAsync(client, "502 Bad Gateway", $"The egress proxy could not reach {request.Host}:{request.Port} ({reason}).", ct).ConfigureAwait(false);
     }
 
     private static async Task RefuseAsync(NetworkStream client, ProxyRequest request, string reason, CancellationToken ct)

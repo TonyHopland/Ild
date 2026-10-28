@@ -536,6 +536,7 @@ export default function NetworkSettings() {
   const [internalError, setInternalError] = useState<string | null>(null);
   const [internalBusy, setInternalBusy] = useState(false);
   const internalDirty = useRef(false);
+  const internalRead = useRef(0);
   internalDirty.current = internalDraft !== internalSaved;
   const [ruleFilter, setRuleFilter] = useState("");
   const [kindFilter, setKindFilter] = useState<"All" | NetworkListKind>("All");
@@ -582,13 +583,15 @@ export default function NetworkSettings() {
   // A policy change from elsewhere replaces the shown value only while the
   // operator has nothing typed that it would overwrite.
   const refreshInternalAllow = useCallback(async () => {
+    const read = ++internalRead.current;
     try {
       const { value } = await settingsService.get(NetworkSettingKeys.InternalAllow);
-      if (internalDirty.current) return;
+      // A save or a newer read since this one began makes its answer stale.
+      if (internalDirty.current || read !== internalRead.current) return;
       setInternalSaved(value);
       setInternalDraft(value);
-    } catch {
-      // The card keeps what it shows; the rest of the page has its own errors.
+    } catch (err) {
+      setInternalError(describeError(err, "Failed to load the internal destinations."));
     }
   }, []);
 
@@ -661,6 +664,7 @@ export default function NetworkSettings() {
   const saveInternalAllow = async () => {
     setInternalBusy(true);
     setInternalError(null);
+    internalRead.current += 1;
     try {
       const saved = await settingsService.put(NetworkSettingKeys.InternalAllow, internalDraft);
       setInternalSaved(saved.value);
