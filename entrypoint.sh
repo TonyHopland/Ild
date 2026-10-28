@@ -445,8 +445,8 @@ has_cap_net_admin() {
 # is dropped even on loopback, everything else is dropped — so a connection that
 # skips the proxy, IP literal or not, goes nowhere and the agent looks up no name.
 # Every allow/deny decision lives in the proxy, which is why editing a list never
-# touches these rules. Idempotent: the table is
-# replaced wholesale, so a restart never stacks a second copy.
+# touches these rules. Idempotent: the table is replaced wholesale, so a restart
+# never stacks a second copy.
 install_egress_rules_nft() {
   uid="$1"
   # Tab-indented (<<-) so the table's closing brace is not a column-0 line: the
