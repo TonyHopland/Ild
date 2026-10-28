@@ -91,7 +91,15 @@ public class WorkItemsControllerTransitionTests
         return id;
     }
 
-    private static async Task AssertMovesToBacklogAsync(RemoteWorkItemStatus from)
+    // The reported bug: an item sitting in Ready that never started cannot be
+    // dragged back to Backlog — the endpoint answers 400 "Transition not allowed".
+    // Nothing about the rejection is specific to Ready, so the other pre-run
+    // columns were broken too.
+    [Theory]
+    [InlineData(RemoteWorkItemStatus.Ready)]
+    [InlineData(RemoteWorkItemStatus.WorkQueue)]
+    [InlineData(RemoteWorkItemStatus.HumanFeedback)]
+    public async Task Transition_to_Backlog_is_allowed_for_an_item_that_has_not_started(RemoteWorkItemStatus from)
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _ = db;
@@ -109,21 +117,6 @@ public class WorkItemsControllerTransitionTests
         Assert.Equal(RemoteWorkItemStatus.Backlog, after!.Status);
     }
 
-    // The reported bug: an item sitting in Ready that never started cannot be
-    // dragged back to Backlog — the endpoint answers 400 "Transition not allowed".
-    [Fact]
-    public async Task Transition_from_Ready_to_Backlog_is_allowed_for_an_item_that_has_not_started()
-        => await AssertMovesToBacklogAsync(RemoteWorkItemStatus.Ready);
-
-    // Same missing mapping, same 400: nothing about the endpoint's rejection is
-    // specific to Ready, so the other pre-run columns are broken too.
-    [Fact]
-    public async Task Transition_from_WorkQueue_to_Backlog_is_allowed()
-        => await AssertMovesToBacklogAsync(RemoteWorkItemStatus.WorkQueue);
-
-    [Fact]
-    public async Task Transition_from_HumanFeedback_to_Backlog_is_allowed()
-        => await AssertMovesToBacklogAsync(RemoteWorkItemStatus.HumanFeedback);
 
     // A second lap round the board: the item ran, its run ended, and it is
     // sitting in Ready again. Nothing is alive underneath it, so it moves back

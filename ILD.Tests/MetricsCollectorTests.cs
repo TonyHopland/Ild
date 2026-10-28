@@ -25,40 +25,19 @@ public class MetricsCollectorTests
         Assert.Contains("ild_disk_space_bytes", body);
     }
 
-    [Fact]
-    public void LoopRunsTotal_reflects_completed_run_count()
+    [Theory]
+    [InlineData(LoopRunStatus.Completed, "completed")]
+    [InlineData(LoopRunStatus.Failed, "failed")]
+    [InlineData(LoopRunStatus.Cancelled, "cancelled")]
+    public void LoopRunsTotal_reflects_run_count_per_status(LoopRunStatus status, string label)
     {
         using var db = new TestDb();
-        SeedAndRun(db, LoopRunStatus.Completed);
+        SeedAndRun(db, status);
 
         var collector = new MetricsCollector(db.Context);
         var snapshot = collector.Snapshot();
 
-        Assert.Contains("ild_loop_runs_total{status=\"completed\"} 1", snapshot);
-    }
-
-    [Fact]
-    public void LoopRunsTotal_reflects_failed_run_count()
-    {
-        using var db = new TestDb();
-        SeedAndRun(db, LoopRunStatus.Failed);
-
-        var collector = new MetricsCollector(db.Context);
-        var snapshot = collector.Snapshot();
-
-        Assert.Contains("ild_loop_runs_total{status=\"failed\"} 1", snapshot);
-    }
-
-    [Fact]
-    public void LoopRunsTotal_reflects_cancelled_run_count()
-    {
-        using var db = new TestDb();
-        SeedAndRun(db, LoopRunStatus.Cancelled);
-
-        var collector = new MetricsCollector(db.Context);
-        var snapshot = collector.Snapshot();
-
-        Assert.Contains("ild_loop_runs_total{status=\"cancelled\"} 1", snapshot);
+        Assert.Contains($"ild_loop_runs_total{{status=\"{label}\"}} 1", snapshot);
     }
 
     private void SeedAndRun(TestDb db, LoopRunStatus status)

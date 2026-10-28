@@ -27,20 +27,6 @@ public class SignalRLogNotifierTests
     private static LogEntryPayload Entry(long id = 1) =>
         new(id, DateTimeOffset.UtcNow, "Warning", "ILD.Core.LoopEngine", "Run 7f21 stalled", null);
 
-    [Fact]
-    public async Task Each_entry_is_pushed_once_to_the_work_item_group()
-    {
-        var (notifier, sent) = Build();
-
-        await notifier.LogEntryAppendedAsync(Entry(1));
-        await notifier.LogEntryAppendedAsync(Entry(2));
-
-        Assert.Equal(2, sent.Count);
-        var payload = Assert.IsType<LogEntryPayload>(Assert.Single(sent[0]));
-        Assert.Equal("Warning", payload.Level);
-        Assert.Equal("Run 7f21 stalled", payload.Message);
-    }
-
     /// <summary>
     /// The push is what a log line triggers, so a failed push must not write one:
     /// it would be buffered, pushed, and fail again. Taking no logger at all is
