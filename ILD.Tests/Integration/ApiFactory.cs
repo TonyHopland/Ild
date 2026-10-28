@@ -18,9 +18,9 @@ namespace ILD.Tests.Integration;
 /// <summary>
 /// Per-instance <see cref="WebApplicationFactory{TEntryPoint}"/> that boots the
 /// real ILD API pipeline against an isolated in-memory SQLite database and a
-/// per-instance temporary data directory. Each test should `new` one of these
-/// (or use it as an <c>IClassFixture</c>) so the database, file system, and
-/// singleton service instances cannot leak between tests.
+/// per-instance temporary data directory. A test that changes anything host-wide
+/// (settings, the clock, the file system root) should `new` one of its own so that state cannot
+/// leak into other tests; the rest share one per class through <see cref="SharedApiFactory"/>.
 /// </summary>
 public class ApiFactory : WebApplicationFactory<Program>
 {
