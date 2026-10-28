@@ -884,6 +884,39 @@ describe("ChatBubble turn state", () => {
       expect(screen.getByRole("status")).toBeTruthy();
     });
 
+    test("a turn seen replaced in the earlier visit is judged afresh in the later one", async () => {
+      const view = await openList(summary("s1", "First chat"));
+      chatService.getById.mockResolvedValue(
+        chatSession({ name: "First chat", activeTurnId: "t1" }),
+      );
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openFirstChat();
+
+      // Another client's send replaces t1 with t2 while this visit watches.
+      emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
+
+      // Away and back into the same chat, which is idle now.
+      await startNewChat();
+      chatService.getById.mockResolvedValue(
+        chatSession({ name: "First chat", activeTurnId: null }),
+      );
+      await openFirstChat();
+      expect(screen.queryByLabelText("Stop")).toBeNull();
+
+      // A rejoin read names t1 again. This visit never saw t1 replaced, so the
+      // read is applied as for any unseen turn.
+      const rejoinRead = holdNextRead();
+      await setConnectionState(view, "reconnecting");
+      await setConnectionState(view, "connected");
+      await rejoinRead.taken;
+      await act(async () => {
+        rejoinRead.answer.resolve(chatSession({ name: "First chat", activeTurnId: "t1" }));
+      });
+
+      expect(screen.getByLabelText("Stop")).toBeTruthy();
+      expect(screen.getByRole("status")).toBeTruthy();
+    });
+
     test("a send failing in the earlier visit does not disturb the later one", async () => {
       await openList(summary("s1", "First chat"));
       chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
