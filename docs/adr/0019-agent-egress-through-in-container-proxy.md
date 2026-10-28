@@ -54,7 +54,7 @@ Two parts, deliberately separate.
 
   Then the container entrypoint, as root and just before its privilege drop,
   installs an nftables rule set (iptables as fallback) keyed on the agent uid:
-  loopback and DNS are accepted, **everything else is dropped**. A connection
+  loopback is accepted but DNS is not, **everything else is dropped**. A connection
   that skips the proxy — an IP literal, a client that ignores `HTTP_PROXY`, git
   over SSH — goes nowhere, so no DNS interception is needed for robustness. The
   rules carry **no domains**; they only say "this uid leaves through loopback".
@@ -120,7 +120,11 @@ degradation is never silent.
   literals exactly for that case.
 - **Loopback is open, not just the proxy port.** The MCP server the agent CLI
   spawns must reach ILD's API, and previews are served on loopback; both are the
-  agent's own. DNS is open to any resolver, which is a residual channel.
+  agent's own. The agent uid has no DNS at all, loopback resolvers
+  included, so there is no residual channel: names are resolved only by the
+  proxy and forwards, as the orchestrator. Accepted risk: an agent tool that
+  looks up a name without connecting through the proxy fails; `localhost`
+  still resolves through `/etc/hosts`.
 - **The proxy resolves and connects as the orchestrator.** The lists are the
   only thing standing between the agent and any host the orchestrator can
   reach, including compose-network neighbours — which the agent could already
