@@ -740,6 +740,29 @@ is blocked only if a matching blacklist entry does; `off` logs everything and
 blocks nothing. Edits apply to the agent's **next connection** — no restart, and
 a host that is newly blacklisted has its open connections reset.
 
+Whatever the mode and lists say, the proxy resolves each destination and
+refuses any address in `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, `169.254.0.0/16` (cloud metadata services live here),
+`100.64.0.0/10`, `0.0.0.0/8`, `::1`, `::`, `fc00::/7` and `fe80::/10`,
+including their IPv4-mapped IPv6 forms. A host name is checked by the addresses
+it resolves to, and the proxy connects to exactly the addresses it checked. The
+refusal is a `403` (a TLS `access_denied` alert for a redirected flow) and is
+logged as Blocked. A whitelist entry does not lift it.
+
+To let the agent reach something internal (self-hosted git, a local model
+server, an internal registry), list it under **Internal destinations** in
+Settings > Network, or set the `network.internalAllow` app setting: one pattern
+per line, each an exact host, a leading-dot domain (`.lan.example`), an IP
+address or a CIDR range. A host pattern permits every address that name
+resolves to; an address or range permits the addresses it contains. The list
+only lifts this check, never a whitelist or blacklist block. **After upgrading,
+a setup whose runs talk to LAN services needs an entry here before they work
+again.**
+
+ILD's own API needs no entry: the exact host and port of `ILD_API_URL` is
+exempt from the address check, though not from the lists. Another port on that
+host is not.
+
 Everything the agent runs is pointed at the proxy through `HTTP_PROXY`,
 `HTTPS_PROXY` and `ALL_PROXY` (both spellings), with loopback on `NO_PROXY`
 (`localhost`, `127.0.0.1`, `::1` and `[::1]`, since some clients match IPv6

@@ -531,6 +531,13 @@ export default function NetworkSettings() {
   const [listError, setListError] = useState<string | null>(null);
   const [forwardError, setForwardError] = useState<string | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
+  const [internalSaved, setInternalSaved] = useState("");
+  const [internalDraft, setInternalDraft] = useState("");
+  const [internalError, setInternalError] = useState<string | null>(null);
+  const [internalBusy, setInternalBusy] = useState(false);
+  const internalDirty = useRef(false);
+  const internalRead = useRef(0);
+  internalDirty.current = internalDraft !== internalSaved;
   const [ruleFilter, setRuleFilter] = useState("");
   const [kindFilter, setKindFilter] = useState<"All" | NetworkListKind>("All");
   const [logFilter, setLogFilter] = useState("");
@@ -573,6 +580,21 @@ export default function NetworkSettings() {
     }
   }, []);
 
+  // A policy change from elsewhere replaces the shown value only while the
+  // operator has nothing typed that it would overwrite.
+  const refreshInternalAllow = useCallback(async () => {
+    const read = ++internalRead.current;
+    try {
+      const { value } = await settingsService.get(NetworkSettingKeys.InternalAllow);
+      // A save or a newer read since this one began makes its answer stale.
+      if (internalDirty.current || read !== internalRead.current) return;
+      setInternalSaved(value);
+      setInternalDraft(value);
+    } catch (err) {
+      setInternalError(describeError(err, "Failed to load the internal destinations."));
+    }
+  }, []);
+
   useEffect(() => {
     void networkService
       .getStatus()
@@ -591,7 +613,8 @@ export default function NetworkSettings() {
     void refreshEntries();
     void refreshForwards();
     void refreshLog();
-  }, [refreshEntries, refreshForwards, refreshLog]);
+    void refreshInternalAllow();
+  }, [refreshEntries, refreshForwards, refreshLog, refreshInternalAllow]);
 
   useEffect(() => {
     // The forwards ride on the same event: their listener set and the verdict on
@@ -599,6 +622,7 @@ export default function NetworkSettings() {
     const onPolicyChanged = () => {
       void refreshEntries();
       void refreshForwards();
+      void refreshInternalAllow();
       void settingsService
         .get(NetworkSettingKeys.Mode)
         .then((s) => {
@@ -623,7 +647,7 @@ export default function NetworkSettings() {
       off("NetworkLogAppended", onLogAppended);
       off("NetworkLogCleared", onLogCleared);
     };
-  }, [on, off, refreshEntries, refreshForwards, refreshLog]);
+  }, [on, off, refreshEntries, refreshForwards, refreshLog, refreshInternalAllow]);
 
   const changeMode = async (next: NetworkMode) => {
     const previous = mode;
@@ -634,6 +658,21 @@ export default function NetworkSettings() {
     } catch (err) {
       setMode(previous);
       setModeError(describeError(err, "Failed to change the mode."));
+    }
+  };
+
+  const saveInternalAllow = async () => {
+    setInternalBusy(true);
+    setInternalError(null);
+    internalRead.current += 1;
+    try {
+      const saved = await settingsService.put(NetworkSettingKeys.InternalAllow, internalDraft);
+      setInternalSaved(saved.value);
+      setInternalDraft(saved.value);
+    } catch (err) {
+      setInternalError(describeError(err, "Failed to save the internal destinations."));
+    } finally {
+      setInternalBusy(false);
     }
   };
 
@@ -819,6 +858,38 @@ export default function NetworkSettings() {
           onRemove={removeEntry}
         />
         <AddRuleRow providers={providers} draft={draftHost} onAdd={addEntry} />
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-card-header">
+          <h3 className="settings-card-title">Internal destinations</h3>
+        </div>
+        <p className="settings-card-note">
+          Hosts that resolve to a private, loopback or link-local address are refused in every mode,
+          whatever the lists say. List the ones agents may reach, one per line: a host name, a
+          leading-dot domain, an IP address or a CIDR range. ILD&apos;s own API needs no entry.
+        </p>
+        <textarea
+          className="settings-input"
+          rows={4}
+          value={internalDraft}
+          readOnly={internalBusy}
+          onChange={(e) => setInternalDraft(e.target.value)}
+          placeholder={"git.internal.example\n.lan.example\n192.168.1.0/24"}
+          aria-label="Internal destinations"
+          spellCheck={false}
+        />
+        <p className="settings-row-help">
+          {internalError && <span className="settings-error">{internalError}</span>}
+        </p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => void saveInternalAllow()}
+          disabled={internalBusy || internalDraft === internalSaved}
+        >
+          Save
+        </button>
       </section>
 
       <section className="settings-card">
