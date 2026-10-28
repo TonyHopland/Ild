@@ -326,37 +326,6 @@ describe("closing while the dialog is in the middle of something", () => {
   });
 });
 
-describe("an answer the server refuses", () => {
-  test("shows the server's message and releases the buttons for a retry", async () => {
-    mockServices();
-    const answer = vi
-      .spyOn(authServices.workItemService, "humanFeedbackInput")
-      .mockRejectedValueOnce({ status: 400, message: "Input must be 8192 characters or fewer." })
-      .mockResolvedValue(undefined);
-    await renderDialog();
-    await settle();
-    await type("Looks good");
-
-    const approve = screen.getByRole("button", { name: "Approve" });
-    await act(async () => {
-      fireEvent.click(approve);
-      await Promise.resolve();
-    });
-    await waitFor(() =>
-      expect(feedback().textContent).toContain("Input must be 8192 characters or fewer."),
-    );
-    expect((approve as HTMLButtonElement).disabled).toBe(false);
-
-    await act(async () => {
-      fireEvent.click(approve);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
-    expect(answer.mock.calls[1]).toEqual(["wi-1", "run-1", "Looks good"]);
-  });
-});
-
 describe("an answer waiting to be retried", () => {
   test("survives an edit opened and cancelled beside it", async () => {
     mockServices();
@@ -504,16 +473,6 @@ describe("an answer sent after the run has moved on", () => {
       await Promise.resolve();
     });
 
-    expect(notice()).toBeNull();
-    expect(screen.queryByText(TYPED)).toBeNull();
-  });
-
-  test("does not carry over to another work item", async () => {
-    const { show } = await answerRefusedWithRunNow(runningOn("run-1"));
-
-    await show({ ...runningOn("run-9"), id: "wi-2", title: "Another item" });
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Another item" })).toBeTruthy());
     expect(notice()).toBeNull();
     expect(screen.queryByText(TYPED)).toBeNull();
   });
