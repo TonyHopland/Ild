@@ -11,7 +11,7 @@ namespace ILD.Tests.WorkItemServer;
 /// holding a quote or a newline, which would leave the upload as a 500 from the
 /// ILD API — so the client makes the name safe and the file still lands.
 /// </summary>
-public sealed class WorkItemAttachmentClientFileNameTests
+public sealed class WorkItemAttachmentClientFileNameTests(AttachmentServer server) : IClassFixture<AttachmentServer>
 {
     [Theory]
     [InlineData("my \"photo\".png", "my _photo_.png")]
@@ -20,8 +20,7 @@ public sealed class WorkItemAttachmentClientFileNameTests
     [InlineData("   ", "attachment")]
     public async Task A_name_a_header_cannot_carry_is_made_safe_rather_than_refused(string sent, string stored)
     {
-        await using var factory = new AttachmentServerFactory();
-        using var http = factory.AuthedClient();
+        var http = server.Client;
         var client = new WorkItemServerClient(http);
         var options = new WorkItemServerOptions { BaseUrl = "http://localhost", ApiKey = AttachmentServerFactory.ApiKey };
 

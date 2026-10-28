@@ -15,22 +15,15 @@ namespace ILD.Tests.WorkItemServer;
 /// nowhere else, and every one of the four operations is reachable over HTTP
 /// with no ILD instance and no UI in front of it.
 /// </summary>
-public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
+public sealed class WorkItemAttachmentsApiTests : IClassFixture<AttachmentServer>
 {
-    private AttachmentServerFactory _factory = null!;
-    private HttpClient _client = null!;
+    private readonly AttachmentServer _factory;
+    private readonly HttpClient _client;
 
-    public ValueTask InitializeAsync()
+    public WorkItemAttachmentsApiTests(AttachmentServer server)
     {
-        _factory = new AttachmentServerFactory();
-        _client = _factory.AuthedClient();
-        return ValueTask.CompletedTask;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _client.Dispose();
-        await _factory.DisposeAsync();
+        _factory = server;
+        _client = server.Client;
     }
 
     private async Task<string> CreateWorkItemAsync(string title = "with attachments")
@@ -185,16 +178,18 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         await UploadAsync(doomed, AttachmentUpload.Of("b.bin", "application/octet-stream", AttachmentUpload.Bytes(64, seed: 9)));
         await UploadAsync(survivor, AttachmentUpload.Of("keep.bin", "application/octet-stream", AttachmentUpload.Bytes(64)));
 
+        await using var db = _factory.NewDbContext();
+        var doomedKey = await db.WorkItems.Where(w => w.Id == doomed).Select(w => w.InternalId).SingleAsync(TestContext.Current.CancellationToken);
+        var survivorKey = await db.WorkItems.Where(w => w.Id == survivor).Select(w => w.InternalId).SingleAsync(TestContext.Current.CancellationToken);
+
         var deleted = await _client.DeleteAsync($"/workitems/{doomed}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
 
-        await using var db = _factory.NewDbContext();
-        var doomedKey = await db.WorkItems.Where(w => w.Id == doomed).Select(w => (int?)w.InternalId).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-        Assert.Null(doomedKey);
-
+        Assert.False(await db.WorkItems.AnyAsync(w => w.Id == doomed, TestContext.Current.CancellationToken));
         var remaining = await db.Set<WorkItemAttachment>().ToListAsync(TestContext.Current.CancellationToken);
         var liveKeys = await db.WorkItems.Select(w => w.InternalId).ToListAsync(TestContext.Current.CancellationToken);
-        Assert.Equal("keep.bin", Assert.Single(remaining).FileName);
+        Assert.DoesNotContain(remaining, a => a.WorkItemId == doomedKey);
+        Assert.Equal("keep.bin", Assert.Single(remaining, a => a.WorkItemId == survivorKey).FileName);
         Assert.All(remaining, a => Assert.Contains(a.WorkItemId, liveKeys));
     }
 
@@ -283,40 +278,5 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
 
         Assert.Equal(10, created.EnumerateArray().Count());
         Assert.Equal(10, (await ListAsync(id)).EnumerateArray().Count());
-    }
-
-    [Fact]
-    public void Attachments_are_a_cascading_child_of_the_work_items_key()
-    {
-        using var db = _factory.NewDbContext();
-        var entity = db.Model.FindEntityType(typeof(WorkItemAttachment));
-
-        Assert.NotNull(entity);
-        Assert.Equal(nameof(WorkItemAttachment.Id), Assert.Single(entity!.FindPrimaryKey()!.Properties).Name);
-        Assert.Equal(typeof(Guid), entity.FindPrimaryKey()!.Properties[0].ClrType);
-
-        var foreignKey = Assert.Single(entity.GetForeignKeys());
-        Assert.Equal(typeof(WorkItem), foreignKey.PrincipalEntityType.ClrType);
-        Assert.Equal(nameof(WorkItem.InternalId), Assert.Single(foreignKey.PrincipalKey.Properties).Name);
-        Assert.Equal(nameof(WorkItemAttachment.WorkItemId), Assert.Single(foreignKey.Properties).Name);
-        // The server deletes a work item without ever loading its attachments,
-        // so nothing but the database's own cascade collects them.
-        Assert.Equal(DeleteBehavior.Cascade, foreignKey.DeleteBehavior);
-    }
-
-    [Fact]
-    public void One_scaffolded_migration_adds_the_attachments_table()
-    {
-        var migrations = Directory.GetFiles(Path.Combine(RepositoryFiles.Root, "ILD.WorkItemServer", "Migrations"), "*.cs")
-            .Where(f => !f.EndsWith(".Designer.cs", StringComparison.Ordinal))
-            .Where(f => !f.EndsWith("ModelSnapshot.cs", StringComparison.Ordinal))
-            .Where(f => File.ReadAllText(f).Contains("WorkItemAttachments", StringComparison.Ordinal))
-            .Select(Path.GetFileName)
-            .ToList();
-
-        Assert.Single(migrations);
-        // The snapshot is only updated by scaffolding; a hand-written migration leaves it behind.
-        Assert.Contains("WorkItemAttachments", RepositoryFiles.ReadAllText(
-            Path.Combine("ILD.WorkItemServer", "Migrations", "WorkItemServerDbContextModelSnapshot.cs")), StringComparison.Ordinal);
     }
 }

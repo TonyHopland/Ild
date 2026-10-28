@@ -91,3 +91,32 @@ internal sealed class AttachmentServerFactory : WebApplicationFactory<WorkItemSe
         _connection.Dispose();
     }
 }
+
+/// <summary>
+/// One default <see cref="AttachmentServerFactory"/> and its authed client for every test of a class
+/// that reads and writes only the work items it creates itself.
+/// </summary>
+public sealed class AttachmentServer : IAsyncLifetime
+{
+    private AttachmentServerFactory _factory = null!;
+
+    public HttpClient Client { get; private set; } = null!;
+
+    public IServiceProvider Services => _factory.Services;
+
+    public ValueTask InitializeAsync()
+    {
+        _factory = new AttachmentServerFactory();
+        Client = _factory.AuthedClient();
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>A context on the same database, for reading and writing rows the API does not expose.</summary>
+    public ILD.WorkItemServer.WorkItemServerDbContext NewDbContext() => _factory.NewDbContext();
+
+    public async ValueTask DisposeAsync()
+    {
+        Client.Dispose();
+        await _factory.DisposeAsync();
+    }
+}

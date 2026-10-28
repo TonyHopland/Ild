@@ -15,22 +15,15 @@ namespace ILD.Tests.WorkItemServer;
 /// Everything here is a caller mistake the server has to answer with a reason
 /// rather than a 500 from the database or an empty 201 that stored nothing.
 /// </summary>
-public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
+public sealed class WorkItemAttachmentRequestTests : IClassFixture<AttachmentServer>
 {
-    private AttachmentServerFactory _factory = null!;
-    private HttpClient _client = null!;
+    private readonly AttachmentServer _factory;
+    private readonly HttpClient _client;
 
-    public ValueTask InitializeAsync()
+    public WorkItemAttachmentRequestTests(AttachmentServer server)
     {
-        _factory = new AttachmentServerFactory();
-        _client = _factory.AuthedClient();
-        return ValueTask.CompletedTask;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        _client.Dispose();
-        await _factory.DisposeAsync();
+        _factory = server;
+        _client = server.Client;
     }
 
     private async Task<string> CreateWorkItemAsync()
