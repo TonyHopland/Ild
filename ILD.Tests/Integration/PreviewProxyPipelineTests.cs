@@ -19,6 +19,7 @@ namespace ILD.Tests.Integration;
 /// preview host being answered by ILD's own index.html went unnoticed.
 /// </para>
 /// </summary>
+// A host per test: each test sets its own preview proxy base configuration.
 public class PreviewProxyPipelineTests
 {
     private const string BaseHost = "ild.test";

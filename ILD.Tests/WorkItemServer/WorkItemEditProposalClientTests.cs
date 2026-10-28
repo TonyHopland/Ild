@@ -79,6 +79,7 @@ public sealed class WorkItemEditProposalClientTests : IClassFixture<WorkItemEdit
     public WorkItemEditProposalClientTests(Server server)
     {
         _humanEdit = server.HumanEdit;
+        _humanEdit.Reset();
         _client = server.Client;
     }
 
@@ -595,6 +596,12 @@ public sealed class WorkItemEditProposalClientTests : IClassFixture<WorkItemEdit
         private string? _value;
 
         public bool Fired { get; private set; }
+
+        public void Reset()
+        {
+            _workItemId = null;
+            Fired = false;
+        }
 
         public void Arm(string workItemId, string description) => Arm(workItemId, "Description", description);
 

@@ -4,8 +4,8 @@ namespace ILD.Tests.Integration;
 
 /// <summary>
 /// Event log endpoints currently live on <c>LoopRunsController</c>
-/// (<c>/api/v1/loopruns/{id}/events</c>). These tests verify route wiring and
-/// auth behaviour for those event endpoints.
+/// (<c>/api/v1/loopruns/{id}/events</c>). These tests verify route wiring for
+/// those event endpoints.
 /// </summary>
 public class EventLogIntegrationTests
 {
