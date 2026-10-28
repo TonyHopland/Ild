@@ -7,12 +7,10 @@ import {
   WorkItemStatus,
 } from "../../types";
 
-/**
- * When a run can be sent back to one of its nodes. One place for the rules the
- * Runs tab and the failed-node card on the Action tab share, so they never
- * disagree, and for the one only the card applies: a run that ended on a failed
- * node, which the retry reopens.
- */
+// When a run can be sent back to one of its nodes. One place for the rules the
+// Runs tab and the failed-node card on the Action tab share, so they never
+// disagree, and for the one only the card applies: a run that ended on a failed
+// node, which the retry reopens.
 
 /** Why a run waits on a person after a node failed with nowhere to go. */
 export const NODE_FAILED = "Node Failed";
@@ -63,9 +61,4 @@ export function nodeTakesRetry(
     (status === LoopRunNodeStatus.Failed ||
       (nodeType !== NodeType.Start && nodeType !== NodeType.Cleanup))
   );
-}
-
-/** A failed node's Retry is the primary action; on any other node it stays ghosted. */
-export function nodeRetryIsPrimary(status: LoopRunNodeStatus): boolean {
-  return status === LoopRunNodeStatus.Failed;
 }

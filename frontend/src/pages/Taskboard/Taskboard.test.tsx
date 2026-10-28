@@ -10,7 +10,13 @@ import {
   seedPreferences,
   setPreference,
 } from "../../utils/userPreferences";
-import { mockTaskboardServer, pressEscapeUntil, signalRHub } from "../../test-support";
+import {
+  mockTaskboardServer,
+  pressEscapeUntil,
+  signalRHub,
+  deferred,
+  flushPromises,
+} from "../../test-support";
 import { NodeType, WorkItemStatus, WorkItem, Repository, LoopTemplate } from "../../types";
 import { stageParkedNode } from "../../test-support.parkedNode";
 import * as authServices from "../../services/auth";
@@ -62,14 +68,6 @@ function mockModalServices() {
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
 }
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
@@ -218,14 +216,6 @@ async function advance(ms: number) {
 }
 
 /** Lets pending promise callbacks and the renders they cause run. */
-async function settle() {
-  for (let i = 0; i < 5; i++) {
-    await act(async () => {
-      await Promise.resolve();
-    });
-  }
-}
-
 describe("Taskboard SignalR", () => {
   test("updates work item when HumanFeedbackRequired event arrives", async () => {
     mockTaskboardServer([makeItem()]);
@@ -1091,7 +1081,7 @@ describe("Taskboard live changes keep server order", () => {
 
     await waitFor(() => expect(cardTitles("Backlog")[0]).toBe("Brand new"));
     expect(cardTitles("Backlog").slice(1, 3)).toEqual(["b24", "b23"]);
-    await settle();
+    await flushPromises();
     expect(badge("Backlog")).toBe("26");
     expect(cardTitles("Backlog")[0]).toBe("Brand new");
   });
@@ -1158,7 +1148,7 @@ describe("Taskboard live changes keep server order", () => {
       oldStatus: "Backlog",
       newStatus: "Backlog",
     });
-    await settle();
+    await flushPromises();
     held.resolve();
 
     await waitFor(() =>
@@ -1215,7 +1205,7 @@ describe("Taskboard live changes keep server order", () => {
       newStatus: "Ready",
     });
     await waitFor(() => expect(cardTitles("Work queue")).toEqual(["c", "b", "a"]));
-    await settle();
+    await flushPromises();
     expect(badge("Work queue")).toBe("3");
   });
 
@@ -1270,7 +1260,7 @@ describe("Taskboard live changes keep server order", () => {
       oldStatus: "Backlog",
       newStatus: "Backlog",
     });
-    await settle();
+    await flushPromises();
     expect(cardTitles("Backlog")).toEqual(["keep"]);
     expect(badge("Backlog")).toBe("1");
   });
@@ -1331,12 +1321,12 @@ describe("Taskboard live changes keep server order", () => {
       oldStatus: "Backlog",
       newStatus: "Backlog",
     });
-    await settle();
+    await flushPromises();
     expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1);
 
     held.resolve();
     await waitFor(() => expect(server.getCounts.mock.calls.length).toBe(countsBefore + 2));
-    await settle();
+    await flushPromises();
     expect(server.getCounts.mock.calls.length).toBe(countsBefore + 2);
     await waitFor(() => expect(badge("Backlog")).toBe("5"));
   });
@@ -1374,7 +1364,7 @@ describe("Taskboard live changes keep server order", () => {
     });
     await waitFor(() => expect(cardTitles("Backlog")).toEqual(["other"]));
     held.resolve();
-    await settle();
+    await flushPromises();
 
     expect(badge("Backlog")).toBe("1");
   });
@@ -1392,9 +1382,9 @@ describe("Taskboard direct link", () => {
       expect(within(screen.getByRole("dialog")).getByRole("heading", { name: "b0" })).toBeTruthy(),
     );
     expect(getById).toHaveBeenCalledWith("b0");
-    await settle();
+    await flushPromises();
     const fetched = getById.mock.calls.filter(([id]) => id === "b0").length;
-    await settle();
+    await flushPromises();
 
     expect(getById.mock.calls.filter(([id]) => id === "b0").length).toBe(fetched);
     expect(cardTitles("Backlog")).toHaveLength(20);
@@ -1526,7 +1516,7 @@ describe("Taskboard folded columns", () => {
     mockTaskboardServer([makeItem({ id: "wi-1", title: "Not started" })]);
     renderTaskboard();
 
-    await settle();
+    await flushPromises();
     expect(screen.getByText("Loading taskboard...")).toBeTruthy();
     expect(screen.queryByText("Not started")).toBeNull();
   });
@@ -1578,7 +1568,7 @@ describe("Taskboard Work queue column", () => {
 
     await waitFor(() => expect(queuePills("waiting")).toEqual(["Ready"]));
     expect(cardTitles("Work queue")).toEqual(["first", "waiting", "last"]);
-    await settle();
+    await flushPromises();
     expect(badge("Work queue")).toBe("3");
     expect(server.getPage.mock.calls.length).toBe(reads);
   });
@@ -1704,7 +1694,7 @@ describe("Taskboard Work queue column", () => {
       expect(transition).toHaveBeenCalledWith("planned", WorkItemStatus.WorkQueue);
       expect(cardTitles("Backlog")).toEqual([]);
       await waitFor(() => expect(queuePills("planned")).toEqual([pill]));
-      await settle();
+      await flushPromises();
       expect(badge("Work queue")).toBe("1");
       expect(badge("Backlog")).toBe("0");
     },

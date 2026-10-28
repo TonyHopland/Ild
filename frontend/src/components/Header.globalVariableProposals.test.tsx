@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router";
 import { AuthContext } from "../hooks/useAuth";
 import * as signalRHook from "../hooks/useSignalR";
 import Header from "./Header";
-import { fakeHub, reply, stubFetch } from "../test-support";
+import { fakeHub, reply, stubFetch, routeEveryHub } from "../test-support";
 import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
 
 afterEach(() => {
@@ -15,7 +15,7 @@ afterEach(() => {
 
 function mockHub() {
   const hub = fakeHub();
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
+  routeEveryHub(signalRHook, hub);
   return hub.emit;
 }
 

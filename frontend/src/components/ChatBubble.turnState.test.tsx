@@ -76,7 +76,6 @@ async function sendMessageText(text: string) {
 
 afterEach(() => {
   signalRHub.reset();
-  services.reset();
   vi.clearAllMocks();
   localStorage.clear();
 });

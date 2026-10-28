@@ -26,7 +26,7 @@ import Icon from "../Icon";
 import { feedbackReasonLabel, pillClass, type Tone } from "../../utils/labels";
 import { failureMessage } from "./RunDetailSections";
 import { repositoryName } from "../../utils/repositoryName";
-import { PR_AWAITING_MERGE, offersMerge } from "./offers";
+import { PR_AWAITING_MERGE } from "./offers";
 import { NODE_FAILED, nodeTakesRetry, runReopensOnRetry, runTakesRetryNow } from "./retry";
 
 /**
@@ -339,7 +339,7 @@ export function FeedbackBanner({
     );
   }
 
-  const isPr = offersMerge(feedback);
+  const isPr = feedback.reason === PR_AWAITING_MERGE;
   const answering = feedback.runId;
   const reply = detail.replyFor(answering);
   // Answers are offered once the run has been read to be waiting for one, and

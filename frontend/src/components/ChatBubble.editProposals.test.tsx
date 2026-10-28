@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import type { ChatMessage, ChatSession, WorkItem, WorkItemEditProposal } from "../types";
-import { documentOrder, emitHubEvent, proposalCardAround, signalRHub } from "../test-support";
+import {
+  documentOrder,
+  emitHubEvent,
+  proposalCardAround,
+  signalRHub,
+  makeEditProposal,
+} from "../test-support";
 import {
   chatMessage,
   chatSession,
@@ -31,26 +37,12 @@ function session(): ChatSession {
 }
 
 function proposal(overrides: Partial<WorkItemEditProposal> = {}): WorkItemEditProposal {
-  return {
-    id: "p-1",
+  return makeEditProposal({
     workItemId: "wi-9",
-    status: "Pending",
     proposed: { title: "Agent's sharper title" },
-    snapshot: {
-      title: "Old title",
-      description: null,
-      tags: [],
-      branchNameOverride: null,
-      baseBranchOverride: null,
-    },
-    rationale: null,
-    rejectionReason: null,
-    createdByLoopRunId: null,
     createdByChatSessionId: "s1",
-    createdAt: "2026-09-26T10:00:00Z",
-    decidedAt: null,
     ...overrides,
-  };
+  });
 }
 
 function message(sequence: number, role: "user" | "assistant", content: string): ChatMessage {
@@ -77,7 +69,6 @@ function card(
 
 afterEach(() => {
   signalRHub.reset();
-  services.reset();
   vi.clearAllMocks();
   localStorage.clear();
 });

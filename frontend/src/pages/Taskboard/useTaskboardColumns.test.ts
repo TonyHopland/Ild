@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useTaskboardColumns } from "./useTaskboardColumns";
-import { mockTaskboardServer } from "../../test-support";
+import { mockTaskboardServer, deferred } from "../../test-support";
 import { WorkItem, WorkItemPage, WorkItemStatus } from "../../types";
 import { EMPTY_TASKBOARD_FILTER } from "../../utils/taskboardFilter";
 import type { TaskboardColumnKey } from "../../utils/taskboardColumns";
@@ -43,14 +43,6 @@ function itemIn(status: WorkItemStatus, n: number): WorkItem {
 }
 
 const byText = (a: string, b: string) => a.localeCompare(b);
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
 
 /** Holds the next read of a column holding `status` until the returned release is called; the page is taken when asked. */
 function holdNextRead(server: ReturnType<typeof mockTaskboardServer>, status: WorkItemStatus) {

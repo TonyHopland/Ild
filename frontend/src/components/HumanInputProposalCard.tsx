@@ -1,5 +1,5 @@
 import { humanInputProposalService } from "../services/auth";
-import { outputLabel } from "./FeedbackActions";
+import { outputLabel } from "./feedbackAnswers";
 import MarkdownRenderer from "./MarkdownRenderer";
 import ProposalDecision from "./ProposalDecision";
 import type { HumanInputProposal } from "../types";

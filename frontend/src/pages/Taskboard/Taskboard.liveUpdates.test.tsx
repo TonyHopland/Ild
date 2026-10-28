@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import Taskboard from "./index";
-import { fakeHub, mockTaskboardServer, routeHubs, signalRHub } from "../../test-support";
+import {
+  fakeHub,
+  mockTaskboardServer,
+  routeHubs,
+  signalRHub,
+  deferred,
+  flushPromises,
+} from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 import { WorkItemStatus, WorkItem, Repository } from "../../types";
 import * as authServices from "../../services/auth";
@@ -58,14 +65,6 @@ function makeRepo(n: number): Repository {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
-
 function mockBoard(items: WorkItem[], repositories: Repository[] = [makeRepo(1)]) {
   const server = mockTaskboardServer(items);
   vi.spyOn(authServices.workItemService, "getById").mockImplementation(async (id: string) => ({
@@ -110,14 +109,6 @@ function backlogTitles(): string[] {
   return Array.from(column.querySelectorAll(".work-item-card")).map(
     (card) => card.getAttribute("aria-label")!.split(", status ")[0],
   );
-}
-
-async function settle() {
-  for (let i = 0; i < 5; i++) {
-    await act(async () => {
-      await Promise.resolve();
-    });
-  }
 }
 
 describe("Taskboard filter options", () => {
@@ -193,12 +184,12 @@ describe("Taskboard filter options", () => {
     server.items[0] = { ...server.items[0], tags: [] };
     await emit("WorkItemStateChanged", edited("a"));
     await emit("WorkItemStateChanged", edited("b"));
-    await settle();
+    await flushPromises();
     expect(server.getTags.mock.calls.length).toBe(before + 1);
 
     await act(async () => held[0].resolve());
     await waitFor(() => expect(server.getTags.mock.calls.length).toBe(before + 2));
-    await settle();
+    await flushPromises();
     expect(server.getTags.mock.calls.length).toBe(before + 2);
 
     armed = false;
@@ -224,14 +215,14 @@ describe("Taskboard live updates", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /^a, next step,/ })).toBeTruthy(),
     );
-    await settle();
+    await flushPromises();
     expect(server.getTags.mock.calls.length).toBe(before);
     expect(server.getCounts.mock.calls.length).toBe(countsBefore);
 
     // A run event for an item the board never placed adds no card it cannot count.
     server.items.push({ ...makeItem("unheard", []), createdAt: "2026-02-01T00:00:00Z" });
     await emit("WorkItemRunProgressed", { workItemId: "unheard" });
-    await settle();
+    await flushPromises();
     expect(screen.queryByRole("button", { name: /^unheard,/ })).toBeNull();
     expect(server.getCounts.mock.calls.length).toBe(countsBefore);
   });
@@ -282,7 +273,7 @@ describe("Taskboard live updates", () => {
 
       await emit("WorkItemStateChanged", edited("a"));
       await emit("WorkItemRunProgressed", { workItemId: "a" });
-      await settle();
+      await flushPromises();
 
       expect(chips()).toEqual(["one"]);
       expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1);
@@ -315,7 +306,7 @@ describe("Taskboard live updates", () => {
     await act(async () => nextPage.resolve());
 
     await waitFor(() => expect(backlogTitles()).toHaveLength(25));
-    await settle();
+    await flushPromises();
     expect(server.getPage.mock.calls.slice(pagesBefore).map(([q]) => [q.skip, q.take])).toEqual([
       [20, 20],
     ]);

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import StorageSettings from "./StorageSettings";
 import * as services from "../../../services/auth";
+import { deferred } from "../../../test-support";
 
 const REPO = "55555555-5555-5555-5555-555555555555";
 
@@ -26,14 +27,6 @@ const overview = {
     },
   ],
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 const entry = () => screen.getByText("delta-app").closest("li") as HTMLElement;
 

@@ -5,6 +5,7 @@ import { useRunView } from "./useRunView";
 import { LoopRun, LoopRunStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import { loopRunService } from "../../services/auth";
+import { deferred, fakeHub, flushPromises, routeEveryHub } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -28,38 +29,11 @@ function makeRun(overrides: Partial<LoopRun> = {}): LoopRun {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
-async function flush() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
-}
-
-type Handler = (m: { type: string; payload: unknown; timestamp: string }) => void;
-
+/** Answers every hub with one fake; returns how a test delivers a run event to it. */
 function stageHub() {
-  const handlers = new Map<string, Set<Handler>>();
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: (event: string, h: Handler) => {
-      const set = handlers.get(event) ?? new Set<Handler>();
-      set.add(h);
-      handlers.set(event, set);
-    },
-    off: (event: string, h: Handler) => handlers.get(event)?.delete(h),
-    invoke: () => Promise.resolve(undefined),
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-  return (event: string, runId: string) =>
-    act(async () => {
-      handlers.get(event)?.forEach((h) => h({ type: event, payload: { runId }, timestamp: "" }));
-    });
+  const hub = fakeHub();
+  routeEveryHub(signalRHook, hub);
+  return (event: string, runId: string) => hub.emit(event, { runId });
 }
 
 function stageReads() {
@@ -88,13 +62,13 @@ describe("useRunView's run detail", () => {
       ({ run }) => useRunView("run-1", 0, { isCurrent: true, run }),
       { initialProps: { run: first } },
     );
-    await flush();
+    await flushPromises();
     expect(result.current.run).toBe(first);
 
     for (const event of stateEvents) await emit(event, "run-1");
     const parked = makeRun({ status: LoopRunStatus.WaitingHuman });
     rerender({ run: parked });
-    await flush();
+    await flushPromises();
 
     expect(result.current.run).toBe(parked);
     expect(getById).not.toHaveBeenCalled();
@@ -106,7 +80,7 @@ describe("useRunView's run detail", () => {
     const { result } = renderHook(() =>
       useRunView("run-1", 0, { isCurrent: true, run: makeRun({ id: "run-0" }) }),
     );
-    await flush();
+    await flushPromises();
 
     expect(result.current.run).toBeNull();
   });
@@ -115,21 +89,21 @@ describe("useRunView's run detail", () => {
     const emit = stageHub();
     const { reads, getById } = stageReads();
     const { result } = renderHook(() => useRunView("run-1", 0, { isCurrent: false, run: null }));
-    await flush();
+    await flushPromises();
     expect(reads).toHaveLength(1);
 
     for (const event of stateEvents) await emit(event, "run-1");
-    await flush();
+    await flushPromises();
     expect(reads).toHaveLength(1);
 
     const read = makeRun({ status: LoopRunStatus.Completed });
     await act(async () => reads[0].resolve(read));
-    await flush();
+    await flushPromises();
     expect(result.current.run).toBe(read);
     expect(reads).toHaveLength(2);
 
     await act(async () => reads[1].resolve(read));
-    await flush();
+    await flushPromises();
     expect(getById).toHaveBeenCalledTimes(2);
   });
 
@@ -141,16 +115,16 @@ describe("useRunView's run detail", () => {
       ({ isCurrent }) => useRunView("run-1", 0, { isCurrent, run: isCurrent ? current : null }),
       { initialProps: { isCurrent: true } },
     );
-    await flush();
+    await flushPromises();
 
     rerender({ isCurrent: false });
-    await flush();
+    await flushPromises();
     expect(result.current.run).toBe(current);
     expect(reads).toHaveLength(1);
 
     const finished = makeRun({ status: LoopRunStatus.Completed });
     await act(async () => reads[0].resolve(finished));
-    await flush();
+    await flushPromises();
     expect(result.current.run).toBe(finished);
   });
 });

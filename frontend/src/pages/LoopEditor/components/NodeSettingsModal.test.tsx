@@ -85,6 +85,14 @@ describe("NodeSettingsModal install-on-start option", () => {
     cleanup();
   });
 
+  test("reflects an enabled install option as checked", () => {
+    renderModal({ startRunInstall: true });
+
+    expect((screen.getByLabelText("Run ild.config install") as HTMLInputElement).checked).toBe(
+      true,
+    );
+  });
+
   test("notifies when the install option is toggled on", () => {
     const props = renderModal({ startRunInstall: false });
 
@@ -168,6 +176,9 @@ describe("NodeSettingsModal session memory mode", () => {
     });
 
     expect((screen.getByLabelText("Fork from") as HTMLSelectElement).value).toBe("base_{{Var.n}}");
+    expect((screen.getByLabelText("Into new session") as HTMLInputElement).value).toBe(
+      "fork_{{Var.n}}",
+    );
     expect(screen.getByText("base_{{Var.n}} (1 node, one per value)")).toBeTruthy();
   });
 

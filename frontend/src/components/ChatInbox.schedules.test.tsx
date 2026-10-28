@@ -1,26 +1,15 @@
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ChatSessionSummary } from "../types";
 
-const { handlers, chatService } = vi.hoisted(() => ({
-  handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
-  chatService: { listHistory: vi.fn() },
-}));
+const { chatService } = vi.hoisted(() => ({ chatService: { listHistory: vi.fn() } }));
 
-vi.mock("../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: "disconnected",
-    on: (event: string, handler: (msg: { payload: unknown }) => void) =>
-      (handlers[event] ??= new Set()).add(handler),
-    off: (event: string, handler: (msg: { payload: unknown }) => void) =>
-      handlers[event]?.delete(handler),
-    invoke: () => Promise.resolve(),
-  }),
-}));
+vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
 
 vi.mock("../services/auth", () => ({ chatService }));
 
 import { ChatInboxProvider, useChatInbox } from "./ChatInbox";
+import { emitHubEvent, signalRHub } from "../test-support";
 
 const chat = (scheduleName: string | null): ChatSessionSummary => ({
   id: "c1",
@@ -42,9 +31,12 @@ function Marks() {
   );
 }
 
+// A hub that never connects, so the inbox reads its history on mount and on a hint only.
+beforeEach(() => signalRHub.setState("disconnected"));
+
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   vi.clearAllMocks();
 });
 
@@ -59,11 +51,11 @@ describe("The chat list's schedule marks", () => {
     expect(await screen.findByText("Weekly retro")).toBeTruthy();
 
     chatService.listHistory.mockResolvedValue([chat("Monday retro")]);
-    act(() => handlers.ChatSchedulesChanged?.forEach((h) => h({ payload: { scheduleId: "s1" } })));
+    emitHubEvent("ChatSchedulesChanged", { scheduleId: "s1" });
     expect(await screen.findByText("Monday retro")).toBeTruthy();
 
     chatService.listHistory.mockResolvedValue([chat(null)]);
-    act(() => handlers.ChatSchedulesChanged?.forEach((h) => h({ payload: { scheduleId: "s1" } })));
+    emitHubEvent("ChatSchedulesChanged", { scheduleId: "s1" });
     await waitFor(() => expect(screen.getByText("no schedule")).toBeTruthy());
   });
 });

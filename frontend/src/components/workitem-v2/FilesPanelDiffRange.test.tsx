@@ -9,6 +9,7 @@ import {
   WorktreeFileContent,
 } from "../../types";
 import * as authServices from "../../services/auth";
+import { settle } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -69,26 +70,18 @@ function fileUnder(range?: WorktreeDiffRange): WorktreeFileContent {
   };
 }
 
-async function settle() {
-  for (let i = 0; i < 4; i++) {
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-  }
-}
-
 async function mount() {
   const workItem = makeWorkItem();
   let view!: ReturnType<typeof render>;
   await act(async () => {
     view = render(<FilesPanel workItem={workItem} />);
   });
-  await settle();
+  await settle(4);
   return async () => {
     await act(async () => {
       view.rerender(<FilesPanel workItem={{ ...workItem }} />);
     });
-    await settle();
+    await settle(4);
   };
 }
 
@@ -96,7 +89,7 @@ async function click(element: HTMLElement) {
   await act(async () => {
     fireEvent.click(element);
   });
-  await settle();
+  await settle(4);
 }
 
 const commitBox = (subject: RegExp) =>
@@ -169,7 +162,7 @@ describe("FilesPanel diff range moved by the commit list", () => {
     await act(async () => {
       answerSave({ ...fileUnder({ from: C2, to: C3 }), content: "saved under the old range" });
     });
-    await settle();
+    await settle(4);
 
     expect(screen.queryByText("saved under the old range")).toBeNull();
     expect(getFileContent.mock.lastCall).toEqual(["wi-1", "a.ts"]);
@@ -187,15 +180,15 @@ describe("FilesPanel diff range moved by the commit list", () => {
     mockFiles();
     const refresh = await mount();
     await act(async () => answers[0](COMMITS));
-    await settle();
+    await settle(4);
     await click(commitBox(/Third change/));
 
     await refresh();
     await refresh();
     await act(async () => answers[2](COMMITS));
-    await settle();
+    await settle(4);
     await act(async () => answers[1](WITHOUT_THIRD));
-    await settle();
+    await settle(4);
 
     expect(commitBox(/Third change/).checked).toBe(true);
   });
@@ -220,9 +213,9 @@ describe("FilesPanel reads of the open file", () => {
     expect(answers).toHaveLength(2);
 
     await act(async () => answers[1]({ ...fileUnder(), content: "the newer read" }));
-    await settle();
+    await settle(4);
     await act(async () => answers[0]({ ...fileUnder(), content: "the older read" }));
-    await settle();
+    await settle(4);
 
     expect(screen.queryByText("the older read")).toBeNull();
     expect(screen.getByText("the newer read")).toBeTruthy();
@@ -258,7 +251,7 @@ describe("FilesPanel reads of the open file", () => {
     expect(screen.getByText("saved")).toBeTruthy();
 
     await act(async () => answers[0]({ ...fileUnder(), content: "read before the save" }));
-    await settle();
+    await settle(4);
 
     expect(screen.queryByText("read before the save")).toBeNull();
     expect(screen.getByText("saved")).toBeTruthy();

@@ -2,20 +2,11 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import StorageSettings from "./StorageSettings";
 import * as services from "../../../services/auth";
+import { deferred } from "../../../test-support";
 
 const KB = 1024;
 const MB = 1024 * KB;
 const GB = 1024 * MB;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 function overview(incomplete: boolean, worktreesBytes = 5 * GB) {
   return {

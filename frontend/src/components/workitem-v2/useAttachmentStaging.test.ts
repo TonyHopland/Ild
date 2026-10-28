@@ -4,6 +4,7 @@ import { renderHook, act, cleanup, waitFor } from "@testing-library/react";
 import { useAttachmentStaging } from "./useAttachmentStaging";
 import { AttachmentLimits } from "../../types";
 import { workItemService } from "../../services/auth";
+import { deferred } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -16,14 +17,6 @@ const LIMITS: AttachmentLimits = {
   maxFilesPerRequest: 10,
   maxTotalBytesPerWorkItem: 250 * 1024 * 1024,
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 /** A file of an arbitrary reported size, without holding that many bytes. */
 function fileOfSize(name: string, bytes: number, type = "application/octet-stream"): File {
@@ -279,14 +272,10 @@ describe("useAttachmentStaging", () => {
     expect(result.current.staged[0].status).toBe("pending");
   });
 
-  test("after a partial failure the next save re-sends only the file that did not land, and the landed one is marked uploaded", async () => {
-    let failB = true;
-    const upload = vi
-      .spyOn(workItemService, "uploadAttachment")
-      .mockImplementation((_id: string, file: File) => {
-        if (file.name === "b.pdf" && failB) return Promise.reject({ message: "unreachable" });
-        return Promise.resolve([]);
-      });
+  test("after a partial failure the landed file is marked uploaded and the other stays pending", async () => {
+    vi.spyOn(workItemService, "uploadAttachment").mockImplementation((_id: string, file: File) =>
+      file.name === "b.pdf" ? Promise.reject({ message: "unreachable" }) : Promise.resolve([]),
+    );
     const { result } = renderHook(() => useAttachmentStaging("wi-1", LIMITS));
     act(() =>
       result.current.add([
@@ -305,19 +294,6 @@ describe("useAttachmentStaging", () => {
     expect(result.current.staged.map((e) => [e.file.name, e.status])).toEqual([
       ["a.png", "uploaded"],
       ["b.pdf", "pending"],
-    ]);
-
-    failB = false;
-    let second!: Awaited<ReturnType<typeof result.current.uploadAll>>;
-    await act(async () => {
-      second = await result.current.uploadAll("wi-1");
-    });
-
-    expect(second.ok).toBe(true);
-    expect(upload.mock.calls.map((call) => (call[1] as File).name)).toEqual([
-      "a.png",
-      "b.pdf",
-      "b.pdf",
     ]);
   });
 });

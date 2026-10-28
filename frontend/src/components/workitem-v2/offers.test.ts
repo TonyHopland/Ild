@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vite-plus/test";
 import { LoopRunStatus, WorkItemStatus } from "../../types";
 import type { LoopRun, WorkItem } from "../../types";
-import { asksForManualMerge, offersMerge, repositoryHoldOf, startOfferOf } from "./offers";
+import { asksForManualMerge, repositoryHoldOf, startOfferOf } from "./offers";
 
 const hold = { inProgress: 1, limit: 1 };
 
@@ -102,15 +102,5 @@ describe("asksForManualMerge: ILD could not merge the AutoMerge pull request", (
     ["the run has moved on", { status: LoopRunStatus.Running }],
   ])("asks for no manual merge when %s", (_, change) => {
     expect(asksForManualMerge({ ...failed, ...change })).toBe(false);
-  });
-});
-
-describe("offersMerge: the feedback that carries a Merge button", () => {
-  test.each([
-    ["PR Awaiting Merge", true],
-    ["Human Input Needed", false],
-    ["Node Failed", false],
-  ])("feedback for %s offers Merge: %s", (reason, offers) => {
-    expect(offersMerge({ reason })).toBe(offers);
   });
 });

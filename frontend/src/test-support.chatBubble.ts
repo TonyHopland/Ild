@@ -3,7 +3,7 @@
 import { createElement, type ReactElement } from "react";
 import { MemoryRouter } from "react-router";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { vi, type MockInstance } from "vite-plus/test";
+import { beforeEach, vi, type MockInstance } from "vite-plus/test";
 import {
   aiProviderService,
   chatService,
@@ -80,14 +80,9 @@ export async function openResumedChat(session: ChatSession, initialPath = "/") {
   return view;
 }
 
-/**
- * Spies on the chat, provider and edit-proposal methods the chat bubble calls,
- * each answering with nothing (an empty list for the list reads) until a test
- * says otherwise. Call it once at the top of a test file, and `reset` in its
- * `afterEach` to forget every call and answer a test gave a spy.
- */
-export function stubChatServices() {
-  const spies = {
+/** Spies on every method {@link stubChatServices} stands in for, by service. */
+function spyOnChatServices() {
+  return {
     chatService: {
       listHistory: vi.spyOn(chatService, "listHistory"),
       getById: vi.spyOn(chatService, "getById"),
@@ -115,29 +110,44 @@ export function stubChatServices() {
       rejectEditProposal: vi.spyOn(workItemService, "rejectEditProposal"),
     },
   };
-  const listReads: MockInstance[] = [
-    spies.chatService.listHistory,
-    spies.chatService.searchChats,
-    spies.aiProviderService.getAll,
-    spies.proposalServices.listVariableProposals,
-    spies.proposalServices.listTemplateProposals,
-    spies.workItemService.listEditProposals,
-    spies.workItemService.listEditProposalsFor,
-  ];
+}
+
+/**
+ * Spies on the chat, provider and edit-proposal methods the chat bubble calls,
+ * each answering with nothing (an empty list for the list reads) until a test
+ * says otherwise. Call it once at the top of a test file. Before every test the
+ * spies are put back to those answers with every call forgotten, and spied on
+ * afresh, so a test that restores mocks leaves the next one stubbed all the
+ * same. Each service's spies stay on the one object, so a test file can hold it.
+ */
+export function stubChatServices() {
+  const spies = spyOnChatServices();
   const reset = () => {
-    for (const group of Object.values(spies)) {
-      for (const spy of Object.values(group) as MockInstance[]) {
+    const fresh = spyOnChatServices();
+    const listReads: MockInstance[] = [
+      fresh.chatService.listHistory,
+      fresh.chatService.searchChats,
+      fresh.aiProviderService.getAll,
+      fresh.proposalServices.listVariableProposals,
+      fresh.proposalServices.listTemplateProposals,
+      fresh.workItemService.listEditProposals,
+      fresh.workItemService.listEditProposalsFor,
+    ];
+    for (const group of Object.keys(fresh) as (keyof typeof fresh)[]) {
+      Object.assign(spies[group], fresh[group]);
+      for (const spy of Object.values(fresh[group]) as MockInstance[]) {
         spy.mockReset();
         spy.mockResolvedValue(listReads.includes(spy) ? [] : undefined);
       }
     }
   };
   reset();
-  return { ...spies, reset };
+  beforeEach(reset);
+  return spies;
 }
 
 /** A search request held back by {@link chatServer} until the test answers it. */
-export interface HeldSearch {
+interface HeldSearch {
   q: string;
   answer: Deferred<string[]>;
 }
@@ -148,7 +158,7 @@ export interface HeldSearch {
  * `sessions` what opening a chat returns; mark-read, rename, favourite and delete
  * change `chats` as the server would. `holdHistoryReads(n)` leaves the next `n`
  * history reads in flight (in `heldReads`) and every search is held in `searches`.
- * `reset` puts the server and the spies it answers through back, for an `afterEach`.
+ * Before every test the server is emptied and answers through the fresh spies.
  */
 export function chatServer(services: ReturnType<typeof stubChatServices>) {
   const { chatService: api } = services;
@@ -208,11 +218,11 @@ export function chatServer(services: ReturnType<typeof stubChatServices>) {
       server.heldReads = [];
       server.searches = [];
       server.readsToHold = 0;
-      services.reset();
       server.install();
     },
   };
   server.install();
+  beforeEach(() => server.reset());
   return server;
 }
 

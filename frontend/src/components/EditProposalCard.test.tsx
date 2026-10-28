@@ -3,6 +3,7 @@ import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-libra
 import EditProposalCard from "./EditProposalCard";
 import type { WorkItemEditProposal } from "../types";
 import * as authServices from "../services/auth";
+import { deferred, makeEditProposal } from "../test-support";
 
 afterEach(() => {
   cleanup();
@@ -10,10 +11,7 @@ afterEach(() => {
 });
 
 function makeProposal(overrides: Partial<WorkItemEditProposal> = {}): WorkItemEditProposal {
-  return {
-    id: "p-1",
-    workItemId: "wi-1",
-    status: "Pending",
+  return makeEditProposal({
     proposed: {
       title: "Sharper title",
       description: null,
@@ -29,23 +27,9 @@ function makeProposal(overrides: Partial<WorkItemEditProposal> = {}): WorkItemEd
       baseBranchOverride: "develop-base",
     },
     rationale: "The old title no longer says what the item is about.",
-    rejectionReason: null,
-    createdByLoopRunId: null,
     createdByChatSessionId: "chat-1",
-    createdAt: "2026-09-26T10:00:00Z",
-    decidedAt: null,
     ...overrides,
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
   });
-  return { promise, resolve, reject };
 }
 
 const approveButton = () => screen.getByRole("button", { name: "Approve" });

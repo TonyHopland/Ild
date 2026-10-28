@@ -51,6 +51,7 @@ import {
   reply,
   signalRHub,
   stubFetch,
+  makeEditProposal,
 } from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
@@ -115,26 +116,14 @@ function suggestion(rationale: string, anchor: number | null, createdAt: string)
 }
 
 function editProposal(title: string, anchor: number, createdAt: string): WorkItemEditProposal {
-  return {
+  return makeEditProposal({
     id: `p-${title}`,
     workItemId: "wi-9",
-    status: "Pending",
     proposed: { title },
-    snapshot: {
-      title: "Old title",
-      description: null,
-      tags: [],
-      branchNameOverride: null,
-      baseBranchOverride: null,
-    },
-    rationale: null,
-    rejectionReason: null,
-    createdByLoopRunId: null,
     createdByChatSessionId: "s1",
     chatReplySequence: anchor,
     createdAt,
-    decidedAt: null,
-  };
+  });
 }
 
 /** What GET /global-variables/proposals?chatSessionId=s1 answers; a test changes it. */

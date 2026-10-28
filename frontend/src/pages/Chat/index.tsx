@@ -6,7 +6,6 @@ import { ROUTES } from "../../utils/constants";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import ChatsBackButton from "./ChatsBackButton";
 import Schedules from "./Schedules";
-import { phonePaneOf } from "./phonePane";
 import "./Chat.css";
 
 /** Marks a visit to the Chat tab that shows the start form rather than a chat. */
@@ -121,9 +120,7 @@ export default function Chat({ view = "chat" }: { view?: "chat" | "schedules" })
       revealGlobalProposalId={schedules ? null : searchParams.get("globalProposal")}
     >
       {({ title, error, sidebar, content }) => (
-        <div
-          className={`chat-page${phonePaneOf(isMobile, listShown) === "list" ? " chat-page--list" : ""}`}
-        >
+        <div className={`chat-page${isMobile && listShown ? " chat-page--list" : ""}`}>
           {loaded ? (
             <>
               {sidebar}

@@ -3,6 +3,7 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 import WorkItemServerSettings from "./WorkItemServerSettings";
 import * as services from "../../../services/auth";
 import type { WorkItemServerConfig } from "../../../types";
+import { deferred } from "../../../test-support";
 
 const stored: WorkItemServerConfig = {
   url: "https://workitems.example.com",
@@ -10,16 +11,6 @@ const stored: WorkItemServerConfig = {
   pollIntervalSeconds: 120,
   graceIntervalSeconds: 10,
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 const field = (label: RegExp) => screen.getByLabelText(label) as HTMLInputElement;
 const urlField = () => field(/url/i);

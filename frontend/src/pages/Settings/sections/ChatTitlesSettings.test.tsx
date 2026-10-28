@@ -181,6 +181,78 @@ describe("Chat titles card", () => {
     await screen.findByText("Runs on the default provider (Main)");
     expect(screen.queryByText(/is a Copilot provider/)).toBeNull();
   });
+
+  test("suggests the providers' tags, sorted", async () => {
+    switchedOn();
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([
+      main as unknown as AiProvider,
+      { id: "Fast", name: "Fast", type: "claude-code", isDefault: false, tags: ["Fast", "Cheap"] },
+    ] as unknown as AiProvider[]);
+
+    render(<ChatTitlesSettings />);
+
+    await screen.findByText("Runs on Fast");
+    const suggestions = document.getElementById(field().tag.getAttribute("list")!)!;
+    expect(Array.from(suggestions.querySelectorAll("option"), (o) => o.value)).toEqual([
+      "Cheap",
+      "Fast",
+    ]);
+  });
+});
+
+describe("Saving the chat titles card", () => {
+  const toggle = () =>
+    screen.getByRole("checkbox", { name: /smart session titles/i }) as HTMLInputElement;
+
+  function stored(smartTitles: string) {
+    vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
+      key,
+      value: key === authServices.ChatTitleSettingKeys.SmartTitles ? smartTitles : "",
+    }));
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([
+      main as unknown as AiProvider,
+    ]);
+    return vi
+      .spyOn(authServices.settingsService, "put")
+      .mockImplementation(async (key: string, value: string) => ({ key, value }));
+  }
+
+  test("Save stores the edited tag as the title provider tag", async () => {
+    const put = stored("true");
+
+    render(<ChatTitlesSettings />);
+    await waitFor(() => expect(field().tag.disabled).toBe(false));
+    fireEvent.change(field().tag, { target: { value: "Fast" } });
+    fireEvent.click(field().save);
+
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.TitleProviderTag, "Fast"),
+    );
+  });
+
+  test("switching smart titles on stores it and opens the tag; switching it off shuts the tag again", async () => {
+    const put = stored("false");
+
+    render(<ChatTitlesSettings />);
+    await screen.findByText("Runs on the default provider (Main)");
+    expect(field().tag.disabled).toBe(true);
+    expect(field().save.disabled).toBe(true);
+
+    fireEvent.click(toggle());
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.SmartTitles, "true"),
+    );
+    await waitFor(() => expect(field().tag.disabled).toBe(false));
+    fireEvent.change(field().tag, { target: { value: "Fast" } });
+    expect(field().save.disabled).toBe(false);
+
+    fireEvent.click(toggle());
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.SmartTitles, "false"),
+    );
+    await waitFor(() => expect(field().tag.disabled).toBe(true));
+    expect(field().save.disabled).toBe(true);
+  });
 });
 
 describe("Chat titles card with a Codex provider", () => {
@@ -506,22 +578,5 @@ describe("Title attempts", () => {
     put.mockClear();
     fireEvent.blur(attempts);
     expect(put).not.toHaveBeenCalled();
-  });
-
-  test("suggests the providers' tags, sorted", async () => {
-    switchedOn();
-    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([
-      main as unknown as AiProvider,
-      { id: "Fast", name: "Fast", type: "claude-code", isDefault: false, tags: ["Fast", "Cheap"] },
-    ] as unknown as AiProvider[]);
-
-    render(<ChatTitlesSettings />);
-
-    await screen.findByText("Runs on Fast");
-    const suggestions = document.getElementById(field().tag.getAttribute("list")!)!;
-    expect(Array.from(suggestions.querySelectorAll("option"), (o) => o.value)).toEqual([
-      "Cheap",
-      "Fast",
-    ]);
   });
 });

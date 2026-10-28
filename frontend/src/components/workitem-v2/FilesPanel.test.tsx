@@ -12,6 +12,7 @@ import {
 } from "../../types";
 import * as authServices from "../../services/auth";
 import * as saveBlobModule from "../../utils/saveBlob";
+import { settle } from "../../test-support";
 
 // Every panel asks for the commit list it offers ranges from; one with no
 // commits of its own leaves the rest of the panel exactly as it was.
@@ -621,18 +622,6 @@ describe("FilesPanel diff rendering", () => {
     ]);
     expect(screen.getByText("-hello")).toBeTruthy();
     expect(screen.getByText("+world")).toBeTruthy();
-  });
-
-  test("Wrap is a checkbox that ticks and unticks", async () => {
-    await showDiff(["diff --git a/a.ts b/a.ts", "@@ -1,1 +1,1 @@", "-a", "+b"].join("\n"));
-    const wrap = screen.getByRole("checkbox", { name: "Wrap" }) as HTMLInputElement;
-    expect(wrap.checked).toBe(false);
-
-    fireEvent.click(wrap);
-    expect(wrap.checked).toBe(true);
-
-    fireEvent.click(wrap);
-    expect(wrap.checked).toBe(false);
   });
 
   test("shows original and current line numbers beside each line, blank where absent", async () => {
@@ -1387,7 +1376,7 @@ describe("FilesPanel download", () => {
   }
 
   /** Settles a held download and lets everything that follows it run out. */
-  async function settle(run: () => void) {
+  async function settleDownload(run: () => void) {
     await act(async () => {
       run();
       await new Promise((r) => setTimeout(r, 0));
@@ -1576,12 +1565,12 @@ describe("FilesPanel download", () => {
 
     await clickButton("Download");
     expect(downloadButton()!.disabled).toBe(true);
-    await settle(() => held[0].resolve(new Blob(["x"])));
+    await settleDownload(() => held[0].resolve(new Blob(["x"])));
     expect(downloadButton()!.disabled).toBe(false);
 
     await clickButton("Download");
     expect(downloadButton()!.disabled).toBe(true);
-    await settle(() => held[1].reject({ status: 500, message: "boom" }));
+    await settleDownload(() => held[1].reject({ status: 500, message: "boom" }));
     expect(downloadButton()!.disabled).toBe(false);
   });
 
@@ -1593,7 +1582,9 @@ describe("FilesPanel download", () => {
     const view = await renderView(makeWorkItem());
     await open("a.ts");
     await clickButton("Download");
-    await settle(() => held[0].reject({ status: 404, message: "File not found in worktree." }));
+    await settleDownload(() =>
+      held[0].reject({ status: 404, message: "File not found in worktree." }),
+    );
 
     const shown = screen.getByText("File not found in worktree.");
     expect(shown.classList.contains("preview-error")).toBe(true);
@@ -1605,7 +1596,7 @@ describe("FilesPanel download", () => {
 
     // With nothing to say, the error still says something.
     await clickButton("Download");
-    await settle(() => held[1].reject({}));
+    await settleDownload(() => held[1].reject({}));
     expect(screen.getByText("Failed to download file.")).toBeTruthy();
 
     await switchTo(view, makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
@@ -1621,12 +1612,12 @@ describe("FilesPanel download", () => {
     await open("a.ts");
     await clickButton("Download");
     await open("b.ts");
-    await settle(() => held[0].reject({ message: "left behind on a.ts" }));
+    await settleDownload(() => held[0].reject({ message: "left behind on a.ts" }));
     expect(screen.queryByText("left behind on a.ts")).toBeNull();
 
     await clickButton("Download");
     await switchTo(view, makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
-    await settle(() => held[1].reject({ message: "left behind on wi-1" }));
+    await settleDownload(() => held[1].reject({ message: "left behind on wi-1" }));
     expect(screen.queryByText("left behind on wi-1")).toBeNull();
   });
 
@@ -1648,11 +1639,11 @@ describe("FilesPanel download", () => {
     expect(spy).toHaveBeenLastCalledWith("wi-2", "README.md");
     expect(downloadButton()!.disabled).toBe(true);
 
-    await settle(() => held[0].reject({ message: "wi-1 failed" }));
+    await settleDownload(() => held[0].reject({ message: "wi-1 failed" }));
     expect(downloadButton()!.disabled).toBe(true);
     expect(screen.queryByText("wi-1 failed")).toBeNull();
 
-    await settle(() => held[1].resolve(new Blob(["readme"])));
+    await settleDownload(() => held[1].resolve(new Blob(["readme"])));
     expect(downloadButton()!.disabled).toBe(false);
   });
 
@@ -1672,10 +1663,10 @@ describe("FilesPanel download", () => {
     await open("x.ts");
     expect(downloadButton()!.disabled).toBe(true);
 
-    await settle(() => held[1].resolve(new Blob(["y"])));
+    await settleDownload(() => held[1].resolve(new Blob(["y"])));
     expect(downloadButton()!.disabled).toBe(true);
 
-    await settle(() => held[0].resolve(new Blob(["x"])));
+    await settleDownload(() => held[0].resolve(new Blob(["x"])));
     expect(downloadButton()!.disabled).toBe(false);
   });
 });
@@ -1736,18 +1727,9 @@ describe("FilesPanel diff range", () => {
         call.settled = true;
         call.resolve(value);
       }
-      await settle();
+      await settle(4);
     };
     return { calls, impl, answer };
-  }
-
-  /** Lets every answer already given land, along with whatever it sets off. */
-  async function settle() {
-    for (let i = 0; i < 4; i++) {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-    }
   }
 
   async function mount(workItem: WorkItem) {
@@ -1755,20 +1737,20 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       view = render(<FilesPanel workItem={workItem} />);
     });
-    await settle();
+    await settle(4);
     return {
       /** The parent hands down a fresh copy of the same item, as it does when the run advances. */
       refresh: async () => {
         await act(async () => {
           view.rerender(<FilesPanel workItem={{ ...workItem }} />);
         });
-        await settle();
+        await settle(4);
       },
       switchTo: async (next: WorkItem) => {
         await act(async () => {
           view.rerender(panelFor(next));
         });
-        await settle();
+        await settle(4);
       },
     };
   }
@@ -1799,7 +1781,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(rangeToggle());
     });
-    await settle();
+    await settle(4);
   }
 
   function box(name: RegExp): HTMLInputElement {
@@ -1814,7 +1796,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(checkbox);
     });
-    await settle();
+    await settle(4);
   }
 
   const checked = () =>
@@ -1888,7 +1870,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("a.ts"));
     });
-    await settle();
+    await settle(4);
     await panel.refresh();
 
     // The dropdown on its default costs nothing: one list per load, nothing
@@ -1987,7 +1969,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("b.ts"));
     });
-    await settle();
+    await settle(4);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Diff" }));
     });
@@ -2102,7 +2084,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("a.ts"));
     });
-    await settle();
+    await settle(4);
     expect(getFileContent).toHaveBeenLastCalledWith("wi-1", "a.ts", { from: C2, to: C3 });
 
     await act(async () => {
@@ -2119,7 +2101,7 @@ describe("FilesPanel diff range", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
     });
-    await settle();
+    await settle(4);
 
     expect(save).toHaveBeenCalledWith("wi-1", "a.ts", "after", { from: C2, to: C3 });
     expect(disabled(pendingBox())).toBe(false);

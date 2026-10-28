@@ -3,9 +3,10 @@ import {
   PR_MERGE,
   answerStyleOf,
   answerToneOf,
+  confirmToneOf,
   primaryAnswerOf,
   visibleAnswersOf,
-} from "./FeedbackActions";
+} from "./feedbackAnswers";
 
 describe("visibleAnswersOf: the listed outputs the node shows", () => {
   const all = () => true;
@@ -78,6 +79,16 @@ describe("answerToneOf: how an answer's button looks", () => {
     ["Merge when another answer is primary", PR_MERGE, "Needs work", "btn-secondary"],
   ])("%s", (_, name, primary, tone) => {
     expect(answerToneOf(name, primary)).toBe(tone);
+  });
+});
+
+describe("confirmToneOf: how the confirm button of an answer that asks first looks", () => {
+  test.each([
+    ["Reject", "OnFailure", "btn-danger"],
+    ["Approve", "OnSuccess", "btn-primary"],
+    ["a named output", "Needs work", "btn-primary"],
+  ])("%s", (_, name, tone) => {
+    expect(confirmToneOf(name)).toBe(tone);
   });
 });
 

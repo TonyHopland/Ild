@@ -7,7 +7,14 @@ import {
   SIDEBAR_OPEN_KEY,
   saveSidebarOpen,
 } from "./chatPlacement";
-import { deferred, emitHubEvent, settle, showChatActions, signalRHub } from "../test-support";
+import {
+  deferred,
+  emitHubEvent,
+  settle,
+  showChatActions,
+  signalRHub,
+  flushPromises,
+} from "../test-support";
 import {
   chatMessage,
   chatServer,
@@ -40,7 +47,6 @@ function msg(chat: string, sequence: number, role: "user" | "assistant"): ChatMe
 
 afterEach(() => {
   vi.useRealTimers();
-  server.reset();
   signalRHub.reset();
   vi.clearAllMocks();
   localStorage.clear();
@@ -55,12 +61,6 @@ function widePanel() {
 // Without a stored size the panel takes its 384px default: narrow.
 
 /** Lets answered promises reach the view without running any timer (fake timers safe). */
-async function flush() {
-  await act(async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  });
-}
-
 async function openPanel() {
   await openChatPanel();
   await waitFor(() => expect(screen.queryByText("Loading…")).toBeNull());
@@ -449,7 +449,7 @@ describe("chat favourites", () => {
     // Shown on success without waiting for any re-read.
     server.holdHistoryReads(1);
     await act(async () => starring.resolve());
-    await flush();
+    await flushPromises();
     expect(star("Beta").getAttribute("aria-pressed")).toBe("true");
     expect((star("Beta") as HTMLButtonElement).disabled).toBe(false);
     expect(rowOrder(names)).toEqual(["Beta", "Gamma", "Alpha"]);
@@ -519,7 +519,7 @@ describe("chat search", () => {
 
     // Content matches join in, starred first; an id the list does not hold is ignored.
     await act(async () => server.searches[0].answer.resolve(["b", "zzz"]));
-    await flush();
+    await flushPromises();
     expect(rowOrder(names)).toEqual(["Bug triage", "Deploy pipeline"]);
 
     // A new query drops the old content matches at once.
@@ -530,11 +530,11 @@ describe("chat search", () => {
     advance(1000);
     expect(server.searches.map((s) => s.q)).toEqual(["DEPL", "notes", "triage"]);
     await act(async () => server.searches[2].answer.resolve(["c"]));
-    await flush();
+    await flushPromises();
     expect(rowOrder(names)).toEqual(["Bug triage", "Untitled chat"]);
     // The answer for "notes" comes back late and is never applied.
     await act(async () => server.searches[1].answer.resolve(["a"]));
-    await flush();
+    await flushPromises();
     expect(rowOrder(names)).toEqual(["Bug triage", "Untitled chat"]);
 
     // Nothing matches; an answer for a query since changed stays unapplied.
@@ -543,13 +543,13 @@ describe("chat search", () => {
     advance(1000);
     type("qqqq");
     await act(async () => server.searches[3].answer.resolve(["a"]));
-    await flush();
+    await flushPromises();
     expect(rowOrder(names)).toEqual([]);
     expect(within(sidebar()).getByText("Searching…")).toBeTruthy();
     advance(1000);
     expect(server.searches[4].q).toBe("qqqq");
     await act(async () => server.searches[4].answer.resolve([]));
-    await flush();
+    await flushPromises();
     expect(within(sidebar()).getByText("No chats match")).toBeTruthy();
 
     // A failed search leaves the title matches; the shown fallback title counts.
@@ -559,7 +559,7 @@ describe("chat search", () => {
     const failed = server.searches[server.searches.length - 1];
     expect(failed.q).toBe("untitled");
     await act(async () => failed.answer.reject(new Error("search failed")));
-    await flush();
+    await flushPromises();
     expect(rowOrder(names)).toEqual(["Untitled chat"]);
     expect(within(sidebar()).queryByText("No chats match")).toBeNull();
 

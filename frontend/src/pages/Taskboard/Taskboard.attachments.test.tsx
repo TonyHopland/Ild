@@ -5,7 +5,7 @@ import Taskboard from "./index";
 import { WorkItem, WorkItemAttachment, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
-import { mockTaskboardServer } from "../../test-support";
+import { mockTaskboardServer, deferred } from "../../test-support";
 import { stageParkedNode } from "../../test-support.parkedNode";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
@@ -40,14 +40,6 @@ function makeItem(id: string, title: string, overrides: Partial<WorkItem> = {}):
     dependentIds: [],
     ...overrides,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 function mockServices(items: WorkItem[]) {

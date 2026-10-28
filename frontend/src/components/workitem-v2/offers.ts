@@ -1,10 +1,8 @@
 import { LoopRun, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
 
-/**
- * Whether the footer offers to start a Ready item early, and whether a pull
- * request asks to be merged by hand. Plain rules the modal and the action
- * thread share, kept out of the components.
- */
+// Whether the footer offers to start a Ready item early, and whether a pull
+// request asks to be merged by hand. Plain rules the modal and the action
+// thread share, kept out of the components.
 
 /** Why an item waits on a person to merge its pull request. */
 export const PR_AWAITING_MERGE = "PR Awaiting Merge";
@@ -43,9 +41,4 @@ export function asksForManualMerge(
     run.status === LoopRunStatus.WaitingHuman &&
     run.prSnapshot?.state !== "closed"
   );
-}
-
-/** Whether the feedback carries a Merge button: the item is waiting on its pull request. */
-export function offersMerge(feedback: { reason: string }): boolean {
-  return feedback.reason === PR_AWAITING_MERGE;
 }

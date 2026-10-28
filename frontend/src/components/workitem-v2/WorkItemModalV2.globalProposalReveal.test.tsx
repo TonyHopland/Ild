@@ -11,7 +11,7 @@ import {
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
-import { fakeHub, makeGlobalVariableProposal } from "../../test-support";
+import { fakeHub, makeGlobalVariableProposal, routeEveryHub } from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 afterEach(() => {
@@ -80,7 +80,7 @@ const linked = makeGlobalVariableProposal({
 
 describe("a link to a suggestion in the Action tab", () => {
   test("waits for the run's turns before scrolling to the card, so none lands above it afterwards", async () => {
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue(fakeHub().connection);
+    routeEveryHub(signalRHook, fakeHub());
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
     vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
     vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);

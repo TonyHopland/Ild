@@ -6,6 +6,7 @@ import type {
   RunConversationMessage,
   WorkItemEditProposal,
 } from "../types";
+import { makeEditProposal } from "../test-support";
 
 function message(sequence: number): ChatMessage {
   const role = sequence % 2 === 0 ? "user" : "assistant";
@@ -13,26 +14,12 @@ function message(sequence: number): ChatMessage {
 }
 
 function proposal(id: string, chatReplySequence: number): WorkItemEditProposal {
-  return {
+  return makeEditProposal({
     id,
-    workItemId: "wi-1",
-    status: "Pending",
     proposed: { title: id },
-    snapshot: {
-      title: "t",
-      description: null,
-      tags: [],
-      branchNameOverride: null,
-      baseBranchOverride: null,
-    },
-    rationale: null,
-    rejectionReason: null,
-    createdByLoopRunId: null,
     createdByChatSessionId: "s1",
     chatReplySequence,
-    createdAt: "2026-09-26T10:00:00Z",
-    decidedAt: null,
-  };
+  });
 }
 
 const ids = (list: { id: string }[] | undefined) => (list ?? []).map((p) => p.id);

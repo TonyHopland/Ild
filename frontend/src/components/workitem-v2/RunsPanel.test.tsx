@@ -13,6 +13,7 @@ import {
   NodeType,
   EdgeType,
 } from "../../types";
+import { deferred } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -310,16 +311,6 @@ const DELETE_RUN = /delete run/i;
 const runEntry = (id: string) =>
   screen.queryByRole("button", { name: new RegExp(`Run ${id.slice(0, 8)}`) });
 const isDisabled = (el: HTMLElement | null) => (el as HTMLButtonElement | null)?.disabled;
-
-function deferred<T = void>() {
-  let resolve!: (v: T) => void;
-  let reject!: (e: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 async function confirmDelete() {
   fireEvent.click(actionButton(DELETE_RUN)!);
@@ -1803,7 +1794,7 @@ describe("RunsPanel retry", () => {
     expect(retries[1].classList.contains("btn-primary")).toBe(true);
   });
 
-  test.each(["Start", "Cleanup"])("is offered on a %s node that failed", async (nodeType) => {
+  test.each(["Start", "Cleanup"])("stands out on a %s node that failed", async (nodeType) => {
     renderActionPanel([
       run({
         id: RUN_A,
@@ -1814,6 +1805,8 @@ describe("RunsPanel retry", () => {
     ]);
     await screen.findByText(nodeType);
 
-    expect(screen.getAllByRole("button", { name: "Retry from this node" })).toHaveLength(1);
+    const retries = screen.getAllByRole("button", { name: "Retry from this node" });
+    expect(retries).toHaveLength(1);
+    expect(retries[0].classList.contains("btn-primary")).toBe(true);
   });
 });

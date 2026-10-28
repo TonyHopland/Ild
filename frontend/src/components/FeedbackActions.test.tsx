@@ -284,17 +284,45 @@ describe("FeedbackActions — button look", () => {
     );
     const escalate = screen.getByRole("button", { name: "Escalate" });
     expect(escalate.style.getPropertyValue("--output-color")).toBe(PURPLE);
-    expect(screen.getByRole("button", { name: "Approve" }).getAttribute("style")).toBeNull();
+    expectColourMarker(escalate, true);
+    const approve = screen.getByRole("button", { name: "Approve" });
+    expect(approve.getAttribute("style")).toBeNull();
+    expectColourMarker(approve, false);
 
     fireEvent.click(escalate);
     const dialog = screen.getByRole("dialog", { name: "Confirm Escalate" });
-    expect(
-      within(dialog)
-        .getByRole("button", { name: "Escalate" })
-        .style.getPropertyValue("--output-color"),
-    ).toBe(PURPLE);
+    const confirm = within(dialog).getByRole("button", { name: "Escalate" });
+    expect(confirm.style.getPropertyValue("--output-color")).toBe(PURPLE);
+    expectColourMarker(confirm, true);
+    expect(confirm.classList.contains("btn-primary")).toBe(true);
+  });
+
+  test("the confirm button of an uncoloured Reject is a danger button without a colour marker", () => {
+    render(
+      <FeedbackActions
+        actions="OnSuccess,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        needsConfirm={(name) => name === "OnFailure"}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    const confirm = within(screen.getByRole("dialog", { name: "Confirm Reject" })).getByRole(
+      "button",
+      { name: "Reject" },
+    );
+    expect(confirm.classList.contains("btn-danger")).toBe(true);
+    expectColourMarker(confirm, false);
   });
 });
+
+/** The class and the dot that mark a button carrying its output's colour. */
+function expectColourMarker(button: HTMLElement, marked: boolean) {
+  expect(button.classList.contains("has-output-color")).toBe(marked);
+  expect(button.querySelector(".output-color-dot") !== null).toBe(marked);
+}
 
 describe("FeedbackActions — Enter in the feedback box", () => {
   type Props = Parameters<typeof FeedbackActions>[0];

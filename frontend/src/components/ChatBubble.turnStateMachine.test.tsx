@@ -282,7 +282,6 @@ function shown() {
 
 afterEach(() => {
   signalRHub.reset();
-  services.reset();
   vi.clearAllMocks();
   serverTurn = null;
   nextRead = "answers";

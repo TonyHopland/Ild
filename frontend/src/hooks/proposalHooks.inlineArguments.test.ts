@@ -5,17 +5,17 @@ import { boardHint, useProposalList } from "./useProposalList";
 import { usePendingProposalCount, type ProposalCountKind } from "./usePendingProposalCount";
 import * as signalRHook from "./useSignalR";
 import { WorkItemHubProvider } from "./useWorkItemHub";
-import { fakeHub, makeLoopTemplateProposal, routeHubs, type FakeHub } from "../test-support";
+import {
+  fakeHub,
+  makeLoopTemplateProposal,
+  routeHubs,
+  settle,
+  type FakeHub,
+} from "../test-support";
 
 // The generic proposal hooks take their description of the kind by value. A
 // caller that writes it inline makes a new one every render, and that must not
 // join or read again; a kind with another key is a different kind, and must.
-
-/** Lets React run whatever a settled read set off. */
-const settle = () =>
-  act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
 
 /** The hub the shared work-item connection is, for hooks rendered under the provider. */
 function sharedHub(): FakeHub {

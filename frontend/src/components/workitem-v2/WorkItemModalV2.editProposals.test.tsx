@@ -11,7 +11,7 @@ import {
   WorkItemStatus,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
-import { documentOrder, proposalCardAround } from "../../test-support";
+import { documentOrder, proposalCardAround, makeEditProposal } from "../../test-support";
 import * as authServices from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
@@ -73,10 +73,8 @@ function makeProposal(
   runNodeId: string | null,
   overrides: Partial<WorkItemEditProposal> = {},
 ): WorkItemEditProposal {
-  return {
+  return makeEditProposal({
     id: `p-${title}`,
-    workItemId: "wi-1",
-    status: "Pending",
     proposed: { title },
     snapshot: {
       title: "Old title",
@@ -85,16 +83,11 @@ function makeProposal(
       branchNameOverride: null,
       baseBranchOverride: null,
     },
-    rationale: null,
-    rejectionReason: null,
     createdByLoopRunId: "run-1",
-    createdByChatSessionId: null,
     createdByRunNodeId: runNodeId,
     chatReplySequence: null,
-    createdAt: "2026-09-26T10:00:00Z",
-    decidedAt: null,
     ...overrides,
-  };
+  });
 }
 
 function turn(

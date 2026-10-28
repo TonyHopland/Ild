@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, within, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { pressEscapeUntil } from "../../test-support";
+import { pressEscapeUntil, deferred, settle } from "../../test-support";
 import {
   WorkItemStatus,
   WorkItem,
@@ -682,20 +682,6 @@ describe("WorkItemModalV2", () => {
 
   function branchItem(overrides: Partial<WorkItem> = {}): WorkItem {
     return makeWorkItem({ branchName: LINKED_BRANCH, worktreePath: "/tmp/wt/wi-1", ...overrides });
-  }
-
-  function deferred<T>() {
-    let resolve!: (value: T) => void;
-    const promise = new Promise<T>((r) => {
-      resolve = r;
-    });
-    return { promise, resolve };
-  }
-
-  async function settle() {
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
-    });
   }
 
   function expectPlainBranch(name: string) {
@@ -2188,10 +2174,6 @@ describe("WorkItemModalV2 files tab", () => {
       imageBase64: null,
     });
     const { rerender } = await renderDialog(makeWorkItem({ worktreePath: "/tmp/wt/a" }));
-    const settle = () =>
-      act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
 
     await act(async () => {
       fireEvent.click(screen.getByRole("tab", { name: "Files" }));
@@ -2353,12 +2335,6 @@ describe("WorkItemModalV2 Runs tab run action refresh", () => {
 // Every control in the dialog that acts on a run waits for any other action on
 // that run, whichever tab or footer started it.
 describe("WorkItemModalV2 one action at a time per run", () => {
-  function settle<T = void>() {
-    let resolve!: (v: T) => void;
-    const promise = new Promise<T>((res) => (resolve = res));
-    return { promise, resolve };
-  }
-
   async function openRunsTab(run: LoopRun, item: Partial<WorkItem>) {
     mockServices([run]);
     await renderDialog(
@@ -2385,7 +2361,7 @@ describe("WorkItemModalV2 one action at a time per run", () => {
 
   test("a footer cleanup and a Runs-tab delete of the same run never overlap", async () => {
     await openRunsTab(makeRun(), {});
-    const cleanupDone = settle();
+    const cleanupDone = deferred();
     vi.spyOn(authServices.workItemService, "cleanupToDone").mockReturnValue(cleanupDone.promise);
     await findRunAction(/delete run/i);
 
@@ -2402,7 +2378,7 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     });
     await waitFor(() => expect((deleteRun() as HTMLButtonElement).disabled).toBe(false));
 
-    const deletion = settle();
+    const deletion = deferred();
     const remove = vi
       .spyOn(authServices.loopRunService, "delete")
       .mockReturnValue(deletion.promise);
@@ -2427,7 +2403,7 @@ describe("WorkItemModalV2 one action at a time per run", () => {
       isHalted: true,
     });
     await openRunsTab(halted, { humanFeedbackReason: "Human Input Needed" });
-    const deletion = settle();
+    const deletion = deferred();
     vi.spyOn(authServices.loopRunService, "delete").mockReturnValue(deletion.promise);
 
     fireEvent.click(await findRunAction(/delete run/i));

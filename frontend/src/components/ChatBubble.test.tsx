@@ -41,7 +41,6 @@ const provider: AiProvider = {
 
 afterEach(() => {
   signalRHub.reset();
-  services.reset();
   vi.clearAllMocks();
   // clearAllMocks keeps return-value implementations, so a per-test loop document
   // would leak into later tests; reset it back to "no loop open".

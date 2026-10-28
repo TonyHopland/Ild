@@ -10,6 +10,7 @@ import {
   reply,
   stubFetch,
   type Call,
+  routeEveryHub,
 } from "../../test-support";
 import type { GlobalVariableProposal } from "../../types";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
@@ -95,7 +96,7 @@ function stubApi(
 
 function mockHub() {
   const hub = fakeHub();
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
+  routeEveryHub(signalRHook, hub);
   return hub;
 }
 

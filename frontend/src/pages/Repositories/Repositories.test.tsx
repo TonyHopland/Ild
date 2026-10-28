@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import Repositories from "./index";
 import * as services from "../../services/auth";
-import { reply as respond, stubFetch, type Call } from "../../test-support";
+import { reply, stubFetch, type Call } from "../../test-support";
 
 // The feed list is its own request, made on mount; stubbing it keeps the queued
 // fetch responses below in step with the requests they answer.
@@ -76,30 +76,30 @@ describe("Repositories page", () => {
       const { method, path, body } = call;
       const one = /\/repositories\/([^/]+)$/.exec(path);
       const env = /\/repositories\/([^/]+)\/preview-env$/.exec(path);
-      if (path.endsWith("/remoteproviders")) return respond(200, [provider]);
-      if (path.endsWith("/repositories/inspect-remote")) return respond(200, server.inspection);
+      if (path.endsWith("/remoteproviders")) return reply(200, [provider]);
+      if (path.endsWith("/repositories/inspect-remote")) return reply(200, server.inspection);
       if (env && method === "GET")
         return typeof server.previewEnv === "string"
-          ? respond(200, { previewEnv: server.previewEnv })
+          ? reply(200, { previewEnv: server.previewEnv })
           : server.previewEnv;
       if (env && method === "DELETE")
-        return respond(200, { ...server.repos.find((r) => r.id === env[1]), hasPreviewEnv: false });
+        return reply(200, { ...server.repos.find((r) => r.id === env[1]), hasPreviewEnv: false });
       if (one && method === "PUT")
-        return respond(
+        return reply(
           200,
           server.repos.find((r) => r.id === one[1]),
         );
       if (one && method === "DELETE") {
         server.repos = server.repos.filter((r) => r.id !== one[1]);
-        return respond(204);
+        return reply(204);
       }
       if (path.endsWith("/repositories") && method === "POST") {
         const created = { ...repo("repo-new", String(body?.name)), ...body };
         server.repos = [...server.repos, created];
-        return respond(201, created);
+        return reply(201, created);
       }
-      if (path.endsWith("/repositories")) return respond(200, server.repos);
-      return respond(404);
+      if (path.endsWith("/repositories")) return reply(200, server.repos);
+      return reply(404);
     });
     return { server, calls };
   }
@@ -220,7 +220,7 @@ describe("Repositories page", () => {
   test("a Custom .env that cannot be read says so instead of looking unset", async () => {
     const { calls } = serve({
       repos: [storedRepo("repo-1", "my-repo", { hasPreviewEnv: true })],
-      previewEnv: respond(500),
+      previewEnv: reply(500),
     });
     renderPageOnly();
     await waitFor(() => expect(screen.getByText("my-repo")).toBeTruthy());
@@ -331,12 +331,6 @@ describe("Repositories page", () => {
   });
 });
 
-type FakeResponse = { ok: boolean; status: number; text: () => Promise<string> };
-
-function reply(body: unknown, status = 200): FakeResponse {
-  return { ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) };
-}
-
 const testProviders = [
   {
     id: "prov-1",
@@ -366,24 +360,25 @@ function repo(id: string, name: string) {
 /** Answers the page's list/update/.env calls from `state`; test calls go to `onTest`. */
 function routedFetch(
   state: { repos: Record<string, unknown>[] },
-  onTest: (id: string) => Promise<FakeResponse>,
+  onTest: (id: string) => Promise<Response>,
 ) {
   return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const test = /\/repositories\/([^/]+)\/test$/.exec(url);
     if (test && method === "POST") return onTest(test[1]);
     if (/\/repositories\/[^/]+\/preview-env$/.test(url))
-      return Promise.resolve(reply({ previewEnv: null }));
+      return Promise.resolve(reply(200, { previewEnv: null }));
     const one = /\/repositories\/([^/?]+)$/.exec(url);
     if (one && method === "PUT") {
       state.repos = state.repos.map((r) =>
         r.id === one[1] ? { ...r, updatedAt: new Date(Date.now() + 60_000).toISOString() } : r,
       );
-      return Promise.resolve(reply(state.repos.find((r) => r.id === one[1])));
+      const updated = state.repos.find((r) => r.id === one[1]);
+      return Promise.resolve(reply(200, updated));
     }
-    if (url.includes("/remoteproviders")) return Promise.resolve(reply(testProviders));
-    if (url.includes("/repositories")) return Promise.resolve(reply(state.repos));
-    return Promise.resolve(reply(null, 404));
+    if (url.includes("/remoteproviders")) return Promise.resolve(reply(200, testProviders));
+    if (url.includes("/repositories")) return Promise.resolve(reply(200, state.repos));
+    return Promise.resolve(reply(404));
   });
 }
 
@@ -396,7 +391,7 @@ describe("Repositories page — Test button", () => {
     const state = { repos: [repo("repo-1", "alpha-app"), repo("repo-2", "beta-app")] };
     const fetchMock = routedFetch(state, () =>
       Promise.resolve(
-        reply({
+        reply(200, {
           ok: false,
           outcome: "BranchMissing",
           message: "The default branch 'main' is not on the remote.",
@@ -428,7 +423,7 @@ describe("Repositories page — Test button", () => {
     renderPage(
       routedFetch(state, () =>
         Promise.resolve(
-          reply({ ok: true, outcome: "Ok", message: "Reached branch main.", detail: null }),
+          reply(200, { ok: true, outcome: "Ok", message: "Reached branch main.", detail: null }),
         ),
       ),
     );
@@ -449,28 +444,29 @@ describe("Repositories page — Test button", () => {
 /** The page's list/update/create/.env calls, plus the preview-data reset, answered from `state`. */
 function previewDataFetch(
   state: { repos: Record<string, unknown>[] },
-  onReset: (id: string) => Promise<FakeResponse> = () => Promise.resolve(reply({})),
+  onReset: (id: string) => Promise<Response> = () => Promise.resolve(reply(200, {})),
 ) {
   return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const reset = /\/storage\/preview-data\/([^/]+)$/.exec(url);
     if (reset && method === "DELETE") return onReset(reset[1]);
     if (/\/repositories\/[^/]+\/preview-env$/.test(url))
-      return Promise.resolve(reply({ previewEnv: null }));
+      return Promise.resolve(reply(200, { previewEnv: null }));
     const one = /\/repositories\/([^/?]+)$/.exec(url);
     if (one && method === "PUT") {
       const sent = JSON.parse(init?.body as string);
       state.repos = state.repos.map((r) => (r.id === one[1] ? { ...r, ...sent, id: r.id } : r));
-      return Promise.resolve(reply(state.repos.find((r) => r.id === one[1])));
+      const updated = state.repos.find((r) => r.id === one[1]);
+      return Promise.resolve(reply(200, updated));
     }
     if (url.endsWith("/repositories") && method === "POST") {
       const created = { ...repo("repo-new", "new-repo"), ...JSON.parse(init?.body as string) };
       state.repos = [...state.repos, created];
-      return Promise.resolve(reply(created, 201));
+      return Promise.resolve(reply(201, created));
     }
-    if (url.includes("/remoteproviders")) return Promise.resolve(reply(testProviders));
-    if (url.includes("/repositories")) return Promise.resolve(reply(state.repos));
-    return Promise.resolve(reply(null, 404));
+    if (url.includes("/remoteproviders")) return Promise.resolve(reply(200, testProviders));
+    if (url.includes("/repositories")) return Promise.resolve(reply(200, state.repos));
+    return Promise.resolve(reply(404));
   });
 }
 
@@ -575,7 +571,7 @@ describe("Repositories page — preview data", () => {
       ],
     };
     const fetchMock = previewDataFetch(state, () =>
-      Promise.resolve(reply({ error: refusal }, 409)),
+      Promise.resolve(reply(409, { error: refusal })),
     );
     renderPage(fetchMock);
     await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());

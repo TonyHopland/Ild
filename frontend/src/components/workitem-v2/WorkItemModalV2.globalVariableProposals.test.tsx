@@ -18,6 +18,8 @@ import {
   makeGlobalVariableProposal,
   reply,
   stubFetch,
+  makeEditProposal,
+  routeEveryHub,
 } from "../../test-support";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
@@ -91,10 +93,8 @@ function editProposal(
   runNodeId: string | null,
   createdAt: string,
 ): WorkItemEditProposal {
-  return {
+  return makeEditProposal({
     id: `p-${title}`,
-    workItemId: "wi-1",
-    status: "Pending",
     proposed: { title },
     snapshot: {
       title: "Old title",
@@ -103,15 +103,11 @@ function editProposal(
       branchNameOverride: null,
       baseBranchOverride: null,
     },
-    rationale: null,
-    rejectionReason: null,
     createdByLoopRunId: "run-1",
-    createdByChatSessionId: null,
     createdByRunNodeId: runNodeId,
     chatReplySequence: null,
     createdAt,
-    decidedAt: null,
-  };
+  });
 }
 
 let suggested = 0;
@@ -158,7 +154,7 @@ function mockServices(
   edits: WorkItemEditProposal[] = [],
 ) {
   const hub = fakeHub();
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
+  routeEveryHub(signalRHook, hub);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);

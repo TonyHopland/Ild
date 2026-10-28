@@ -11,8 +11,8 @@ export default defineConfig({
     ignorePatterns: ["frontend/dist/**", "dist/**"],
     options: { typeAware: true, typeCheck: true, denyWarnings: true },
   },
+  // The frontend's config owns how its tests run; `vp test` from here runs them that same way.
   test: {
-    environment: "jsdom",
-    exclude: ["**/data/repos/**", "**/node_modules/**", "**/dist/**"],
+    projects: ["frontend"],
   },
 });

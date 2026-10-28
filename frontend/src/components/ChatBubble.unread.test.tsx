@@ -37,7 +37,6 @@ const { chatService } = services;
 const server = chatServer(services);
 
 afterEach(() => {
-  server.reset();
   signalRHub.reset();
   vi.clearAllMocks();
   localStorage.clear();

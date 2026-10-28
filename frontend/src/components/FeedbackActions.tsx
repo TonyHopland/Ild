@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import Icon from "./Icon";
+import {
+  PR_MERGE,
+  answerStyleOf,
+  answerToneOf,
+  confirmToneOf,
+  outputLabel,
+  primaryAnswerOf,
+  visibleAnswersOf,
+  type Tone,
+} from "./feedbackAnswers";
 
 /**
  * An answer waiting on the person to confirm it: the button they pressed and
@@ -7,7 +17,7 @@ import Icon from "./Icon";
  */
 interface PendingAnswer {
   label: string;
-  tone: string;
+  tone: Tone;
   style: CSSProperties | undefined;
   send: () => void;
   askedUnder: (name: string) => boolean;
@@ -52,47 +62,6 @@ interface FeedbackActionsProps {
 // Tokens in the comma-separated actions string that map to the fixed
 // success/failure roles; everything else names one of the node's outputs.
 const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
-
-/** The label of the button for an output: the role's verb for the two defaults, otherwise the output's own name. */
-export const outputLabel = (name: string) =>
-  name === "OnSuccess" ? "Approve" : name === "OnFailure" ? "Reject" : name;
-
-// The PR merge in the list of buttons. It holds a comma, which no output name
-// can, as the actions string is split on commas: an output called "Merge" is
-// its own button.
-export const PR_MERGE = ",pr-merge";
-
-/** A button's look: one primary, Reject in danger, everything else secondary. */
-type Tone = "btn-primary" | "btn-secondary" | "btn-danger";
-
-/** The outputs listed in the actions string, in order, that the node shows. Nothing listed means Approve and Reject. */
-export function visibleAnswersOf(
-  actions: string | null | undefined,
-  isVisible: (name: string) => boolean,
-): string[] {
-  return (
-    actions
-      ? actions
-          .split(",")
-          .map((a) => a.trim())
-          .filter(Boolean)
-      : ["OnSuccess", "OnFailure"]
-  ).filter((name) => isVisible(name));
-}
-
-/** The one answer pushed over the others: the shown default, else the PR merge when offered. */
-export function primaryAnswerOf(shownDefault: string | null, withMerge: boolean): string | null {
-  return shownDefault ?? (withMerge ? PR_MERGE : null);
-}
-
-export function answerToneOf(name: string, primary: string | null): Tone {
-  return name === primary ? "btn-primary" : name === "OnFailure" ? "btn-danger" : "btn-secondary";
-}
-
-/** The button style that hands an output colour to the stylesheet, or none when it has no colour. */
-export function answerStyleOf(color: string | null | undefined): CSSProperties | undefined {
-  return color ? ({ "--output-color": color } as CSSProperties) : undefined;
-}
 
 /**
  * Renders the node's answers as buttons, from the comma-separated
@@ -153,7 +122,7 @@ export default function FeedbackActions({
     if (needsConfirm?.(name))
       setAsked({
         label: outputLabel(name),
-        tone: name === "OnFailure" ? "btn-danger" : "btn-primary",
+        tone: confirmToneOf(name),
         style: styleOf(name),
         send,
         askedUnder: needsConfirm,

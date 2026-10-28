@@ -36,4 +36,21 @@ describe("RunCostSummary", () => {
     expect(screen.getByText("12.3k")).toBeTruthy();
     expect(screen.getByText("4.0k")).toBeTruthy();
   });
+
+  test("renders tokens without a cost figure when cost was not reported", () => {
+    render(
+      <RunCostSummary
+        run={makeRun({ totalInputTokens: 50, totalOutputTokens: 10, totalCostUsd: null })}
+      />,
+    );
+
+    expect(screen.queryByText("cost")).toBeNull();
+    expect(screen.getByText("50")).toBeTruthy();
+    expect(screen.getByText("10")).toBeTruthy();
+  });
+
+  test("renders nothing when the run has no token or cost data", () => {
+    const { container } = render(<RunCostSummary run={makeRun()} />);
+    expect(container.firstChild).toBeNull();
+  });
 });

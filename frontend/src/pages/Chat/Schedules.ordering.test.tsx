@@ -1,12 +1,11 @@
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { ChatSchedule, ChatScheduleList } from "../../types";
 
-const { handlers, reads, chatScheduleService } = vi.hoisted(() => {
+const { reads, chatScheduleService } = vi.hoisted(() => {
   const reads: { resolve: (list: ChatScheduleList) => void }[] = [];
   return {
-    handlers: {} as Record<string, Set<() => void>>,
     reads,
     chatScheduleService: {
       list: vi.fn(
@@ -23,14 +22,9 @@ const { handlers, reads, chatScheduleService } = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: "disconnected",
-    on: (event: string, handler: () => void) => (handlers[event] ??= new Set()).add(handler),
-    off: (event: string, handler: () => void) => handlers[event]?.delete(handler),
-    invoke: () => Promise.resolve(),
-  }),
-}));
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
 
 vi.mock("../../services/auth", () => ({
   chatScheduleService,
@@ -40,6 +34,7 @@ vi.mock("../../services/auth", () => ({
 
 import Schedules from "./Schedules";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import { emitHubEvent, signalRHub } from "../../test-support";
 
 const schedule = (enabled: boolean): ChatSchedule => ({
   id: "s1",
@@ -62,10 +57,13 @@ const page = (enabled: boolean): ChatScheduleList => ({
   schedules: [schedule(enabled)],
 });
 
+// A hub that never connects, so the list is read only on mount and on a hint.
+beforeEach(() => signalRHub.setState("disconnected"));
+
 afterEach(() => {
   cleanup();
   reads.length = 0;
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   vi.clearAllMocks();
 });
 
@@ -85,7 +83,7 @@ describe("The schedules list's reads", () => {
     expect(toggle.checked).toBe(true);
 
     // A hint asks for a read, which is slow to answer.
-    act(() => handlers.ChatSchedulesChanged?.forEach((h) => h()));
+    emitHubEvent("ChatSchedulesChanged", {});
     await waitFor(() => expect(reads).toHaveLength(2));
 
     // The owner turns it off, and the server confirms.

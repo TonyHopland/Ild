@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import PromptEditor, { PLACEHOLDERS } from "./PromptEditor";
+import PromptEditor from "./PromptEditor";
 
 function setCursor(textarea: HTMLTextAreaElement, pos: number) {
   textarea.selectionStart = pos;
@@ -23,11 +23,30 @@ function typeInto(text: string, props: { globalNames?: string[] } = {}) {
 
 const suggestions = () => screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
 
+/** The placeholder each suggestion inserts, in the order they are listed. */
+const suggestedKeys = () => suggestions().map((text) => text.match(/\{\{[^}]*\}\}/)![0]);
+
+const BUILT_IN = [
+  "{{WorkItem.Title}}",
+  "{{WorkItem.Description}}",
+  "{{EventLog.Summary}}",
+  "{{EventLog.LastN}}",
+  "{{Node.Input}}",
+  "{{PreviousNode.Output}}",
+  "{{Conversation.Full}}",
+  "{{Conversation.AI}}",
+  "{{Conversation.Human}}",
+  "{{WorkTree.Diff}}",
+  "{{WorkTree.File:}}",
+  "{{Var.}}",
+  "{{Global.}}",
+];
+
 describe("PromptEditor", () => {
   test("typing {{ shows every placeholder suggestion", () => {
     typeInto("{{");
 
-    expect(suggestions()).toHaveLength(PLACEHOLDERS.length);
+    expect(suggestedKeys()).toEqual(BUILT_IN);
   });
 
   test.each([
@@ -103,18 +122,15 @@ describe("PromptEditor", () => {
   test("offers one entry per existing global variable, filtered and inserted like the rest", () => {
     const globalNames = ["review_rules", "writing"];
     const { textarea, onChange } = typeInto("{{", { globalNames });
-    const all = suggestions();
-    expect(all).toHaveLength(PLACEHOLDERS.length + globalNames.length);
-    expect(all.some((t) => t.includes("{{Global.review_rules}}"))).toBe(true);
-    expect(all.some((t) => t.includes("{{Global.writing}}"))).toBe(true);
+    expect(suggestedKeys()).toEqual([...BUILT_IN, "{{Global.review_rules}}", "{{Global.writing}}"]);
 
     setCursor(textarea, 4);
     fireEvent.change(textarea, { target: { value: "{{Gl" } });
-    expect(
-      suggestions()
-        .map((t) => t.match(/\{\{[^}]*\}\}/)![0])
-        .sort(),
-    ).toEqual(["{{Global.review_rules}}", "{{Global.writing}}", "{{Global.}}"]);
+    expect(suggestedKeys().sort()).toEqual([
+      "{{Global.review_rules}}",
+      "{{Global.writing}}",
+      "{{Global.}}",
+    ]);
 
     setCursor(textarea, 11);
     fireEvent.change(textarea, { target: { value: "{{Global.re" } });

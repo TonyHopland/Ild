@@ -7,6 +7,7 @@ import { formatBytes } from "../../utils/attachments";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import { deferred } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -46,16 +47,6 @@ function fileOfSize(name: string, bytes: number, type = "application/octet-strea
   const file = new File(["x"], name, { type });
   Object.defineProperty(file, "size", { value: bytes });
   return file;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 function mockServices() {
@@ -319,6 +310,33 @@ describe("a half-failed upload batch", () => {
 
     await waitFor(() => expect(screen.queryByRole("button", { name: "Update" })).toBeNull());
     expect(upload.mock.calls.map((c) => (c[1] as File).name)).toEqual(["a.png", "b.pdf", "b.pdf"]);
+  });
+
+  test("publishes the item as reread, with the files that did land", async () => {
+    mockServices();
+    const item = makeWorkItem();
+    const landed = { id: "att-1", fileName: "a.png", contentType: "image/png", sizeBytes: 10 };
+    vi.spyOn(authServices.workItemService, "update").mockResolvedValue(item);
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue({
+      ...item,
+      attachments: [landed],
+    });
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockImplementation(
+      (_id: string, file: File) =>
+        file.name === "b.pdf"
+          ? Promise.reject({ status: 503, message: "WorkItemServer unreachable" })
+          : Promise.resolve([landed]),
+    );
+    const onSave = vi.fn();
+    await renderDialog(item, { onSave });
+    await openEdit();
+    await waitForLimits();
+
+    await pick(fileOfSize("a.png", 10, "image/png"), fileOfSize("b.pdf", 10, "application/pdf"));
+    await click(screen.getByRole("button", { name: "Update" }));
+
+    await waitFor(() => expect(form().textContent).toContain("WorkItemServer unreachable"));
+    expect(onSave).toHaveBeenLastCalledWith({ ...item, attachments: [landed] });
   });
 
   test("a retry in create mode saves onto the item already created instead of a second one", async () => {

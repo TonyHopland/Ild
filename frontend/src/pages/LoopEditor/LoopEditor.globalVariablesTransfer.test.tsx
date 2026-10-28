@@ -19,6 +19,7 @@ vi.mock("../../hooks/useSignalR", () => ({
 
 import LoopEditor from "./index";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import { pressEscapeUntil } from "../../test-support";
 
 type Call = { method: string; path: string; body: any };
 type Stored = { id: string; name: string; value: string };
@@ -288,14 +289,14 @@ describe("Loop Editor — exporting global variables", () => {
       "the Cancel button",
       (d: HTMLElement) => fireEvent.click(within(d).getByRole("button", { name: "Cancel" })),
     ],
-    ["Escape", (d: HTMLElement) => fireEvent.keyDown(d, { key: "Escape" })],
+    ["Escape", () => pressEscapeUntil(() => expect(exportDialog()).toBeNull())],
     ["a click on the overlay", (d: HTMLElement) => fireEvent.mouseDown(d.parentElement!)],
   ])("%s cancels and downloads nothing", async (_label, cancel) => {
     await setup();
     clickExport();
     const dialog = await screen.findByRole("dialog", { name: "Include global variables" });
 
-    cancel(dialog);
+    await cancel(dialog);
 
     await waitFor(() => expect(exportDialog()).toBeNull());
     await act(async () => {});
@@ -421,7 +422,13 @@ describe("Loop Editor — importing global variables", () => {
       "Keep current",
       (d: HTMLElement) => fireEvent.click(within(d).getByRole("button", { name: "Keep current" })),
     ],
-    ["Escape", (d: HTMLElement) => fireEvent.keyDown(d, { key: "Escape" })],
+    [
+      "Escape",
+      () =>
+        pressEscapeUntil(() =>
+          expect(screen.queryByRole("dialog", { name: "Global variable conflict" })).toBeNull(),
+        ),
+    ],
     ["a click on the overlay", (d: HTMLElement) => fireEvent.mouseDown(d.parentElement!)],
   ])("%s keeps the current value and reports it as skipped", async (_label, keep) => {
     const server: Server = { globals: [stored("tone", "calm")] };
@@ -430,7 +437,7 @@ describe("Loop Editor — importing global variables", () => {
     ]);
     const dialog = await screen.findByRole("dialog", { name: "Global variable conflict" });
 
-    keep(dialog);
+    await keep(dialog);
 
     const rows = await results();
     expect(writes(calls)).toEqual([]);
