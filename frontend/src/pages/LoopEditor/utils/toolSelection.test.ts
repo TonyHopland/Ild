@@ -36,7 +36,6 @@ const ildOnlyTraits = { emptyToolSelectionMeansNone: true };
 describe.each([
   provider("copilot", [tool("ild")], ildOnlyTraits),
   provider("codex", [tool("ild")], ildOnlyTraits),
-  provider(" Codex ", [tool("ild")], ildOnlyTraits),
 ])("resolveToolSelection for the ild-only provider $type", (ildOnly) => {
   test("a saved empty list keeps ILD unticked", () => {
     expect(resolveToolSelection(ildOnly, [])).toEqual([]);

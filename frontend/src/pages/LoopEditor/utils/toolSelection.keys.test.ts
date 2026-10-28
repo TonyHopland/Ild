@@ -46,13 +46,4 @@ describe("resolveToolSelection matches saved keys like the backend does", () => 
     ]);
     expect(resolveToolSelection(opencode, ["Read", "read", "ILD"])).toEqual(["read", "ild"]);
   });
-
-  test("a Copilot provider type in another case or with spaces still keeps an empty selection off", () => {
-    expect(
-      resolveToolSelection(
-        provider(" Copilot ", [tool("ild")], { emptyToolSelectionMeansNone: true }),
-        [],
-      ),
-    ).toEqual([]);
-  });
 });

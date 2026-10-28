@@ -571,3 +571,105 @@ describe("a Review link to the template that is still open", () => {
     expect(calls.filter((c) => c.path === "/api/v1/loop-template-proposals/lp-1")).toHaveLength(1);
   });
 });
+
+describe("closing a review", () => {
+  const devLoopV2 = {
+    ...devLoop,
+    version: 2,
+    nodes: [
+      { id: "n-start", type: NodeType.Start, label: "Old Start", config: {} },
+      { id: "n-cleanup", type: NodeType.Cleanup, label: "Tidy Up", config: {} },
+    ],
+  };
+  const discardButton = () => screen.queryByRole("button", { name: "Discard" });
+  const shown = (label: string) => {
+    const flow = document.querySelector<HTMLElement>(".react-flow");
+    return flow !== null && within(flow).queryByText(label) !== null;
+  };
+
+  beforeEach(() => {
+    server.templates = [devLoop, docsLoop];
+    const base = answer;
+    answer = (call) => {
+      const { method, path } = call;
+      if (method === "GET" && path === "/api/v1/looptemplates")
+        return reply(
+          200,
+          server.templates.filter((t) => !t.isArchived),
+        );
+      if (method === "GET" && path === "/api/v1/looptemplates/tpl-1/versions")
+        return reply(
+          200,
+          [3, 2].map((versionNumber) => ({
+            id: `v-${versionNumber}`,
+            loopTemplateId: "tpl-1",
+            versionNumber,
+            createdAt: devLoop.createdAt,
+            nodeCount: 2,
+          })),
+        );
+      if (method === "GET" && path === "/api/v1/looptemplates/tpl-1/versions/2")
+        return reply(200, devLoopV2);
+      if (method === "POST" && path.endsWith("/archive")) {
+        const id = path.split("/")[4];
+        server.templates = server.templates.map((t) =>
+          t.id === id ? { ...t, isArchived: true } : t,
+        );
+        return reply(200);
+      }
+      return base(call);
+    };
+  });
+
+  test("viewing an old version ends the review and shows that version", async () => {
+    await openReview();
+
+    fireEvent.click(within(row("Dev Loop")).getByText("Versions"));
+    await screen.findByText("Version History");
+    fireEvent.click(screen.getByText("v2"));
+
+    await waitFor(() => expect(shown("Old Start")).toBe(true));
+    expect(shown("Run Linter")).toBe(false);
+    expect(discardButton()).toBeNull();
+  });
+
+  test("archiving the open template ends the review and empties the canvas", async () => {
+    await openReview();
+
+    fireEvent.click(within(row("Dev Loop")).getByText("Archive"));
+
+    await waitFor(() => expect(discardButton()).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByText("Select a template to view its graph")).toBeTruthy(),
+    );
+    expect(shown("Run Linter")).toBe(false);
+    expect(shown("Initialize")).toBe(false);
+  });
+
+  test("archiving another template leaves the review open", async () => {
+    await openReview();
+
+    fireEvent.click(within(row("Docs Loop")).getByText("Archive"));
+
+    await waitFor(() => expect(document.querySelectorAll(".loop-list-item").length).toBe(1));
+    expect(discardButton()).not.toBeNull();
+    expect(shown("Run Linter")).toBe(true);
+  });
+
+  test("Discard comes before Reject while pending, stays once the proposal is stale, and still goes back to the saved version", async () => {
+    await openReview();
+    const discard = screen.getByRole("button", { name: "Discard" });
+    const reject = screen.getByRole("button", { name: "Reject" });
+    expect(discard.compareDocumentPosition(reject) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    server.proposal = { ...server.proposal, status: "Stale", latestVersion: 4 };
+    emit("LoopTemplateProposalsChanged", { templateId: "tpl-1" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Reject" })).toBeNull());
+    expect(discardButton()).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(shown("Run Linter")).toBe(false));
+    expect(shown("Initialize")).toBe(true);
+    expect(discardButton()).toBeNull();
+  });
+});
