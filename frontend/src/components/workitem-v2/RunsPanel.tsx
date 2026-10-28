@@ -31,7 +31,7 @@ import RunCostSummary from "./RunCostSummary";
 import Icon from "../Icon";
 import MenuButton, { type MenuItem } from "../MenuButton";
 import { nodeStatusLabel, pillClass, runStatusLabel, runStatusTone } from "../../utils/labels";
-import { nodeTakesRetry, runOffersRetry, runTakesRetryNow } from "./retry";
+import { nodeRetryIsPrimary, nodeTakesRetry, runOffersRetry, runTakesRetryNow } from "./retry";
 import { runHasEnded } from "../../utils/runEnded";
 
 interface EffectiveInput {
@@ -237,7 +237,7 @@ function NodeRow({
         {onRetry && nodeTakesRetry(status, nodeType) && (
           <button
             type="button"
-            className={`btn btn-sm ${status === LoopRunNodeStatus.Failed ? "btn-primary" : "btn-ghost"} wiv2-node-retry`}
+            className={`btn btn-sm ${nodeRetryIsPrimary(status) ? "btn-primary" : "btn-ghost"} wiv2-node-retry`}
             disabled={retryDisabled}
             title="Retry from this node with the same input as last time"
             aria-label="Retry from this node"

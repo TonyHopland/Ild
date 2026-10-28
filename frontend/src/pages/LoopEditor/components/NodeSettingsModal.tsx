@@ -20,6 +20,8 @@ import {
   isReservedOutput,
   needsConfirmation,
   isDefaultOutput,
+  closedReasonOf,
+  outputControlsShown,
   outputsAreDerived,
   routedOutputNames,
   unroutedRows,
@@ -337,9 +339,6 @@ function ColorPicker({
 
 const outputRowClass = (visible: boolean) =>
   visible ? "match-rule-row" : "match-rule-row output-row-hidden";
-
-const closedReasonOf = (wired: boolean, visible: boolean) =>
-  !wired ? "no edge connected" : visible ? null : "hidden from user";
 
 /**
  * A node's outputs, rendered for Human and PR nodes. Each
@@ -855,7 +854,6 @@ export function NodeSettingsModal({
     cases: conditionCases,
     defaultEdge: conditionDefaultEdge,
   });
-  const parksForAPerson = selectedNodeType === NodeType.Human || selectedNodeType === NodeType.PR;
   const [pendingDelete, setPendingDelete] = useState<OutputRow | null>(null);
   const [confirmingSave, setConfirmingSave] = useState(false);
 
@@ -898,7 +896,7 @@ export function NodeSettingsModal({
     <OutputsEditor
       rows={outputRows}
       fixed={fixedOutputs}
-      successFailure={parksForAPerson ? successFailureOutputs : []}
+      successFailure={outputControlsShown(selectedNodeType) ? successFailureOutputs : []}
       wiredSuccessFailure={wiredSuccessFailure}
       wiredNames={wiredOutputs.map((edge) => edge.name)}
       nodeType={selectedNodeType}
