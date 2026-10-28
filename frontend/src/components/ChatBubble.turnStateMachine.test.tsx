@@ -3,6 +3,8 @@ import { screen, fireEvent, waitFor, act } from "@testing-library/react";
 import type { ChatMessage, ChatSession } from "../types";
 import {
   chatBubbleTree,
+  chatMessageOf,
+  chatSessionOf,
   chatSummary,
   emitChatEvent as emit,
   openChatFromList,
@@ -31,29 +33,11 @@ const { chatService, aiProviderService } = stubChatServices();
 
 const CHAT = "s1";
 
-function chatSession(activeTurnId: string | null, messages: ChatMessage[] = []): ChatSession {
-  return {
-    id: CHAT,
-    name: "Past chat",
-    aiProviderId: "p1",
-    providerType: "claude-code",
-    tools: ["ild"],
-    createdAt: "2026-01-01T00:00:00Z",
-    messages,
-    activeTurnId,
-  };
-}
+const chatSession = (activeTurnId: string | null, messages: ChatMessage[] = []) =>
+  chatSessionOf({ id: CHAT, activeTurnId, messages });
 
-function msg(id: string, content: string, interrupted = false): ChatMessage {
-  return {
-    id,
-    role: "assistant",
-    content,
-    interrupted,
-    sequence: Number(id.replace(/\D/g, "")) || 1,
-    createdAt: "2026-01-01T00:00:00Z",
-  };
-}
+const msg = (id: string, content: string, interrupted = false) =>
+  chatMessageOf({ id, content, interrupted, sequence: Number(id.replace(/\D/g, "")) || 1 });
 
 /** What the server would answer a state read with, until a step changes it. */
 let serverTurn: string | null = null;

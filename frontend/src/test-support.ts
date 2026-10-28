@@ -468,12 +468,9 @@ export function chatSession(
 /** A message with a random id; `partial` sets the fields a test cares about. */
 export function chatMessageOf(partial: Partial<ChatMessage> = {}): ChatMessage {
   return {
+    ...chatMessage("", partial.sequence ?? 0, partial.role ?? "assistant", partial.content ?? ""),
     id: partial.id ?? crypto.randomUUID(),
-    role: partial.role ?? "assistant",
-    content: partial.content ?? "",
     interrupted: partial.interrupted ?? false,
-    sequence: partial.sequence ?? 0,
-    createdAt: "2026-01-01T00:00:00Z",
   };
 }
 
@@ -493,7 +490,6 @@ export function chatSessionOf(partial: Partial<ChatSession> = {}): ChatSession {
 export async function openResumedChat(session: ChatSession, initialPath = "/") {
   vi.mocked(chatService.listHistory).mockResolvedValue([chatSummary(session.id, session.name)]);
   vi.mocked(chatService.getById).mockResolvedValue(session);
-  vi.mocked(aiProviderService.getAll).mockResolvedValue([]);
   const view = await renderChatBubble(initialPath);
   await openChatPanel();
   await resumeChat(session.name ?? "Untitled chat");
