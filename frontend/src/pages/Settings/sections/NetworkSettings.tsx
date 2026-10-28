@@ -812,6 +812,7 @@ export default function NetworkSettings() {
         <div className="net-banner">
           <strong>Network mode is Off.</strong> Agents launched in it can reach any host, including
           your LAN and cloud metadata, and nothing is logged.
+          {status?.enforcement === "enforced" && <> {status.reason}</>}
         </div>
       )}
       {listError && <div className="settings-error">{listError}</div>}

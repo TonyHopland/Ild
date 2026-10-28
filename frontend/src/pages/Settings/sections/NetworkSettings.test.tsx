@@ -921,6 +921,19 @@ describe("Network modes", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  test("the Off warning carries the firewall's own word on whether Off can reach the network", async () => {
+    const offUnavailable = {
+      ...enforced,
+      reason:
+        "Network mode Off is unavailable: it needs no-new-privileges; agents launched in it have no network.",
+    };
+    mockServices(offUnavailable, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const banner = (await screen.findByText(/Network mode is Off/)).closest("div")!;
+    expect(banner.textContent).toMatch(/Off is unavailable/);
+  });
+
   test("no Off warning in a mode that has a proxy", async () => {
     mockServices(enforced, "monitor");
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
