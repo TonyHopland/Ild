@@ -44,7 +44,7 @@ cd frontend && vp test --run src/utils/__tests__/workItemJson.test.ts   # single
 cd frontend && vp check                # format + lint + type-check
 ```
 
-.NET tests: `dotnet test ILD.Tests/ILD.Tests.csproj`.
+.NET tests: `dotnet test ILD.Tests/ILD.Tests.csproj`. A compiler or analyzer warning fails the build in every configuration, so fix it rather than suppress it.
 
 ## Changelog Entries
 
