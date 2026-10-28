@@ -150,6 +150,8 @@ public class ChatSidebarApiTests(SharedApiFactory factory) : IClassFixture<Share
     [Fact]
     public async Task Batch_delete_over_HTTP_removes_the_callers_listed_chats_and_leaves_everything_else()
     {
+        // Own host: it asserts the whole chat table after the delete.
+        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var first = Guid.NewGuid();
         var second = Guid.NewGuid();

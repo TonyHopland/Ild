@@ -16,6 +16,8 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     [Fact]
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
+        // Own host: it asserts the whole run list is empty.
+        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

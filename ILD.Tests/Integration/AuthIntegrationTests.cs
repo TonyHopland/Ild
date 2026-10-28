@@ -88,6 +88,8 @@ public class AuthIntegrationTests(SharedApiFactory factory) : IClassFixture<Shar
     [Fact]
     public async Task Sessions_lists_every_device_without_leaking_a_token()
     {
+        // Own host: it asserts the whole list of the admin's signed-in sessions.
+        await using var factory = new ApiFactory();
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktopToken = await factory.GetAdminTokenAsync();
 

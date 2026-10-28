@@ -9,6 +9,7 @@ namespace ILD.Tests.Integration;
 /// run.retentionDays: 14 on a fresh install, so a finished run lasts from one weekly
 /// retro to the next; an integer from 0 to 3650, where 0 deletes it at the next cleanup.
 /// </summary>
+// A host per test: it reads the host-wide retention setting on a fresh install.
 public class RunRetentionSettingsTests
 {
     private const string Key = "run.retentionDays";

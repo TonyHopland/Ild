@@ -23,6 +23,8 @@ public class ChatTitlesApiTests(SharedApiFactory factory) : IClassFixture<Shared
     [Fact]
     public async Task A_fresh_install_reports_smart_titles_off_with_no_tag_and_the_tag_can_be_cleared_again()
     {
+        // Own host: it reads and clears the host-wide title tag setting.
+        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var all = await client.GetFromJsonAsync<JsonElement[]>("/api/v1/settings", TestContext.Current.CancellationToken);

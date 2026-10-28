@@ -10,8 +10,7 @@ namespace ILD.Tests.Integration;
 
 /// <summary>
 /// A run's event log read back through the API: the events page keyed by event
-/// id, the conversation projected from those events, and the
-/// <c>{{Conversation.*}}</c> prompt variables built from that same projection.
+/// id and the conversation projected from those events.
 /// </summary>
 public class RunConversationApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {

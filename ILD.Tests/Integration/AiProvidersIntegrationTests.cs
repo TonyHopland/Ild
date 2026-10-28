@@ -238,7 +238,7 @@ public class AiProvidersIntegrationTests(SharedApiFactory factory) : IClassFixtu
         Assert.False(string.IsNullOrWhiteSpace(error));
         if (expected is not null) Assert.Contains(expected, error, StringComparison.OrdinalIgnoreCase);
         var all = await (await client.GetAsync("/api/v1/aiproviders", ct)).Content.ReadFromJsonAsync<JsonElement[]>(ct);
-        Assert.Empty(all!);
+        Assert.DoesNotContain(all!, p => p.GetProperty("name").GetString() == "Bad");
     }
 
     [Fact]
