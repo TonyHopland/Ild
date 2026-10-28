@@ -16,12 +16,18 @@ import type {
   NetworkPolicyEntry,
   NetworkStatus,
 } from "../../../types";
+import ConfirmModal from "../../../components/ConfirmModal";
 import { NumericSettingField, Segmented, SettingRow, Switch } from "../controls";
 
 const MODES: { value: NetworkMode; label: string; help: string }[] = [
   {
     value: "off",
     label: "Off",
+    help: "Agents connect directly to any host and port, with no proxy. Nothing is logged and neither list is in effect.",
+  },
+  {
+    value: "monitor",
+    label: "Monitor",
     help: "Every destination is logged and nothing is blocked. Neither list is in effect.",
   },
   {
@@ -56,7 +62,12 @@ function normalizeLogEntry(entry: NetworkLogEntry): NetworkLogEntry {
 }
 
 function isMode(value: string): value is NetworkMode {
-  return value === "off" || value === "whitelist" || value === "blacklist";
+  return value === "off" || value === "monitor" || value === "whitelist" || value === "blacklist";
+}
+
+/** Whether a rule of this kind is in effect; before the mode has loaded, none is marked as ignored. */
+function listInEffect(mode: NetworkMode | null, kind: "whitelist" | "blacklist"): boolean {
+  return (mode !== "whitelist" && mode !== "blacklist") || mode === kind;
 }
 
 function describeError(err: unknown, fallback: string): string {
@@ -117,7 +128,7 @@ export function groupConsecutive(entries: NetworkLogEntry[]): LogGroup[] {
 interface RuleTableProps {
   entries: NetworkPolicyEntry[];
   providers: AiProvider[];
-  mode: NetworkMode;
+  mode: NetworkMode | null;
   /** True when a filter is hiding rules, so "none" reads as "none matching". */
   filtered: boolean;
   onRemove: (id: string) => Promise<void>;
@@ -144,9 +155,9 @@ function RuleTable({ entries, providers, mode, filtered, onRemove }: RuleTablePr
       <tbody>
         {entries.map((entry) => {
           const kind = entry.listKind === "Whitelist" ? "whitelist" : "blacklist";
-          // With filtering off nothing is in effect, and saying so on every row
+          // Without a list mode nothing is in effect, and saying so on every row
           // is noise; the card says it once instead.
-          const inEffect = mode === "off" || mode === kind;
+          const inEffect = listInEffect(mode, kind);
           return (
             <tr key={entry.id} className={inEffect ? "" : "net-row-idle"}>
               <td>
@@ -522,7 +533,8 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
 export default function NetworkSettings() {
   const { on, off } = useSharedWorkItemHub();
   const [status, setStatus] = useState<NetworkStatus | null>(null);
-  const [mode, setMode] = useState<NetworkMode>("off");
+  const [mode, setMode] = useState<NetworkMode | null>(null);
+  const [confirmingOff, setConfirmingOff] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
   const [entries, setEntries] = useState<NetworkPolicyEntry[]>([]);
   const [forwards, setForwards] = useState<NetworkForward[]>([]);
@@ -661,6 +673,11 @@ export default function NetworkSettings() {
     }
   };
 
+  const chooseMode = (next: NetworkMode) => {
+    if (next === "off" && mode !== "off") setConfirmingOff(true);
+    else void changeMode(next);
+  };
+
   const saveInternalAllow = async () => {
     setInternalBusy(true);
     setInternalError(null);
@@ -774,6 +791,7 @@ export default function NetworkSettings() {
   const ruleFor = (host: string) => entries.find((e) => coversHost(e.host, host));
 
   const activeMode = MODES.find((m) => m.value === mode);
+  const filtering = mode === "whitelist" || mode === "blacklist";
   const inEffect = entries.filter(
     (e) => (e.listKind === "Whitelist" ? "whitelist" : "blacklist") === mode,
   ).length;
@@ -790,6 +808,12 @@ export default function NetworkSettings() {
           <strong>Advisory mode — agent network limits are not enforced.</strong> {status.reason}
         </div>
       )}
+      {mode === "off" && (
+        <div className="net-banner">
+          <strong>Network mode is Off.</strong> Agents launched in it can reach any host, including
+          your LAN and cloud metadata, and nothing is logged.
+        </div>
+      )}
       {listError && <div className="settings-error">{listError}</div>}
 
       <section className="settings-card">
@@ -800,9 +824,13 @@ export default function NetworkSettings() {
           label="Mode"
           help={
             <>
-              {activeMode?.help} A change applies to the agent&apos;s next connection; nothing needs
-              a restart.
-              {mode !== "off" && (
+              {activeMode?.help} Switching to or from Off applies to the next agent launch; running
+              agents keep the network they started with. A change between Monitor, Whitelist and
+              Blacklist, or to a list, applies to the next connection; nothing needs a restart.
+              {status && status.enforcement !== "enforced" && (
+                <> Without the firewall, Off and Monitor differ only in logging.</>
+              )}
+              {filtering && (
                 <>
                   {" "}
                   <strong>{inEffect}</strong> {inEffect === 1 ? "rule is" : "rules are"} in effect.
@@ -815,19 +843,36 @@ export default function NetworkSettings() {
           <Segmented
             label="Filter mode"
             value={mode}
-            onChange={(v) => void changeMode(v)}
+            onChange={chooseMode}
             options={MODES.map((m) => ({ value: m.value, label: m.label }))}
           />
         </SettingRow>
       </section>
 
+      <ConfirmModal
+        isOpen={confirmingOff}
+        title="Turn the network proxy off?"
+        message="Agents launched from now on connect directly: agents can reach any host, including your LAN and cloud metadata, and nothing is logged. Agents already running keep the network they started with."
+        confirmText="Turn off"
+        onCancel={() => setConfirmingOff(false)}
+        onConfirm={() => {
+          setConfirmingOff(false);
+          void changeMode("off");
+        }}
+      />
+
       <section className="settings-card">
         <div className="settings-card-header">
           <h3 className="settings-card-title">Rules</h3>
         </div>
-        {mode === "off" && (
+        {mode === "monitor" && (
           <p className="settings-card-note">
             Filtering is off, so no rule is in effect. Every destination is logged.
+          </p>
+        )}
+        {mode === "off" && (
+          <p className="settings-card-note">
+            Agents bypass the proxy, so no rule is in effect and nothing is logged.
           </p>
         )}
         <div className="net-toolbar">
