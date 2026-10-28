@@ -135,6 +135,8 @@ public class RemoteMergeExpectedHeadTests
         Assert.True(await service.MergePullRequestAsync(AzureRepo, "7"));
 
         Assert.Equal(2, handler.Calls.Count);
+        Assert.Equal(HttpMethod.Patch, handler.Calls[1].Method);
+        Assert.Contains("\"status\":\"completed\"", handler.Calls[1].Body);
         Assert.Contains("\"commitId\":\"current\"", handler.Calls[1].Body);
     }
 

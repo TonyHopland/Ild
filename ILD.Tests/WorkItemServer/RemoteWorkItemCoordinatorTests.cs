@@ -59,39 +59,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         engine.Verify(e => e.StartRunAsync(ready.Id, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    [Fact]
-    public async Task Escalates_to_humanfeedback_when_no_template_matches()
-    {
-        var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "unknown");
-        RemoteTransitionRequest? captured = null;
-
-        var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
-              .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
-        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
-              .Callback<WorkItemServerOptions, string, RemoteTransitionRequest, WorkItemActor, CancellationToken>((_, _, r, _, _) => captured = r)
-              .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.HumanFeedback });
-
-        var engine = new Mock<ILoopEngine>();
-        var resolver = new Mock<ILoopTemplateResolver>();
-        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
-                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.None, null, Array.Empty<string>()));
-
-        var runs = NoLiveRunsMock();
-        var notifier = new Mock<IWorkItemNotifier>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object, TestActors.Instance,
-            workItemNotifier: notifier.Object);
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
-
-        Assert.Single(result.EscalatedToHumanFeedback);
-        Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
-        runs.Verify(s => s.SetWorkItemStatusReasonAsync(ready.Id, It.Is<string>(r => r.Contains("No loop"))), Times.Once);
-        notifier.Verify(n => n.WorkItemStateChangedAsync(ready.Id,
-            RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.HumanFeedback), Times.Once);
-    }
-
-    [Fact]
-    public async Task Escalates_when_multiple_templates_match()
+    [Theory]
+    [InlineData(LoopTemplateResolutionKind.None, "No loop")]
+    [InlineData(LoopTemplateResolutionKind.Ambiguous, "Multiple loop templates")]
+    public async Task Escalates_to_humanfeedback_when_the_template_does_not_resolve_uniquely(
+        LoopTemplateResolutionKind kind, string reason)
     {
         var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build", "deploy");
         RemoteTransitionRequest? captured = null;
@@ -106,15 +78,19 @@ public sealed class RemoteWorkItemCoordinatorTests
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
-                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Ambiguous, null, new[] { "build", "deploy" }));
+                .Returns(new LoopTemplateResolution(kind, null, new[] { "build", "deploy" }));
 
         var runs = NoLiveRunsMock();
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object, TestActors.Instance);
+        var notifier = new Mock<IWorkItemNotifier>();
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object, TestActors.Instance,
+            workItemNotifier: notifier.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.EscalatedToHumanFeedback);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
-        runs.Verify(s => s.SetWorkItemStatusReasonAsync(ready.Id, It.Is<string>(r => r.Contains("Multiple loop templates"))), Times.Once);
+        runs.Verify(s => s.SetWorkItemStatusReasonAsync(ready.Id, It.Is<string>(r => r.Contains(reason))), Times.Once);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(ready.Id,
+            RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.HumanFeedback), Times.Once);
     }
 
     [Theory]

@@ -1,7 +1,5 @@
-using System.Net;
-using System.Reflection;
 using System.Web;
-using ILD.McpServer;
+using ILD.Tests.Fakes;
 
 namespace ILD.Tests;
 
@@ -12,44 +10,11 @@ namespace ILD.Tests;
 /// </summary>
 public class LoopRetroToolsTests
 {
-    private const string BaseAddress = "http://ild-host:8080/";
-
     private static async Task<HttpRequestMessage> InvokeToolAsync(string toolName, IReadOnlyDictionary<string, object?> args)
     {
-        HttpRequestMessage? seen = null;
-        var handler = new StubHandler(req =>
-        {
-            seen = req;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") });
-        });
-        var ild = new IldClient(
-            new HttpClient(handler) { BaseAddress = new Uri(BaseAddress) },
-            new IldClientOptions(BaseAddress.TrimEnd('/'), "the-agent-token", LoopRunId: null));
-
-        var method = typeof(ILD.McpServer.Tools.ListingTools).Assembly.GetTypes()
-            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-            .Single(m => m.CustomAttributes.Any(a =>
-                a.AttributeType.Name == "McpServerToolAttribute"
-                && a.NamedArguments.Any(n => n.MemberName == "Name" && (string?)n.TypedValue.Value == toolName)));
-        var tools = Activator.CreateInstance(method.DeclaringType!, ild)!;
-        var parameters = method.GetParameters();
-        Assert.All(args.Keys, name => Assert.Contains(parameters, p => p.Name == name));
-        var values = parameters
-            .Select(p => args.TryGetValue(p.Name!, out var v) ? ConvertTo(v, p.ParameterType) : p.HasDefaultValue ? p.DefaultValue : null)
-            .ToArray();
-
-        await (Task<string>)method.Invoke(tools, values)!;
-        Assert.NotNull(seen);
-        Assert.Equal(HttpMethod.Get, seen.Method);
-        return seen;
-    }
-
-    private static object? ConvertTo(object? value, Type type)
-    {
-        if (value is null) return null;
-        var target = Nullable.GetUnderlyingType(type) ?? type;
-        return target == typeof(string) ? Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)
-            : Convert.ChangeType(value, target, System.Globalization.CultureInfo.InvariantCulture);
+        var (_, request, _) = await McpToolInvoker.InvokeAsync(toolName, args);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        return request;
     }
 
     private static (string Path, Dictionary<string, string?> Query) Split(HttpRequestMessage request)
@@ -131,11 +96,5 @@ public class LoopRetroToolsTests
         Assert.Equal(templateId, query["templateId"]);
         Assert.Equal("10", query["skip"]);
         Assert.Equal("20", query["take"]);
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => respond(request);
     }
 }
