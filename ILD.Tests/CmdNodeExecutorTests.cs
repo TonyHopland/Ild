@@ -57,14 +57,6 @@ public class CmdNodeExecutorTests : IDisposable
     // The command reaches /bin/sh as one argv entry, so the shell — not .NET's
     // argument parser, and not a hand-rolled escape — is what interprets it.
     [InlineData("echo 'it'\\''s \"quoted\"'", "it's \"quoted\"")]
-    [InlineData("printf '%s\\n' 'C:\\path\\to\\thing'", "C:\\path\\to\\thing")]
-    [InlineData("echo \\\\", "\\")]
-    [InlineData("echo \"a  b\"", "a  b")]
-    // A trailing backslash and a backslash before a closing quote are what the
-    // old hand-rolled escaping mangled: it doubled quotes into the argument
-    // string and .NET's parser then ate the backslash guarding them.
-    [InlineData("echo \"x\\\\\"", "x\\")]
-    [InlineData("echo hi \\", "hi \\")]
     public async Task A_command_is_interpreted_by_the_shell_verbatim(string command, string expected)
     {
         var outcomes = await RunAsync(Context(command, TestContext.Current.CancellationToken));

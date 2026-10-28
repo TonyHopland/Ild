@@ -307,11 +307,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
             "done\n" +
             "echo 'done'\n" +
             $"exit {exitCode}\n");
-        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(script);
-        using var chmod = Process.Start(psi)!;
-        chmod.WaitForExit();
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
     }
 }

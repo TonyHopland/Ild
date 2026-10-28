@@ -69,8 +69,7 @@ public sealed class ManagedAgentCommandEnvironmentTests : IDisposable
         var binary = ManagedAgentInstall.BinaryIn(ManagedAgentInstall.VersionDir(_dataRoot, agent, "v1"), agent);
         Directory.CreateDirectory(Path.GetDirectoryName(binary)!);
         File.WriteAllText(binary, $"#!/bin/sh\necho launched > '{marker}'\n");
-        using (var chmod = Process.Start("chmod", ["+x", binary]))
-            chmod.WaitForExit();
+        File.SetUnixFileMode(binary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         File.WriteAllText(ManagedAgentInstall.PointerFile(_dataRoot, agent), "v1");
     }
 }

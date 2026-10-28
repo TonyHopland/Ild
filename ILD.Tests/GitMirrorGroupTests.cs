@@ -92,7 +92,7 @@ public class GitMirrorGroupTests : IDisposable
         using (made!) path = made!.Path;
         var primary = Run("id", "-g");
         Run("chgrp", "-R", primary, root);
-        Run("chmod", "g-s", root);
+        File.SetUnixFileMode(root, File.GetUnixFileMode(root) & ~UnixFileMode.SetGroup);
         Assert.Equal(primary, GroupOf(Path.Combine(path, "HEAD")));
 
         var (session, error) = await NewMirror(root, group).OpenAsync(Remote, TestContext.Current.CancellationToken);
@@ -154,7 +154,7 @@ public class GitMirrorGroupTests : IDisposable
         var root = Path.Combine(_tmp, "mirrors");
         Directory.CreateDirectory(root);
         Run("chgrp", group, root);
-        Run("chmod", "2750", root);
+        File.SetUnixFileMode(root, UnixFileMode.SetGroup | UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
 
         var (session, error) = await NewMirror(root, null).OpenAsync(Remote, TestContext.Current.CancellationToken);
 
@@ -174,7 +174,7 @@ public class GitMirrorGroupTests : IDisposable
         if (!OperatingSystem.IsLinux()) Assert.Skip("groups are a Linux filesystem behaviour");
         var root = Path.Combine(_tmp, "mirrors");
         Directory.CreateDirectory(root);
-        Run("chmod", "750", root);
+        File.SetUnixFileMode(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
 
         var (session, error) = await NewMirror(root, null).OpenAsync(Remote, TestContext.Current.CancellationToken);
 

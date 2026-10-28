@@ -551,17 +551,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     public async Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default)
     {
-        var match = PreviewHostLabelRegex.Match(hostLabel?.Trim() ?? string.Empty);
-        if (!match.Success)
+        if (!TryParsePreviewHostLabel(hostLabel, out var workItemId, out var serviceName))
         {
             return PreviewTarget.Failed(
                 PreviewTargetOutcome.NotAPreviewHost,
                 $"'{hostLabel}' is not a worktree preview hostname. Previews are served from "
                 + "wi-<workItemId> (the service marked \"public\": true) or wi-<workItemId>-<serviceName>.");
         }
-
-        var workItemId = match.Groups["id"].Value;
-        var serviceName = match.Groups["service"].Success ? match.Groups["service"].Value : null;
 
         var workItem = await workItems.GetWorkItemAsync(workItemId);
         if (workItem == null)
@@ -587,11 +583,37 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 + "Start it from the work item's Preview tab.");
         }
 
-        ManagedPreviewProcess? process;
+        var rows = runtime.Processes
+            .Select(p => new PreviewServiceRow(
+                p.Service.Name, p.Service.Public, p.Service.RewriteHost, p.IsRunning,
+                runtime.Ports.TryGetValue(p.Service.Port, out var port) ? port : 0))
+            .ToList();
+        return SelectPreviewTarget(workItemId, serviceName, rows);
+    }
+
+    /// <summary>Splits a preview hostname's leading label into its work item id and optional service name.</summary>
+    internal static bool TryParsePreviewHostLabel(string? label, out string workItemId, out string? serviceName)
+    {
+        var match = PreviewHostLabelRegex.Match(label?.Trim() ?? string.Empty);
+        workItemId = match.Success ? match.Groups["id"].Value : string.Empty;
+        serviceName = match.Success && match.Groups["service"].Success ? match.Groups["service"].Value : null;
+        return match.Success;
+    }
+
+    /// <summary>One service of a running preview, as the proxy's target choice sees it.</summary>
+    internal sealed record PreviewServiceRow(string Name, bool Public, bool RewriteHost, bool IsRunning, int Port);
+
+    /// <summary>
+    /// Picks the service a preview hostname addresses: the named one, or with no name
+    /// the single running service marked public.
+    /// </summary>
+    internal static PreviewTarget SelectPreviewTarget(string workItemId, string? serviceName, IReadOnlyList<PreviewServiceRow> rows)
+    {
+        PreviewServiceRow? row;
         if (serviceName == null)
         {
-            var publicProcesses = runtime.Processes.Where(p => p.Service.Public && p.IsRunning).ToList();
-            if (publicProcesses.Count == 0)
+            var publicRows = rows.Where(r => r.Public && r.IsRunning).ToList();
+            if (publicRows.Count == 0)
             {
                 return PreviewTarget.Failed(
                     PreviewTargetOutcome.ServiceNotRunning,
@@ -601,21 +623,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
             // Picking the first would silently serve one of them under a hostname
             // that just as fairly describes the others.
-            if (publicProcesses.Count > 1)
+            if (publicRows.Count > 1)
             {
-                var names = string.Join(", ", publicProcesses.Select(p => $"wi-{workItemId}-{p.Service.Name}"));
+                var names = string.Join(", ", publicRows.Select(r => $"wi-{workItemId}-{r.Name}"));
                 return PreviewTarget.Failed(
                     PreviewTargetOutcome.AmbiguousService,
-                    $"Work item {workItemId}'s preview is running {publicProcesses.Count} services marked "
+                    $"Work item {workItemId}'s preview is running {publicRows.Count} services marked "
                     + $"\"public\": true, so this hostname does not name one. Use {names}.");
             }
 
-            process = publicProcesses[0];
+            row = publicRows[0];
         }
         else
         {
-            process = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, serviceName, StringComparison.OrdinalIgnoreCase));
-            if (process == null || !process.IsRunning)
+            row = rows.FirstOrDefault(r => string.Equals(r.Name, serviceName, StringComparison.OrdinalIgnoreCase));
+            if (row == null || !row.IsRunning)
             {
                 return PreviewTarget.Failed(
                     PreviewTargetOutcome.ServiceNotRunning,
@@ -623,14 +645,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             }
         }
 
-        if (!runtime.Ports.TryGetValue(process.Service.Port, out var port) || port <= 0)
+        if (row.Port <= 0)
         {
             return PreviewTarget.Failed(
                 PreviewTargetOutcome.ServiceNotRunning,
-                $"Preview service '{process.Service.Name}' has no port allocated for alias '{process.Service.Port}'.");
+                $"Preview service '{row.Name}' has no port allocated.");
         }
 
-        return PreviewTarget.Resolved(port, process.Service.Name, process.Service.RewriteHost);
+        return PreviewTarget.Resolved(row.Port, row.Name, row.RewriteHost);
     }
 
     public void Dispose()
@@ -1288,16 +1310,23 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// </para>
     /// </summary>
     private string? BuildPublicUrl(PreviewServiceConfig service, PreviewRuntime runtime, int? port, bool singlePublicService)
+        => ComposePublicUrl(
+            ResolveOptionalTemplate(service.PublicUrl, runtime, service.Port),
+            _proxyBase, runtime.WorkItemId, service.Name, runtime.PublicHost, port, singlePublicService);
+
+    /// <summary>The precedence of <see cref="BuildPublicUrl"/> over values already resolved.</summary>
+    internal static string? ComposePublicUrl(
+        string? authoredUrl, PreviewProxyBase proxyBase, string? workItemId, string serviceName,
+        string publicHost, int? port, bool singlePublicService)
     {
-        var authored = ResolveOptionalTemplate(service.PublicUrl, runtime, service.Port);
-        if (authored != null)
-            return authored;
+        if (authoredUrl != null)
+            return authoredUrl;
 
-        var proxyLabel = BuildPreviewHostLabel(runtime.WorkItemId, singlePublicService ? null : service.Name);
-        if (_proxyBase.Enabled && proxyLabel != null)
-            return _proxyBase.BuildUrl(proxyLabel);
+        var proxyLabel = BuildPreviewHostLabel(workItemId, singlePublicService ? null : serviceName);
+        if (proxyBase.Enabled && proxyLabel != null)
+            return proxyBase.BuildUrl(proxyLabel);
 
-        return port is int allocated ? $"http://{runtime.PublicHost}:{allocated}" : null;
+        return port is int allocated ? $"http://{publicHost}:{allocated}" : null;
     }
 
     /// <summary>
@@ -1305,7 +1334,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// formed — no work item id, or a service name that is not a legal DNS label
     /// (which <c>ild.config.json</c> does not otherwise constrain).
     /// </summary>
-    private static string? BuildPreviewHostLabel(string? workItemId, string? serviceName)
+    internal static string? BuildPreviewHostLabel(string? workItemId, string? serviceName)
     {
         if (string.IsNullOrWhiteSpace(workItemId))
             return null;
@@ -1498,44 +1527,62 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         IReadOnlyDictionary<string, string> feedEnvironment, CancellationToken cancellationToken)
     {
         var workingDirectory = await ResolveWorkingDirectoryAsync(step.Cwd, runtime, currentPortAlias, cancellationToken);
-        var environment = BuildDefaultEnvironment(runtime.StateDirectory);
-
-        // Precedence: base defaults < per-service ild.config env < repo custom .env
-        // < package feed credentials.
-        // The committed config is the profile's default; the repo's .env is what the
-        // human who owns the repository typed for this deployment, so it wins — every
-        // key in it was set deliberately, and a value it cannot override is a value
-        // they cannot correct without editing the agent-writable worktree.
-        // The cost of that is worth knowing: a stale .env line shadows a computed
-        // ${PORT:...} value just as readily as an intended one (docs/configuration.md).
-        if (step.Env != null)
-        {
-            foreach (var entry in step.Env)
-            {
-                environment[entry.Key] = ResolveTemplate(entry.Value, runtime, currentPortAlias);
-            }
-        }
-
-        // Custom values are injected verbatim — they are user-authored secrets, not
-        // ${PORT:...} templates, so they must not go through ResolveTemplate: a
-        // password containing ${...} would otherwise be rewritten, or rejected
-        // outright as an unsupported token, for looking like something it isn't.
-        foreach (var entry in runtime.CustomEnv)
-        {
-            environment[entry.Key] = entry.Value;
-        }
-
-        // Last of all: the selected package feeds' credentials name a file only this
-        // runtime can put in place, so nothing typed anywhere may repoint them.
-        foreach (var entry in feedEnvironment)
-        {
-            environment[entry.Key] = entry.Value;
-        }
+        var environment = MergePreviewEnvironment(
+            BuildDefaultEnvironment(runtime.StateDirectory),
+            step.Env,
+            value => ResolveTemplate(value, runtime, currentPortAlias),
+            runtime.CustomEnv,
+            feedEnvironment);
 
         return new ResolvedStep(
             ResolveTemplate(step.Command, runtime, currentPortAlias),
             workingDirectory,
             environment);
+    }
+
+    /// <summary>
+    /// Layers a step's environment onto <paramref name="defaults"/>, which it returns.
+    /// Precedence: base defaults &lt; per-service ild.config env (templated) &lt; repo
+    /// custom .env (verbatim) &lt; package feed credentials.
+    /// The committed config is the profile's default; the repo's .env is what the
+    /// human who owns the repository typed for this deployment, so it wins — every
+    /// key in it was set deliberately, and a value it cannot override is a value
+    /// they cannot correct without editing the agent-writable worktree.
+    /// The cost of that is worth knowing: a stale .env line shadows a computed
+    /// ${PORT:...} value just as readily as an intended one (docs/configuration.md).
+    /// </summary>
+    internal static Dictionary<string, string> MergePreviewEnvironment(
+        Dictionary<string, string> defaults,
+        IReadOnlyDictionary<string, string>? configEnv,
+        Func<string, string> resolveTemplate,
+        IReadOnlyDictionary<string, string> customEnv,
+        IReadOnlyDictionary<string, string> feedEnv)
+    {
+        if (configEnv != null)
+        {
+            foreach (var entry in configEnv)
+            {
+                defaults[entry.Key] = resolveTemplate(entry.Value);
+            }
+        }
+
+        // Custom values are injected verbatim — they are user-authored secrets, not
+        // ${PORT:...} templates, so they must not go through resolveTemplate: a
+        // password containing ${...} would otherwise be rewritten, or rejected
+        // outright as an unsupported token, for looking like something it isn't.
+        foreach (var entry in customEnv)
+        {
+            defaults[entry.Key] = entry.Value;
+        }
+
+        // Last of all: the selected package feeds' credentials name a file only this
+        // runtime can put in place, so nothing typed anywhere may repoint them.
+        foreach (var entry in feedEnv)
+        {
+            defaults[entry.Key] = entry.Value;
+        }
+
+        return defaults;
     }
 
     /// <summary>

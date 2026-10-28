@@ -83,7 +83,7 @@ internal sealed class PromptCapturingCli : IDisposable
                 : string.Empty);
 
         File.WriteAllText(BinaryPath, "#!/bin/sh\n" + record + recordPerInvocation + turn);
-        Process.Start("chmod", "+x " + BinaryPath)!.WaitForExit();
+        File.SetUnixFileMode(BinaryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
     /// <summary>The prompt the CLI process was actually handed.</summary>

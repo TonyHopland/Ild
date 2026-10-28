@@ -605,8 +605,12 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     private static async Task WaitForExitAsync(WorktreePreviewService service, string worktree)
     {
         // The service is "exit 0": its exit is immediate, and the state says when it is seen.
-        while ((await service.GetStatusAsync(worktree, Ct)).State != "failed")
-            await Task.Yield();
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            if ((await service.GetStatusAsync(worktree, Ct)).State == "failed") return;
+            await Task.Delay(50, Ct);
+        }
+        Assert.Equal("failed", (await service.GetStatusAsync(worktree, Ct)).State);
     }
 
     /// <summary>

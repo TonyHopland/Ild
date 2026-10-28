@@ -134,42 +134,49 @@ public sealed class PiAdapter : CliAgentAdapterBase
             if (ctx.ManageSession && process.ExitCode == 0 && !string.IsNullOrWhiteSpace(effectiveSessionId))
                 await PersistManagedSessionAsync(sessionDirectory, effectiveSessionId!, ctx);
 
-            var response = stdout.Content;
-            if (string.IsNullOrWhiteSpace(response))
-            {
-                if (!stdout.SawJsonEvents)
-                    response = stdout.RawStdout;
-                else if (!string.IsNullOrWhiteSpace(stderr))
-                    response = $"[pi] no assistant text response. stderr: {stderr.Trim()}";
-                else
-                    response = "[pi] no assistant text response from model";
-            }
-
-            // Pi sometimes exits 0 mid-turn (e.g. provider closed the stream
-            // early) leaving the assistant message truncated. Without a
-            // message_end/turn_end marker we cannot trust the partial text as
-            // the final response; surface it as a retryable failure rather
-            // than letting downstream nodes consume half a sentence.
-            if (process.ExitCode == 0 && stdout.SawJsonEvents && !stdout.SawTurnEnd)
-                return NodeExecutionResult.Fail(
-                    "pi stream ended before message_end/turn_end (assistant turn was truncated)",
-                    response);
-
-            // Turn completed cleanly but model produced no text — e.g. the
-            // provider silently dropped the request. Treat as retryable failure
-            // so the on_failure edge can recover rather than propagating the
-            // error string as real AI output.
-            if (process.ExitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
-                return NodeExecutionResult.Fail(response);
-
-            return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.ParsePi(stdout.RawStdout))
-                : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
+            return AssembleResult(stdout, stderr, process.ExitCode, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId);
         }
         catch (Exception ex)
         {
             return NodeExecutionResult.Fail($"[pi-error] {ex.Message}");
         }
+    }
+
+    /// <summary>Turns a finished run's parsed output, stderr and exit code into the node's result.</summary>
+    internal static NodeExecutionResult AssembleResult(
+        PiExecutionOutput stdout, string stderr, int exitCode, string prompt, string? effectiveSessionId, string? incomingSessionId)
+    {
+        var response = stdout.Content;
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            if (!stdout.SawJsonEvents)
+                response = stdout.RawStdout;
+            else if (!string.IsNullOrWhiteSpace(stderr))
+                response = $"[pi] no assistant text response. stderr: {stderr.Trim()}";
+            else
+                response = "[pi] no assistant text response from model";
+        }
+
+        // Pi sometimes exits 0 mid-turn (e.g. provider closed the stream
+        // early) leaving the assistant message truncated. Without a
+        // message_end/turn_end marker we cannot trust the partial text as
+        // the final response; surface it as a retryable failure rather
+        // than letting downstream nodes consume half a sentence.
+        if (exitCode == 0 && stdout.SawJsonEvents && !stdout.SawTurnEnd)
+            return NodeExecutionResult.Fail(
+                "pi stream ended before message_end/turn_end (assistant turn was truncated)",
+                response);
+
+        // Turn completed cleanly but model produced no text — e.g. the
+        // provider silently dropped the request. Treat as retryable failure
+        // so the on_failure edge can recover rather than propagating the
+        // error string as real AI output.
+        if (exitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
+            return NodeExecutionResult.Fail(response);
+
+        return exitCode == 0
+            ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParsePi(stdout.RawStdout))
+            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
@@ -309,7 +316,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         await PersistSessionFileAsync(ctx, sessionId, sessionPath, SessionSnapshotFormats.PiJsonl, _logger);
     }
 
-    private static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, Action<string>? onSessionId, CancellationToken ct)
+    internal static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, Action<string>? onSessionId, CancellationToken ct)
     {
         var raw = new StringBuilder();
         var content = new StringBuilder();
@@ -792,7 +799,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         IReadOnlyList<string> ToolNames,
         bool NoTools);
 
-    private sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents, bool SawTurnEnd);
+    internal sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents, bool SawTurnEnd);
 
     private sealed record ManagedSessionRestoreResult(string? SessionIdToUse, string? SessionPathToUse)
     {

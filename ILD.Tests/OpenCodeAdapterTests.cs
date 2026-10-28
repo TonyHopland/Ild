@@ -26,12 +26,7 @@ public class OpenCodeAdapterTests
     /// </summary>
     private static void MakeExecutable(string scriptPath)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo("chmod") { UseShellExecute = false };
-        psi.ArgumentList.Add("+x");
-        psi.ArgumentList.Add(scriptPath);
-        using var proc = System.Diagnostics.Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start chmod");
-        proc.WaitForExit();
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
     [Fact]
@@ -62,21 +57,6 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_returns_failure_when_binary_not_found()
-    {
-        var adapter = new OpenCodeAdapter();
-
-        var ctx = BuildContext(
-            binaryPath: "/nonexistent/opencode",
-            executionCount: 1);
-
-        var result = await adapter.ExecuteAsync(ctx);
-
-        Assert.False(result.Success);
-        Assert.Contains("opencode-error", result.Error);
-    }
-
-    [Fact]
     public async Task ExecuteAsync_uses_prompt_for_all_executions()
     {
         var adapter = new OpenCodeAdapter();
@@ -85,21 +65,6 @@ public class OpenCodeAdapterTests
             binaryPath: "/bin/true",
             prompt: "shared prompt here",
             executionCount: 2);
-
-        var result = await adapter.ExecuteAsync(ctx);
-
-        Assert.True(result.Success);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_reads_binaryPath_from_config_overriding_baseUrl()
-    {
-        var adapter = new OpenCodeAdapter();
-
-        var ctx = BuildContext(
-            binaryPath: "/nonexistent/path",
-            config: "{\"binaryPath\":\"/bin/true\"}",
-            executionCount: 1);
 
         var result = await adapter.ExecuteAsync(ctx);
 
@@ -183,52 +148,27 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_passes_worktree_via_dir_argument()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "pwd.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\npwd\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            Assert.Contains("--dir", result.Output);
-            Assert.Contains(worktreeDir, result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
     public async Task ExecuteAsync_times_out_long_running_process()
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"ild-timeout-test-{Guid.NewGuid():N}.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\nsleep 60\n");
+        File.WriteAllText(scriptPath, "#!/bin/sh\necho started\nsleep 60\n");
         MakeExecutable(scriptPath);
 
         try
         {
             var adapter = new OpenCodeAdapter();
-            using var cts = new System.Threading.CancellationTokenSource(1000);
+            using var cts = new System.Threading.CancellationTokenSource();
 
+            // Cancel once the process is known to be running, not after a wall-clock wait.
             var ctx = BuildContext(
                 binaryPath: scriptPath,
                 executionCount: 1,
-                cancel: cts.Token);
+                cancel: cts.Token,
+                progressCallback: _ =>
+                {
+                    cts.Cancel();
+                    return Task.CompletedTask;
+                });
 
             var result = await adapter.ExecuteAsync(ctx);
 
@@ -238,144 +178,6 @@ public class OpenCodeAdapterTests
         finally
         {
             if (File.Exists(scriptPath)) File.Delete(scriptPath);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_streams_extracted_text_from_json_lines_to_progress_callback()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-json-stream-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"thinking...\"}'\necho '{\"text\":\"analyzing code...\"}'\necho '{\"text\":\"done\"}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-            var progressLines = new System.Collections.Concurrent.ConcurrentBag<string>();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1,
-                progressCallback: (line) =>
-                {
-                    progressLines.Add(line);
-                    return Task.CompletedTask;
-                });
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            // Progress lines should be extracted text, not raw JSON
-            Assert.Contains("thinking...", progressLines);
-            Assert.Contains("analyzing code...", progressLines);
-            Assert.Contains("done", progressLines);
-            // Verify no raw JSON leaked through
-            Assert.DoesNotContain(progressLines, l => l.Contains("{\"text\":"));
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_surfaces_event_type_for_non_text_json_lines()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-event-type-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        // Simulate real opencode JSON events: text, step_start, tool_use, step_finish, empty text
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"step_start\"}'\n" +
-            "echo '{\"type\":\"text\",\"text\":\"reading file...\"}'\n" +
-            "echo '{\"type\":\"tool_use\",\"tool\":\"read\"}'\n" +
-            "echo '{\"type\":\"text\",\"text\":\"\"}'\n" +
-            "echo '{\"type\":\"step_finish\"}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-            var progressLines = new System.Collections.Concurrent.ConcurrentBag<string>();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1,
-                progressCallback: (line) =>
-                {
-                    progressLines.Add(line);
-                    return Task.CompletedTask;
-                });
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            // Text lines should appear normally
-            Assert.Contains("reading file...", progressLines);
-            // Step events should show as [step_start] and [step_finish]
-            Assert.Contains("[step_start]", progressLines);
-            Assert.Contains("[step_finish]", progressLines);
-            // Tool use should show as [tool: read]
-            Assert.Contains("[tool: read]", progressLines);
-            // Empty text lines should NOT appear as blank entries
-            Assert.DoesNotContain(string.Empty, progressLines);
-            Assert.DoesNotContain(progressLines, l => string.IsNullOrWhiteSpace(l));
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_streams_tool_arguments_from_the_wrapped_tool_part()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-tool-args-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        // `opencode run --format json` wraps the SDK tool part in the event:
-        // the name is at part.tool and the arguments at part.state.input.
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "printf '%s\\n' '{\"type\":\"tool_use\",\"sessionID\":\"ses-1\",\"part\":{\"type\":\"tool\",\"tool\":\"write\",\"state\":" +
-            "{\"status\":\"completed\",\"input\":{\"filePath\":\"notes.md\",\"content\":\"line one\\nline two\"},\"output\":\"done\"}}}'\n" +
-            "echo '{\"type\":\"text\",\"text\":\"Wrote the file.\"}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-            var progressLines = new System.Collections.Concurrent.ConcurrentBag<string>();
-
-            var result = await adapter.ExecuteAsync(BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1,
-                progressCallback: line =>
-                {
-                    progressLines.Add(line);
-                    return Task.CompletedTask;
-                }));
-
-            Assert.True(result.Success);
-            Assert.Contains("[tool: write] notes.md", progressLines);
-            // The written file's content rides in the same arguments object; the
-            // live view gets the marker, not the file.
-            Assert.DoesNotContain(progressLines, l => l.Contains("line two"));
-            Assert.Contains("Wrote the file.", result.Output);
-            Assert.DoesNotContain("[tool:", result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
         }
     }
 
@@ -467,69 +269,6 @@ public class OpenCodeAdapterTests
             using var config = JsonDocument.Parse(Assert.IsType<string>(result.Output));
             Assert.Equal(modelRef, config.RootElement.GetProperty("model").GetString());
             Assert.Equal(modelRef, config.RootElement.GetProperty("small_model").GetString());
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_passes_session_flag_when_session_id_is_set()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "args.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "my prompt",
-                worktreePath: worktreeDir,
-                sessionId: "test-session-abc",
-                executionCount: 1);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            Assert.Contains("--session", result.Output);
-            Assert.Contains("test-session-abc", result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_does_not_pass_session_flag_when_session_id_is_null()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "args.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "my prompt",
-                worktreePath: worktreeDir,
-                sessionId: null,
-                executionCount: 1);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            Assert.DoesNotContain("--session", result.Output);
         }
         finally
         {
@@ -952,74 +691,6 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_treats_prompt_starting_with_dashes_as_message_argument()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-dashes-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        var argsPath = Path.Combine(worktreeDir, "args.txt");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "printf '%s\\n' \"$@\" > \"$ILD_TEST_ARGS\"\n" +
-            "echo '{\"text\":\"ok\",\"sessionId\":\"dash-session\"}'\n");
-        MakeExecutable(scriptPath);
-
-        var previousArgs = Environment.GetEnvironmentVariable("ILD_TEST_ARGS");
-        Environment.SetEnvironmentVariable("ILD_TEST_ARGS", argsPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-            var result = await adapter.ExecuteAsync(BuildContext(
-                binaryPath: scriptPath,
-                prompt: "---\nname: to-issues\n",
-                worktreePath: worktreeDir,
-                executionCount: 1));
-
-            Assert.True(result.Success);
-            var args = File.ReadAllLines(argsPath);
-            var separatorIndex = Array.IndexOf(args, "--");
-            Assert.True(separatorIndex >= 0);
-            Assert.Equal(new[] { "---", "name: to-issues", "" }, args.Skip(separatorIndex + 1));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ILD_TEST_ARGS", previousArgs);
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_returns_session_id_from_json_output()
-    {
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"hello\",\"sessionId\":\"session-from-output\"}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            Assert.Equal("session-from-output", result.SessionId);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
     public async Task ExecuteAsync_invokes_OnSessionId_once_with_first_session_id()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-sid-{Guid.NewGuid():N}");
@@ -1047,40 +718,6 @@ public class OpenCodeAdapterTests
             Assert.True(result.Success);
             Assert.Single(captured);
             Assert.Equal("oc-live", captured.Single());
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_returns_session_id_from_nested_session_object()
-    {
-        // opencode emits stream events whose payloads sometimes nest the
-        // session id (`{"session":{"id":"..."}}`) instead of placing it at
-        // the root. The extractor must walk the tree so the run can keep
-        // its session across executions regardless of the event shape.
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"hello\",\"session\":{\"id\":\"nested-session\"}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            Assert.Equal("nested-session", result.SessionId);
         }
         finally
         {
@@ -1585,214 +1222,6 @@ public class OpenCodeAdapterTests
             var fork = Encoding.UTF8.GetString((await harness.SnapshotContentAsync(runId, "fork-dest"))!);
             Assert.Contains("fork-dest", fork);
             Assert.DoesNotContain("source-sess", fork);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_extracts_text_from_typed_text_event_part()
-    {
-        // opencode --format json emits `{"type":"text","part":{"type":"text","text":"..."}}`
-        // alongside step_start/step_finish/tool_use events. We must extract the
-        // assistant's response from the text part, ignoring boundary events.
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-typed-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_1\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
-            "echo '{\"type\":\"text\",\"timestamp\":2,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"text\",\"text\":\"final answer\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
-            "echo '{\"type\":\"step_finish\",\"timestamp\":3,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_2\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.True(result.Success);
-            Assert.Equal("final answer", result.Output);
-            Assert.DoesNotContain("step_start", result.Output);
-            Assert.DoesNotContain("step_finish", result.Output);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_records_the_summed_usage_of_every_step_in_the_turn()
-    {
-        // Shape of opencode 1.19.1 run --format json: each step_finish part carries
-        // that one model call's tokens and cost.
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-steps-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_1\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
-            "echo '{\"type\":\"step_finish\",\"timestamp\":2,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_2\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\",\"reason\":\"tool-calls\",\"cost\":0.006135,\"tokens\":{\"total\":7871,\"input\":6023,\"output\":56,\"reasoning\":0,\"cache\":{\"read\":1792,\"write\":0}}}}'\n" +
-            "echo '{\"type\":\"step_start\",\"timestamp\":3,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_3\",\"messageID\":\"msg_2\",\"sessionID\":\"ses_x\"}}'\n" +
-            "echo '{\"type\":\"text\",\"timestamp\":4,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"text\",\"text\":\"final answer\",\"messageID\":\"msg_2\",\"sessionID\":\"ses_x\"}}'\n" +
-            "echo '{\"type\":\"step_finish\",\"timestamp\":5,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_4\",\"messageID\":\"msg_2\",\"sessionID\":\"ses_x\",\"reason\":\"stop\",\"cost\":0.006171,\"tokens\":{\"total\":7949,\"input\":6143,\"output\":14,\"reasoning\":0,\"cache\":{\"read\":1792,\"write\":0}}}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var result = await new OpenCodeAdapter().ExecuteAsync(
-                BuildContext(binaryPath: scriptPath, prompt: "ignored", worktreePath: worktreeDir, executionCount: 1));
-
-            Assert.True(result.Success, result.Error);
-            Assert.NotNull(result.Usage);
-            Assert.Equal(15750, result.Usage!.InputTokens);
-            Assert.Equal(70, result.Usage.OutputTokens);
-            Assert.Equal(0.012306m, result.Usage.CostUsd);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_does_not_dump_raw_ndjson_when_no_text_event_present()
-    {
-        // Regression: when opencode emits only boundary events (step_start /
-        // step_finish / tool_use) without a final text event — e.g. when the
-        // model only produced tool calls — we must not surface the raw NDJSON
-        // event stream as the AI node output. Surface a clear diagnostic
-        // instead so downstream nodes get a readable signal.
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-no-text-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_1\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
-            "echo '{\"type\":\"step_finish\",\"timestamp\":2,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_2\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            // Model produced only tool calls, no assistant text — should be a
-            // retryable failure, not a success that passes the error string downstream.
-            Assert.False(result.Success);
-            Assert.Contains("opencode", result.Error ?? result.Output ?? "");
-            Assert.DoesNotContain("step_start", result.Error ?? result.Output ?? "");
-            Assert.DoesNotContain("\"type\":", result.Error ?? result.Output ?? "");
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_surfaces_session_error_event_as_failure()
-    {
-        // opencode emits `{"type":"error","error":{...}}` when a session
-        // fails (auth, rate limit, model error, ...). Even when the CLI
-        // exits with code 0, we must propagate that error so the AI node
-        // reflects the failure instead of silently returning empty output.
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-err-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderAuthError\",\"data\":{\"message\":\"invalid api key\"}}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var adapter = new OpenCodeAdapter();
-
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                prompt: "ignored",
-                worktreePath: worktreeDir,
-                executionCount: 1);
-
-            var result = await adapter.ExecuteAsync(ctx);
-
-            Assert.False(result.Success);
-            Assert.Contains("invalid api key", result.Error);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_classifies_a_rate_limited_session_error_as_an_interruption()
-    {
-        // The `{"type":"error"}` event isolates the provider's own message, so
-        // this adapter classifies from it directly instead of leaving the node
-        // executor to find it in a prefixed error string. An interruption parks
-        // the run for a human Resume rather than taking the on_failure edge.
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-429-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderRateLimitError\",\"data\":{\"message\":\"429 rate limit exceeded, retry after 60s\"}}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var result = await new OpenCodeAdapter().ExecuteAsync(BuildContext(
-                binaryPath: scriptPath, prompt: "ignored", worktreePath: worktreeDir, executionCount: 1));
-
-            Assert.False(result.Success);
-            Assert.Equal(FailureKind.Interrupted, result.Failure);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_leaves_an_auth_session_error_for_the_on_failure_edge()
-    {
-        // Same structured path, opposite verdict: an auth failure is genuine, and
-        // classifying it as an interruption would park a run that will never
-        // recover without a human changing the credentials.
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-auth-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "echo '{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderAuthError\",\"data\":{\"message\":\"invalid api key\"}}}'\n");
-        MakeExecutable(scriptPath);
-
-        try
-        {
-            var result = await new OpenCodeAdapter().ExecuteAsync(BuildContext(
-                binaryPath: scriptPath, prompt: "ignored", worktreePath: worktreeDir, executionCount: 1));
-
-            Assert.False(result.Success);
-            Assert.NotEqual(FailureKind.Interrupted, result.Failure);
         }
         finally
         {

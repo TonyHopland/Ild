@@ -28,9 +28,6 @@ public sealed class WorkItemFileRawApiTests : IDisposable
         _tmp = Path.Combine(Path.GetTempPath(), "ild-raw-" + Guid.NewGuid().ToString("N"));
         _worktree = Path.Combine(_tmp, "wt");
         Directory.CreateDirectory(_worktree);
-        var git = Process.Start(new ProcessStartInfo("git", ["init", "-q", _worktree]) { UseShellExecute = false })!;
-        git.WaitForExit();
-        Assert.Equal(0, git.ExitCode);
         _outside = Path.Combine(_tmp, "outside.txt");
         File.WriteAllText(_outside, "outside-secret\n");
     }

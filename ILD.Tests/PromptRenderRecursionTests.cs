@@ -22,48 +22,36 @@ namespace ILD.Tests;
 /// grammar (a spec that says "write {{Var.handoff}} when you finish", an agent
 /// explaining the syntax). A second render pass eats those tokens, and it runs
 /// with a strictly weaker context than the first, so what it substitutes is
-/// usually empty. These tests drive a real AI node against a fake agent CLI and
-/// assert on the prompt that CLI was handed.
+/// usually empty. One test drives a real AI node against a fake agent CLI and
+/// asserts on the prompt that CLI was handed; the rest render on the renderer directly.
 /// </summary>
 public class PromptRenderRecursionTests
 {
     private const string Title = "Fix the widget";
 
-    /// <summary>
-    /// Run one AI node end to end — executor render, adapter, agent process —
-    /// and return the prompt the agent process actually received.
-    /// </summary>
-    private static async Task<string> RunAiNodeAsync(
-        string nodePrompt,
-        string? workItemDescription = null,
-        (string Name, string Value)[]? variables = null,
-        (string Label, string Output)[]? priorAiOutputs = null,
-        string? previousNodeOutput = null)
-    {
-        using var cli = new PromptCapturingCli();
-        var runId = Guid.NewGuid();
+    private sealed record Arranged(
+        Guid RunId,
+        Mock<IProviderStore> ProviderStore,
+        Mock<IWorkItemManager> WorkItems,
+        Mock<ILoopRunStore> RunStore,
+        PromptRenderingService Renderer);
 
-        var provider = new AiProvider
-        {
-            Id = Guid.NewGuid(),
-            Name = "capture",
-            Type = "claude-code",
-            BaseUrl = string.Empty,
-            Model = string.Empty,
-            IsDefault = true,
-            Parallelism = 1,
-            Config = cli.ProviderConfigJson,
-            CreatedAt = DateTime.UtcNow,
-        };
+    /// <summary>The stores a render reads, loaded with one test's description, variables and prior AI output.</summary>
+    private static Arranged Arrange(
+        string? worktreePath,
+        string? workItemDescription,
+        (string Name, string Value)[]? variables,
+        (string Label, string Output)[]? priorAiOutputs)
+    {
+        var runId = Guid.NewGuid();
         var providerStore = new Mock<IProviderStore>();
-        providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
 
         var workItem = new WorkItemView
         {
             Id = "WI-1",
             Title = Title,
             Description = workItemDescription,
-            WorktreePath = cli.WorkDir,
+            WorktreePath = worktreePath,
         };
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
@@ -86,6 +74,56 @@ public class PromptRenderRecursionTests
         var eventLog = new Mock<IEventLogStore>();
         eventLog.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>())).ReturnsAsync(Array.Empty<EventLog>());
 
+        var renderer = new PromptRenderingService(
+            new PromptTemplateResolver(), eventLog.Object, conversation.Object, runStore.Object, Mock.Of<IGlobalVariableStore>());
+        return new Arranged(runId, providerStore, workItems, runStore, renderer);
+    }
+
+    /// <summary>
+    /// Render a node prompt exactly as the AI node executor does and return the result,
+    /// with no agent process behind it.
+    /// </summary>
+    private static async Task<string> RenderAsync(
+        string nodePrompt,
+        string? workItemDescription = null,
+        (string Name, string Value)[]? variables = null,
+        (string Label, string Output)[]? priorAiOutputs = null,
+        string? previousNodeOutput = null)
+    {
+        var arranged = Arrange(worktreePath: null, workItemDescription, variables, priorAiOutputs);
+        var workItem = await arranged.WorkItems.Object.GetWorkItemAsync("WI-1");
+        return await arranged.Renderer.RenderAsync(nodePrompt, arranged.RunId, workItem!, previousNodeOutput);
+    }
+
+    /// <summary>
+    /// Run one AI node end to end — executor render, adapter, agent process —
+    /// and return the prompt the agent process actually received.
+    /// </summary>
+    private static async Task<string> RunAiNodeAsync(
+        string nodePrompt,
+        string? workItemDescription = null,
+        (string Name, string Value)[]? variables = null,
+        (string Label, string Output)[]? priorAiOutputs = null,
+        string? previousNodeOutput = null)
+    {
+        using var cli = new PromptCapturingCli();
+        var arranged = Arrange(cli.WorkDir, workItemDescription, variables, priorAiOutputs);
+        var runId = arranged.RunId;
+
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "capture",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            Model = string.Empty,
+            IsDefault = true,
+            Parallelism = 1,
+            Config = cli.ProviderConfigJson,
+            CreatedAt = DateTime.UtcNow,
+        };
+        arranged.ProviderStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
+
         var adapter = new RecordingAdapter(new ClaudeCodeAdapter());
         var registry = Mock.Of<IAgentAdapterRegistry>(r =>
             r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
@@ -93,13 +131,12 @@ public class PromptRenderRecursionTests
         var services = new ServiceCollection();
 
         services.AddSingleton(NoPackageFeeds.Resolver);
-        services.AddSingleton(providerStore.Object);
-        services.AddSingleton(workItems.Object);
-        services.AddSingleton(runStore.Object);
+        services.AddSingleton(arranged.ProviderStore.Object);
+        services.AddSingleton(arranged.WorkItems.Object);
+        services.AddSingleton(arranged.RunStore.Object);
         services.AddSingleton(registry);
         services.AddSingleton<IPromptTemplateResolver>(new PromptTemplateResolver());
-        services.AddSingleton<IPromptRenderingService>(sp => new PromptRenderingService(
-            sp.GetRequiredService<IPromptTemplateResolver>(), eventLog.Object, conversation.Object, runStore.Object, Mock.Of<IGlobalVariableStore>()));
+        services.AddSingleton<IPromptRenderingService>(arranged.Renderer);
         var sp = services.BuildServiceProvider();
 
         var node = new LoopNode
@@ -150,7 +187,7 @@ public class PromptRenderRecursionTests
         // The variable's value was written by an earlier agent turn; it is data,
         // not a template, so the token it mentions must reach the next agent
         // intact rather than being resolved against a different node's context.
-        var sent = await RunAiNodeAsync(
+        var sent = await RenderAsync(
             nodePrompt: "Handoff: {{Var.handoff}}",
             variables: [("handoff", "the reviewer asked for {{WorkItem.Title}} in the title")]);
 
@@ -163,7 +200,7 @@ public class PromptRenderRecursionTests
     {
         // An agent explaining the templating grammar to the next node is the
         // exact case that first surfaced this: its answer gets holed on replay.
-        var sent = await RunAiNodeAsync(
+        var sent = await RenderAsync(
             nodePrompt: "Earlier:\n{{Conversation.AI}}",
             priorAiOutputs: [("Explainer", "Use {{EventLog.LastN}} to see recent events.")]);
 
@@ -173,7 +210,7 @@ public class PromptRenderRecursionTests
     [Fact]
     public async Task A_placeholder_inside_the_previous_node_output_survives_into_the_agent_prompt()
     {
-        var sent = await RunAiNodeAsync(
+        var sent = await RenderAsync(
             nodePrompt: "{{Node.Input}}",
             workItemDescription: "the description that must not leak in",
             previousNodeOutput: "Human said: keep {{WorkItem.Description}} out of this prompt.");
@@ -188,7 +225,7 @@ public class PromptRenderRecursionTests
         // Two levels at once: the description pulled in by the node's template
         // quotes a variable, and that variable's own value quotes another token.
         // Exactly one pass runs, so only the node's own template expands.
-        var sent = await RunAiNodeAsync(
+        var sent = await RenderAsync(
             nodePrompt: "{{WorkItem.Description}} / {{Var.handoff}}",
             workItemDescription: "set {{Var.handoff}}",
             variables: [("handoff", "mention {{WorkItem.Title}}")]);
@@ -201,7 +238,7 @@ public class PromptRenderRecursionTests
     {
         // Unknown names pass through the resolver untouched; nothing downstream
         // may take a second look and decide otherwise.
-        var sent = await RunAiNodeAsync(nodePrompt: "See {{Totally.Unknown}} and <Foo.Bar> below.");
+        var sent = await RenderAsync(nodePrompt: "See {{Totally.Unknown}} and <Foo.Bar> below.");
 
         Assert.Equal("See {{Totally.Unknown}} and <Foo.Bar> below.", sent);
     }
