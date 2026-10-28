@@ -190,9 +190,19 @@ public class StorageApiTests
 // A host per test: each measures the host's own data root and the process-wide agent scratch root.
 public class StorageOverviewTests
 {
+    private sealed class ScratchRootUnset : IDisposable
+    {
+        private readonly string? _previous = Environment.GetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar);
+
+        public ScratchRootUnset() => Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, null);
+
+        public void Dispose() => Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, _previous);
+    }
+
     [Fact]
     public async Task The_overview_counts_each_file_once_by_its_allocated_size_and_attributes_worktrees_through_their_runs()
     {
+        using var _ = new ScratchRootUnset();
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var data = DataRoot(factory);
@@ -302,33 +312,12 @@ public class StorageOverviewTests
         // which is shared with everything else and so is not measured.
         Assert.Equal(JsonValueKind.Null, Entry(temp, "scratch").GetProperty("bytes").ValueKind);
         Assert.Equal(JsonValueKind.Number, Entry(temp, "private").GetProperty("bytes").ValueKind);
+        Assert.True(temp.GetProperty("incomplete").GetBoolean());
+        Assert.Equal(Entries(temp).Sum(e => e.GetProperty("bytes").ValueKind == JsonValueKind.Number ? Bytes(e) : 0), Bytes(temp));
+        Assert.False(Category(doc, "chat-sessions").GetProperty("incomplete").GetBoolean());
 
         var everythingInData = categories.Where(c => c.GetProperty("key").GetString() != "temp").Sum(Bytes);
         Assert.Equal(DiskUsage(data), everythingInData);
-    }
-
-    [Fact]
-    public async Task Temp_is_incomplete_when_the_scratch_root_is_not_measured()
-    {
-        var previous = Environment.GetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar);
-        Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, null);
-        try
-        {
-            await using var factory = new ApiFactory();
-            var client = await factory.CreateAuthenticatedClientAsync();
-
-            using var doc = JsonDocument.Parse(await client.GetStringAsync("/api/v1/storage", TestContext.Current.CancellationToken));
-
-            var temp = Category(doc, "temp");
-            Assert.Equal(JsonValueKind.Null, Entry(temp, "scratch").GetProperty("bytes").ValueKind);
-            Assert.True(temp.GetProperty("incomplete").GetBoolean());
-            Assert.Equal(Entries(temp).Sum(e => e.GetProperty("bytes").ValueKind == JsonValueKind.Number ? Bytes(e) : 0), Bytes(temp));
-            Assert.False(Category(doc, "chat-sessions").GetProperty("incomplete").GetBoolean());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, previous);
-        }
     }
 
     [Fact]
