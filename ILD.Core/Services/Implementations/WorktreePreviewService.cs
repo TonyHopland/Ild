@@ -2099,14 +2099,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public List<PreviewServiceConfig> Services { get; set; } = new();
     }
 
-    private class PreviewCommandConfig
+    internal class PreviewCommandConfig
     {
         public string? Cwd { get; set; }
         public string Command { get; set; } = string.Empty;
         public Dictionary<string, string>? Env { get; set; }
     }
 
-    private sealed class PreviewServiceConfig : PreviewCommandConfig
+    internal sealed class PreviewServiceConfig : PreviewCommandConfig
     {
         public string Name { get; set; } = string.Empty;
         public string Port { get; set; } = string.Empty;

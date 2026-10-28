@@ -449,7 +449,7 @@ public class ConnectionTesterTests : IDisposable
             .TestPackageFeedAsync(Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
 
         Assert.False(result.Ok);
-        Assert.Equal("Azure DevOps unreachable", result.Message);
+        Assert.Equal("Azure DevOps unreachable.", result.Message);
     }
 
     [Fact]
@@ -467,7 +467,7 @@ public class ConnectionTesterTests : IDisposable
             Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
 
         Assert.False(result.Ok);
-        Assert.Equal("Azure DevOps unreachable", result.Message);
+        Assert.Equal("Azure DevOps unreachable.", result.Message);
     }
 
     [Theory]
