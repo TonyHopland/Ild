@@ -87,6 +87,10 @@ ARG APP_GID=10001
 ARG AGENT_UID=10002
 ARG AGENT_GID=10002
 ARG SHARED_GID=10003
+# The group an agent launched in network mode Off runs under, which the egress firewall lets
+# reach the network directly (ADR-0019). It has no members: neither the agent nor ild may be
+# one, so only the orchestrator, which chooses the agent's gid at launch, can put a process in it.
+ARG NET_OPEN_GID=10004
 
 # Install base utilities and optional tools before copying source so Docker
 # layer caching skips tool installs when only source code changes.
@@ -132,6 +136,9 @@ RUN if [ -z "$(getent group "${SHARED_GID}" | cut -d: -f1 || true)" ]; then \
     fi && \
     if [ -z "$(getent group "${AGENT_GID}" | cut -d: -f1 || true)" ]; then \
       groupadd --gid ${AGENT_GID} agent; \
+    fi && \
+    if [ -z "$(getent group "${NET_OPEN_GID}" | cut -d: -f1 || true)" ]; then \
+      groupadd --gid ${NET_OPEN_GID} ild-net-open; \
     fi && \
     if [ -z "$(getent passwd "${AGENT_UID}" | cut -d: -f1 || true)" ]; then \
       useradd --uid ${AGENT_UID} --gid ${AGENT_GID} --create-home --home-dir /home/agent --shell /usr/sbin/nologin agent; \
@@ -319,6 +326,9 @@ ENV AGENT_USER=agent
 ENV AGENT_GROUP=agent
 ENV AGENT_HOME=/home/agent
 ENV SHARED_GROUP=ild-agents
+# Not a group the agent or ild is in (the entrypoint refuses one they are in). Network mode Off
+# stays unavailable unless the container also runs with no-new-privileges.
+ENV NETWORK_OPEN_GROUP=ild-net-open
 # cap_kill is required as well as cap_setuid/cap_setgid: setpriv gives the agent
 # a different real AND saved uid, so kill(2) from the orchestrator returns EPERM
 # without it — Halt and the per-node timeouts would leave the agent orphaned in
