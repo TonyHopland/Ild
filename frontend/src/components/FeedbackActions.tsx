@@ -60,10 +60,39 @@ export const outputLabel = (name: string) =>
 // The PR merge in the list of buttons. It holds a comma, which no output name
 // can, as the actions string is split on commas: an output called "Merge" is
 // its own button.
-const PR_MERGE = ",pr-merge";
+export const PR_MERGE = ",pr-merge";
 
 /** A button's look: one primary, Reject in danger, everything else secondary. */
 type Tone = "btn-primary" | "btn-secondary" | "btn-danger";
+
+/** The outputs listed in the actions string, in order, that the node shows. Nothing listed means Approve and Reject. */
+export function visibleAnswersOf(
+  actions: string | null | undefined,
+  isVisible: (name: string) => boolean,
+): string[] {
+  return (
+    actions
+      ? actions
+          .split(",")
+          .map((a) => a.trim())
+          .filter(Boolean)
+      : ["OnSuccess", "OnFailure"]
+  ).filter((name) => isVisible(name));
+}
+
+/** The one answer pushed over the others: the shown default, else the PR merge when offered. */
+export function primaryAnswerOf(shownDefault: string | null, withMerge: boolean): string | null {
+  return shownDefault ?? (withMerge ? PR_MERGE : null);
+}
+
+export function answerToneOf(name: string, primary: string | null): Tone {
+  return name === primary ? "btn-primary" : name === "OnFailure" ? "btn-danger" : "btn-secondary";
+}
+
+/** The button style that hands an output colour to the stylesheet, or none when it has no colour. */
+export function answerStyleOf(color: string | null | undefined): CSSProperties | undefined {
+  return color ? ({ "--output-color": color } as CSSProperties) : undefined;
+}
 
 /**
  * Renders the node's answers as buttons, from the comma-separated
@@ -102,14 +131,7 @@ export default function FeedbackActions({
   const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(true);
 
-  const actionList = (
-    actions
-      ? actions
-          .split(",")
-          .map((a) => a.trim())
-          .filter(Boolean)
-      : ["OnSuccess", "OnFailure"]
-  ).filter((name) => isVisible(name));
+  const actionList = visibleAnswersOf(actions, isVisible);
 
   const customNames = actionList.filter((a) => !ROLE_TOKENS.has(a));
 
@@ -119,15 +141,9 @@ export default function FeedbackActions({
   const enterTarget = submitDefaultOnEnter ? shownDefault : null;
   // Primary only by the loop's say: its default output, else the PR merge. With
   // neither, no answer is pushed over the others.
-  const primary: string | null = shownDefault ?? (onMerge ? PR_MERGE : null);
-
-  const toneOf = (name: string): Tone =>
-    name === primary ? "btn-primary" : name === "OnFailure" ? "btn-danger" : "btn-secondary";
-
-  const styleOf = (name: string): CSSProperties | undefined => {
-    const color = colorOf?.(name);
-    return color ? ({ "--output-color": color } as CSSProperties) : undefined;
-  };
+  const primary = primaryAnswerOf(shownDefault, Boolean(onMerge));
+  const toneOf = (name: string) => answerToneOf(name, primary);
+  const styleOf = (name: string) => answerStyleOf(colorOf?.(name));
 
   const sendOf = (name: string) =>
     name === "OnSuccess" ? onApprove : name === "OnFailure" ? onReject : () => onEdge(name);

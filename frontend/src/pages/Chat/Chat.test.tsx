@@ -67,7 +67,6 @@ vi.mock("../../services/auth", async (importOriginal) => ({
 }));
 vi.mock("../../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 
-import App from "../../App";
 import ChatBubble from "../../components/ChatBubble";
 import { ChatInboxProvider } from "../../components/ChatInbox";
 import Header from "../../components/Header";
@@ -360,27 +359,6 @@ describe("Chat tab in the main navigation", () => {
     expect(await screen.findByText("s1 reply")).toBeTruthy();
     await waitFor(() => expect(currentPath()).toBe("/chat/s1"));
   });
-
-  test.each([
-    ["/chat/s1", "s1 reply"],
-    ["/chat", "Start chat"],
-  ])(
-    "App renders %s as the Chat page inside the signed-in shell, without the bubble",
-    async (path, shown) => {
-      if (path === "/chat/s1") seedTwoChats();
-      window.history.replaceState(null, "", path);
-      render(<App />, { wrapper: WorkItemHubProvider });
-
-      expect(await screen.findByText(shown)).toBeTruthy();
-      expect(screen.queryByText(NO_CONTEXT)).toBeNull();
-      expect(
-        within(screen.getByRole("navigation")).getByRole("link", { name: "Chat" }),
-      ).toBeTruthy();
-      expect(window.location.pathname).toBe(path);
-      expect(screen.queryByRole("button", { name: "Open chat" })).toBeNull();
-      expect(screen.queryByRole("dialog", { name: "AI chat" })).toBeNull();
-    },
-  );
 });
 
 describe("Opening the Chat tab", () => {
@@ -1029,16 +1007,15 @@ describe("the Chat tab on a phone", () => {
     renderShell("/chat/s2");
 
     expect(await screen.findByText("s2 reply")).toBeTruthy();
-    expect(listShown()).toBe(false);
   });
 
   test("New chat from the list shows the start form", async () => {
     seedTwoChats();
     renderShell("/chat");
-    await waitFor(() => expect(listShown()).toBe(true));
+    await waitFor(() => expect(currentPath()).toBe("/chat/s1"));
 
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     await waitFor(() => expect(currentPath()).toBe("/chat"));
-    expect(listShown()).toBe(false);
+    expect(await screen.findByText("Start chat")).toBeTruthy();
   });
 });

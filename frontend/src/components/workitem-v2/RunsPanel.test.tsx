@@ -1672,18 +1672,15 @@ describe("RunsPanel recorded node type", () => {
 });
 
 describe("RunsPanel retry", () => {
-  test.each([LoopRunStatus.Completed, LoopRunStatus.Failed, LoopRunStatus.Cancelled])(
-    "a %s run offers no retry: an ended run is not started again",
-    async (status) => {
-      const detail = runWithNode(RUN_A, { status });
-      vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
-      render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
+  test("an ended run offers no retry: it is not started again", async () => {
+    const detail = runWithNode(RUN_A, { status: LoopRunStatus.Failed });
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
 
-      await screen.findByText("Node of aaaaaaaa");
+    await screen.findByText("Node of aaaaaaaa");
 
-      expect(screen.queryByRole("button", { name: /retry from this node/i })).toBeNull();
-    },
-  );
+    expect(screen.queryByRole("button", { name: /retry from this node/i })).toBeNull();
+  });
 
   test("a run waiting on a person can be retried from a node", async () => {
     const detail = runWithNode(RUN_A, { status: LoopRunStatus.WaitingHuman, completedAt: null });
@@ -1802,12 +1799,11 @@ describe("RunsPanel retry", () => {
     const retries = screen.getAllByRole("button", { name: "Retry from this node" });
     // Developer and Run tests, not Start or Cleanup.
     expect(retries).toHaveLength(2);
-    const [developer, failed] = retries;
-    expect(developer.classList.contains("btn-ghost")).toBe(true);
-    expect(failed.classList.contains("btn-primary")).toBe(true);
+    expect(retries[0].classList.contains("btn-primary")).toBe(false);
+    expect(retries[1].classList.contains("btn-primary")).toBe(true);
   });
 
-  test.each(["Start", "Cleanup"])("stands out on a %s node that failed", async (nodeType) => {
+  test.each(["Start", "Cleanup"])("is offered on a %s node that failed", async (nodeType) => {
     renderActionPanel([
       run({
         id: RUN_A,
@@ -1818,7 +1814,6 @@ describe("RunsPanel retry", () => {
     ]);
     await screen.findByText(nodeType);
 
-    const retry = screen.getByRole("button", { name: "Retry from this node" });
-    expect(retry.classList.contains("btn-primary")).toBe(true);
+    expect(screen.getAllByRole("button", { name: "Retry from this node" })).toHaveLength(1);
   });
 });

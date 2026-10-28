@@ -64,3 +64,8 @@ export function nodeTakesRetry(
       (nodeType !== NodeType.Start && nodeType !== NodeType.Cleanup))
   );
 }
+
+/** A failed node's Retry is the primary action; on any other node it stays ghosted. */
+export function nodeRetryIsPrimary(status: LoopRunNodeStatus): boolean {
+  return status === LoopRunNodeStatus.Failed;
+}

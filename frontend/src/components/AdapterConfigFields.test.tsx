@@ -69,73 +69,32 @@ describe("AdapterConfigFields", () => {
     expect(screen.getByText("Region")).toBeTruthy();
   });
 
-  test("renders text input for Text field type", () => {
-    render(
-      <AdapterConfigFields
-        schema={sampleSchema}
-        values={{ model: "claude-3" }}
-        onChange={vi.fn()}
-      />,
-    );
+  test.each([
+    ["Text", { model: "claude-3" }, () => screen.getByDisplayValue("claude-3"), "INPUT", "text"],
+    ["Number", { temperature: 0.9 }, () => screen.getByDisplayValue("0.9"), "INPUT", "number"],
+    [
+      "Toggle",
+      { enableTools: true },
+      () => screen.getByLabelText("Enable Tools"),
+      "INPUT",
+      "checkbox",
+    ],
+    [
+      "Textarea",
+      { systemPrompt: "You are helpful." },
+      () => screen.getByDisplayValue("You are helpful."),
+      "TEXTAREA",
+      "textarea",
+    ],
+    ["Select", { region: "eu-west-1" }, () => screen.getByRole("combobox"), "SELECT", "select-one"],
+  ] as const)("renders the control of the %s field type", (_type, values, find, tag, type) => {
+    render(<AdapterConfigFields schema={sampleSchema} values={values} onChange={vi.fn()} />);
 
-    const modelInput = screen.getByDisplayValue("claude-3");
-    expect(modelInput).toBeTruthy();
-    expect(modelInput.tagName).toBe("INPUT");
-  });
-
-  test("renders number input for Number field type", () => {
-    render(
-      <AdapterConfigFields
-        schema={sampleSchema}
-        values={{ temperature: 0.9 }}
-        onChange={vi.fn()}
-      />,
-    );
-
-    const tempInput = screen.getByDisplayValue("0.9");
-    expect(tempInput).toBeTruthy();
-    expect((tempInput as HTMLInputElement).type).toBe("number");
-  });
-
-  test("renders checkbox for Toggle field type", () => {
-    render(
-      <AdapterConfigFields
-        schema={sampleSchema}
-        values={{ enableTools: true }}
-        onChange={vi.fn()}
-      />,
-    );
-
-    const checkbox = screen.getByLabelText("Enable Tools") as HTMLInputElement;
-    expect(checkbox.type).toBe("checkbox");
-    expect(checkbox.checked).toBe(true);
-  });
-
-  test("renders textarea for Textarea field type", () => {
-    render(
-      <AdapterConfigFields
-        schema={sampleSchema}
-        values={{ systemPrompt: "You are helpful." }}
-        onChange={vi.fn()}
-      />,
-    );
-
-    const textarea = screen.getByDisplayValue("You are helpful.");
-    expect(textarea.tagName).toBe("TEXTAREA");
-  });
-
-  test("renders select for Select field type with options", () => {
-    render(
-      <AdapterConfigFields
-        schema={sampleSchema}
-        values={{ region: "eu-west-1" }}
-        onChange={vi.fn()}
-      />,
-    );
-
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
-    expect(select).toBeTruthy();
-    expect(select.value).toBe("eu-west-1");
+    const control = find() as HTMLInputElement;
+    expect(control.tagName).toBe(tag);
+    expect(control.type).toBe(type);
+    if (type === "checkbox") expect(control.checked).toBe(true);
+    else expect(control.value).toBe(String(Object.values(values)[0]));
   });
 
   test("calls onChange with updated value when field changes", () => {

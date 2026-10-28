@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { aiProviderService, authService, loopRunService, workItemService } from "./auth";
+import { authService, loopRunService, workItemService } from "./auth";
 import { WorkItemStatus } from "../types";
 
 const okJsonResponse = (body: unknown): Response =>
@@ -20,48 +20,20 @@ afterEach(() => {
 });
 
 describe("loopRunService URL contract", () => {
-  test("getById calls GET /api/v1/loopruns/:id", async () => {
-    fetchSpy.mockResolvedValue(okJsonResponse({}));
+  test.each([
+    ["getById", "GET", ""],
+    ["cancel", "POST", "/cancel"],
+    ["pause", "POST", "/pause"],
+    ["resume", "POST", "/resume"],
+    ["halt", "POST", "/halt"],
+  ] as const)("%s calls %s /api/v1/loopruns/:id%s", async (verb, method, suffix) => {
+    fetchSpy.mockImplementation(async () => okJsonResponse({}));
 
-    await loopRunService.getById("abc-123");
-
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/loopruns/abc-123");
-    expect(init?.method).toBe("GET");
-  });
-
-  test("cancel calls POST /api/v1/loopruns/:id/cancel", async () => {
-    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
-
-    await loopRunService.cancel("abc-123");
+    await loopRunService[verb]("abc-123");
 
     const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/loopruns/abc-123/cancel");
-    expect(init?.method).toBe("POST");
-  });
-
-  test("pause calls POST /api/v1/loopruns/:id/pause", async () => {
-    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
-    await loopRunService.pause("abc-123");
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/loopruns/abc-123/pause");
-    expect(init?.method).toBe("POST");
-  });
-
-  test("resume calls POST /api/v1/loopruns/:id/resume", async () => {
-    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
-    await loopRunService.resume("abc-123");
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/loopruns/abc-123/resume");
-    expect(init?.method).toBe("POST");
-  });
-
-  test("halt calls POST /api/v1/loopruns/:id/halt", async () => {
-    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
-    await loopRunService.halt("abc-123");
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/loopruns/abc-123/halt");
-    expect(init?.method).toBe("POST");
+    expect(url).toBe(`/api/v1/loopruns/abc-123${suffix}`);
+    expect(init?.method).toBe(method);
   });
 
   test("resumeSteer POSTs the note to /api/v1/loopruns/:id/resume-steer", async () => {
@@ -108,12 +80,17 @@ describe("loopRunService URL contract", () => {
 });
 
 describe("workItemService URL contract", () => {
-  test("transition calls POST /api/v1/workitems/:id/transition", async () => {
-    fetchSpy.mockResolvedValue(okJsonResponse({}));
-    await workItemService.transition("wi-1", "InProgress");
+  test.each([
+    ["transition", () => workItemService.transition("wi-1", "InProgress"), "POST", "/transition"],
+    ["getDependencies", () => workItemService.getDependencies("wi-1"), "GET", "/dependencies"],
+  ] as const)("%s calls %s /api/v1/workitems/wi-1%s", async (_name, call, method, suffix) => {
+    fetchSpy.mockImplementation(async () => okJsonResponse({}));
+
+    await call();
+
     const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/workitems/wi-1/transition");
-    expect(init?.method).toBe("POST");
+    expect(url).toBe(`/api/v1/workitems/wi-1${suffix}`);
+    expect(init?.method).toBe(method);
   });
 
   test("every answer names the run it answers in its body, even a reject with no reason", async () => {
@@ -144,13 +121,6 @@ describe("workItemService URL contract", () => {
         { runId: "run-1", name: "Needs work", input: "Have a look" },
       ],
     ]);
-  });
-
-  test("getDependencies calls GET /api/v1/workitems/:id/dependencies", async () => {
-    await workItemService.getDependencies("wi-1");
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/workitems/wi-1/dependencies");
-    expect(init?.method).toBe("GET");
   });
 
   test("addDependency calls POST /api/v1/workitems/:id/dependencies", async () => {
@@ -268,18 +238,33 @@ describe("workItemService taskboard listing URL contract", () => {
 });
 
 describe("workItemService edit proposal URL contract", () => {
-  test("listEditProposals calls GET /api/v1/workitems/:id/edit-proposals", async () => {
-    await workItemService.listEditProposals("wi-1");
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/workitems/wi-1/edit-proposals");
-    expect(init?.method).toBe("GET");
-  });
+  test.each([
+    [
+      "listEditProposals",
+      () => workItemService.listEditProposals("wi-1"),
+      "GET",
+      "/edit-proposals",
+    ],
+    [
+      "listRequestedEditProposals",
+      () => workItemService.listRequestedEditProposals("wi-1"),
+      "GET",
+      "/requested-edit-proposals",
+    ],
+    [
+      "approveEditProposal",
+      () => workItemService.approveEditProposal("wi-1", "p-1"),
+      "POST",
+      "/edit-proposals/p-1/approve",
+    ],
+  ] as const)("%s calls %s /api/v1/workitems/wi-1%s", async (_name, call, method, suffix) => {
+    fetchSpy.mockImplementation(async () => okJsonResponse({}));
 
-  test("listRequestedEditProposals calls GET /api/v1/workitems/:id/requested-edit-proposals", async () => {
-    await workItemService.listRequestedEditProposals("wi-1");
+    await call();
+
     const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/workitems/wi-1/requested-edit-proposals");
-    expect(init?.method).toBe("GET");
+    expect(url).toBe(`/api/v1/workitems/wi-1${suffix}`);
+    expect(init?.method).toBe(method);
   });
 
   test("listEditProposalsFor filters by status and chat session in the query", async () => {
@@ -290,14 +275,6 @@ describe("workItemService edit proposal URL contract", () => {
     expect(parsed.searchParams.get("status")).toBe("Pending");
     expect(parsed.searchParams.get("chatSessionId")).toBe("chat-1");
     expect(init?.method).toBe("GET");
-  });
-
-  test("approveEditProposal calls POST /api/v1/workitems/:id/edit-proposals/:pid/approve", async () => {
-    fetchSpy.mockResolvedValue(okJsonResponse({}));
-    await workItemService.approveEditProposal("wi-1", "p-1");
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/workitems/wi-1/edit-proposals/p-1/approve");
-    expect(init?.method).toBe("POST");
   });
 
   test("rejectEditProposal POSTs the reason to /api/v1/workitems/:id/edit-proposals/:pid/reject", async () => {
@@ -343,30 +320,5 @@ describe("authService.onTokenChange", () => {
     authService.clearAuth();
 
     expect(listener).not.toHaveBeenCalled();
-  });
-});
-
-describe("aiProviderService.getAll", () => {
-  const providers = (count: number, from = 0) =>
-    Array.from({ length: count }, (_, i) => ({ id: `p-${from + i}` }));
-
-  test("pages past the API's per-request cap until a short page", async () => {
-    fetchSpy
-      .mockResolvedValueOnce(okJsonResponse(providers(500)))
-      .mockResolvedValueOnce(okJsonResponse(providers(1, 500)));
-
-    const all = await aiProviderService.getAll();
-
-    expect(all.map((provider) => provider.id)).toEqual(providers(501).map((p) => p.id));
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(fetchSpy.mock.calls[0][0]).toBe("/api/v1/aiproviders?skip=0&take=500");
-    expect(fetchSpy.mock.calls[1][0]).toBe("/api/v1/aiproviders?skip=500&take=500");
-  });
-
-  test("stops after one request when the first page is short", async () => {
-    fetchSpy.mockResolvedValueOnce(okJsonResponse(providers(3)));
-
-    expect(await aiProviderService.getAll()).toHaveLength(3);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

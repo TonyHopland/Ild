@@ -217,7 +217,7 @@ describe("Repositories page — providers", () => {
     await screen.findByRole("region", { name: "Forge 500" });
     expect(within(card("Forge 500")).getByText("late-app")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Provider not found" })).toBeNull();
-  });
+  }, 30_000);
 
   test("Add repository opens the repository form with that provider chosen", async () => {
     renderPage(

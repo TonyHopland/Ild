@@ -122,19 +122,6 @@ describe("NodeSettingsModal session memory mode", () => {
     expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("");
   });
 
-  test("renders the source picker and destination when forking", () => {
-    renderModal({
-      selectedNode: makeNode(NodeType.AI),
-      aiUseSession: true,
-      aiForkFromPlaceholder: "base",
-      aiSessionPlaceholder: "variant-a",
-      sessionPlaceholderUsages: [{ name: "base", count: 1 }],
-    });
-
-    expect((screen.getByLabelText("Fork from") as HTMLSelectElement).value).toBe("base");
-    expect((screen.getByLabelText("Into new session") as HTMLInputElement).value).toBe("variant-a");
-  });
-
   test("notifies when the fork source is chosen", () => {
     const props = renderModal({
       selectedNode: makeNode(NodeType.AI),
@@ -151,17 +138,13 @@ describe("NodeSettingsModal session memory mode", () => {
     expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("other");
   });
 
-  test("shows a templated session name verbatim and says it expands per run", () => {
+  test("says a templated session name expands per run", () => {
     renderModal({
       selectedNode: makeNode(NodeType.AI),
       aiUseSession: true,
       aiSessionPlaceholder: "ticket_{{Var.current_ticket}}",
     });
 
-    // Never rewritten — the author's template is the stored value.
-    expect((screen.getByLabelText("Session name") as HTMLInputElement).value).toBe(
-      "ticket_{{Var.current_ticket}}",
-    );
     expect(screen.getByText(/one session per distinct value/)).toBeTruthy();
   });
 

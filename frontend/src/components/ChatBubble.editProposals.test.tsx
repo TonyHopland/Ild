@@ -1,72 +1,35 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, waitFor, within, act } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
-import type { ChatMessage, ChatSession, WorkItemEditProposal } from "../types";
+import { screen, fireEvent, waitFor, within, act } from "@testing-library/react";
+import type { ChatMessage, ChatSession, WorkItem, WorkItemEditProposal } from "../types";
+import {
+  chatMessageOf,
+  chatSessionOf,
+  documentOrder,
+  emitHubEvent,
+  openResumedChat as openResumed,
+  proposalCardAround,
+  signalRHub,
+  stubChatServices,
+} from "../test-support";
 
-const { handlers, invoke, chatService, aiProviderService, workItemService } = vi.hoisted(() => ({
-  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-  invoke: vi.fn(() => Promise.resolve()),
-  chatService: {
-    listHistory: vi.fn(),
-    getById: vi.fn(),
-    start: vi.fn(),
-    sendMessage: vi.fn(),
-    interrupt: vi.fn(),
-    deleteOne: vi.fn(),
-    deleteMany: vi.fn(),
-  },
-  aiProviderService: {
-    getAll: vi.fn(),
-  },
-  workItemService: {
-    listEditProposals: vi.fn(),
-    listEditProposalsFor: vi.fn(),
-    approveEditProposal: vi.fn(),
-    rejectEditProposal: vi.fn(),
-  },
-}));
-
-vi.mock("../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: "connected",
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event] = handler;
-    },
-    off: (event: string) => {
-      delete handlers[event];
-    },
-    invoke,
-  }),
-}));
-vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
+vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
-import ChatBubble from "./ChatBubble";
-import { ChatInboxProvider } from "./ChatInbox";
-import { openChatFromList, proposalCardAround } from "../test-support";
-import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
+const { workItemService } = stubChatServices();
 
 function session(): ChatSession {
-  return {
+  return chatSessionOf({
     id: "s1",
     name: "Tidy the backlog",
-    aiProviderId: "p1",
-    providerType: "claude-code",
-    tools: ["ild"],
-    createdAt: "2026-01-01T00:00:00Z",
     messages: [
-      {
+      chatMessageOf({
         id: "m1",
-        role: "assistant",
         content: "I proposed a sharper title for wi-9.",
-        interrupted: false,
         sequence: 1,
-        createdAt: "2026-01-01T00:00:00Z",
-      },
+      }),
     ],
-    activeTurnId: null,
-  };
+  });
 }
 
 function proposal(overrides: Partial<WorkItemEditProposal> = {}): WorkItemEditProposal {
@@ -114,46 +77,8 @@ function card(
   return proposal({ id, proposed: { title }, chatReplySequence: anchor, createdAt, ...overrides });
 }
 
-/** The labels, in the order their elements appear in the document. */
-function documentOrder(entries: [string, Element][]): string[] {
-  return [...entries]
-    .sort(([, a], [, b]) =>
-      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-    )
-    .map(([label]) => label);
-}
-
-function byText(labels: string[]): [string, Element][] {
-  return labels.map((l) => [l, screen.getByText(l)]);
-}
-
-async function openResumed(view: ChatSession = session()) {
-  chatService.listHistory.mockResolvedValue([
-    {
-      id: "s1",
-      name: "Tidy the backlog",
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-02T00:00:00Z",
-    },
-  ]);
-  chatService.getById.mockResolvedValue(view);
-  aiProviderService.getAll.mockResolvedValue([]);
-  render(
-    <MemoryRouter initialEntries={["/"]}>
-      <ChatInboxProvider>
-        <ChatBubble />
-      </ChatInboxProvider>
-    </MemoryRouter>,
-    { wrapper: WorkItemHubProvider },
-  );
-  fireEvent.click(await screen.findByLabelText("Open chat"));
-  await openChatFromList("Tidy the backlog");
-  await screen.findByLabelText("Chat message");
-}
-
 afterEach(() => {
-  cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   vi.clearAllMocks();
   localStorage.clear();
 });
@@ -163,10 +88,10 @@ describe("ChatBubble edit proposals", () => {
     workItemService.listEditProposalsFor.mockResolvedValue([proposal()]);
     workItemService.approveEditProposal.mockResolvedValue({
       proposal: proposal({ status: "Approved" }),
-      workItem: {},
+      workItem: {} as WorkItem,
     });
 
-    await openResumed();
+    await openResumed(session());
 
     const transcript = (await screen.findByText("I proposed a sharper title for wi-9.")).closest(
       ".chat-panel-body",
@@ -176,7 +101,7 @@ describe("ChatBubble edit proposals", () => {
     expect(workItemService.listEditProposalsFor).toHaveBeenCalledWith(
       expect.objectContaining({ chatSessionId: "s1" }),
     );
-    expect(invoke).toHaveBeenCalledWith("SubscribeToChat", "s1");
+    expect(signalRHub.invoke).toHaveBeenCalledWith("SubscribeToChat", "s1");
 
     fireEvent.click(within(transcript).getByRole("button", { name: "Approve" }));
 
@@ -207,7 +132,7 @@ describe("ChatBubble edit proposals", () => {
     );
     workItemService.approveEditProposal.mockResolvedValue({
       proposal: { ...pendingA, status: "Approved" },
-      workItem: {},
+      workItem: {} as WorkItem,
     });
 
     await openResumed({
@@ -238,7 +163,7 @@ describe("ChatBubble edit proposals", () => {
       "Title N1",
       "Title N2",
     ];
-    expect(documentOrder(byText(expected))).toEqual(expected);
+    expect(documentOrder(expected)).toEqual(expected);
 
     const cardA = proposalCardAround(screen.getByText("Title A"));
     fireEvent.click(within(cardA).getByRole("button", { name: "Approve" }));
@@ -250,7 +175,7 @@ describe("ChatBubble edit proposals", () => {
         }),
       ).toBeNull(),
     );
-    expect(documentOrder(byText(expected))).toEqual(expected);
+    expect(documentOrder(expected)).toEqual(expected);
   });
 
   test("a card made by the turn in flight follows its reply as it streams and once it lands", async () => {
@@ -269,55 +194,54 @@ describe("ChatBubble edit proposals", () => {
       activeTurnId: "t1",
     });
     await screen.findByText("Sharper title");
-    const indicator = () => ["indicator", screen.getByRole("status")] as [string, Element];
 
     expect(
       documentOrder([
-        ...byText(["To what?", "Earlier title", "Something sharper", "Sharper title"]),
-        indicator(),
+        "To what?",
+        "Earlier title",
+        "Something sharper",
+        "Sharper title",
+        "Thinking",
       ]),
-    ).toEqual(["To what?", "Earlier title", "Something sharper", "Sharper title", "indicator"]);
+    ).toEqual(["To what?", "Earlier title", "Something sharper", "Sharper title", "Thinking"]);
 
-    act(() =>
-      handlers["ChatTurnProgress"]({
-        payload: { chatSessionId: "s1", turnId: "t1", delta: "Renaming it now" },
-      }),
-    );
+    emitHubEvent("ChatTurnProgress", {
+      chatSessionId: "s1",
+      turnId: "t1",
+      delta: "Renaming it now",
+    });
 
     expect(
-      documentOrder([
-        ...byText(["Something sharper", "Renaming it now", "Sharper title"]),
-        indicator(),
-      ]),
-    ).toEqual(["Something sharper", "Renaming it now", "Sharper title", "indicator"]);
+      documentOrder(["Something sharper", "Renaming it now", "Sharper title", "Responding"]),
+    ).toEqual(["Something sharper", "Renaming it now", "Sharper title", "Responding"]);
 
     act(() => {
-      handlers["ChatMessageAppended"]({
-        payload: {
-          chatSessionId: "s1",
-          turnId: "t1",
-          message: message(3, "assistant", "Renamed it."),
-        },
+      signalRHub.dispatch("ChatMessageAppended", {
+        chatSessionId: "s1",
+        turnId: "t1",
+        message: message(3, "assistant", "Renamed it."),
       });
-      handlers["ChatTurnCompleted"]({
-        payload: { chatSessionId: "s1", turnId: "t1", interrupted: false },
+      signalRHub.dispatch("ChatTurnCompleted", {
+        chatSessionId: "s1",
+        turnId: "t1",
+        interrupted: false,
       });
     });
 
     expect(screen.queryByRole("status")).toBeNull();
-    expect(documentOrder(byText(["Something sharper", "Renamed it.", "Sharper title"]))).toEqual([
+    expect(documentOrder(["Something sharper", "Renamed it.", "Sharper title"])).toEqual([
       "Something sharper",
       "Renamed it.",
       "Sharper title",
     ]);
 
-    act(() =>
-      handlers["ChatMessageAppended"]({
-        payload: { chatSessionId: "s1", turnId: "t2", message: message(4, "user", "Now the tags") },
-      }),
-    );
+    emitHubEvent("ChatMessageAppended", {
+      chatSessionId: "s1",
+      turnId: "t2",
+      message: message(4, "user", "Now the tags"),
+    });
 
-    expect(documentOrder(byText(["Renamed it.", "Sharper title", "Now the tags"]))).toEqual([
+    expect(documentOrder(["Renamed it.", "Sharper title", "Now the tags"])).toEqual([
       "Renamed it.",
       "Sharper title",
       "Now the tags",
@@ -339,15 +263,19 @@ describe("ChatBubble edit proposals", () => {
     });
 
     act(() => {
-      handlers["ChatMessageAppended"]({
-        payload: { chatSessionId: "s1", turnId: "t1", message: message(1, "assistant", "Done.") },
+      signalRHub.dispatch("ChatMessageAppended", {
+        chatSessionId: "s1",
+        turnId: "t1",
+        message: message(1, "assistant", "Done."),
       });
-      handlers["ChatMessageAppended"]({
-        payload: { chatSessionId: "s1", turnId: "t2", message: message(2, "user", "Next") },
+      signalRHub.dispatch("ChatMessageAppended", {
+        chatSessionId: "s1",
+        turnId: "t2",
+        message: message(2, "user", "Next"),
       });
     });
 
-    expect(documentOrder(byText(["Done.", "Sharper title", "Next"]))).toEqual([
+    expect(documentOrder(["Done.", "Sharper title", "Next"])).toEqual([
       "Done.",
       "Sharper title",
       "Next",

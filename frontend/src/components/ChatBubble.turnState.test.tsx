@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
-import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
+import { screen, fireEvent, waitFor, act } from "@testing-library/react";
+import type { ChatSession, ChatSessionSummary } from "../types";
 import {
+  chatBubbleTree,
+  chatMessageOf as msg,
+  chatSessionOf as chatSession,
+  chatSummary as summary,
+  deferred,
+  emitChatEvent as emit,
   openChatFromList,
+  openResumedChat,
+  renderChatBubble,
+  settle,
   showChatActions,
+  signalRHub,
   startNewChat,
-  type ChatHubEvents,
+  stubChatServices,
 } from "../test-support";
 
 // The turn the bubble believes is running outlives every request it makes: a
@@ -14,130 +23,52 @@ import {
 // them, and each of them can land on a chat that has since moved on. These are
 // the paths ChatBubble.test.tsx does not reach — a request that fails, and an
 // answer that arrives for a chat the user has already left.
-const {
-  handlers,
-  invoke,
-  connection,
-  chatService,
-  aiProviderService,
-  workItemService,
-  getOpenLoopDocument,
-} = vi.hoisted(() => ({
-  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-  invoke: vi.fn(() => Promise.resolve()),
-  // The bubble only reads the connection state while rendering, so a test
-  // drops and restores it by setting this and re-rendering.
-  connection: { state: "connected" as string },
-  chatService: {
-    listHistory: vi.fn(),
-    getById: vi.fn(),
-    start: vi.fn(),
-    sendMessage: vi.fn(),
-    interrupt: vi.fn(),
-    deleteOne: vi.fn(),
-    deleteMany: vi.fn(),
-  },
-  aiProviderService: { getAll: vi.fn() },
-  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
-  getOpenLoopDocument: vi.fn(),
-}));
-
-vi.mock("../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: connection.state,
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event] = handler;
-    },
-    off: (event: string) => {
-      delete handlers[event];
-    },
-    invoke,
-  }),
-}));
-
-vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
-vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
+vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
+vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
-import ChatBubble from "./ChatBubble";
-import { ChatInboxProvider } from "./ChatInbox";
-import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
-
-function chatSession(partial: Partial<ChatSession> = {}): ChatSession {
-  return {
-    id: partial.id ?? "s1",
-    name: partial.name ?? "Past chat",
-    aiProviderId: "p1",
-    providerType: "claude-code",
-    tools: ["ild"],
-    createdAt: "2026-01-01T00:00:00Z",
-    messages: partial.messages ?? [],
-    activeTurnId: partial.activeTurnId ?? null,
-  };
-}
-
-function msg(partial: Partial<ChatMessage>): ChatMessage {
-  return {
-    id: partial.id ?? crypto.randomUUID(),
-    role: partial.role ?? "assistant",
-    content: partial.content ?? "",
-    interrupted: false,
-    sequence: partial.sequence ?? 0,
-    createdAt: "2026-01-01T00:00:00Z",
-  };
-}
-
-function summary(id: string, name: string): ChatSessionSummary {
-  return { id, name, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-02T00:00:00Z" };
-}
-
-function emit<E extends keyof ChatHubEvents>(event: E, payload: ChatHubEvents[E]) {
-  act(() => {
-    handlers[event]?.({ payload });
-  });
-}
+const { chatService, aiProviderService } = stubChatServices();
 
 /** Open the bubble on the chat list, with the given chats in the history. */
-function openList(...chats: ChatSessionSummary[]) {
+async function openList(...chats: ChatSessionSummary[]) {
   chatService.listHistory.mockResolvedValue(chats);
   // The start form loads them behind the list; none of these tests start a chat.
   aiProviderService.getAll.mockResolvedValue([]);
-  return render(
-    <MemoryRouter initialEntries={["/"]}>
-      <ChatInboxProvider>
-        <ChatBubble />
-      </ChatInboxProvider>
-    </MemoryRouter>,
-    { wrapper: WorkItemHubProvider },
-  );
+  return renderChatBubble();
 }
 
 /**
- * Resume a chat and wait for the join's own state read, so a test that swaps the
- * `getById` mock afterwards is swapping it for its own call and not for that one.
+ * Resume a chat and let the join's own state read land, so a test that swaps the
+ * `getById` mock afterwards is swapping it for its own read and not for that one.
  */
 async function openResumed(session: ChatSession) {
-  const view = openList(summary(session.id, session.name ?? "Past chat"));
-  chatService.getById.mockResolvedValue(session);
-  fireEvent.click(await screen.findByLabelText("Open chat"));
-  await openChatFromList(session.name ?? "Past chat");
-  await screen.findByLabelText("Chat message");
-  await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(2));
+  const view = await openResumedChat(session);
+  await settle();
   return view;
 }
 
-/** Drop or restore the live connection; the bubble reads it while rendering. */
-function setConnectionState(view: ReturnType<typeof openList>, state: string) {
-  connection.state = state;
-  act(() => {
-    view.rerender(
-      <MemoryRouter initialEntries={["/"]}>
-        <ChatInboxProvider>
-          <ChatBubble />
-        </ChatInboxProvider>
-      </MemoryRouter>,
-    );
+/**
+ * Holds the next state read open: it is answered or failed through `answer`, and
+ * `taken` settles once the bubble has asked for it.
+ */
+function holdNextRead() {
+  const answer = deferred<ChatSession>();
+  const taken = deferred();
+  chatService.getById.mockImplementationOnce(() => {
+    taken.resolve();
+    return answer.promise;
   });
+  return { answer, taken: taken.promise };
+}
+
+/** Drop or restore the live connection; the bubble reads it while rendering. */
+async function setConnectionState(
+  view: Awaited<ReturnType<typeof openList>>,
+  state: "disconnected" | "connecting" | "connected" | "reconnecting",
+) {
+  signalRHub.setState(state);
+  const tree = await chatBubbleTree();
+  act(() => view.rerender(tree));
 }
 
 async function sendMessageText(text: string) {
@@ -147,11 +78,8 @@ async function sendMessageText(text: string) {
 }
 
 afterEach(() => {
-  cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   vi.clearAllMocks();
-  getOpenLoopDocument.mockReset();
-  connection.state = "connected";
   localStorage.clear();
 });
 
@@ -165,29 +93,30 @@ describe("ChatBubble turn state", () => {
 
     let acceptSend!: () => void;
     chatService.sendMessage.mockReturnValue(
-      new Promise<void>((resolve) => {
-        acceptSend = resolve;
+      new Promise<string | null>((resolve) => {
+        acceptSend = () => resolve(null);
       }),
     );
     await sendMessageText("are you there?");
     expect(screen.getByLabelText("Stop")).toBeTruthy();
 
     // The rejoin lands first, with the chat still idle as far as the server knows.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: null }));
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
-    await act(async () => {});
+    const rejoinRead = holdNextRead();
+    await setConnectionState(view, "reconnecting");
+    await setConnectionState(view, "connected");
+    await rejoinRead.taken;
+    await act(async () => rejoinRead.answer.resolve(chatSession({ activeTurnId: null })));
 
     expect(screen.getByLabelText("Stop")).toBeTruthy();
     expect(screen.getByRole("status")).toBeTruthy();
 
     // Then the send is accepted, and its own read names the turn it started.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t4" }));
+    const sendRead = holdNextRead();
     await act(async () => {
       acceptSend();
     });
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
+    await sendRead.taken;
+    await act(async () => sendRead.answer.resolve(chatSession({ activeTurnId: "t4" })));
 
     expect(screen.getByLabelText("Stop")).toBeTruthy();
     emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t4", interrupted: false });
@@ -199,7 +128,7 @@ describe("ChatBubble turn state", () => {
     // own state as usual — otherwise opening one while a send hangs in the other
     // leaves it showing whatever it happened to be showing, right or wrong.
     chatService.interrupt.mockResolvedValue(undefined);
-    const view = openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+    const view = await openList(summary("s1", "First chat"), summary("s2", "Other chat"));
     chatService.getById.mockImplementation((id: string) =>
       Promise.resolve(
         id === "s1"
@@ -213,7 +142,7 @@ describe("ChatBubble turn state", () => {
     await screen.findByLabelText("Chat message");
 
     // A send to the first chat that never comes back.
-    chatService.sendMessage.mockReturnValue(new Promise<void>(() => {}));
+    chatService.sendMessage.mockReturnValue(new Promise<string | null>(() => {}));
     await sendMessageText("are you there?");
     expect(screen.getByLabelText("Stop")).toBeTruthy();
 
@@ -226,8 +155,8 @@ describe("ChatBubble turn state", () => {
     // That turn ends while we are watching it, and the rejoin must be able to say
     // so — the other chat's pending send has no bearing on this one.
     chatService.getById.mockResolvedValue(chatSession({ id: "s2", name: "Other chat" }));
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
+    await setConnectionState(view, "reconnecting");
+    await setConnectionState(view, "connected");
     await act(async () => {});
 
     await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
@@ -237,7 +166,7 @@ describe("ChatBubble turn state", () => {
   test("a send that fails after the user opened another chat reports nothing there", async () => {
     // The bubble is one component for every chat, so a request that outlives the
     // chat it belongs to must write nothing into whatever chat is open instead.
-    openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+    await openList(summary("s1", "First chat"), summary("s2", "Other chat"));
     chatService.getById.mockImplementation((id: string) =>
       Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
     );
@@ -247,7 +176,7 @@ describe("ChatBubble turn state", () => {
 
     let failSend!: (err: Error) => void;
     chatService.sendMessage.mockReturnValue(
-      new Promise<void>((_, reject) => {
+      new Promise<string | null>((_, reject) => {
         failSend = reject;
       }),
     );
@@ -267,7 +196,7 @@ describe("ChatBubble turn state", () => {
   test("a stop still running in one chat leaves another chat's stop button usable", async () => {
     // The same rule for the flag that disables the button while a stop is in
     // flight: it belongs to the chat it was pressed in.
-    openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+    await openList(summary("s1", "First chat"), summary("s2", "Other chat"));
     chatService.getById.mockImplementation((id: string) =>
       Promise.resolve(
         chatSession({ id, name: id === "s1" ? "First chat" : "Other chat", activeTurnId: "t1" }),
@@ -300,13 +229,13 @@ describe("ChatBubble turn state", () => {
     // this chat's is still out", including the one that clears the controls after
     // the turn ends. That is a stop button and a working indicator over an idle
     // chat with nothing left to take them down.
-    const view = openList(summary("s1", "First chat"));
+    const view = await openList(summary("s1", "First chat"));
     chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
     fireEvent.click(await screen.findByLabelText("Open chat"));
     await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
 
-    chatService.sendMessage.mockReturnValue(new Promise<void>(() => {}));
+    chatService.sendMessage.mockReturnValue(new Promise<string | null>(() => {}));
     await sendMessageText("are you there?");
     expect(screen.getByLabelText("Stop")).toBeTruthy();
 
@@ -320,8 +249,8 @@ describe("ChatBubble turn state", () => {
     // The turn ends while the connection is down, so the completion never arrives
     // and the rejoin's read is the only thing that can say so. It has to be heard.
     chatService.getById.mockResolvedValue(chatSession({ name: "First chat", activeTurnId: null }));
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
+    await setConnectionState(view, "reconnecting");
+    await setConnectionState(view, "connected");
     await act(async () => {});
 
     await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
@@ -333,7 +262,7 @@ describe("ChatBubble turn state", () => {
     // flight, and a stop that never answers would otherwise leave it disabled for
     // good — the ability to stop the chat lost again, which is the bug this work
     // item is about.
-    openList(summary("s1", "First chat"));
+    await openList(summary("s1", "First chat"));
     chatService.getById.mockResolvedValue(chatSession({ name: "First chat", activeTurnId: "t1" }));
     chatService.interrupt.mockReturnValue(new Promise<void>(() => {}));
 
@@ -359,7 +288,7 @@ describe("ChatBubble turn state", () => {
     // first one to come back would release the claim of the one still in flight and
     // re-enable its button, ready to fire another interrupt. Each stop is numbered,
     // so only its own claim is the one it releases.
-    openList(summary("s1", "First chat"));
+    await openList(summary("s1", "First chat"));
     chatService.getById.mockResolvedValue(chatSession({ name: "First chat", activeTurnId: "t1" }));
 
     let finishFirstStop!: () => void;
@@ -411,7 +340,7 @@ describe("ChatBubble turn state", () => {
     await openResumed(chatSession({ activeTurnId: "t1" }));
     emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an answer" });
 
-    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.sendMessage.mockResolvedValue(null);
     chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t2" }));
     await sendMessageText("stop that");
 
@@ -487,13 +416,16 @@ describe("ChatBubble turn state", () => {
       }
 
       chatService.sendMessage.mockRejectedValue(new Error("Network error."));
-      if (readFails) chatService.getById.mockRejectedValue(new Error("Network error."));
-      else chatService.getById.mockResolvedValue(chatSession({ activeTurnId: read }));
+      const sendRead = holdNextRead();
 
       await sendMessageText("did this arrive?");
 
       expect(await screen.findByText("Network error.")).toBeTruthy();
-      await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+      await sendRead.taken;
+      await act(async () => {
+        if (readFails) sendRead.answer.reject(new Error("Network error."));
+        else sendRead.answer.resolve(chatSession({ activeTurnId: read }));
+      });
       if (ends === "working") {
         await waitFor(() => expect(screen.getByLabelText("Stop")).toBeTruthy());
         expect(screen.getByRole("status")).toBeTruthy();
@@ -565,28 +497,23 @@ describe("ChatBubble turn state", () => {
 
     let failSend!: (err: Error) => void;
     chatService.sendMessage.mockReturnValue(
-      new Promise<void>((_, reject) => {
+      new Promise<string | null>((_, reject) => {
         failSend = reject;
       }),
     );
-    let failRead!: (err: Error) => void;
-    chatService.getById.mockReturnValue(
-      new Promise<ChatSession>((_, reject) => {
-        failRead = reject;
-      }),
-    );
+    const sendRead = holdNextRead();
 
     await sendMessageText("did this arrive?");
     await act(async () => {
       failSend(new Error("Network error."));
     });
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+    await sendRead.taken;
 
     // The runner did get the message: it announces the turn while the client is
     // still unwinding the send that failed.
     emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t5" });
     await act(async () => {
-      failRead(new Error("Network error."));
+      sendRead.answer.reject(new Error("Network error."));
     });
 
     expect(screen.getByLabelText("Stop")).toBeTruthy();
@@ -604,16 +531,11 @@ describe("ChatBubble turn state", () => {
     const history = Array.from({ length: 60 }, (_, i) =>
       msg({ id: `m${i}`, content: `body ${i}`, sequence: i }),
     );
-    openList(summary("s1", "Long chat"));
+    await openList(summary("s1", "Long chat"));
     chatService.getById.mockResolvedValueOnce(
       chatSession({ name: "Long chat", messages: history }),
     );
-    let answerJoinRead!: (session: ChatSession) => void;
-    chatService.getById.mockReturnValueOnce(
-      new Promise<ChatSession>((resolve) => {
-        answerJoinRead = resolve;
-      }),
-    );
+    const joinRead = holdNextRead();
 
     fireEvent.click(await screen.findByLabelText("Open chat"));
     await openChatFromList("Long chat");
@@ -632,7 +554,7 @@ describe("ChatBubble turn state", () => {
     // The server answers with the same transcript out of order, plus one the
     // client had not seen.
     await act(async () => {
-      answerJoinRead(
+      joinRead.answer.resolve(
         chatSession({
           name: "Long chat",
           messages: [msg({ id: "late", content: "body 61", sequence: 61 }), ...history].reverse(),
@@ -659,33 +581,19 @@ describe("ChatBubble turn state", () => {
     expect(screen.getByLabelText("Stop")).toBeTruthy();
 
     // The join's read goes out first and hangs: its snapshot still says running.
-    let answerJoinRead!: (session: ChatSession) => void;
-    chatService.getById.mockReturnValueOnce(
-      new Promise<ChatSession>((resolve) => {
-        answerJoinRead = resolve;
-      }),
-    );
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+    const joinRead = holdNextRead();
+    await setConnectionState(view, "reconnecting");
+    await setConnectionState(view, "connected");
+    await joinRead.taken;
 
     // Then the user stops the turn, and that read goes out second.
-    let answerStopRead!: (session: ChatSession) => void;
-    chatService.getById.mockReturnValueOnce(
-      new Promise<ChatSession>((resolve) => {
-        answerStopRead = resolve;
-      }),
-    );
+    const stopRead = holdNextRead();
     fireEvent.click(screen.getByLabelText("Stop"));
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
+    await stopRead.taken;
 
     // The stale join answer lands first, then the truth.
-    await act(async () => {
-      answerJoinRead(chatSession({ activeTurnId: "t1" }));
-    });
-    await act(async () => {
-      answerStopRead(chatSession({ activeTurnId: null }));
-    });
+    await act(async () => joinRead.answer.resolve(chatSession({ activeTurnId: "t1" })));
+    await act(async () => stopRead.answer.resolve(chatSession({ activeTurnId: null })));
 
     expect(screen.queryByLabelText("Stop")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
@@ -699,32 +607,18 @@ describe("ChatBubble turn state", () => {
     const view = await openResumed(chatSession({ activeTurnId: "t1" }));
 
     // The stop's own read goes out first and will answer: the turn is over.
-    let answerStopRead!: (session: ChatSession) => void;
-    chatService.getById.mockReturnValueOnce(
-      new Promise<ChatSession>((resolve) => {
-        answerStopRead = resolve;
-      }),
-    );
+    const stopRead = holdNextRead();
     fireEvent.click(screen.getByLabelText("Stop"));
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+    await stopRead.taken;
 
     // A rejoin's read goes out after it, and fails.
-    let failJoinRead!: (err: Error) => void;
-    chatService.getById.mockReturnValueOnce(
-      new Promise<ChatSession>((_, reject) => {
-        failJoinRead = reject;
-      }),
-    );
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
+    const joinRead = holdNextRead();
+    await setConnectionState(view, "reconnecting");
+    await setConnectionState(view, "connected");
+    await joinRead.taken;
 
-    await act(async () => {
-      failJoinRead(new Error("Network error."));
-    });
-    await act(async () => {
-      answerStopRead(chatSession({ activeTurnId: null }));
-    });
+    await act(async () => joinRead.answer.reject(new Error("Network error.")));
+    await act(async () => stopRead.answer.resolve(chatSession({ activeTurnId: null })));
 
     expect(screen.queryByLabelText("Stop")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
@@ -736,31 +630,17 @@ describe("ChatBubble turn state", () => {
     const view = await openResumed(chatSession({ activeTurnId: null }));
     chatService.sendMessage.mockRejectedValue(new Error("Network error."));
 
-    let answerSendRead!: (session: ChatSession) => void;
-    chatService.getById.mockReturnValueOnce(
-      new Promise<ChatSession>((resolve) => {
-        answerSendRead = resolve;
-      }),
-    );
+    const sendRead = holdNextRead();
     await sendMessageText("did this arrive?");
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+    await sendRead.taken;
 
-    let failJoinRead!: (err: Error) => void;
-    chatService.getById.mockReturnValueOnce(
-      new Promise<ChatSession>((_, reject) => {
-        failJoinRead = reject;
-      }),
-    );
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
+    const joinRead = holdNextRead();
+    await setConnectionState(view, "reconnecting");
+    await setConnectionState(view, "connected");
+    await joinRead.taken;
 
-    await act(async () => {
-      failJoinRead(new Error("Network error."));
-    });
-    await act(async () => {
-      answerSendRead(chatSession({ activeTurnId: "t2" }));
-    });
+    await act(async () => joinRead.answer.reject(new Error("Network error.")));
+    await act(async () => sendRead.answer.resolve(chatSession({ activeTurnId: "t2" })));
 
     expect(screen.getByLabelText("Stop")).toBeTruthy();
     expect(screen.getByRole("status")).toBeTruthy();
@@ -768,8 +648,8 @@ describe("ChatBubble turn state", () => {
 
   test("a state read answered after the user left never lands on the chat they moved to", async () => {
     chatService.interrupt.mockResolvedValue(undefined);
-    chatService.sendMessage.mockResolvedValue(undefined);
-    openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+    chatService.sendMessage.mockResolvedValue(null);
+    await openList(summary("s1", "First chat"), summary("s2", "Other chat"));
     chatService.getById.mockResolvedValue(chatSession({ id: "s1", name: "First chat" }));
 
     fireEvent.click(await screen.findByLabelText("Open chat"));
@@ -933,7 +813,7 @@ describe("ChatBubble turn state", () => {
     ];
 
     test.each(LATE_ANSWER_CASES)("$name", async ({ chats, returnTo }) => {
-      openList(...chats.map((name, i) => summary(`s${i + 1}`, name)));
+      await openList(...chats.map((name, i) => summary(`s${i + 1}`, name)));
       chatService.getById.mockImplementation((id: string) =>
         Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
       );
@@ -972,7 +852,7 @@ describe("ChatBubble turn state", () => {
     }
 
     test("a state read from the earlier visit never lands on the later one", async () => {
-      const view = openList(summary("s1", "First chat"));
+      const view = await openList(summary("s1", "First chat"));
       chatService.getById.mockResolvedValue(
         chatSession({ name: "First chat", activeTurnId: "t1" }),
       );
@@ -980,15 +860,10 @@ describe("ChatBubble turn state", () => {
       await openFirstChat();
 
       // A rejoin read taken in the first visit, left unanswered.
-      let answerFirstVisitRead!: (session: ChatSession) => void;
-      chatService.getById.mockReturnValueOnce(
-        new Promise<ChatSession>((resolve) => {
-          answerFirstVisitRead = resolve;
-        }),
-      );
-      setConnectionState(view, "reconnecting");
-      setConnectionState(view, "connected");
-      await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+      const firstVisitRead = holdNextRead();
+      await setConnectionState(view, "reconnecting");
+      await setConnectionState(view, "connected");
+      await firstVisitRead.taken;
 
       // Away and back into the same chat, which is running a different turn now.
       await startNewChat();
@@ -1002,7 +877,7 @@ describe("ChatBubble turn state", () => {
       // answering about a visit that is over, so it may not take the controls off
       // the turn this visit is watching.
       await act(async () => {
-        answerFirstVisitRead(chatSession({ name: "First chat", activeTurnId: null }));
+        firstVisitRead.answer.resolve(chatSession({ name: "First chat", activeTurnId: null }));
       });
 
       expect(screen.getByLabelText("Stop")).toBeTruthy();
@@ -1010,14 +885,14 @@ describe("ChatBubble turn state", () => {
     });
 
     test("a send failing in the earlier visit does not disturb the later one", async () => {
-      openList(summary("s1", "First chat"));
+      await openList(summary("s1", "First chat"));
       chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
       fireEvent.click(await screen.findByLabelText("Open chat"));
       await openFirstChat();
 
       let failSend!: (err: Error) => void;
       chatService.sendMessage.mockReturnValue(
-        new Promise<void>((_, reject) => {
+        new Promise<string | null>((_, reject) => {
           failSend = reject;
         }),
       );
@@ -1053,7 +928,7 @@ describe("ChatBubble turn state", () => {
       // slower answer belongs to a visit that never happened, and installing it
       // would put the user in a chat they did not open — with a stop button that
       // interrupts that chat's turn rather than anything they were looking at.
-      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      await openList(summary("s1", "First chat"), summary("s2", "Other chat"));
       let answerFirstOpen!: (session: ChatSession) => void;
       chatService.getById.mockImplementation((id: string) =>
         id === "s1"
@@ -1095,7 +970,7 @@ describe("ChatBubble turn state", () => {
     });
 
     test("deleting a chat whose open is still on its way calls the open off", async () => {
-      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      await openList(summary("s1", "First chat"), summary("s2", "Other chat"));
       chatService.deleteOne.mockResolvedValue(undefined);
       let answerOtherOpen!: (session: ChatSession) => void;
       chatService.getById.mockImplementation((id: string) =>
@@ -1132,13 +1007,13 @@ describe("ChatBubble turn state", () => {
       });
 
       expect(screen.queryByText("the chat they deleted")).toBeNull();
-      expect(invoke).not.toHaveBeenCalledWith("SubscribeToChat", "s2");
+      expect(signalRHub.invoke).not.toHaveBeenCalledWith("SubscribeToChat", "s2");
       // The chat that was open stays the one open.
       expect(document.querySelector(".chat-panel-title")?.textContent).toBe("First chat");
     });
 
     test("picking the open chat's row again overrules an open of another chat still on its way", async () => {
-      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      await openList(summary("s1", "First chat"), summary("s2", "Other chat"));
       let answerOtherOpen!: (session: ChatSession) => void;
       chatService.getById.mockImplementation((id: string) =>
         id === "s2"
@@ -1180,14 +1055,14 @@ describe("ChatBubble turn state", () => {
       // The sharper half of the same hazard: the stale read carries the *send
       // number* of the visit that made it, and that number is what lets a read
       // through the pending-send claim. It must not open this visit's claim.
-      openList(summary("s1", "First chat"));
+      await openList(summary("s1", "First chat"));
       chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
       fireEvent.click(await screen.findByLabelText("Open chat"));
       await openFirstChat();
 
       let failFirstVisitSend!: (err: Error) => void;
       chatService.sendMessage.mockReturnValue(
-        new Promise<void>((_, reject) => {
+        new Promise<string | null>((_, reject) => {
           failFirstVisitSend = reject;
         }),
       );
@@ -1199,7 +1074,7 @@ describe("ChatBubble turn state", () => {
       // This visit posts its own message, and that request has not come back — so
       // the server may not have registered its turn yet, and only this send's own
       // read may settle what it put up.
-      chatService.sendMessage.mockReturnValue(new Promise<void>(() => {}));
+      chatService.sendMessage.mockReturnValue(new Promise<string | null>(() => {}));
       await sendMessageText("this visit");
       expect(screen.getByLabelText("Stop")).toBeTruthy();
 
@@ -1218,7 +1093,7 @@ describe("ChatBubble turn state", () => {
     });
 
     test("a stop settling from the earlier visit does not disturb the later one", async () => {
-      openList(summary("s1", "First chat"));
+      await openList(summary("s1", "First chat"));
       chatService.getById.mockResolvedValue(
         chatSession({ name: "First chat", activeTurnId: "t1" }),
       );

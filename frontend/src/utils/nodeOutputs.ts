@@ -115,6 +115,16 @@ export function successFailureOutputs(
   return [EdgeType.OnSuccess, EdgeType.OnFailure].filter((name) => names.has(name));
 }
 
+/** Whether a node of this type parks for a person, and so lists its outputs with the eye, shield, default and colour controls. */
+export function outputControlsShown(type: NodeType): boolean {
+  return type === NodeType.Human || type === NodeType.PR;
+}
+
+/** Why an output row is greyed out: nothing is wired to it, or it is wired but hidden from the person answering. */
+export function closedReasonOf(wired: boolean, visible: boolean): string | null {
+  return !wired ? "no edge connected" : visible ? null : "hidden from user";
+}
+
 /** Whether the run asks the person answering to confirm before taking the output. */
 export function needsConfirmation(output: NodeOutput): boolean {
   return output.confirm === true;

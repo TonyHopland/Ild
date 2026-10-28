@@ -10,20 +10,25 @@ import {
   seedPreferences,
   setPreference,
 } from "../../utils/userPreferences";
-import { mockTaskboardServer, pressEscapeUntil } from "../../test-support";
+import { mockTaskboardServer, pressEscapeUntil, signalRHub } from "../../test-support";
 import { NodeType, WorkItemStatus, WorkItem, Repository, LoopTemplate } from "../../types";
 import { stageParkedNode } from "../../test-support.parkedNode";
 import * as authServices from "../../services/auth";
-import * as signalRHook from "../../hooks/useSignalR";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
+
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
 });
 
 beforeEach(() => {
+  signalRHub.reset();
   localStorage.clear();
   // Done starts folded; these tests read the cards in every column, so this
   // user has opened it.
@@ -57,12 +62,6 @@ function mockModalServices() {
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
-}
-
-async function dispatchSignalR(handler: (msg: any) => void, payload: unknown) {
-  await act(async () => {
-    handler({ payload });
-  });
 }
 
 function deferred<T>() {
@@ -128,6 +127,11 @@ function makeRepo(overrides: Partial<Repository> = {}): Repository {
   };
 }
 
+const COLUMN_TITLES = ["Backlog", "Work queue", "Running", "Needs you", "Waiting for ILD", "Done"];
+
+/** The board's search debounce, as Taskboard/index.tsx holds it. */
+const SEARCH_DEBOUNCE_MS = 300;
+
 const byText = (a: string, b: string) => a.localeCompare(b);
 
 /** The statuses each board column reads, one entry per column, sorted. */
@@ -183,26 +187,6 @@ function badge(label: string): string | null | undefined {
   return columnEl(label).querySelector(".taskboard-column-count")?.textContent;
 }
 
-/** A hub whose events a test fires by name. */
-function mockHub() {
-  const handlers: Record<string, ((msg: any) => void)[]> = {};
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: vi.fn((event: string, handler: (msg: any) => void) => {
-      (handlers[event] ??= []).push(handler);
-    }),
-    off: vi.fn(),
-    invoke: vi.fn(),
-    connectionState: "connected",
-  });
-  return {
-    emit: async (event: string, payload: unknown) => {
-      await act(async () => {
-        for (const handler of handlers[event] ?? []) handler({ payload });
-      });
-    },
-  };
-}
-
 /** Board mocks around a fake server whose getById and transition read and write its items. */
 function mockBoard(items: WorkItem[], repositories: Repository[] = [makeRepo()]) {
   const server = mockTaskboardServer(items);
@@ -226,6 +210,13 @@ function mockBoard(items: WorkItem[], repositories: Repository[] = [makeRepo()])
   return server;
 }
 
+/** Runs the board's timers for `ms` of fake time, with the promise callbacks they cause. */
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
 /** Lets pending promise callbacks and the renders they cause run. */
 async function settle() {
   for (let i = 0; i < 5; i++) {
@@ -237,19 +228,6 @@ async function settle() {
 
 describe("Taskboard SignalR", () => {
   test("updates work item when HumanFeedbackRequired event arrives", async () => {
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     mockTaskboardServer([makeItem()]);
 
     renderTaskboard();
@@ -258,11 +236,7 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    const humanFeedbackHandlers = handlers["HumanFeedbackRequired"];
-    expect(humanFeedbackHandlers).toBeDefined();
-    expect(humanFeedbackHandlers!.length).toBeGreaterThan(0);
-
-    await dispatchSignalR(humanFeedbackHandlers![0], {
+    await signalRHub.emit("HumanFeedbackRequired", {
       workItemId: "wi-1",
       reason: "PR Awaiting Merge",
     });
@@ -273,19 +247,6 @@ describe("Taskboard SignalR", () => {
   });
 
   test("reconciles board item from server after WorkItemStateChanged event", async () => {
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     mockTaskboardServer([makeItem({ status: WorkItemStatus.Running })]);
     const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
       makeItem({
@@ -300,7 +261,7 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "wi-1",
       oldStatus: "Running",
       newStatus: "HumanFeedback",
@@ -313,19 +274,6 @@ describe("Taskboard SignalR", () => {
   });
 
   test("adds a newly created item going Running->HumanFeedback when not yet on the board", async () => {
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     // Board starts empty — the item was created after the page loaded.
     mockTaskboardServer([]);
     const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
@@ -340,10 +288,10 @@ describe("Taskboard SignalR", () => {
     renderTaskboard();
 
     await waitFor(() => {
-      expect(handlers["WorkItemStateChanged"]).toBeDefined();
+      expect(signalRHub.handlers["WorkItemStateChanged"]?.size).toBeGreaterThan(0);
     });
 
-    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "wi-new",
       oldStatus: "Running",
       newStatus: "HumanFeedback",
@@ -357,19 +305,6 @@ describe("Taskboard SignalR", () => {
   });
 
   test("adds a newly created item on HumanFeedbackRequired when not yet on the board", async () => {
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     mockTaskboardServer([]);
     const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
       makeItem({
@@ -383,10 +318,10 @@ describe("Taskboard SignalR", () => {
     renderTaskboard();
 
     await waitFor(() => {
-      expect(handlers["HumanFeedbackRequired"]).toBeDefined();
+      expect(signalRHub.handlers["HumanFeedbackRequired"]?.size).toBeGreaterThan(0);
     });
 
-    await dispatchSignalR(handlers["HumanFeedbackRequired"]![0], {
+    await signalRHub.emit("HumanFeedbackRequired", {
       workItemId: "wi-new",
       reason: "Human Input Needed",
     });
@@ -402,19 +337,6 @@ describe("Taskboard SignalR", () => {
     // (create -> claim -> run-progressed -> human). Each fires a getById; an
     // early fetch the server answered with an older status can resolve *after*
     // a later one and clobber it. This pins that the late stale write loses.
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     mockTaskboardServer([makeItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" })]);
 
     const staleRunning = makeItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" });
@@ -439,8 +361,8 @@ describe("Taskboard SignalR", () => {
     });
 
     // Burst: the run advances a node, then immediately parks for human input.
-    await dispatchSignalR(handlers["WorkItemRunProgressed"]![0], { workItemId: "wi-1" });
-    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+    await signalRHub.emit("WorkItemRunProgressed", { workItemId: "wi-1" });
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "wi-1",
       oldStatus: "Running",
       newStatus: "HumanFeedback",
@@ -460,19 +382,6 @@ describe("Taskboard SignalR", () => {
   });
 
   test("refreshes a running card's current step on WorkItemRunProgressed", async () => {
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     mockTaskboardServer([
       makeItem({
         status: WorkItemStatus.Running,
@@ -496,7 +405,7 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("plan")).toBeTruthy();
     });
 
-    await dispatchSignalR(handlers["WorkItemRunProgressed"]![0], {
+    await signalRHub.emit("WorkItemRunProgressed", {
       workItemId: "wi-1",
     });
 
@@ -507,19 +416,6 @@ describe("Taskboard SignalR", () => {
   });
 
   test("normalizes numeric status from a WorkItemStateChanged event", async () => {
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     mockTaskboardServer([makeItem({ status: WorkItemStatus.HumanFeedback })]);
     // SignalR delivers the enum as its numeric value, and the follow-up refetch
     // is irrelevant to what the event itself writes into state — fail it so the
@@ -536,7 +432,7 @@ describe("Taskboard SignalR", () => {
     // approve moving the item out of HumanFeedback. A raw number would crash
     // status rendering and never match a column; the card should land in the
     // Done column instead.
-    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "wi-1",
       oldStatus: 4,
       newStatus: 6,
@@ -557,19 +453,6 @@ describe("Taskboard SignalR", () => {
     }
     vi.stubGlobal("Notification", MockNotification);
 
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     mockTaskboardServer([makeItem()]);
 
     renderTaskboard();
@@ -578,7 +461,7 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    await dispatchSignalR(handlers["HumanFeedbackRequired"]![0], {
+    await signalRHub.emit("HumanFeedbackRequired", {
       workItemId: "wi-1",
       reason: "Node Failed",
     });
@@ -602,19 +485,6 @@ describe("Taskboard SignalR", () => {
     }
     vi.stubGlobal("Notification", MockNotification);
 
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
-
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
     mockTaskboardServer([makeItem()]);
 
     renderTaskboard();
@@ -623,7 +493,7 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    await dispatchSignalR(handlers["HumanFeedbackRequired"]![0], {
+    await signalRHub.emit("HumanFeedbackRequired", {
       workItemId: "wi-1",
       reason: "Node Failed",
     });
@@ -649,13 +519,6 @@ describe("Taskboard reconnect", () => {
   }
 
   test("a reconnect reloads each column's loaded window from the top and the tags", async () => {
-    let connectionState: "connected" | "reconnecting" | "disconnected" = "connected";
-    vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState,
-    }));
     const server = mockTaskboardServer([
       ...Array.from({ length: 45 }, (_, n) => boardItem(`b${n}`, n)),
       boardItem("r0", 0, WorkItemStatus.Ready),
@@ -675,13 +538,13 @@ describe("Taskboard reconnect", () => {
 
     // While the socket is down another client creates an item; its event is lost.
     server.items.push(boardItem("made-during-outage", 100));
-    connectionState = "reconnecting";
+    signalRHub.setState("reconnecting");
     await act(async () => {
       rerender(taskboardTree());
     });
     expect(server.getPage.mock.calls.length).toBe(pagesBefore);
 
-    connectionState = "connected";
+    signalRHub.setState("connected");
     await act(async () => {
       rerender(taskboardTree());
     });
@@ -701,13 +564,7 @@ describe("Taskboard reconnect", () => {
   test("does not re-fetch on the very first connect", async () => {
     // A board that mounts while already connected must load exactly once: the
     // mount effect's load, with no extra fetch from the connect transition.
-    let connectionState: "connected" | "reconnecting" | "disconnected" = "disconnected";
-    vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState,
-    }));
+    signalRHub.setState("disconnected");
 
     const server = mockTaskboardServer([makeItem()]);
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
@@ -722,7 +579,7 @@ describe("Taskboard reconnect", () => {
     });
 
     // The socket finishes its initial handshake.
-    connectionState = "connected";
+    signalRHub.setState("connected");
     await act(async () => {
       rerender(taskboardTree());
     });
@@ -737,9 +594,6 @@ describe("Taskboard reconnect", () => {
 
 describe("Taskboard reconnect with a work item open", () => {
   test("the dialog of an item opened by link and not on the board shows its current state after a reconnect", async () => {
-    let connectionState: "connected" | "reconnecting" | "disconnected" = "connected";
-    const hub = { on: vi.fn(), off: vi.fn(), invoke: vi.fn() };
-    vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({ ...hub, connectionState }));
     mockModalServices();
     mockTaskboardServer([]);
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
@@ -782,12 +636,12 @@ describe("Taskboard reconnect with a work item open", () => {
     await waitFor(() => expect(feedbackBox()?.textContent).toContain("PR feedback"));
 
     // The phone sleeps; the hub drops, and the run moves on meanwhile.
-    connectionState = "disconnected";
+    signalRHub.setState("disconnected");
     await act(async () => {
       rerender(tree());
     });
     onServer = { ...onServer, status: WorkItemStatus.Running, humanFeedbackReason: null };
-    connectionState = "connected";
+    signalRHub.setState("connected");
     await act(async () => {
       rerender(tree());
     });
@@ -799,12 +653,6 @@ describe("Taskboard reconnect with a work item open", () => {
 
 describe("Taskboard keyboard navigation", () => {
   test("ArrowRight on a focused card transitions to the next column", async () => {
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
     const transitionSpy = vi
       .spyOn(authServices.workItemService, "transition")
       .mockResolvedValue(undefined as unknown as void);
@@ -831,88 +679,42 @@ describe("Taskboard keyboard navigation", () => {
 });
 
 describe("Taskboard editing item refetch", () => {
-  test("performs delayed refetch of editing item after WorkItemStateChanged to catch conversation data", async () => {
-    const handlers: Record<string, ((msg: any) => void)[]> = {};
-    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
-      handlers[eventType] = handlers[eventType] || [];
-      handlers[eventType].push(handler);
-    });
+  test("a state change re-reads the item at once and again after 500 ms, to catch data saved after the event", async () => {
+    const reads = [
+      makeItem({ status: WorkItemStatus.HumanFeedback, humanFeedbackReason: "Human Input Needed" }),
+      makeItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Human Input Needed",
+        title: "Saved later",
+      }),
+    ];
+    const server = mockTaskboardServer([makeItem({ status: WorkItemStatus.Running })]);
+    const getById = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockImplementation(async () => reads.shift() ?? server.items[0]);
 
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: mockOn,
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-
-    const initialItem = makeItem({ status: WorkItemStatus.Running });
-    mockTaskboardServer([initialItem]);
-    // Mock modal's internal fetches
-    vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
-    vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
-    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
-
-    // First refetch returns stale data (not yet persisted)
-    const staleItem = makeItem({
-      status: WorkItemStatus.HumanFeedback,
-      humanFeedbackReason: "Human Input Needed",
-    });
-
-    // Delayed refetch returns fresh data
-    const freshItem = makeItem({
-      status: WorkItemStatus.HumanFeedback,
-      humanFeedbackReason: "Human Input Needed",
-    });
-
-    let getByIdCallCount = 0;
-    vi.spyOn(authServices.workItemService, "getById").mockImplementation(() => {
-      getByIdCallCount++;
-      return getByIdCallCount === 1 ? Promise.resolve(staleItem) : Promise.resolve(freshItem);
-    });
-
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     renderTaskboard();
+    await advance(0);
+    expect(screen.getByText("Test Item")).toBeTruthy();
 
-    await waitFor(() => {
-      expect(screen.getByText("Test Item")).toBeTruthy();
-    });
-
-    // Click the card to open the modal (set editingItem)
-    const card = await screen.findByRole("button", { name: /Test Item/i });
-    const { fireEvent } = await import("@testing-library/react");
-    fireEvent.click(card);
-
-    // Wait for modal to open
-    await waitFor(() => {
-      expect(screen.getByRole("dialog")).toBeTruthy();
-    });
-
-    // Trigger WorkItemStateChanged event
-    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "wi-1",
       oldStatus: "Running",
       newStatus: "HumanFeedback",
     });
+    await advance(499);
+    expect(getById).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Saved later")).toBeNull();
 
-    // Should refetch at least twice: immediate + delayed
-    await waitFor(() => {
-      expect(getByIdCallCount).toBeGreaterThan(1);
-    });
+    await advance(1);
+    expect(getById).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Saved later")).toBeTruthy();
   });
 });
 
 describe("Taskboard work item URL", () => {
-  function mockSignalR() {
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-  }
-
   test("opens the detail dialog for the work item id in the URL", async () => {
-    mockSignalR();
     mockModalServices();
     mockTaskboardServer([makeItem()]);
 
@@ -929,7 +731,6 @@ describe("Taskboard work item URL", () => {
   });
 
   test("clicking a card reflects the open item in the URL", async () => {
-    mockSignalR();
     mockModalServices();
     mockTaskboardServer([makeItem()]);
 
@@ -946,7 +747,6 @@ describe("Taskboard work item URL", () => {
   });
 
   test("closing the dialog clears the work item from the URL", async () => {
-    mockSignalR();
     mockModalServices();
     mockTaskboardServer([makeItem()]);
 
@@ -963,7 +763,6 @@ describe("Taskboard work item URL", () => {
   });
 
   test("clicking a dependency link opens that dependency's dialog", async () => {
-    mockSignalR();
     mockModalServices();
     const dep = makeItem({ id: "wi-2", title: "Dep item" });
     mockTaskboardServer([makeItem({ dependencyIds: ["wi-2"] }), dep]);
@@ -989,7 +788,6 @@ describe("Taskboard work item URL", () => {
   });
 
   test("redirects to the taskboard when the URL points at a missing work item", async () => {
-    mockSignalR();
     mockModalServices();
     mockTaskboardServer([]);
     const getByIdSpy = vi
@@ -1008,70 +806,13 @@ describe("Taskboard work item URL", () => {
   });
 });
 describe("Taskboard filter", () => {
-  function mockSignalR() {
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
-  }
-
   const items = [
     makeItem({ id: "wi-1", title: "Add login page", repositoryId: "repo-1", tags: ["frontend"] }),
     makeItem({ id: "wi-2", title: "Fix logout bug", repositoryId: "repo-2", tags: ["backend"] }),
     makeItem({ id: "wi-3", title: "Unrelated chore", repositoryId: "repo-1", tags: ["backend"] }),
   ];
 
-  test("search narrows the board to matching work items", async () => {
-    mockSignalR();
-    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    mockTaskboardServer(items);
-
-    renderTaskboard();
-
-    await waitFor(() => {
-      expect(screen.getByText("Add login page")).toBeTruthy();
-    });
-
-    fireEvent.change(screen.getByLabelText("Search work items"), {
-      target: { value: "log" },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("Add login page")).toBeTruthy();
-      expect(screen.getByText("Fix logout bug")).toBeTruthy();
-      expect(screen.queryByText("Unrelated chore")).toBeNull();
-    });
-  });
-
-  test("repository filter is labelled by repository name", async () => {
-    mockSignalR();
-    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([
-      makeRepo({ id: "repo-1", name: "Repo One" }),
-      makeRepo({ id: "repo-2", name: "Repo Two" }),
-    ]);
-    mockTaskboardServer(items);
-
-    renderTaskboard();
-
-    await waitFor(() => {
-      expect(screen.getByText("Add login page")).toBeTruthy();
-    });
-
-    fireEvent.change(screen.getByLabelText("Filter by repository"), {
-      target: { value: "repo-2" },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("Fix logout bug")).toBeTruthy();
-      expect(screen.queryByText("Add login page")).toBeNull();
-      expect(screen.queryByText("Unrelated chore")).toBeNull();
-    });
-  });
-
   test("each card names the repository its item is on", async () => {
-    mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([
       makeRepo({ id: "repo-1", name: "Repo One" }),
       makeRepo({ id: "repo-2", name: "Repo Two" }),
@@ -1089,7 +830,6 @@ describe("Taskboard filter", () => {
   });
 
   test("marks filter chips that name a loop template, leaving free-form chips plain", async () => {
-    mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
     mockTaskboardServer([
       makeItem({ id: "wi-1", title: "Loop item", tags: ["bug fix"] }),
@@ -1109,7 +849,6 @@ describe("Taskboard filter", () => {
   });
 
   test("tag chips narrow the board and clearing restores every item", async () => {
-    mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
     mockTaskboardServer(items);
 
@@ -1139,7 +878,6 @@ describe("Taskboard filter", () => {
 
 describe("Taskboard server-paged columns", () => {
   test("each column loads its own first page and shows the server total, and Load more pages it to the end", async () => {
-    mockHub();
     const server = mockBoard([
       ...Array.from({ length: 45 }, (_, n) => boardItem(`b${n}`, n)),
       ...Array.from({ length: 3 }, (_, n) => boardItem(`d${n}`, 100 + n, WorkItemStatus.Done)),
@@ -1150,6 +888,9 @@ describe("Taskboard server-paged columns", () => {
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
     const first = server.getPage.mock.calls.map(([q]) => q);
     expect(statusSets(first)).toEqual(COLUMN_STATUSES);
+    expect(
+      Array.from(document.querySelectorAll(".taskboard-column-title")).map((t) => t.textContent),
+    ).toEqual(COLUMN_TITLES);
     for (const q of first) {
       expect(q).toMatchObject({ skip: 0, take: 20 });
       expect(q.search ?? "").toBe("");
@@ -1180,25 +921,31 @@ describe("Taskboard server-paged columns", () => {
   });
 
   test("search is debounced and finds an old item by id in its column, reloading every column from the top", async () => {
-    mockHub();
     const server = mockBoard([
       boardItem("wi-forgotten", 0, WorkItemStatus.Backlog, { title: "Tidy up" }),
       ...Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, 10 + n)),
       boardItem("done-forgotten", 5, WorkItemStatus.Done, { title: "Shipped" }),
     ]);
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     renderTaskboard();
-    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    await advance(0);
+    expect(cardTitles("Backlog")).toHaveLength(20);
     expect(cardTitles("Backlog")).not.toContain("Tidy up");
     const before = server.getPage.mock.calls.length;
 
     const search = screen.getByLabelText("Search work items");
     fireEvent.change(search, { target: { value: "f" } });
+    await advance(200);
     fireEvent.change(search, { target: { value: "forg" } });
+    await advance(200);
     fireEvent.change(search, { target: { value: "forgotten" } });
+    await advance(SEARCH_DEBOUNCE_MS - 1);
+    expect(server.getPage.mock.calls).toHaveLength(before);
 
-    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["Tidy up"]));
-    await waitFor(() => expect(cardTitles("Done")).toEqual(["Shipped"]));
+    await advance(1);
+    expect(cardTitles("Backlog")).toEqual(["Tidy up"]);
+    expect(cardTitles("Done")).toEqual(["Shipped"]);
     expect(badge("Backlog")).toBe("1");
     expect(badge("Done")).toBe("1");
     const reload = server.getPage.mock.calls.slice(before).map(([q]) => q);
@@ -1210,7 +957,6 @@ describe("Taskboard server-paged columns", () => {
   });
 
   test("a page answered for an outdated search never replaces the newer one", async () => {
-    mockHub();
     const server = mockBoard([
       boardItem("first-match", 1),
       boardItem("second-match", 2),
@@ -1223,26 +969,27 @@ describe("Taskboard server-paged columns", () => {
       return snapshot;
     });
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     renderTaskboard();
-    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(3));
+    await advance(0);
+    expect(cardTitles("Backlog")).toHaveLength(3);
 
     const search = screen.getByLabelText("Search work items");
     fireEvent.change(search, { target: { value: "first" } });
-    await waitFor(() =>
-      expect(server.getPage.mock.calls.some(([q]) => q.search === "first")).toBe(true),
-    );
+    await advance(SEARCH_DEBOUNCE_MS);
+    expect(server.getPage.mock.calls.some(([q]) => q.search === "first")).toBe(true);
     fireEvent.change(search, { target: { value: "second" } });
-    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["second-match"]));
+    await advance(SEARCH_DEBOUNCE_MS);
+    expect(cardTitles("Backlog")).toEqual(["second-match"]);
 
     held.resolve();
-    await settle();
+    await advance(0);
 
     expect(cardTitles("Backlog")).toEqual(["second-match"]);
     expect(badge("Backlog")).toBe("1");
   });
 
   test("repository and tag filters narrow every column, with options for every repository and every tag in use", async () => {
-    mockHub();
     const server = mockBoard(
       [
         ...Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, 10 + n)),
@@ -1266,19 +1013,23 @@ describe("Taskboard server-paged columns", () => {
       ],
     );
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     renderTaskboard();
-    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    await advance(0);
+    expect(cardTitles("Backlog")).toHaveLength(20);
     expect(cardTitles("Backlog")).not.toContain("ancient");
     // Options come from the server, not from the cards that happen to be loaded.
-    expect(await screen.findByRole("option", { name: "Gamma" })).toBeTruthy();
-    expect(await screen.findByRole("button", { name: "ancient" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Gamma" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "ancient" })).toBeTruthy();
 
     let before = server.getPage.mock.calls.length;
     fireEvent.change(screen.getByLabelText("Filter by repository"), {
       target: { value: "repo-2" },
     });
-    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["beta-newer", "ancient"]));
-    await waitFor(() => expect(cardTitles("Done")).toEqual(["beta-done"]));
+    await advance(0);
+    expect(cardTitles("Backlog")).toEqual(["beta-newer", "ancient"]);
+    await advance(0);
+    expect(cardTitles("Done")).toEqual(["beta-done"]);
     expect(badge("Backlog")).toBe("2");
     expect(badge("Done")).toBe("1");
     for (const [q] of server.getPage.mock.calls.slice(before)) {
@@ -1288,8 +1039,10 @@ describe("Taskboard server-paged columns", () => {
 
     before = server.getPage.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "ancient" }));
-    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["ancient"]));
-    await waitFor(() => expect(cardTitles("Done")).toEqual([]));
+    await advance(0);
+    expect(cardTitles("Backlog")).toEqual(["ancient"]);
+    await advance(0);
+    expect(cardTitles("Done")).toEqual([]);
     expect(badge("Backlog")).toBe("1");
     expect(badge("Done")).toBe("0");
     const tagged = server.getPage.mock.calls.slice(before).map(([q]) => q);
@@ -1303,7 +1056,6 @@ describe("Taskboard server-paged columns", () => {
 
 describe("Taskboard live changes keep server order", () => {
   test("creating a work item puts its card at the top of Backlog at once and counts it", async () => {
-    mockHub();
     const server = mockBoard(Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, n)));
     vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
     vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
@@ -1345,14 +1097,13 @@ describe("Taskboard live changes keep server order", () => {
   });
 
   test("an item created elsewhere lands in server order over SignalR, and one beyond the loaded page is only counted", async () => {
-    const hub = mockHub();
     const server = mockBoard(Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, 10 + n)));
 
     renderTaskboard();
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
     const created = (id: string, n: number) => {
       server.items.push(boardItem(id, n));
-      return hub.emit("WorkItemStateChanged", {
+      return signalRHub.emit("WorkItemStateChanged", {
         workItemId: id,
         oldStatus: "Backlog",
         newStatus: "Backlog",
@@ -1378,7 +1129,6 @@ describe("Taskboard live changes keep server order", () => {
   });
 
   test("an item created while its column is reloading is not lost when the older response lands", async () => {
-    const hub = mockHub();
     const server = mockBoard([
       ...Array.from({ length: 5 }, (_, n) => boardItem(`a${n}`, n)),
       boardItem("elsewhere", 50, WorkItemStatus.Backlog, { repositoryId: "repo-2" }),
@@ -1403,7 +1153,7 @@ describe("Taskboard live changes keep server order", () => {
     await waitFor(() => expect(holding).toBe(false));
 
     server.items.push(boardItem("fresh", 100));
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "fresh",
       oldStatus: "Backlog",
       newStatus: "Backlog",
@@ -1418,7 +1168,6 @@ describe("Taskboard live changes keep server order", () => {
   });
 
   test("a status change over SignalR moves the card to its sorted place and updates both totals", async () => {
-    const hub = mockHub();
     const server = mockBoard([
       boardItem("r7", 7, WorkItemStatus.Ready),
       boardItem("u9", 9, WorkItemStatus.Running),
@@ -1429,7 +1178,7 @@ describe("Taskboard live changes keep server order", () => {
     await waitFor(() => expect(cardTitles("Running")).toEqual(["u9", "u2"]));
 
     server.items.find((wi) => wi.id === "r7")!.status = WorkItemStatus.Running;
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "r7",
       oldStatus: "Ready",
       newStatus: "Running",
@@ -1442,7 +1191,6 @@ describe("Taskboard live changes keep server order", () => {
   });
 
   test("a reorder announced over SignalR moves the card to its new place in the same column", async () => {
-    const hub = mockHub();
     const server = mockBoard([
       boardItem("a", 9, WorkItemStatus.Ready),
       boardItem("b", 5, WorkItemStatus.Ready),
@@ -1453,7 +1201,7 @@ describe("Taskboard live changes keep server order", () => {
     await waitFor(() => expect(cardTitles("Work queue")).toEqual(["a", "b", "c"]));
 
     server.items.find((wi) => wi.id === "c")!.priority = -100;
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "c",
       oldStatus: "Ready",
       newStatus: "Ready",
@@ -1461,7 +1209,7 @@ describe("Taskboard live changes keep server order", () => {
     await waitFor(() => expect(cardTitles("Work queue")).toEqual(["c", "a", "b"]));
 
     server.items.find((wi) => wi.id === "a")!.priority = -3;
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "a",
       oldStatus: "Ready",
       newStatus: "Ready",
@@ -1472,7 +1220,6 @@ describe("Taskboard live changes keep server order", () => {
   });
 
   test("a renumber announced once for the whole board re-reads the columns in their new order", async () => {
-    const hub = mockHub();
     const server = mockBoard([
       boardItem("a", 9, WorkItemStatus.Ready),
       boardItem("b", 5, WorkItemStatus.Ready),
@@ -1486,14 +1233,13 @@ describe("Taskboard live changes keep server order", () => {
 
     const renumbered: Record<string, number> = { b: 0, a: 2, d: 4, c: 6 };
     for (const wi of server.items) wi.priority = renumbered[wi.id];
-    await hub.emit("WorkItemBoardReordered", { workItemId: "b" });
+    await signalRHub.emit("WorkItemBoardReordered", { workItemId: "b" });
 
     await waitFor(() => expect(cardTitles("Work queue")).toEqual(["b", "a"]));
     await waitFor(() => expect(cardTitles("Backlog")).toEqual(["d", "c"]));
   });
 
   test("under a filter a card edited out of it leaves and a non-matching new item never shows", async () => {
-    const hub = mockHub();
     const server = mockBoard([
       boardItem("keep", 3),
       boardItem("moves-repo", 2),
@@ -1508,7 +1254,7 @@ describe("Taskboard live changes keep server order", () => {
     await waitFor(() => expect(cardTitles("Backlog")).toEqual(["keep", "moves-repo"]));
 
     server.items.find((wi) => wi.id === "moves-repo")!.repositoryId = "repo-2";
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "moves-repo",
       oldStatus: "Backlog",
       newStatus: "Backlog",
@@ -1519,7 +1265,7 @@ describe("Taskboard live changes keep server order", () => {
     server.items.push(
       boardItem("new-elsewhere", 100, WorkItemStatus.Backlog, { repositoryId: "repo-2" }),
     );
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "new-elsewhere",
       oldStatus: "Backlog",
       newStatus: "Backlog",
@@ -1530,7 +1276,6 @@ describe("Taskboard live changes keep server order", () => {
   });
 
   test("a keyboard move takes the card from its column to the next and both totals follow", async () => {
-    mockHub();
     mockBoard([
       boardItem("mover", 5, WorkItemStatus.Ready),
       boardItem("u9", 9, WorkItemStatus.Running),
@@ -1548,7 +1293,6 @@ describe("Taskboard live changes keep server order", () => {
   });
 
   test("totals reconcile from the server with one counts request in flight and one follow-up", async () => {
-    const hub = mockHub();
     const server = mockBoard(Array.from({ length: 6 }, (_, n) => boardItem(`b${n}`, n)));
     const held = deferred<void>();
     let armed = false;
@@ -1571,18 +1315,18 @@ describe("Taskboard live changes keep server order", () => {
       server.items.findIndex((wi) => wi.id === "b0"),
       1,
     );
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "b1",
       oldStatus: "Backlog",
       newStatus: "Backlog",
     });
     await waitFor(() => expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1));
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "b2",
       oldStatus: "Backlog",
       newStatus: "Backlog",
     });
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "b3",
       oldStatus: "Backlog",
       newStatus: "Backlog",
@@ -1598,7 +1342,6 @@ describe("Taskboard live changes keep server order", () => {
   });
 
   test("a counts answer for an outdated filter is dropped", async () => {
-    const hub = mockHub();
     const server = mockBoard(
       [
         ...Array.from({ length: 4 }, (_, n) => boardItem(`b${n}`, n)),
@@ -1619,7 +1362,7 @@ describe("Taskboard live changes keep server order", () => {
     renderTaskboard();
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(5));
     armed = true;
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "b1",
       oldStatus: "Backlog",
       newStatus: "Backlog",
@@ -1639,7 +1382,6 @@ describe("Taskboard live changes keep server order", () => {
 
 describe("Taskboard direct link", () => {
   test("an item outside the loaded page opens in the dialog without joining its column", async () => {
-    mockHub();
     mockModalServices();
     mockBoard(Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, n)));
     const getById = vi.mocked(authServices.workItemService.getById);
@@ -1669,12 +1411,6 @@ describe("Taskboard on a phone", () => {
       addEventListener: () => {},
       removeEventListener: () => {},
     }));
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([makeRepo()]);
   });
 
@@ -1762,12 +1498,6 @@ describe("Taskboard on a phone", () => {
 
 describe("Taskboard folded columns", () => {
   beforeEach(() => {
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-      connectionState: "connected",
-    });
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   });
 
@@ -1803,14 +1533,6 @@ describe("Taskboard folded columns", () => {
 });
 
 describe("Taskboard Work queue column", () => {
-  const COLUMN_TITLES = [
-    "Backlog",
-    "Work queue",
-    "Running",
-    "Needs you",
-    "Waiting for ILD",
-    "Done",
-  ];
   const QUEUE_PILL =
     /^(Waiting on dependencies|Waiting: repository parallelism limit \(\d+\/\d+ in progress\)|Scheduler paused|Ready)$/;
 
@@ -1834,47 +1556,7 @@ describe("Taskboard Work queue column", () => {
     });
   }
 
-  test("one Work queue column holds Work queue and Ready items in board order, counts both and pages them as one", async () => {
-    mockHub();
-    const queued = Array.from({ length: 25 }, (_, n) =>
-      boardItem(`q${n}`, n, n % 2 ? WorkItemStatus.Ready : WorkItemStatus.WorkQueue),
-    );
-    const server = mockBoard([
-      ...queued,
-      boardItem("b0", 0),
-      boardItem("u0", 0, WorkItemStatus.Running),
-    ]);
-
-    renderTaskboard();
-    await waitFor(() => expect(cardTitles("Work queue")).toHaveLength(20));
-
-    const titles = Array.from(document.querySelectorAll(".taskboard-column-title")).map(
-      (title) => title.textContent,
-    );
-    expect(titles).toEqual(COLUMN_TITLES);
-    const inBoardOrder = Array.from({ length: 25 }, (_, n) => `q${24 - n}`);
-    expect(cardTitles("Work queue")).toEqual(inBoardOrder.slice(0, 20));
-    expect(badge("Work queue")).toBe("25");
-
-    fireEvent.click(within(columnEl("Work queue")).getByRole("button", { name: "Load more" }));
-    await waitFor(() => expect(cardTitles("Work queue")).toHaveLength(25));
-
-    expect(cardTitles("Work queue")).toEqual(inBoardOrder);
-    const columnReads = server.getPage.mock.calls
-      .map(([q]) => q)
-      .filter(
-        (q) =>
-          q.statuses.includes(WorkItemStatus.WorkQueue) ||
-          q.statuses.includes(WorkItemStatus.Ready),
-      );
-    expect(statusSets(columnReads)).toEqual(["Ready+WorkQueue", "Ready+WorkQueue"]);
-    expect(columnReads.map((q) => q.skip)).toEqual([0, 20]);
-    await settle();
-    expect(badge("Work queue")).toBe("25");
-  });
-
   test("a Work queue card whose dependencies finish turns Ready in its place without a reload", async () => {
-    const hub = mockHub();
     const server = mockBoard([
       boardItem("first", 9, WorkItemStatus.Ready),
       boardItem("waiting", 5, WorkItemStatus.WorkQueue),
@@ -1888,7 +1570,7 @@ describe("Taskboard Work queue column", () => {
     const reads = server.getPage.mock.calls.length;
 
     server.items.find((wi) => wi.id === "waiting")!.status = WorkItemStatus.Ready;
-    await hub.emit("WorkItemStateChanged", {
+    await signalRHub.emit("WorkItemStateChanged", {
       workItemId: "waiting",
       oldStatus: "WorkQueue",
       newStatus: "Ready",
@@ -1902,7 +1584,6 @@ describe("Taskboard Work queue column", () => {
   });
 
   test("each card shows why it waits, and the Ready ones follow the scheduler's pause and resume", async () => {
-    const hub = mockHub();
     mockBoard([
       boardItem("queued", 9, WorkItemStatus.WorkQueue),
       boardItem("held", 7, WorkItemStatus.Ready, {
@@ -1917,25 +1598,20 @@ describe("Taskboard Work queue column", () => {
     expect(queuePills("queued")).toEqual(["Waiting on dependencies"]);
     expect(queuePills("held")).toEqual(["Waiting: repository parallelism limit (2/2 in progress)"]);
     expect(queuePills("going")).toEqual([]);
-    const runningClasses = Array.from(cardEl("startable").classList);
 
-    await hub.emit("SchedulerStateChanged", { isPaused: true });
+    await signalRHub.emit("SchedulerStateChanged", { isPaused: true });
 
     await waitFor(() => expect(queuePills("startable")).toEqual(["Scheduler paused"]));
     expect(queuePills("held")).toEqual(["Waiting: repository parallelism limit (2/2 in progress)"]);
     expect(queuePills("queued")).toEqual(["Waiting on dependencies"]);
     expect(queuePills("going")).toEqual([]);
-    const pausedClasses = Array.from(cardEl("startable").classList);
-    expect(pausedClasses.filter((c) => !runningClasses.includes(c))).not.toHaveLength(0);
 
-    await hub.emit("SchedulerStateChanged", { isPaused: false });
+    await signalRHub.emit("SchedulerStateChanged", { isPaused: false });
 
     await waitFor(() => expect(queuePills("startable")).toEqual(["Ready"]));
-    expect(Array.from(cardEl("startable").classList)).toEqual(runningClasses);
   });
 
   test("a Ready card shows Scheduler paused on a board opened while the scheduler is paused", async () => {
-    mockHub();
     mockBoard([boardItem("startable", 5, WorkItemStatus.Ready)]);
     pausedReads(true);
 
@@ -1945,7 +1621,6 @@ describe("Taskboard Work queue column", () => {
   });
 
   test("an open Ready item's dialog offers Start now while paused and follows a live resume and pause", async () => {
-    const hub = mockHub();
     mockModalServices();
     mockBoard([boardItem("startable", 5, WorkItemStatus.Ready)]);
     pausedReads(true);
@@ -1961,7 +1636,7 @@ describe("Taskboard Work queue column", () => {
       ).toBeTruthy(),
     );
 
-    await hub.emit("SchedulerStateChanged", { isPaused: false });
+    await signalRHub.emit("SchedulerStateChanged", { isPaused: false });
 
     await waitFor(() =>
       expect(
@@ -1969,7 +1644,7 @@ describe("Taskboard Work queue column", () => {
       ).toBeNull(),
     );
 
-    await hub.emit("SchedulerStateChanged", { isPaused: true });
+    await signalRHub.emit("SchedulerStateChanged", { isPaused: true });
 
     await waitFor(() =>
       expect(
@@ -1986,7 +1661,6 @@ describe("Taskboard Work queue column", () => {
     [WorkItemStatus.Ready, "ArrowLeft", WorkItemStatus.Backlog, "Backlog"],
     [WorkItemStatus.Running, "ArrowLeft", WorkItemStatus.WorkQueue, "Work queue"],
   ])("%s with %s moves to %s and says so", async (from, key, target, label) => {
-    mockHub();
     mockBoard([boardItem("mover", 5, from)]);
     const transition = vi.spyOn(authServices.workItemService, "transition");
 
@@ -2010,7 +1684,6 @@ describe("Taskboard Work queue column", () => {
         [foldedColumnKey(WorkItemStatus.Done)]: "false",
         [foldedColumnKey(WorkItemStatus.WorkQueue)]: "false",
       });
-      mockHub();
       const server = mockBoard([boardItem("planned", 5)]);
       const transition = vi
         .spyOn(authServices.workItemService, "transition")

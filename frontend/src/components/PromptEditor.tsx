@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import "./PromptEditor.css";
 
-const PLACEHOLDERS = [
+export const PLACEHOLDERS = [
   { key: "WorkItem.Title", label: "WorkItem.Title", desc: "Title of the work item" },
   {
     key: "WorkItem.Description",

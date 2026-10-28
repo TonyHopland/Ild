@@ -25,6 +25,7 @@ import {
   workItemStatusTone,
 } from "../../utils/labels";
 import { repositoryName } from "../../utils/repositoryName";
+import { repositoryHoldOf, startOfferOf } from "./offers";
 
 type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal" | "history";
 
@@ -122,10 +123,8 @@ export default function WorkItemModalV2({
       setMoving(false);
     }
   };
-  const repositoryHold =
-    workItem?.status === WorkItemStatus.Ready ? (workItem.repositoryParallelismHold ?? null) : null;
-  const pausedStart =
-    workItem?.status === WorkItemStatus.Ready && !repositoryHold && schedulerPaused === true;
+  const repositoryHold = workItem ? repositoryHoldOf(workItem) : null;
+  const startOffer = workItem ? startOfferOf(workItem, schedulerPaused) : null;
   const startAnyway = async () => {
     setMoving(true);
     setMoveError(null);
@@ -656,14 +655,14 @@ export default function WorkItemModalV2({
                     Move to Work queue
                   </button>
                 )}
-                {(repositoryHold || pausedStart) && (
+                {startOffer && (
                   <button
                     type="button"
                     className="btn btn-primary"
                     onClick={() => void startAnyway()}
                     disabled={moving || detail.busy}
                   >
-                    {repositoryHold
+                    {startOffer === "anyway"
                       ? "Start anyway (ignore repository limit)"
                       : "Start now (scheduler paused)"}
                   </button>

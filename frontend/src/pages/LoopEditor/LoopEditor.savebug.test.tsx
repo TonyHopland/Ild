@@ -43,204 +43,82 @@ const sampleTemplate = {
 };
 
 describe("Loop Editor save existing template (regression)", () => {
-  test("saving an existing template completes and does not hang", async () => {
-    const fetchCalls: Array<{ url: string; method: string; body?: string }> = [];
+  test.each([
+    ["without __pos", false],
+    ["with __pos config (round-trip)", true],
+  ])(
+    "saving an existing template %s completes and does not hang",
+    async (_, withPos) => {
+      const stored = withPos
+        ? {
+            ...sampleTemplate,
+            nodes: sampleTemplate.nodes.map((n, i) => ({
+              ...n,
+              config: { __pos: { x: 100 + i * 50, y: 80 } },
+            })),
+          }
+        : sampleTemplate;
+      const fetchCalls: Array<{ url: string; method: string }> = [];
 
-    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
-      const method = (init?.method as string) ?? "GET";
-      const urlStr = String(url);
-      fetchCalls.push({ url: urlStr, method, body: init?.body as string | undefined });
-
-      if (method === "GET" && urlStr.includes("/looptemplates") && !urlStr.includes("versions")) {
-        return {
+      const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+        const method = (init?.method as string) ?? "GET";
+        const urlStr = String(url);
+        fetchCalls.push({ url: urlStr, method });
+        const ok = (body: unknown) => ({
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
-        };
-      }
+          text: () => Promise.resolve(JSON.stringify(body)),
+        });
 
-      if (method === "POST" && urlStr.includes("/looptemplates/validate")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify({ valid: true, errors: [] })),
-        };
-      }
+        if (method === "GET" && urlStr.includes("/looptemplates") && !urlStr.includes("versions"))
+          return ok([stored]);
+        if (method === "POST" && urlStr.includes("/looptemplates/validate"))
+          return ok({ valid: true, errors: [] });
+        if (method === "PUT" && urlStr.includes("/looptemplates/")) return ok({ id: stored.id });
+        if (method === "GET" && urlStr.includes("/aiproviders")) return ok([]);
+        return { ok: false, status: 500, text: () => Promise.resolve("") };
+      });
 
-      if (method === "PUT" && urlStr.includes("/looptemplates/")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify({ id: sampleTemplate.id })),
-        };
-      }
+      vi.stubGlobal("fetch", trackingFetch);
 
-      if (method === "GET" && urlStr.includes("/aiproviders")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([])),
-        };
-      }
+      const authValue = {
+        user: { id: "1", username: "test", createdAt: "" },
+        token: "test-token",
+        isAuthenticated: true,
+        isLoading: false,
+        login: vi.fn(),
+        logout: vi.fn(),
+      };
 
-      return { ok: false, status: 500, text: () => Promise.resolve("") };
-    });
+      render(
+        <MemoryRouter initialEntries={["/loop-editor"]}>
+          <AuthContext.Provider value={authValue}>
+            <Routes>
+              <Route path="/loop-editor" element={<LoopEditor />} />
+              <Route path="/loop-editor/:templateId" element={<LoopEditor />} />
+            </Routes>
+          </AuthContext.Provider>
+        </MemoryRouter>,
+        { wrapper: WorkItemHubProvider },
+      );
 
-    vi.stubGlobal("fetch", trackingFetch);
+      await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
+      fireEvent.click(screen.getByText("Dev Loop"));
+      await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
 
-    const authValue = {
-      user: { id: "1", username: "test", createdAt: "" },
-      token: "test-token",
-      isAuthenticated: true,
-      isLoading: false,
-      login: vi.fn(),
-      logout: vi.fn(),
-    };
+      fireEvent.click(screen.getByText("Save"));
+      fireEvent.click(await screen.findByText("Save changes"));
+      await waitFor(() => expect(fetchCalls.some((c) => c.method === "PUT")).toBe(true), {
+        timeout: 5000,
+      });
+      await waitFor(() => expect(screen.getByText("Saved!")).toBeTruthy(), { timeout: 5000 });
 
-    render(
-      <MemoryRouter initialEntries={["/loop-editor"]}>
-        <AuthContext.Provider value={authValue}>
-          <Routes>
-            <Route path="/loop-editor" element={<LoopEditor />} />
-            <Route path="/loop-editor/:templateId" element={<LoopEditor />} />
-          </Routes>
-        </AuthContext.Provider>
-      </MemoryRouter>,
-      { wrapper: WorkItemHubProvider },
-    );
-
-    await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
-
-    // Select the template
-    fireEvent.click(screen.getByText("Dev Loop"));
-
-    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
-
-    // Click save — this opens the review-diff modal; confirm to persist.
-    fireEvent.click(screen.getByText("Save"));
-    fireEvent.click(await screen.findByText("Save changes"));
-
-    await waitFor(
-      () => {
-        const putCall = fetchCalls.find((c) => c.method === "PUT");
-        expect(putCall).toBeTruthy();
-      },
-      { timeout: 5000 },
-    );
-
-    await waitFor(
-      () => {
-        expect(screen.getByText("Saved!")).toBeTruthy();
-      },
-      { timeout: 5000 },
-    );
-
-    // Save a second time to make sure it doesn't hang
-    fireEvent.click(screen.getByText("Save"));
-    fireEvent.click(await screen.findByText("Save changes"));
-    await waitFor(
-      () => {
-        const putCalls = fetchCalls.filter((c) => c.method === "PUT");
-        expect(putCalls.length).toBeGreaterThanOrEqual(2);
-      },
-      { timeout: 5000 },
-    );
-  }, 15000);
-
-  test("saving an existing template that includes __pos config (round-trip) does not hang", async () => {
-    const templateWithPos = {
-      ...sampleTemplate,
-      nodes: sampleTemplate.nodes.map((n, i) => ({
-        ...n,
-        config: { __pos: { x: 100 + i * 50, y: 80 } },
-      })),
-    };
-
-    const fetchCalls: Array<{ url: string; method: string }> = [];
-
-    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
-      const method = (init?.method as string) ?? "GET";
-      const urlStr = String(url);
-      fetchCalls.push({ url: urlStr, method });
-
-      if (method === "GET" && urlStr.includes("/looptemplates") && !urlStr.includes("versions")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([templateWithPos])),
-        };
-      }
-
-      if (method === "POST" && urlStr.includes("/looptemplates/validate")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify({ valid: true, errors: [] })),
-        };
-      }
-
-      if (method === "PUT" && urlStr.includes("/looptemplates/")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify({ id: templateWithPos.id })),
-        };
-      }
-
-      if (method === "GET" && urlStr.includes("/aiproviders")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([])),
-        };
-      }
-
-      return { ok: false, status: 500, text: () => Promise.resolve("") };
-    });
-
-    vi.stubGlobal("fetch", trackingFetch);
-
-    const authValue = {
-      user: { id: "1", username: "test", createdAt: "" },
-      token: "test-token",
-      isAuthenticated: true,
-      isLoading: false,
-      login: vi.fn(),
-      logout: vi.fn(),
-    };
-
-    render(
-      <MemoryRouter initialEntries={["/loop-editor"]}>
-        <AuthContext.Provider value={authValue}>
-          <Routes>
-            <Route path="/loop-editor" element={<LoopEditor />} />
-            <Route path="/loop-editor/:templateId" element={<LoopEditor />} />
-          </Routes>
-        </AuthContext.Provider>
-      </MemoryRouter>,
-      { wrapper: WorkItemHubProvider },
-    );
-
-    await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
-    fireEvent.click(screen.getByText("Dev Loop"));
-    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
-
-    fireEvent.click(screen.getByText("Save"));
-    fireEvent.click(await screen.findByText("Save changes"));
-
-    await waitFor(
-      () => {
-        const putCall = fetchCalls.find((c) => c.method === "PUT");
-        expect(putCall).toBeTruthy();
-      },
-      { timeout: 5000 },
-    );
-
-    await waitFor(
-      () => {
-        expect(screen.getByText("Saved!")).toBeTruthy();
-      },
-      { timeout: 5000 },
-    );
-  }, 15000);
+      fireEvent.click(screen.getByText("Save"));
+      fireEvent.click(await screen.findByText("Save changes"));
+      await waitFor(() => expect(fetchCalls.filter((c) => c.method === "PUT").length).toBe(2), {
+        timeout: 5000,
+      });
+    },
+    15000,
+  );
 });

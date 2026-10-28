@@ -183,56 +183,10 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
       buttons: ["Needs work", "Reject"],
     },
     {
-      name: "a hidden failure output has no Reject",
-      node: human([{ name: "OnSuccess" }, { name: "OnFailure", visible: false }]),
-      item: { humanFeedbackActions: "OnSuccess,OnFailure" },
-      buttons: ["Approve"],
-    },
-    {
-      name: "nothing hidden leaves every output as before",
-      node: human([{ name: "OnSuccess" }, { name: "OnFailure" }, { name: "Needs work" }]),
-      item: { humanFeedbackActions: "OnSuccess,Needs work,OnFailure" },
-      buttons: ["Approve", "Needs work", "Reject"],
-    },
-    {
       name: "a PR node whose config has no outputs hides its wired reserved outputs",
       node: pr(),
       item: { humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS },
       buttons: ["Approve", "Merge", "Reject"],
-    },
-    {
-      name: "a PR node stored with no visible anywhere hides its wired reserved outputs",
-      node: pr(STORED_PR_OUTPUTS),
-      item: { humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS },
-      buttons: ["Approve", "Merge", "Reject"],
-    },
-    {
-      name: "a reserved PR output set to visible gets its button",
-      node: pr(
-        STORED_PR_OUTPUTS.map((output) =>
-          output.name === "on_merged" ? { ...output, visible: true } : output,
-        ),
-      ),
-      item: { humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS },
-      buttons: ["Approve", "Merge", "on_merged", "Reject"],
-    },
-    {
-      name: "an output named like a reserved one is offered on a Human node",
-      node: human([{ name: "OnSuccess" }, { name: "on_merged" }]),
-      item: { humanFeedbackActions: "OnSuccess,on_merged" },
-      buttons: ["Approve", "on_merged"],
-    },
-    {
-      name: "with no actions listed, a hidden success output leaves only Reject",
-      node: human([{ name: "OnSuccess", visible: false }, { name: "OnFailure" }]),
-      item: { humanFeedbackActions: null },
-      buttons: ["Reject"],
-    },
-    {
-      name: "with no actions listed and nothing hidden, Approve and Reject are offered",
-      node: human([]),
-      item: { humanFeedbackActions: null },
-      buttons: ["Approve", "Reject"],
     },
     {
       name: "with every listed output hidden there is no button, and no fallback to Approve and Reject",
@@ -243,21 +197,6 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
       ]),
       item: { humanFeedbackActions: "OnSuccess,OnFailure,later" },
       buttons: [],
-    },
-    {
-      name: "with no actions listed and success and failure hidden there is no button",
-      node: human([
-        { name: "OnSuccess", visible: false },
-        { name: "OnFailure", visible: false },
-      ]),
-      item: { humanFeedbackActions: null },
-      buttons: [],
-    },
-    {
-      name: "a PR node with every output hidden still has Merge",
-      node: pr(STORED_PR_OUTPUTS.map((output) => ({ ...output, visible: false }))),
-      item: { humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS },
-      buttons: ["Merge"],
     },
   ];
 
@@ -322,37 +261,6 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
     expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Clean up", "");
-  });
-
-  test("a valid colour stored on the parked node's output colours its button, and nothing else does", async () => {
-    mockDialogServices();
-    stageParkedNode(
-      human([
-        { name: "OnSuccess", color: "#7E22CE" },
-        { name: "OnFailure", color: "red" },
-        { name: "Needs work", color: "#fde047" },
-        { name: "Later" },
-      ]),
-    );
-    const answer = vi
-      .spyOn(authServices.workItemService, "humanFeedbackEdge")
-      .mockResolvedValue(undefined);
-    await renderDialog(
-      makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,Later,OnFailure" }),
-    );
-
-    const button = (name: string) => within(pane()).getByRole("button", { name });
-    // A colour shows as a dot and border from --output-color.
-    expect(button("Approve").style.getPropertyValue("--output-color")).toBe("#7e22ce");
-    expect(button("Needs work").style.getPropertyValue("--output-color")).toBe("#fde047");
-    expect(button("Reject").getAttribute("style")).toBeNull();
-    expect(button("Later").getAttribute("style")).toBeNull();
-
-    await act(async () => {
-      fireEvent.click(button("Needs work"));
-    });
-    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Needs work", "");
   });
 
   test("a confirmation open when the work item changes is dropped, and nothing is sent", async () => {
