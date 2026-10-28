@@ -27,6 +27,10 @@ public static class BackupCipher
     private const string Magic = "ILDBAK1";
     private const string Kdf = "pbkdf2-sha256";
     private const int Iterations = 600_000;
+
+    /// <summary>Test-only: replaces the production iteration count for backups written afterwards. Reading always uses the count in the header.</summary>
+    internal static int? IterationsOverride { get; set; }
+
     private const int MaxIterations = 10_000_000;
     private const int ChunkSize = 64 * 1024;
     private const int MaxHeaderBytes = 4096;
@@ -44,7 +48,7 @@ public static class BackupCipher
     /// <summary>The bytes written to <paramref name="output"/> through the returned stream are encrypted; call <see cref="EncryptingStream.CompleteAsync"/> when done.</summary>
     public static async Task<EncryptingStream> OpenWriteAsync(Stream output, string passphrase, string database, CancellationToken ct)
     {
-        var header = new Header(Kdf, Iterations, RandomNumberGenerator.GetBytes(SaltBytes),
+        var header = new Header(Kdf, IterationsOverride ?? Iterations, RandomNumberGenerator.GetBytes(SaltBytes),
             RandomNumberGenerator.GetBytes(PrefixBytes), ChunkSize, database);
         var headerBytes = JsonSerializer.SerializeToUtf8Bytes(header, Json);
         var key = await DeriveKeyAsync(passphrase, header);
