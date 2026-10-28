@@ -18,22 +18,6 @@ namespace ILD.Tests;
 /// </summary>
 public class ExecutorPreconditionTests
 {
-    private sealed class CountingAdapter : IAgentAdapter
-    {
-        public int Calls { get; private set; }
-        public string Name => "Counting";
-        public string[] SupportedProviderTypes => ["claude-code"];
-        public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            Calls++;
-            return Task.FromResult(NodeExecutionResult.Ok("done", context.Prompt, null));
-        }
-    }
-
     [Fact]
     public async Task PRNode_without_a_repository_fails_without_creating_a_LoopRunNode()
     {
@@ -58,7 +42,7 @@ public class ExecutorPreconditionTests
     [Fact]
     public async Task AINode_with_its_provider_at_capacity_defers_without_creating_a_LoopRunNode_or_calling_the_adapter()
     {
-        var adapter = new CountingAdapter();
+        var adapter = new CapturingAdapter();
         var provider = new AiProvider
         {
             Id = Guid.NewGuid(),
@@ -83,7 +67,7 @@ public class ExecutorPreconditionTests
         await h.RunAsync();
 
         Assert.Empty(h.ReloadRunNodes());
-        Assert.Equal(0, adapter.Calls);
+        Assert.Empty(adapter.Calls);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.WaitingForIld,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);

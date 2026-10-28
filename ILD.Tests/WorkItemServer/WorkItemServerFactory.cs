@@ -13,10 +13,12 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ILD.Tests.WorkItemServer;
 
 /// <summary>
-/// A WorkItem server bound to its own in-memory SQLite database and the API key it
-/// was given. Both replace what the host read from the process environment, so
-/// hosts running side by side cannot see each other's values. The stale item
-/// reclaimer is off, so nothing moves a test's items behind its back.
+/// A WorkItem server on its own in-memory SQLite database with the API key it was
+/// given. Both are supplied per instance rather than read from the process
+/// environment, so hosts running side by side do not share them. The database
+/// connection-string variable is cleared for the whole process, which every host
+/// here wants, so none of them reaches for PostgreSQL. The stale item reclaimer is
+/// off, so nothing moves a test's items behind its back.
 /// </summary>
 public class WorkItemServerFactory : WebApplicationFactory<WorkItemServerProgram>
 {

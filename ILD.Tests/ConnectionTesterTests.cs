@@ -68,7 +68,7 @@ public class ConnectionTesterTests : IDisposable
         }
     }
 
-    private sealed class RecordingLogger : ILogger<ConnectionTester>
+    private sealed class StructuredLogRecorder : ILogger<ConnectionTester>
     {
         public List<string> Lines { get; } = new();
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -349,7 +349,7 @@ public class ConnectionTesterTests : IDisposable
     [InlineData(HttpStatusCode.InternalServerError)]
     public async Task Provider_key_never_appears_in_the_result_or_the_log(HttpStatusCode status)
     {
-        var logger = new RecordingLogger();
+        var logger = new StructuredLogRecorder();
         var handler = ScriptedHandler.Answer(status, "{\"login\":\"octo-cat\",\"message\":\"nope\"}");
 
         var result = await ProviderTester(handler, logger)
@@ -479,7 +479,7 @@ public class ConnectionTesterTests : IDisposable
     {
         // A server that echoes back everything it was sent, in every form the
         // credential travelled in.
-        var logger = new RecordingLogger();
+        var logger = new StructuredLogRecorder();
         var handler = new ScriptedHandler((request, _) => Task.FromResult(new HttpResponseMessage(status)
         {
             Content = new StringContent(
@@ -741,7 +741,7 @@ public class ConnectionTesterTests : IDisposable
     [Fact]
     public async Task Repository_key_never_appears_in_the_result_or_the_log()
     {
-        var logger = new RecordingLogger();
+        var logger = new StructuredLogRecorder();
         var provider = Provider("GitHub", "https://github.com", Key);
         var runner = ScriptedRunner.Exit(128, "fatal: Authentication failed for 'https://github.com/team/app.git/'");
 

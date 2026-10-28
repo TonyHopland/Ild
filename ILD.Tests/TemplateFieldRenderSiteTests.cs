@@ -70,7 +70,7 @@ public class TemplateFieldRenderSiteTests
     [Fact]
     public async Task AI_node_renders_its_prompt_before_handing_it_to_the_adapter()
     {
-        var adapter = new CapturingAdapter("stub");
+        var adapter = new CapturingAdapter();
         var provider = new AiProvider
         {
             Id = Guid.NewGuid(),
@@ -86,8 +86,7 @@ public class TemplateFieldRenderSiteTests
         var services = BaseServices(Wi());
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(Mock.Of<ILoopRunStore>());
-        services.AddSingleton(Mock.Of<IAgentAdapterRegistry>(r =>
-            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter)));
+        services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
 
         await RunAsync(
             new AINodeExecutor(),

@@ -102,7 +102,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var unreachable = new WorkItemManager(
             Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns,
-            new WorkItemServerClient(new HttpClient(new RefusingHandler())), _db.ServerOptions, TestActors.Instance);
+            new WorkItemServerClient(new HttpClient(new ThrowingHandler())), _db.ServerOptions, TestActors.Instance);
         var svc = NewService(adapter, unreachable);
         var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" }, TestContext.Current.CancellationToken)).Id;
 
@@ -172,11 +172,5 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
         _db.Context.AiProviders.Add(provider);
         await _db.Context.SaveChangesAsync();
         return provider;
-    }
-
-    private sealed class RefusingHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => throw new HttpRequestException("Connection refused (workitem-server:8080)");
     }
 }

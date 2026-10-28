@@ -2,11 +2,9 @@ using Microsoft.Extensions.Options;
 
 namespace ILD.Tests.Fakes;
 
-/// <summary>Options that change only when a test sets them, and never notify.</summary>
+/// <summary>Options that hold the value they were given and never notify of a change.</summary>
 internal sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
 {
-    private T _value = value;
-
     /// <summary>Runs once, on the next read of <see cref="CurrentValue"/>, then clears itself.</summary>
     public Action? OnNextRead;
 
@@ -15,13 +13,11 @@ internal sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
         get
         {
             Interlocked.Exchange(ref OnNextRead, null)?.Invoke();
-            return _value;
+            return value;
         }
     }
 
-    public T Get(string? name) => _value;
-
-    public void Set(T value) => _value = value;
+    public T Get(string? name) => value;
 
     public IDisposable? OnChange(Action<T, string?> listener) => null;
 }

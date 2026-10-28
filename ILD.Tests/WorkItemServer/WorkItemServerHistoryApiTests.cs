@@ -22,23 +22,9 @@ public sealed class WorkItemServerHistoryApiTests : IClassFixture<WorkItemServer
     private const string ApiKey = "history-test-key";
     private const string ActorHeader = "X-ILD-Actor";
 
-    public sealed class Server : IAsyncLifetime
-    {
-        public WorkItemServerFactory Factory { get; } = new(ApiKey);
-        public HttpClient Http { get; private set; } = null!;
-        public WorkItemServerClient Client { get; private set; } = null!;
+    public sealed class Server() : WorkItemServerFactory(ApiKey);
 
-        public ValueTask InitializeAsync()
-        {
-            Http = Factory.KeyedClient();
-            Client = new WorkItemServerClient(Factory.CreateClient());
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync() => Factory.DisposeAsync();
-    }
-
-    private readonly WorkItemServerFactory _factory;
+    private readonly Server _factory;
     private readonly HttpClient _http;
     private readonly WorkItemServerClient _client;
     private readonly WorkItemServerOptions _opts = new() { BaseUrl = "http://localhost", ApiKey = ApiKey };
@@ -47,9 +33,9 @@ public sealed class WorkItemServerHistoryApiTests : IClassFixture<WorkItemServer
 
     public WorkItemServerHistoryApiTests(Server server)
     {
-        _factory = server.Factory;
-        _http = server.Http;
-        _client = server.Client;
+        _factory = server;
+        _http = server.KeyedClient();
+        _client = new WorkItemServerClient(server.CreateClient());
     }
 
     private static string Encode(object actor) => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(actor));

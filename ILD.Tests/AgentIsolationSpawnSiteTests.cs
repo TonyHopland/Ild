@@ -119,9 +119,9 @@ public class AgentIsolationSpawnSiteTests
     }
 
     [Theory]
-    // Plain, verbatim, raw, interpolated — plus the two that used to run the scan
-    // off the end of the literal: a verbatim string opening on an escaped quote,
-    // and one closing on a backslash behind an @$ prefix. Then a comment.
+    // Plain, verbatim, raw and interpolated literals, and a comment. A verbatim
+    // string opening on an escaped quote and one closing on a backslash behind an
+    // @$ prefix guard the end of the literal: misread, the scan runs past it.
     [InlineData("var s = \"Process.Start(x)\";")]
     [InlineData("var s = @\"Process.Start(x)\";")]
     [InlineData("var s = @\"\"\"Process.Start(x)\";")]

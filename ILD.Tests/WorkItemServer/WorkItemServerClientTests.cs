@@ -12,25 +12,12 @@ public sealed class WorkItemServerClientTests : IClassFixture<WorkItemServerClie
 {
     private const string ApiKey = "test-key";
 
-    public sealed class Server : IAsyncLifetime
-    {
-        private readonly WorkItemServerFactory _factory = new(ApiKey);
-
-        public WorkItemServerClient Client { get; private set; } = null!;
-
-        public ValueTask InitializeAsync()
-        {
-            Client = new WorkItemServerClient(_factory.CreateClient());
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync() => _factory.DisposeAsync();
-    }
+    public sealed class Server() : WorkItemServerFactory(ApiKey);
 
     private readonly WorkItemServerClient _client;
     private readonly WorkItemServerOptions _opts = new() { BaseUrl = "http://localhost", ApiKey = ApiKey };
 
-    public WorkItemServerClientTests(Server server) => _client = server.Client;
+    public WorkItemServerClientTests(Server server) => _client = new WorkItemServerClient(server.CreateClient());
 
     [Fact]
     public async Task Create_then_get_round_trips_via_client()
@@ -131,34 +118,34 @@ public sealed class WorkItemServerClientTests : IClassFixture<WorkItemServerClie
     public async Task A_reorder_within_a_column_round_trips_the_placed_item()
     {
         // Own host: it orders and renumbers the whole board by priority.
-        await using var own = new Server();
-        await own.InitializeAsync();
+        await using var ownHost = new Server();
+        var own = new WorkItemServerClient(ownHost.CreateClient());
         var ct = TestContext.Current.CancellationToken;
-        var a = await CreateAtAsync(own.Client, "a", 0);
-        var b = await CreateAtAsync(own.Client, "b", 1);
-        var c = await CreateAtAsync(own.Client, "c", 2);
+        var a = await CreateAtAsync(own, "a", 0);
+        var b = await CreateAtAsync(own, "b", 1);
+        var c = await CreateAtAsync(own, "c", 2);
 
-        var resp = await own.Client.ReorderAsync(_opts, c, new RemoteReorderWorkItemRequest { AboveId = a, BelowId = b }, TestActors.Human, ct);
+        var resp = await own.ReorderAsync(_opts, c, new RemoteReorderWorkItemRequest { AboveId = a, BelowId = b }, TestActors.Human, ct);
 
         Assert.Equal(RemoteReorderOutcome.Moved, resp.Outcome);
         Assert.False(resp.Renumbered);
         Assert.Equal(c, resp.Item!.Id);
         Assert.Equal(RemoteWorkItemStatus.Backlog, resp.Item.Status);
         Assert.Equal(0.5, resp.Item.Priority);
-        Assert.Equal(0.5, (await own.Client.GetAsync(_opts, c, ct))!.Priority);
+        Assert.Equal(0.5, (await own.GetAsync(_opts, c, ct))!.Priority);
     }
 
     [Fact]
     public async Task A_reorder_into_another_status_round_trips_the_status_and_the_reason()
     {
         // Own host: it orders and renumbers the whole board by priority.
-        await using var own = new Server();
-        await own.InitializeAsync();
+        await using var ownHost = new Server();
+        var own = new WorkItemServerClient(ownHost.CreateClient());
         var ct = TestContext.Current.CancellationToken;
-        var a = await CreateAtAsync(own.Client, "a", 0, RemoteWorkItemStatus.Ready);
-        var x = await CreateAtAsync(own.Client, "x", 5);
+        var a = await CreateAtAsync(own, "a", 0, RemoteWorkItemStatus.Ready);
+        var x = await CreateAtAsync(own, "x", 5);
 
-        var resp = await own.Client.ReorderAsync(_opts, x, new RemoteReorderWorkItemRequest
+        var resp = await own.ReorderAsync(_opts, x, new RemoteReorderWorkItemRequest
         {
             BelowId = a,
             TargetStatus = RemoteWorkItemStatus.Ready,
@@ -168,7 +155,7 @@ public sealed class WorkItemServerClientTests : IClassFixture<WorkItemServerClie
         Assert.Equal(RemoteReorderOutcome.Moved, resp.Outcome);
         Assert.Equal(RemoteWorkItemStatus.Ready, resp.Item!.Status);
         Assert.True(resp.Item.Priority < 0);
-        var status = Assert.Single((await own.Client.GetHistoryAsync(_opts, x, ct))!, e => e.Field == "status" && e.NewValue == "Ready");
+        var status = Assert.Single((await own.GetHistoryAsync(_opts, x, ct))!, e => e.Field == "status" && e.NewValue == "Ready");
         Assert.Equal("dropped on the board", status.Reason);
     }
 
@@ -176,18 +163,18 @@ public sealed class WorkItemServerClientTests : IClassFixture<WorkItemServerClie
     public async Task A_reorder_that_renumbers_says_so()
     {
         // Own host: it orders and renumbers the whole board by priority.
-        await using var own = new Server();
-        await own.InitializeAsync();
+        await using var ownHost = new Server();
+        var own = new WorkItemServerClient(ownHost.CreateClient());
         var ct = TestContext.Current.CancellationToken;
-        var a = await CreateAtAsync(own.Client, "a", 1);
-        var b = await CreateAtAsync(own.Client, "b", 1);
-        var c = await CreateAtAsync(own.Client, "c", 9);
+        var a = await CreateAtAsync(own, "a", 1);
+        var b = await CreateAtAsync(own, "b", 1);
+        var c = await CreateAtAsync(own, "c", 9);
 
-        var resp = await own.Client.ReorderAsync(_opts, c, new RemoteReorderWorkItemRequest { AboveId = a, BelowId = b }, TestActors.Human, ct);
+        var resp = await own.ReorderAsync(_opts, c, new RemoteReorderWorkItemRequest { AboveId = a, BelowId = b }, TestActors.Human, ct);
 
         Assert.Equal(RemoteReorderOutcome.Moved, resp.Outcome);
         Assert.True(resp.Renumbered);
-        var order = (await own.Client.ListAsync(_opts, status: null, tags: null, ct)).Select(w => w.Id);
+        var order = (await own.ListAsync(_opts, status: null, tags: null, ct)).Select(w => w.Id);
         Assert.Equal(new[] { a, c, b }, order);
     }
 
@@ -195,21 +182,21 @@ public sealed class WorkItemServerClientTests : IClassFixture<WorkItemServerClie
     public async Task A_reorder_that_cannot_place_answers_its_outcome_and_a_refused_move_its_reason()
     {
         // Own host: it orders and renumbers the whole board by priority.
-        await using var own = new Server();
-        await own.InitializeAsync();
+        await using var ownHost = new Server();
+        var own = new WorkItemServerClient(ownHost.CreateClient());
         var ct = TestContext.Current.CancellationToken;
-        var dependency = await CreateAtAsync(own.Client, "dependency", 0);
-        var a = await CreateAtAsync(own.Client, "a", 1);
-        var blocked = (await own.Client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        var dependency = await CreateAtAsync(own, "dependency", 0);
+        var a = await CreateAtAsync(own, "a", 1);
+        var blocked = (await own.CreateAsync(_opts, new RemoteCreateWorkItemRequest
         {
             Title = "blocked",
             ForceStatus = RemoteWorkItemStatus.Ready,
             Dependencies = new[] { dependency },
         }, TestActors.Human, ct)).Id;
 
-        var missing = await own.Client.ReorderAsync(_opts, "999", new RemoteReorderWorkItemRequest { AboveId = a }, TestActors.Human, ct);
-        var nowhere = await own.Client.ReorderAsync(_opts, a, new RemoteReorderWorkItemRequest { AboveId = "999" }, TestActors.Human, ct);
-        var refused = await own.Client.ReorderAsync(_opts, blocked, new RemoteReorderWorkItemRequest
+        var missing = await own.ReorderAsync(_opts, "999", new RemoteReorderWorkItemRequest { AboveId = a }, TestActors.Human, ct);
+        var nowhere = await own.ReorderAsync(_opts, a, new RemoteReorderWorkItemRequest { AboveId = "999" }, TestActors.Human, ct);
+        var refused = await own.ReorderAsync(_opts, blocked, new RemoteReorderWorkItemRequest
         {
             AboveId = a,
             TargetStatus = RemoteWorkItemStatus.Running,
@@ -220,8 +207,8 @@ public sealed class WorkItemServerClientTests : IClassFixture<WorkItemServerClie
         Assert.Equal(RemoteReorderOutcome.TransitionRefused, refused.Outcome);
         Assert.Equal("Dependencies not satisfied", refused.Reason);
         Assert.Null(missing.Item);
-        Assert.Equal(1, (await own.Client.GetAsync(_opts, a, ct))!.Priority);
-        Assert.Equal(RemoteWorkItemStatus.Ready, (await own.Client.GetAsync(_opts, blocked, ct))!.Status);
+        Assert.Equal(1, (await own.GetAsync(_opts, a, ct))!.Priority);
+        Assert.Equal(RemoteWorkItemStatus.Ready, (await own.GetAsync(_opts, blocked, ct))!.Status);
     }
 
     [Fact]

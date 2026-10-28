@@ -138,7 +138,7 @@ public class AiTraversalCapAiNodeSeamTests
     [Fact]
     public async Task A_node_deferred_by_provider_capacity_costs_no_budget()
     {
-        var adapter = new CapturingAdapter(reportedSessionId: null);
+        var adapter = new CapturingAdapter();
         using var h = Harness(adapter, new AlwaysFullTracker());
         await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "2", TestContext.Current.CancellationToken);
         h.AddNode("a", NodeType.AI);

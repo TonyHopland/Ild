@@ -298,7 +298,7 @@ function dropAt(target: Element, draggedId: string, clientY: number) {
   }
 }
 
-/** Lets the drop's requests and their callbacks run. */
+/** One item per id, in that order, all in the given column. */
 function itemsIn(status: WorkItemStatus, ids: string[]): WorkItem[] {
   return ids.map((id) => makeItem({ id, title: `Item ${id}`, status }));
 }

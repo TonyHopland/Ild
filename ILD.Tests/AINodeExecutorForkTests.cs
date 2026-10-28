@@ -33,10 +33,7 @@ public class AINodeExecutorForkTests
         var providerStore = new Mock<IProviderStore>();
         providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
 
-        var adapter = new CapturingAdapter("stub");
-        var registry = Mock.Of<IAgentAdapterRegistry>(r =>
-            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
-
+        var adapter = new CapturingAdapter();
         var runStore = new Mock<ILoopRunStore>();
         runStore.Setup(s => s.GetSessionBindingAsync(It.IsAny<Guid>(), "AI", "base"))
             .ReturnsAsync(forkSourceBinding);
@@ -51,7 +48,7 @@ public class AINodeExecutorForkTests
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(runStore.Object);
         services.AddSingleton(workItems);
-        services.AddSingleton(registry);
+        services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
         return (services.BuildServiceProvider(), adapter, runStore);
     }
 

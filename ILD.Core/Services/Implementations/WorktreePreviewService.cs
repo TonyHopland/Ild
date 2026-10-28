@@ -549,7 +549,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     public bool AnyPreviewRunning() => !_runtimes.IsEmpty;
 
-    /// <summary>The process list a reader of <paramref name="worktreePath"/>'s running preview takes, or null when none runs.</summary>
+    /// <summary>
+    /// The live process list of the preview running for <paramref name="worktreePath"/>,
+    /// the same object later starts and stops act on, or null when no preview runs for it.
+    /// </summary>
     internal IReadOnlyList<ManagedPreviewProcess>? RunningProcesses(string worktreePath)
         => _runtimes.TryGetValue(NormalizeWorktreePath(worktreePath), out var runtime) ? runtime.Processes : null;
 

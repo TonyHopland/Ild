@@ -7,13 +7,12 @@ namespace ILD.Tests.Fakes;
 /// An AI node's agent: records every call it is handed and answers "done" on the
 /// session the call resumed, or on <c>newSessionId</c> when it resumed none.
 /// </summary>
-/// <param name="providerType">The provider type it serves.</param>
 /// <param name="newSessionId">The session a call that resumed none ends on.</param>
 /// <param name="reportedSessionId">
 /// A session it reports mid-stream, as a real CLI does, and ends every call on.
 /// </param>
 internal sealed class CapturingAdapter(
-    string providerType = "claude-code", string? newSessionId = null, string? reportedSessionId = null) : IAgentAdapter
+    string? newSessionId = null, string? reportedSessionId = null) : IAgentAdapter
 {
     public List<AgentExecutionContext> Calls { get; } = new();
 
@@ -21,7 +20,7 @@ internal sealed class CapturingAdapter(
     public AgentExecutionContext? Captured => Calls.LastOrDefault();
 
     public string Name => "Capturing";
-    public string[] SupportedProviderTypes => [providerType];
+    public string[] SupportedProviderTypes => ["claude-code"];
     public ConfigFieldDescriptor[] ConfigSchema => [];
     public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
     public AgentAdapterTraits Traits => AgentAdapterTraits.None;

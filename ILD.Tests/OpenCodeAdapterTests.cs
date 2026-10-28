@@ -695,7 +695,7 @@ public class OpenCodeAdapterTests
     [Theory]
     [InlineData("{\"type\":\"text\",\"text\":\"hello\",\"sessionId\":\"streamed\"}", "streamed")]
     [InlineData("{\"type\":\"text\",\"text\":\"hello\"}", "given")]
-    public async Task ExecuteAsync_ends_on_the_session_its_stream_names_else_the_one_it_was_given(string line, string expected)
+    public async Task ExecuteAsync_ends_on_the_session_its_stream_names_else_the_given_one_and_passes_the_incoming_one_on(string line, string expected)
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-sid-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
@@ -709,10 +709,11 @@ public class OpenCodeAdapterTests
                 binaryPath: scriptPath,
                 prompt: "ignored",
                 worktreePath: worktreeDir,
-                sessionId: "given"));
+                sessionId: "given") with { IncomingSessionId = "incoming" });
 
             Assert.True(result.Success, result.Error);
             Assert.Equal(expected, result.SessionId);
+            Assert.Equal("incoming", result.IncomingSessionId);
         }
         finally
         {

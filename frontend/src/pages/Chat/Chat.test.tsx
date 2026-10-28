@@ -259,7 +259,7 @@ function emit(event: string, payload: unknown) {
   emitHubEvent(event, payload);
 }
 
-/** Let every answer already given reach the view, and every effect it causes run. */
+/** The Chat link in the app's navigation. */
 function chatLink() {
   return within(screen.getByRole("navigation")).getByRole("link", { name: "Chat" });
 }

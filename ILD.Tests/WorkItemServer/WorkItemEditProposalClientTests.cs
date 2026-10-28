@@ -17,22 +17,13 @@ public sealed class WorkItemEditProposalClientTests : IClassFixture<WorkItemEdit
 {
     private const string ApiKey = "edit-proposals-test-key";
 
-    public sealed class Server : IAsyncLifetime
+    public sealed class Server : WorkItemServerFactory
     {
-        private readonly WorkItemServerFactory _factory;
+        public Server() : this(new HumanEditBeforeWorkItemWrite()) { }
 
-        public Server() => _factory = new WorkItemServerFactory(ApiKey, HumanEdit);
+        private Server(HumanEditBeforeWorkItemWrite humanEdit) : base(ApiKey, humanEdit) => HumanEdit = humanEdit;
 
-        public HumanEditBeforeWorkItemWrite HumanEdit { get; } = new();
-        public WorkItemServerClient Client { get; private set; } = null!;
-
-        public ValueTask InitializeAsync()
-        {
-            Client = new WorkItemServerClient(_factory.KeyedClient());
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync() => _factory.DisposeAsync();
+        public HumanEditBeforeWorkItemWrite HumanEdit { get; }
     }
 
     private readonly HumanEditBeforeWorkItemWrite _humanEdit;
@@ -43,7 +34,7 @@ public sealed class WorkItemEditProposalClientTests : IClassFixture<WorkItemEdit
     {
         _humanEdit = server.HumanEdit;
         _humanEdit.Reset();
-        _client = server.Client;
+        _client = new WorkItemServerClient(server.KeyedClient());
     }
 
     private async Task<RemoteWorkItem> CreateItemAsync(string title = "Old backlog item") =>

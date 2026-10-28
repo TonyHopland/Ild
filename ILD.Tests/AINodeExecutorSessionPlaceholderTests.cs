@@ -35,10 +35,7 @@ public class AINodeExecutorSessionPlaceholderTests
         var providerStore = new Mock<IProviderStore>();
         providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
 
-        var adapter = new CapturingAdapter("stub", newSessionId: "new-sess");
-        var registry = Mock.Of<IAgentAdapterRegistry>(r =>
-            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
-
+        var adapter = new CapturingAdapter(newSessionId: "new-sess");
         var runStore = new Mock<ILoopRunStore>();
         runStore.Setup(s => s.GetVariablesAsync(It.IsAny<Guid>()))
             .ReturnsAsync(() => (variables ?? new Dictionary<string, string>())
@@ -60,7 +57,7 @@ public class AINodeExecutorSessionPlaceholderTests
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(runStore.Object);
         services.AddSingleton(workItems);
-        services.AddSingleton(registry);
+        services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
         return (services.BuildServiceProvider(), adapter, runStore);
     }
 

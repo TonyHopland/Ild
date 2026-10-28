@@ -98,7 +98,7 @@ function dialogFor(workItem: WorkItem) {
   );
 }
 
-/** Lets every answered read, and whatever it sets off, land. */
+/** Renders the dialog and lets its first reads, and whatever they set off, land. */
 async function renderDialog(workItem: WorkItem) {
   const result = render(dialogFor(workItem), { wrapper: WorkItemHubProvider });
   await settle();

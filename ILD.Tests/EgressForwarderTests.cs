@@ -8,6 +8,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -25,7 +26,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
 
     private readonly TestDb _db = new();
     private readonly RecordingLog _log = new();
-    private readonly CapturingLogger _diagnostics = new();
+    private readonly RecordingLogger<EgressForwarder> _diagnostics = new();
     private readonly ServiceProvider _services;
     private readonly EgressPolicy _policy;
     private EgressForwarder? _forwarder;
@@ -378,7 +379,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         }
         catch (TimeoutException)
         {
-            Assert.Fail($"expected {count} recorded destination(s), saw {_log.Entries.Count}; forwarder said: {string.Join(" | ", _diagnostics.Lines)}");
+            Assert.Fail($"expected {count} recorded destination(s), saw {_log.Entries.Count}; forwarder said: {string.Join(" | ", _diagnostics.Entries)}");
         }
         return _log.Entries;
     }
@@ -436,23 +437,6 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     /// lines makes a failure here say what went wrong instead of only that nothing
     /// was recorded.
     /// </summary>
-    private sealed class CapturingLogger : ILogger<EgressForwarder>
-    {
-        private readonly List<string> _lines = new();
-
-        public IReadOnlyList<string> Lines
-        {
-            get { lock (_lines) return _lines.ToList(); }
-        }
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            lock (_lines) _lines.Add($"{logLevel}: {formatter(state, exception)}{(exception is null ? "" : " -- " + exception)}");
-        }
-    }
 
     private sealed class SilentNotifier : INetworkNotifier
     {
