@@ -231,22 +231,46 @@ const CASES: Case[] = [
     ],
     ends: "working",
   },
+  {
+    name: "the same read answering with the turn being replaced is what would break it",
+    // The server should answer with the replacement, but if it answers with the outgoing turn
+    // the view still keeps t2, so t1's completion cannot take the controls away under it.
+    resumeWith: "t1",
+    steps: [
+      { start: "t2", shows: "working" },
+      { holdRead: true },
+      { reconnect: true },
+      { answerHeldRead: "t1", shows: "working" },
+      { complete: "t1", shows: "working" },
+    ],
+    ends: "working",
+  },
+  {
+    name: "the replacement still ends the chat after a read named the turn it replaced",
+    resumeWith: "t1",
+    steps: [
+      { start: "t2", shows: "working" },
+      { holdRead: true },
+      { reconnect: true },
+      { answerHeldRead: "t1", shows: "working" },
+      { complete: "t1", shows: "working" },
+      { complete: "t2" },
+    ],
+    ends: "idle",
+  },
+  {
+    name: "a read naming a replaced turn after the replacement completed leaves the chat idle",
+    resumeWith: "t1",
+    steps: [
+      { start: "t2" },
+      { complete: "t2", shows: "idle" },
+      { holdRead: true },
+      { reconnect: true },
+      { answerHeldRead: "t1", shows: "idle" },
+    ],
+    ends: "idle",
+  },
 ];
-
-const REPLACED_TURN_COMPLETION: Case = {
-  name: "the same read answering with the turn being replaced is what would break it",
-  // The server must not answer a read with the outgoing turn, but if it does, t1's completion
-  // takes the controls away under t2, which is still running. Known bug: follow-up work item 468.
-  resumeWith: "t1",
-  steps: [
-    { start: "t2", shows: "working" },
-    { holdRead: true },
-    { reconnect: true },
-    { answerHeldRead: "t1", shows: "working" },
-    { complete: "t1", shows: "working" },
-  ],
-  ends: "working",
-};
 
 /** Stop button and working indicator, which must always agree with each other. */
 function shown() {
@@ -426,7 +450,4 @@ describe("ChatBubble turn state machine", () => {
   }
 
   test.each(CASES)("$name", runCase);
-
-  // Known bug, follow-up work item 468: expected to fail until it is fixed.
-  test.fails(REPLACED_TURN_COMPLETION.name, () => runCase(REPLACED_TURN_COMPLETION));
 });
