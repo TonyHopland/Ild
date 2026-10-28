@@ -748,9 +748,10 @@ describe("Network settings", () => {
 
   test("shows the stored internal destinations and saves an edit, showing what the server kept", async () => {
     mockServices(enforced, "off", [postgres], "git.example");
-    const put = vi
-      .spyOn(services.settingsService, "put")
-      .mockResolvedValue({ key: services.NetworkSettingKeys.InternalAllow, value: "git.example\n10.0.0.0/8" });
+    const put = vi.spyOn(services.settingsService, "put").mockResolvedValue({
+      key: services.NetworkSettingKeys.InternalAllow,
+      value: "git.example\n10.0.0.0/8",
+    });
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const box = (await screen.findByLabelText("Internal destinations")) as HTMLTextAreaElement;

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Coding agents can no longer reach private or internal addresses through the proxy unless you allow them in Settings > Network.** Self-hosted git, local model servers and internal registries need an entry there after upgrading.
 - **Coding agents can no longer make DNS lookups, so data cannot leave that way.**
 
 ### Fixed
