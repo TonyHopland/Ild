@@ -28,17 +28,23 @@ namespace ILD.Tests;
 /// </summary>
 public class WorkItemsControllerBranchNameTests
 {
-    public static TheoryData<string, string, string, string, string?> Fields => new()
+    public static TheoryData<string, string, string?> IllegalNames => new()
     {
-        { "branch", "feature foo", "  feature/foo  ", "feature/foo", null },
-        { "base", "release 1.0", "  release/1.0  ", "release/1.0", "Base branch" },
+        { "branch", "feature foo", null },
+        { "base", "release 1.0", "Base branch" },
+    };
+
+    public static TheoryData<string, string, string> LegalNames => new()
+    {
+        { "branch", "  feature/foo  ", "feature/foo" },
+        { "base", "  release/1.0  ", "release/1.0" },
     };
 
     public static TheoryData<string> FieldNames => new() { "branch", "base" };
 
     [Theory]
-    [MemberData(nameof(Fields))]
-    public async Task Create_rejects_an_illegal_name(string field, string illegal, string legalInput, string legalStored, string? errorNames)
+    [MemberData(nameof(IllegalNames))]
+    public async Task Create_rejects_an_illegal_name(string field, string illegal, string? errorNames)
     {
         var (controller, _, db, repoId) = Setup();
         using var _db = db;
@@ -52,8 +58,8 @@ public class WorkItemsControllerBranchNameTests
     }
 
     [Theory]
-    [MemberData(nameof(Fields))]
-    public async Task Create_accepts_and_persists_a_legal_name(string field, string illegal, string legalInput, string legalStored, string? errorNames)
+    [MemberData(nameof(LegalNames))]
+    public async Task Create_accepts_and_persists_a_legal_name(string field, string legalInput, string legalStored)
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _db = db;
