@@ -8,7 +8,10 @@ import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function repo(id: string, name: string): Repository {
   return {
