@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, createEvent, fireEvent, waitFor } from "@testing-library/react";
-import { useState, type ComponentProps } from "react";
+import { Profiler, useState, type ComponentProps } from "react";
 import BoardColumn from "./TaskboardColumn";
 
 type ColumnProps = ComponentProps<typeof BoardColumn>;
@@ -1070,6 +1070,32 @@ describe("TaskboardColumn drop line", () => {
     expect(drag("dragEnter", outside, { clientX: 500 }).prevented).toBe(false);
     expect(drag("dragOver", outside, { clientX: 500 }).prevented).toBe(false);
     outside.remove();
+  });
+
+  test("dragging on within the same slot does not re-render the column", () => {
+    const onRender = vi.fn();
+    render(
+      <Profiler id="column" onRender={onRender}>
+        <TaskboardColumn
+          status={WorkItemStatus.Backlog}
+          label="Backlog"
+          workItems={itemsIn(WorkItemStatus.Backlog, ["a", "b", "c"])}
+          total={3}
+          onWorkItemUpdate={vi.fn()}
+          onError={vi.fn()}
+          foldChoice={false}
+        />
+      </Profiler>,
+    );
+    layOutWithGaps(["a", "b", "c"]);
+    drag("dragOver", card("b"), { clientY: cardTop(1) + 10 });
+    drag("dragOver", titleOf("b"), { clientY: cardTop(1) + 20 });
+    const renders = onRender.mock.calls.length;
+
+    for (let y = cardTop(1) + 22; y < cardTop(1) + CARD_HEIGHT / 2; y += 2)
+      drag("dragOver", titleOf("b"), { clientY: y });
+
+    expect(onRender.mock.calls.length).toBe(renders);
   });
 
   test.each([

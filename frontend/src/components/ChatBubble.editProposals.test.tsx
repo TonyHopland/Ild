@@ -1,29 +1,27 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import type { ChatMessage, ChatSession, WorkItem, WorkItemEditProposal } from "../types";
+import { documentOrder, emitHubEvent, proposalCardAround, signalRHub } from "../test-support";
 import {
-  chatMessageOf,
-  chatSessionOf,
-  documentOrder,
-  emitHubEvent,
+  chatMessage,
+  chatSession,
   openResumedChat as openResumed,
-  proposalCardAround,
-  signalRHub,
   stubChatServices,
-} from "../test-support";
+} from "../test-support.chatBubble";
 
 vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
-const { workItemService } = stubChatServices();
+const services = stubChatServices();
+const { workItemService } = services;
 
 function session(): ChatSession {
-  return chatSessionOf({
+  return chatSession({
     id: "s1",
     name: "Tidy the backlog",
     messages: [
-      chatMessageOf({
+      chatMessage({
         id: "m1",
         content: "I proposed a sharper title for wi-9.",
         sequence: 1,
@@ -79,6 +77,7 @@ function card(
 
 afterEach(() => {
   signalRHub.reset();
+  services.reset();
   vi.clearAllMocks();
   localStorage.clear();
 });

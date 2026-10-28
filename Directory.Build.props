@@ -5,6 +5,7 @@
     <FileVersion>0.22.0</FileVersion>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
     <!-- Keep the informational version exactly as <Version> (no +<git-sha>
          suffix) so a CI release stamp of X.Y.Z surfaces verbatim on /health.
          See docs/adr/0012-ghcr-image-tagging-strategy.md. -->

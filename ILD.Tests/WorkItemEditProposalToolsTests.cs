@@ -1,8 +1,5 @@
-using System.Net;
-using System.Reflection;
 using System.Text.Json;
-using ILD.McpServer;
-using ILD.McpServer.Tools;
+using ILD.Tests.Fakes;
 
 namespace ILD.Tests;
 
@@ -15,41 +12,10 @@ namespace ILD.Tests;
 /// </summary>
 public class WorkItemEditProposalToolsTests
 {
-    private const string BaseAddress = "http://ild-host:8080/";
-
-    private static async Task<(string Result, HttpRequestMessage Request, string? Body)> InvokeToolAsync(
-        string toolName, IReadOnlyDictionary<string, object?> args, string responseBody)
-    {
-        HttpRequestMessage? seen = null;
-        string? body = null;
-        var handler = new StubHandler(async req =>
-        {
-            seen = req;
-            body = req.Content is null ? null : await req.Content.ReadAsStringAsync();
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseBody) };
-        });
-        var tools = new WorkItemTools(new IldClient(
-            new HttpClient(handler) { BaseAddress = new Uri(BaseAddress) },
-            new IldClientOptions(BaseAddress.TrimEnd('/'), "the-agent-token", LoopRunId: null)));
-
-        var method = typeof(WorkItemTools).GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Single(m => m.CustomAttributes.Any(a =>
-                a.AttributeType.Name == "McpServerToolAttribute"
-                && a.NamedArguments.Any(n => n.MemberName == "Name" && (string?)n.TypedValue.Value == toolName)));
-        var parameters = method.GetParameters();
-        Assert.All(args.Keys, name => Assert.Contains(parameters, p => p.Name == name));
-        var values = parameters
-            .Select(p => args.TryGetValue(p.Name!, out var v) ? v : p.HasDefaultValue ? p.DefaultValue : null)
-            .ToArray();
-
-        var result = await (Task<string>)method.Invoke(tools, values)!;
-        return (result, seen!, body);
-    }
-
     [Fact]
     public async Task propose_workitem_edit_posts_only_the_fields_given_plus_the_rationale()
     {
-        var (result, request, body) = await InvokeToolAsync("propose_workitem_edit", new Dictionary<string, object?>
+        var (result, request, body) = await McpToolInvoker.InvokeAsync("propose_workitem_edit", new Dictionary<string, object?>
         {
             ["id"] = "wi-42",
             ["description"] = "A sharper description.",
@@ -58,7 +24,7 @@ public class WorkItemEditProposalToolsTests
         }, """{"id":"p-1","status":"Pending"}""");
 
         Assert.Equal(HttpMethod.Post, request.Method);
-        Assert.Equal($"{BaseAddress}api/v1/agent/workitems/wi-42/edit-proposals", request.RequestUri!.ToString());
+        Assert.Equal($"{McpToolInvoker.BaseAddress}api/v1/agent/workitems/wi-42/edit-proposals", request.RequestUri!.ToString());
         var json = JsonDocument.Parse(body!).RootElement;
         Assert.Equal("A sharper description.", json.GetProperty("description").GetString());
         Assert.Equal("", json.GetProperty("baseBranchOverride").GetString());
@@ -71,7 +37,7 @@ public class WorkItemEditProposalToolsTests
     [Fact]
     public async Task propose_workitem_edit_carries_tags_as_given()
     {
-        var (_, _, body) = await InvokeToolAsync("propose_workitem_edit", new Dictionary<string, object?>
+        var (_, _, body) = await McpToolInvoker.InvokeAsync("propose_workitem_edit", new Dictionary<string, object?>
         {
             ["id"] = "wi-42",
             ["tags"] = new[] { "HIL", "bugfix" },
@@ -84,7 +50,7 @@ public class WorkItemEditProposalToolsTests
     [Fact]
     public async Task propose_workitem_edit_carries_dependency_changes_as_given_and_omits_the_list_not_given()
     {
-        var (_, _, body) = await InvokeToolAsync("propose_workitem_edit", new Dictionary<string, object?>
+        var (_, _, body) = await McpToolInvoker.InvokeAsync("propose_workitem_edit", new Dictionary<string, object?>
         {
             ["id"] = "wi-42",
             ["addDependencies"] = new[] { "wi-277", "wi-278" },
@@ -96,7 +62,7 @@ public class WorkItemEditProposalToolsTests
         Assert.True(!json.TryGetProperty("removeDependencies", out var removed) || removed.ValueKind == JsonValueKind.Null);
         Assert.True(!json.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null);
 
-        var (_, _, removeBody) = await InvokeToolAsync("propose_workitem_edit", new Dictionary<string, object?>
+        var (_, _, removeBody) = await McpToolInvoker.InvokeAsync("propose_workitem_edit", new Dictionary<string, object?>
         {
             ["id"] = "wi-42",
             ["removeDependencies"] = new[] { "wi-12" },
@@ -109,14 +75,14 @@ public class WorkItemEditProposalToolsTests
     [Fact]
     public async Task add_workitem_dependency_posts_the_other_item_to_the_dependent_items_dependencies()
     {
-        var (result, request, body) = await InvokeToolAsync("add_workitem_dependency", new Dictionary<string, object?>
+        var (result, request, body) = await McpToolInvoker.InvokeAsync("add_workitem_dependency", new Dictionary<string, object?>
         {
             ["workItemId"] = "wi-273",
             ["dependsOnWorkItemId"] = "wi-277",
         }, """{"changed":true,"dependencies":[{"id":"wi-277","title":"Chat tab","status":"Backlog"}]}""");
 
         Assert.Equal(HttpMethod.Post, request.Method);
-        Assert.Equal($"{BaseAddress}api/v1/agent/workitems/wi-273/dependencies", request.RequestUri!.ToString());
+        Assert.Equal($"{McpToolInvoker.BaseAddress}api/v1/agent/workitems/wi-273/dependencies", request.RequestUri!.ToString());
         Assert.Equal("wi-277", JsonDocument.Parse(body!).RootElement.GetProperty("dependsOnWorkItemId").GetString());
         Assert.Contains("Chat tab", result);
     }
@@ -124,14 +90,14 @@ public class WorkItemEditProposalToolsTests
     [Fact]
     public async Task remove_workitem_dependency_deletes_the_edge_from_the_dependent_item()
     {
-        var (_, request, _) = await InvokeToolAsync("remove_workitem_dependency", new Dictionary<string, object?>
+        var (_, request, _) = await McpToolInvoker.InvokeAsync("remove_workitem_dependency", new Dictionary<string, object?>
         {
             ["workItemId"] = "wi-273",
             ["dependsOnWorkItemId"] = "wi-277",
         }, """{"changed":true,"dependencies":[]}""");
 
         Assert.Equal(HttpMethod.Delete, request.Method);
-        Assert.Equal($"{BaseAddress}api/v1/agent/workitems/wi-273/dependencies/wi-277", request.RequestUri!.ToString());
+        Assert.Equal($"{McpToolInvoker.BaseAddress}api/v1/agent/workitems/wi-273/dependencies/wi-277", request.RequestUri!.ToString());
     }
 
     [Fact]
@@ -139,17 +105,11 @@ public class WorkItemEditProposalToolsTests
     {
         const string listed = """[{"id":"p-1","status":"Rejected","rejectionReason":"Too vague."}]""";
 
-        var (result, request, _) = await InvokeToolAsync("list_workitem_edit_proposals",
+        var (result, request, _) = await McpToolInvoker.InvokeAsync("list_workitem_edit_proposals",
             new Dictionary<string, object?> { ["id"] = "wi-42" }, listed);
 
         Assert.Equal(HttpMethod.Get, request.Method);
-        Assert.Equal($"{BaseAddress}api/v1/agent/workitems/wi-42/edit-proposals", request.RequestUri!.ToString());
+        Assert.Equal($"{McpToolInvoker.BaseAddress}api/v1/agent/workitems/wi-42/edit-proposals", request.RequestUri!.ToString());
         Assert.Contains("Too vague.", result);
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => respond(request);
     }
 }

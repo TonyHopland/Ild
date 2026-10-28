@@ -15,6 +15,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function renderPage(mockFetchFn: ReturnType<typeof vi.fn>) {

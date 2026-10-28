@@ -4,5 +4,4 @@ public interface IRecoveryManager
 {
     Task<IEnumerable<Guid>> GetRecoverableRunIdsAsync();
     Task<bool> RecoverRunAsync(Guid runId);
-    Task ClearRecoveryStateAsync(Guid runId);
 }

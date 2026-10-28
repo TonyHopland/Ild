@@ -56,6 +56,7 @@ function adapterList(types: string[]) {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 // The MCP-capable adapters (opencode, claude-code) advertise a single

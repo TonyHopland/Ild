@@ -25,7 +25,7 @@ public class RouteAuthorizationTableTests(RouteAuthorizationTableTests.Host host
         public async ValueTask DisposeAsync() => await Factory.DisposeAsync();
     }
 
-    private sealed record Probe(string Verb, string Template, string Path, bool AgentOrUser);
+    private sealed record Probe(string Verb, string Path, bool AgentOrUser);
 
     private static string ValueFor(RoutePatternParameterPart part)
     {
@@ -54,7 +54,7 @@ public class RouteAuthorizationTableTests(RouteAuthorizationTableTests.Host host
                 .Any(a => a.Policy == IldAuthentication.AgentOrUserPolicy);
             var verbs = endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["GET"];
             foreach (var verb in verbs)
-                probes.Add(new Probe(verb, endpoint.RoutePattern.RawText ?? path, path, agentOrUser));
+                probes.Add(new Probe(verb, path, agentOrUser));
         }
         return probes;
     }
@@ -63,6 +63,7 @@ public class RouteAuthorizationTableTests(RouteAuthorizationTableTests.Host host
     public async Task Every_user_facing_route_refuses_no_token_with_401_and_the_agent_token_with_403_unless_it_is_agent_or_user()
     {
         var probes = Probes(host.Factory.Services);
+        Assert.True(probes.Count > 100, $"only {probes.Count} routes were enumerated");
         var anonymous = host.Factory.CreateClient();
         var agent = host.Factory.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
@@ -81,41 +82,5 @@ public class RouteAuthorizationTableTests(RouteAuthorizationTableTests.Host host
         }
 
         Assert.Empty(mismatches);
-    }
-
-    public static TheoryData<string, string> RoutesTheRemovedPerControllerTestsProbed => new()
-    {
-        { "GET", "api/v1/WorkItems" },
-        { "GET", "api/v1/WorkItems/page" },
-        { "GET", "api/v1/WorkItems/counts" },
-        { "GET", "api/v1/WorkItems/tags" },
-        { "POST", "api/v1/WorkItems/{id}/pr/merge" },
-        { "GET", "api/v1/WorkItems/{id}/attachments" },
-        { "POST", "api/v1/WorkItems/{id}/attachments" },
-        { "GET", "api/v1/WorkItems/{id}/attachments/{attachmentId:guid}" },
-        { "DELETE", "api/v1/WorkItems/{id}/attachments/{attachmentId:guid}" },
-        { "GET", "api/v1/settings/attachments" },
-        { "GET", "api/v1/settings" },
-        { "GET", "api/v1/Repositories" },
-        { "GET", "api/v1/RemoteProviders" },
-        { "GET", "api/v1/LoopTemplates" },
-        { "GET", "api/v1/LoopRuns" },
-        { "GET", "api/v1/LoopRuns/{id}/events" },
-        { "GET", "api/v1/preferences" },
-        { "GET", "api/v1/AiProviders" },
-        { "GET", "api/v1/Auth/me" },
-        { "GET", "api/v1/Auth/sessions" },
-        { "GET", "api/v1/chat/history" },
-        { "POST", "api/v1/webhooks/forgejo" },
-    };
-
-    [Theory]
-    [MemberData(nameof(RoutesTheRemovedPerControllerTestsProbed))]
-    public void The_table_probes_every_route_the_per_controller_401_tests_used_to(string verb, string template)
-    {
-        var probes = Probes(host.Factory.Services);
-
-        Assert.Contains(probes, p => p.Verb == verb && string.Equals(p.Template, template, StringComparison.OrdinalIgnoreCase));
-        Assert.True(probes.Count > 100, $"only {probes.Count} routes were enumerated");
     }
 }

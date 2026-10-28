@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A chat no longer looks finished while its next reply is still running.**
+
 ## [0.22.0] - 2026-10-27
 
 ### Changed

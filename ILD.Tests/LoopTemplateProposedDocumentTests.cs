@@ -107,7 +107,7 @@ public class LoopTemplateProposedDocumentTests
         Assert.Empty(result.ValidationErrors);
     }
 
-public static TheoryData<string, string> OversizedOrAmbiguous => new()
+    public static TheoryData<string, string> OversizedOrAmbiguous => new()
     {
         { "name over 256", $$"""{"$schema":"ild-loop-template/v2","name":"{{new string('n', 257)}}","recoveryPolicy":"AutoResume",{{Graph}}}""" },
         { "description over 8192", $$"""{"$schema":"ild-loop-template/v2","name":"x","description":"{{new string('d', 8193)}}","recoveryPolicy":"AutoResume",{{Graph}}}""" },

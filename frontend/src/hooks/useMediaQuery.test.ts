@@ -53,4 +53,15 @@ describe("useMediaQuery", () => {
     });
     expect(result.current).toBe(false);
   });
+
+  test("starts out matching when the query already matches", () => {
+    mockMatches = true;
+    const { result } = renderHook(() => useMediaQuery("(max-width: 768px)"));
+    expect(result.current).toBe(true);
+
+    act(() => {
+      fireMediaChange(false);
+    });
+    expect(result.current).toBe(false);
+  });
 });

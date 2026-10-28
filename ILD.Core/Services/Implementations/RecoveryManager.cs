@@ -103,6 +103,4 @@ public class RecoveryManager : IRecoveryManager
         await _workItems.TransitionAsync(_actor, run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.RecoveryRequiresReview, currentLoopRunId: run.Id);
     }
-
-    public Task ClearRecoveryStateAsync(Guid runId) => Task.CompletedTask;
 }

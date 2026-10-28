@@ -187,8 +187,10 @@ public sealed class AgentControllerProposalValidationTests : IDisposable
     [Fact]
     public void A_rationale_over_2000_fails_validation_on_the_loop_and_variable_requests_and_2000_passes()
     {
-        Assert.NotEmpty(Validate(new AgentLoopTemplateProposalRequest { Rationale = new string('r', 2001) }));
-        Assert.NotEmpty(Validate(new AgentGlobalVariableProposalRequest { Rationale = new string('r', 2001) }));
+        Assert.Contains(nameof(AgentLoopTemplateProposalRequest.Rationale),
+            Validate(new AgentLoopTemplateProposalRequest { Rationale = new string('r', 2001) }).SelectMany(r => r.MemberNames));
+        Assert.Contains(nameof(AgentGlobalVariableProposalRequest.Rationale),
+            Validate(new AgentGlobalVariableProposalRequest { Rationale = new string('r', 2001) }).SelectMany(r => r.MemberNames));
         Assert.Empty(Validate(new AgentLoopTemplateProposalRequest { Rationale = new string('r', 2000) }));
         Assert.Empty(Validate(new AgentGlobalVariableProposalRequest { Rationale = new string('r', 2000) }));
     }

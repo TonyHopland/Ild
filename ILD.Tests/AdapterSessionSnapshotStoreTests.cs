@@ -335,11 +335,12 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
     {
         await using var db = Context();
         var id = await SessionSnapshotTestSupport.SeedLegacyAsync(db, _runId, null, "Pi", "same", "{\"n\":1}\n", Ct);
-        _sql.Clear();
+        var before = await Store().ListMetadataForRunAsync(_runId, Ct);
 
         Assert.True(await Store().ForkAsync(Key("same", "Pi"), Key("same", "Pi"), Ct));
 
-        Assert.DoesNotContain(_sql.Commands, c => !c.Sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, await Store().ListMetadataForRunAsync(_runId, Ct));
+        Assert.Empty(await ChunksAsync(Key("same", "Pi")));
         Assert.Equal("{\"n\":1}\n", await SessionSnapshotTestSupport.ReadLegacySessionJsonAsync(Context(), id, Ct));
     }
 

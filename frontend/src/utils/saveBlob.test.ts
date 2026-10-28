@@ -7,13 +7,19 @@ const revokeObjectURL = vi.fn();
 
 beforeEach(() => {
   vi.useFakeTimers();
-  URL.createObjectURL = createObjectURL;
-  URL.revokeObjectURL = revokeObjectURL;
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    },
+  );
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 test("clicks a temporary download link for the bytes and removes it, then revokes the URL only after the delay", () => {
