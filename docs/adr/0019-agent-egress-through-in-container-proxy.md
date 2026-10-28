@@ -54,8 +54,8 @@ Two parts, deliberately separate.
 
   Then the container entrypoint, as root and just before its privilege drop,
   installs an nftables rule set (iptables as fallback) keyed on the agent uid:
-  loopback is accepted but DNS is not, **everything else is dropped**. A connection
-  that skips the proxy — an IP literal, a client that ignores `HTTP_PROXY`, git
+  loopback is accepted but DNS is not, **everything else is dropped**. A
+  connection that skips the proxy — an IP literal, a client that ignores `HTTP_PROXY`, git
   over SSH — goes nowhere, so no DNS interception is needed for robustness. The
   rules carry **no domains**; they only say "this uid leaves through loopback".
   The orchestrator uid is untouched and keeps full network access.

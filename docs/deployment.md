@@ -238,8 +238,8 @@ also what you get with uid isolation off (`AGENT_USER=`), since there is then no
 separate uid to key rules on.
 
 The rules open only loopback (the proxy, ILD's own API for the agent's MCP
-callback, and previews, but not DNS) for the agent uid; everything else it sends is
-dropped, IP literal or not. The orchestrator is not subject to them. The image
+callback, and previews, but not DNS) for the agent uid; everything else it
+sends is dropped, IP literal or not. The orchestrator is not subject to them. The image
 ships `nftables` and falls back to `iptables` where nf_tables is unavailable.
 
 ## Volumes

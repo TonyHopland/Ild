@@ -443,8 +443,9 @@ has_cap_net_admin() {
 # The agent uid's egress, as a single uid-keyed rule set that carries no domains:
 # loopback (the proxy, ILD's own API for the MCP callback, previews) is open, DNS
 # is dropped even on loopback, everything else is dropped — so a connection that
-# skips the proxy, IP literal or not, goes nowhere and the agent looks up no name. Every allow/deny decision lives in the proxy, which
-# is why editing a list never touches these rules. Idempotent: the table is
+# skips the proxy, IP literal or not, goes nowhere and the agent looks up no name.
+# Every allow/deny decision lives in the proxy, which is why editing a list never
+# touches these rules. Idempotent: the table is
 # replaced wholesale, so a restart never stacks a second copy.
 install_egress_rules_nft() {
   uid="$1"
@@ -522,7 +523,7 @@ install_agent_egress_rules() {
   fi
 
   export ILD_NETWORK_ENFORCEMENT=enforced
-  export ILD_NETWORK_ENFORCEMENT_REASON="$tool rules drop everything uid $agent_uid ($AGENT_USER) sends except loopback, DNS included, so only the proxy on 127.0.0.1:$ILD_NETWORK_PROXY_PORT reaches the network."
+  export ILD_NETWORK_ENFORCEMENT_REASON="$tool rules drop everything uid $agent_uid ($AGENT_USER) sends except loopback, and its DNS is blocked, so only the proxy on 127.0.0.1:$ILD_NETWORK_PROXY_PORT reaches the network."
   echo "Agent egress enforced: $ILD_NETWORK_ENFORCEMENT_REASON"
 }
 
