@@ -64,7 +64,7 @@ const postgres: NetworkForward = {
 
 function mockServices(
   status: NetworkStatus = enforced,
-  mode = "off",
+  mode = "monitor",
   forwards: NetworkForward[] = [postgres],
   internalAllow = "",
 ) {
@@ -142,17 +142,17 @@ describe("Network settings", () => {
   });
 
   test("saves the mode and reverts when the save fails", async () => {
-    mockServices(enforced, "off");
+    mockServices(enforced, "monitor");
     const put = vi
       .spyOn(services.settingsService, "put")
       .mockResolvedValueOnce({ key: services.NetworkSettingKeys.Mode, value: "whitelist" })
       .mockRejectedValueOnce({
         status: 400,
-        message: "network.mode must be off, whitelist or blacklist",
+        message: "network.mode must be off, monitor, whitelist or blacklist",
       });
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
-    await waitFor(() => expect(modeButton("Off").getAttribute("aria-pressed")).toBe("true"));
+    await waitFor(() => expect(modeButton("Monitor").getAttribute("aria-pressed")).toBe("true"));
 
     fireEvent.click(modeButton("Whitelist"));
     await waitFor(() =>
@@ -161,7 +161,7 @@ describe("Network settings", () => {
     expect(modeButton("Whitelist").getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(modeButton("Blacklist"));
-    await screen.findByText(/must be off, whitelist or blacklist/i);
+    await screen.findByText(/must be off, monitor, whitelist or blacklist/i);
     expect(modeButton("Whitelist").getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -360,7 +360,7 @@ describe("Network settings", () => {
   });
 
   test("a forward whose local port will not bind says so on its own row", async () => {
-    mockServices(enforced, "off", [
+    mockServices(enforced, "monitor", [
       { ...postgres, listenError: "Local port 15432 is already in use by something else" },
     ]);
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
@@ -747,7 +747,7 @@ describe("Network settings", () => {
   });
 
   test("shows the stored internal destinations and saves an edit, showing what the server kept", async () => {
-    mockServices(enforced, "off", [postgres], "git.example");
+    mockServices(enforced, "monitor", [postgres], "git.example");
     const put = vi.spyOn(services.settingsService, "put").mockResolvedValue({
       key: services.NetworkSettingKeys.InternalAllow,
       value: "git.example\n10.0.0.0/8",
@@ -784,4 +784,189 @@ describe("Network settings", () => {
     await screen.findByText(/git\.example:3000' is not a host name/);
     expect(box.value).toBe("git.example:3000");
   });
+});
+
+describe("Network modes", () => {
+  const modeCard = () => screen.getByText("Filter mode", { selector: "h3" }).closest("section")!;
+  const offWarning = () => screen.queryAllByText(/reach any host/i);
+  const confirmation = () => screen.queryByRole("dialog");
+  const confirmButton = (dialog: HTMLElement) =>
+    within(dialog)
+      .getAllByRole("button")
+      .find((b) => b.textContent !== "Cancel")!;
+
+  const pressed = (name: string) => modeButton(name).getAttribute("aria-pressed") === "true";
+
+  test("offers Off, Monitor, Whitelist and Blacklist", async () => {
+    mockServices();
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    const names = within(screen.getByRole("group", { name: "Filter mode" }))
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(names).toEqual(["Off", "Monitor", "Whitelist", "Blacklist"]);
+  });
+
+  test("each mode explains itself in its own words", async () => {
+    const texts: string[] = [];
+    for (const mode of ["off", "monitor", "whitelist", "blacklist"]) {
+      mockServices(enforced, mode);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+      await waitFor(() => expect(pressed(mode[0].toUpperCase() + mode.slice(1))).toBe(true));
+      texts.push(modeCard().textContent!);
+      cleanup();
+      vi.restoreAllMocks();
+    }
+    expect(new Set(texts).size).toBe(4);
+  });
+
+  test("choosing Off asks first; cancelling saves nothing and keeps the previous mode", async () => {
+    mockServices(enforced, "monitor");
+    const put = vi
+      .spyOn(services.settingsService, "put")
+      .mockResolvedValue({ key: services.NetworkSettingKeys.Mode, value: "off" });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    fireEvent.click(modeButton("Off"));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain(
+      "agents can reach any host, including your LAN and cloud metadata, and nothing is logged",
+    );
+    expect(put).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(confirmation()).toBeNull());
+    expect(put).not.toHaveBeenCalled();
+    expect(pressed("Monitor")).toBe(true);
+    expect(pressed("Off")).toBe(false);
+  });
+
+  test("confirming Off saves it", async () => {
+    mockServices(enforced, "monitor");
+    const put = vi
+      .spyOn(services.settingsService, "put")
+      .mockResolvedValue({ key: services.NetworkSettingKeys.Mode, value: "off" });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    fireEvent.click(modeButton("Off"));
+    fireEvent.click(confirmButton(await screen.findByRole("dialog")));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(services.NetworkSettingKeys.Mode, "off"));
+    expect(put).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(pressed("Off")).toBe(true));
+    expect(confirmation()).toBeNull();
+  });
+
+  test("a refused save of Off reverts to the previous mode and shows the server message", async () => {
+    mockServices(enforced, "whitelist");
+    vi.spyOn(services.settingsService, "put").mockRejectedValue({
+      status: 400,
+      message: "network.mode could not be saved right now",
+    });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Whitelist")).toBe(true));
+
+    fireEvent.click(modeButton("Off"));
+    fireEvent.click(confirmButton(await screen.findByRole("dialog")));
+
+    await screen.findByText(/could not be saved right now/i);
+    expect(pressed("Whitelist")).toBe(true);
+    expect(pressed("Off")).toBe(false);
+  });
+
+  test("the other modes save without a question", async () => {
+    mockServices(enforced, "off");
+    const put = vi
+      .spyOn(services.settingsService, "put")
+      .mockResolvedValue({ key: services.NetworkSettingKeys.Mode, value: "monitor" });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Off")).toBe(true));
+
+    for (const [button, value] of [
+      ["Monitor", "monitor"],
+      ["Whitelist", "whitelist"],
+      ["Blacklist", "blacklist"],
+    ]) {
+      fireEvent.click(modeButton(button));
+      await waitFor(() =>
+        expect(put).toHaveBeenLastCalledWith(services.NetworkSettingKeys.Mode, value),
+      );
+      expect(confirmation()).toBeNull();
+    }
+  });
+
+  test("a warning stays up while Off is the loaded mode, and not before the mode has loaded", async () => {
+    mockServices(enforced, "off");
+    let release: (v: { key: string; value: string }) => void = () => {};
+    const real = vi.mocked(services.settingsService.get).getMockImplementation()!;
+    vi.mocked(services.settingsService.get).mockImplementation((key: string) =>
+      key === services.NetworkSettingKeys.Mode
+        ? new Promise((resolve) => (release = resolve))
+        : real(key),
+    );
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByLabelText("Network rules");
+    expect(offWarning()).toHaveLength(0);
+
+    release({ key: services.NetworkSettingKeys.Mode, value: "off" });
+
+    await waitFor(() => expect(offWarning().length).toBeGreaterThan(0));
+    // It is not the advisory banner's live region.
+    expect(offWarning().every((el) => el.closest("[role=status]") === null)).toBe(true);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  test("no Off warning in a mode that has a proxy", async () => {
+    mockServices(enforced, "monitor");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    expect(offWarning()).toHaveLength(0);
+  });
+
+  test("says which changes apply to the next agent launch and which to the next connection", async () => {
+    mockServices(enforced, "whitelist");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Whitelist")).toBe(true));
+
+    const card = modeCard().textContent!;
+    expect(card).toMatch(/next agent launch/i);
+    expect(card).toMatch(/running agents keep/i);
+    expect(card).toMatch(/next connection/i);
+  });
+
+  test("without the firewall it says Off and Monitor differ only in logging", async () => {
+    mockServices(advisory, "monitor");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+    expect(modeCard().textContent).toMatch(/differ only in logging/i);
+    cleanup();
+
+    mockServices(enforced, "monitor");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+    expect(modeCard().textContent).not.toMatch(/differ only in logging/i);
+  });
+
+  test.each(["monitor", "off"])(
+    "%s shows no rule in effect and no rule marked as ignored",
+    async (mode) => {
+      mockServices(enforced, mode);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+      await waitFor(() => expect(pressed(mode === "off" ? "Off" : "Monitor")).toBe(true));
+
+      const rules = within(await screen.findByLabelText("Network rules"));
+      expect(rules.getByText(".github.com")).toBeTruthy();
+      expect(screen.queryAllByText("not in effect")).toHaveLength(0);
+      expect(modeCard().textContent).not.toMatch(/\d+ rules? (is|are) in effect/i);
+      const note = screen.getByText("Rules", { selector: "h3" }).closest("section")!.textContent!;
+      expect(note).toMatch(/no rule is in effect/i);
+      expect(note).toMatch(mode === "off" ? /nothing is logged/i : /logged/i);
+    },
+  );
 });

@@ -161,13 +161,37 @@ public class EgressRulesTests
 
     [Theory]
     [InlineData("off", true, NetworkMode.Off)]
+    [InlineData(" OFF ", true, NetworkMode.Off)]
+    [InlineData("monitor", true, NetworkMode.Monitor)]
+    [InlineData(" Monitor ", true, NetworkMode.Monitor)]
     [InlineData("Whitelist", true, NetworkMode.Whitelist)]
     [InlineData(" blacklist ", true, NetworkMode.Blacklist)]
-    [InlineData("allow", false, NetworkMode.Off)]
-    [InlineData(null, false, NetworkMode.Off)]
-    public void The_mode_setting_parses_its_three_values_only(string? value, bool ok, NetworkMode expected)
+    [InlineData("allow", false, NetworkMode.Monitor)]
+    [InlineData("", false, NetworkMode.Monitor)]
+    [InlineData(null, false, NetworkMode.Monitor)]
+    public void The_mode_setting_parses_its_four_values_only_and_falls_back_to_monitor_never_off(string? value, bool ok, NetworkMode expected)
     {
         Assert.Equal(ok, EgressRules.TryParseMode(value, out var mode));
         Assert.Equal(expected, mode);
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Off, "off")]
+    [InlineData(NetworkMode.Monitor, "monitor")]
+    [InlineData(NetworkMode.Whitelist, "whitelist")]
+    [InlineData(NetworkMode.Blacklist, "blacklist")]
+    public void Every_mode_name_round_trips(NetworkMode mode, string name)
+    {
+        Assert.Equal(name, EgressRules.ModeName(mode));
+        Assert.True(EgressRules.TryParseMode(name, out var parsed));
+        Assert.Equal(mode, parsed);
+    }
+
+    [Fact]
+    public void Monitor_mode_records_without_judging_like_the_old_off()
+    {
+        var entries = new[] { Entry("api.example.com", NetworkListKind.Blacklist), Entry("other.example.com", NetworkListKind.Whitelist) };
+        Assert.Equal(NetworkDecision.Advisory, EgressRules.Decide(NetworkMode.Monitor, entries, "api.example.com", null));
+        Assert.Equal(NetworkDecision.Advisory, EgressRules.Decide(NetworkMode.Monitor, entries, "unlisted.example.com", null));
     }
 }
