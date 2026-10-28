@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vite-plus/test";
 import { LoopRunNodeStatus, LoopRunStatus, NodeType, WorkItemStatus } from "../../types";
-import { nodeTakesRetry, runOffersRetry, runReopensOnRetry, runTakesRetryNow } from "./retry";
+import {
+  nodeRetryIsPrimary,
+  nodeTakesRetry,
+  runOffersRetry,
+  runReopensOnRetry,
+  runTakesRetryNow,
+} from "./retry";
 
 describe("when a run can go back to a node", () => {
   test.each([
@@ -59,5 +65,17 @@ describe("when a run can go back to a node", () => {
     expect(nodeTakesRetry(LoopRunNodeStatus.Running, NodeType.AI)).toBe(false);
     expect(nodeTakesRetry(LoopRunNodeStatus.Succeeded, NodeType.AI)).toBe(true);
     expect(nodeTakesRetry(LoopRunNodeStatus.Succeeded, undefined)).toBe(true);
+  });
+});
+
+describe("which node retry stands out", () => {
+  test.each([
+    [LoopRunNodeStatus.Failed, true],
+    [LoopRunNodeStatus.Succeeded, false],
+    [LoopRunNodeStatus.Interrupted, false],
+    [LoopRunNodeStatus.Skipped, false],
+    [LoopRunNodeStatus.Pending, false],
+  ])("a %s node: primary Retry is %s", (status, primary) => {
+    expect(nodeRetryIsPrimary(status)).toBe(primary);
   });
 });

@@ -507,4 +507,21 @@ describe("Title attempts", () => {
     fireEvent.blur(attempts);
     expect(put).not.toHaveBeenCalled();
   });
+
+  test("suggests the providers' tags, sorted", async () => {
+    switchedOn();
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([
+      main as unknown as AiProvider,
+      { id: "Fast", name: "Fast", type: "claude-code", isDefault: false, tags: ["Fast", "Cheap"] },
+    ] as unknown as AiProvider[]);
+
+    render(<ChatTitlesSettings />);
+
+    await screen.findByText("Runs on Fast");
+    const suggestions = document.getElementById(field().tag.getAttribute("list")!)!;
+    expect(Array.from(suggestions.querySelectorAll("option"), (o) => o.value)).toEqual([
+      "Cheap",
+      "Fast",
+    ]);
+  });
 });

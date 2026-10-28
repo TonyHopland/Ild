@@ -278,4 +278,46 @@ describe("useAttachmentStaging", () => {
     expect(outcome.errors).toEqual(["Attachments for this work item exceed the total allowed."]);
     expect(result.current.staged[0].status).toBe("pending");
   });
+
+  test("after a partial failure the next save re-sends only the file that did not land, and the landed one is marked uploaded", async () => {
+    let failB = true;
+    const upload = vi
+      .spyOn(workItemService, "uploadAttachment")
+      .mockImplementation((_id: string, file: File) => {
+        if (file.name === "b.pdf" && failB) return Promise.reject({ message: "unreachable" });
+        return Promise.resolve([]);
+      });
+    const { result } = renderHook(() => useAttachmentStaging("wi-1", LIMITS));
+    act(() =>
+      result.current.add([
+        new File(["a"], "a.png", { type: "image/png" }),
+        new File(["b"], "b.pdf", { type: "application/pdf" }),
+      ]),
+    );
+
+    let first!: Awaited<ReturnType<typeof result.current.uploadAll>>;
+    await act(async () => {
+      first = await result.current.uploadAll("wi-1");
+    });
+
+    expect(first.ok).toBe(false);
+    expect(first.storedNames).toEqual(["a.png"]);
+    expect(result.current.staged.map((e) => [e.file.name, e.status])).toEqual([
+      ["a.png", "uploaded"],
+      ["b.pdf", "pending"],
+    ]);
+
+    failB = false;
+    let second!: Awaited<ReturnType<typeof result.current.uploadAll>>;
+    await act(async () => {
+      second = await result.current.uploadAll("wi-1");
+    });
+
+    expect(second.ok).toBe(true);
+    expect(upload.mock.calls.map((call) => (call[1] as File).name)).toEqual([
+      "a.png",
+      "b.pdf",
+      "b.pdf",
+    ]);
+  });
 });
