@@ -9,7 +9,7 @@ export default defineConfig({
   },
   lint: {
     ignorePatterns: ["frontend/dist/**", "dist/**"],
-    options: { typeAware: true, typeCheck: true },
+    options: { typeAware: true, typeCheck: true, denyWarnings: true },
   },
   test: {
     environment: "jsdom",

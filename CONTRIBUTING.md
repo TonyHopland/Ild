@@ -35,7 +35,7 @@ dotnet test ILD.Tests/ILD.Tests.csproj
 
 # Frontend
 cd frontend
-vp check          # format + lint + type-check
+vp check          # format + lint + type-check; a lint warning fails it
 vp test --run     # one-shot test run
 ```
 
