@@ -128,7 +128,7 @@ public class LoopRunStoreGetByIdTests
             LoopRunId = run.Id,
             EventType = EventType.LoopRunCompleted,
             Timestamp = DateTime.UtcNow,
-            Data = "done",
+            Data = new string('x', 20_000),
         });
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 

@@ -308,6 +308,30 @@ public class StorageOverviewTests
     }
 
     [Fact]
+    public async Task Temp_is_incomplete_when_the_scratch_root_is_not_measured()
+    {
+        var previous = Environment.GetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar);
+        Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, null);
+        try
+        {
+            await using var factory = new ApiFactory();
+            var client = await factory.CreateAuthenticatedClientAsync();
+
+            using var doc = JsonDocument.Parse(await client.GetStringAsync("/api/v1/storage", TestContext.Current.CancellationToken));
+
+            var temp = Category(doc, "temp");
+            Assert.Equal(JsonValueKind.Null, Entry(temp, "scratch").GetProperty("bytes").ValueKind);
+            Assert.True(temp.GetProperty("incomplete").GetBoolean());
+            Assert.Equal(Entries(temp).Sum(e => e.GetProperty("bytes").ValueKind == JsonValueKind.Number ? Bytes(e) : 0), Bytes(temp));
+            Assert.False(Category(doc, "chat-sessions").GetProperty("incomplete").GetBoolean());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, previous);
+        }
+    }
+
+    [Fact]
     public async Task Preview_data_is_its_own_category_with_an_entry_per_repository_folder_and_orphans_marked()
     {
         await using var factory = new ApiFactory();

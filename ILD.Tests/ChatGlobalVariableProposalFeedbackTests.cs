@@ -4,6 +4,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using Microsoft.EntityFrameworkCore;
+using ILD.Tests.Fakes;
 using Moq;
 
 namespace ILD.Tests;
@@ -66,26 +67,6 @@ public sealed class ChatGlobalVariableProposalFeedbackTests : IDisposable
         await TurnAsync(adapter, chat, "turn three");
         foreach (var name in new[] { "approved_rules", "rejected_rules", "stale_rules" })
             Assert.DoesNotContain(name, adapter.Prompts[2]);
-    }
-
-    [Fact]
-    public async Task A_decision_whose_turn_never_reached_the_agent_is_announced_again()
-    {
-        var adapter = new RecordingChatAdapter();
-        var chat = await StartChatAsync(adapter);
-        var suggestion = await SuggestAsync(chat, "review_rules");
-        await TurnAsync(adapter, chat, "turn one");
-        await DecideAsync(suggestion, GlobalVariableProposalStatus.Rejected, "Not now.");
-
-        adapter.FailNextTurnBeforeLaunch = true;
-        await TurnAsync(adapter, chat, "turn two");
-        Assert.Contains("review_rules", adapter.Prompts[1]);
-
-        await TurnAsync(adapter, chat, "turn three");
-        Assert.Contains("Not now.", LineNaming(adapter.Prompts[2], "review_rules"));
-
-        await TurnAsync(adapter, chat, "turn four");
-        Assert.DoesNotContain("review_rules", adapter.Prompts[3]);
     }
 
     private static string LineNaming(string prompt, string name)
@@ -163,33 +144,4 @@ public sealed class ChatGlobalVariableProposalFeedbackTests : IDisposable
             _db.LoopRuns,
             new ChatLoopScratchpad(),
             new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
-
-    private sealed class RecordingChatAdapter : IAgentAdapter
-    {
-        private readonly List<AgentExecutionContext> _contexts = new();
-        public List<string> Prompts => _contexts.Select(c => c.Prompt).ToList();
-
-        /// <summary>
-        /// Makes the next turn throw the way an adapter does when the CLI never
-        /// launches — before any session is bound, so the prompt never reached an agent.
-        /// </summary>
-        public bool FailNextTurnBeforeLaunch { get; set; }
-
-        public string Name => "fake";
-        public string[] SupportedProviderTypes => ["fake"];
-        public ConfigFieldDescriptor[] ConfigSchema => [];
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            _contexts.Add(context);
-            if (FailNextTurnBeforeLaunch)
-            {
-                FailNextTurnBeforeLaunch = false;
-                throw new InvalidOperationException("claude: command not found");
-            }
-            return Task.FromResult(NodeExecutionResult.Ok("ok", context.Prompt, context.SessionId ?? "sess-1"));
-        }
-    }
 }

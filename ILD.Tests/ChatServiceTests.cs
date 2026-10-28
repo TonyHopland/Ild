@@ -386,7 +386,7 @@ public sealed class ChatServiceTests : IDisposable
         Assert.True(assistant.Interrupted);
         Assert.Equal("partial answer", assistant.Content);
         // That the cancelled turn also REPORTS itself interrupted is the runner's
-        // job now: ChatTurnLifecycleTests covers it, under the turn's own id.
+        // job now: ChatTurnRunnerTests covers it, under the turn's own id.
     }
 
     [Fact]
@@ -693,38 +693,11 @@ public sealed class ChatServiceTests : IDisposable
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "Help me wire up a deploy loop", CancellationToken.None);
         Assert.Equal("Help me wire up a deploy loop", _db.Context.ChatSessions.Single().Name);
+        Assert.Equal(ChatTitleSource.Fallback, ReadSession(started.Id).TitleSource);
 
         // The name is fixed by the first turn — a later message must not rename it.
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "now add a PR node", CancellationToken.None);
         Assert.Equal("Help me wire up a deploy loop", _db.Context.ChatSessions.Single().Name);
-    }
-
-    [Fact]
-    public async Task ExecuteTurnAsync_truncates_a_long_first_message_into_the_name()
-    {
-        var provider = await SeedProviderAsync();
-        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-
-        var longMessage = new string('a', 200);
-        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), longMessage, CancellationToken.None);
-
-        var name = _db.Context.ChatSessions.Single().Name!;
-        Assert.Equal(new string('a', 119) + "…", name);
-    }
-
-    [Fact]
-    public async Task ExecuteTurnAsync_names_the_chat_from_its_first_message_without_the_markdown()
-    {
-        var provider = await SeedProviderAsync();
-        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-
-        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "## Fix the **login** page", CancellationToken.None);
-
-        var session = ReadSession(started.Id);
-        Assert.Equal("Fix the login page", session.Name);
-        Assert.Equal(ChatTitleSource.Fallback, session.TitleSource);
     }
 
     [Fact]

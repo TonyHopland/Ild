@@ -114,6 +114,7 @@ public class EngineFeedbackResumeTransitionTests
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Running,
             It.IsAny<string?>(), It.IsAny<string?>(), h.RunId, It.IsAny<string?>()), Times.Once);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
     }
 
     [Fact]

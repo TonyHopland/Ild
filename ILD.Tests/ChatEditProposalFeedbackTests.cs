@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Tests.Fakes;
 using Moq;
 
 namespace ILD.Tests;
@@ -177,34 +178,5 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
             => throw new HttpRequestException("Connection refused (workitem-server:8080)");
-    }
-
-    private sealed class RecordingChatAdapter : IAgentAdapter
-    {
-        private readonly List<AgentExecutionContext> _contexts = new();
-        public List<string> Prompts => _contexts.Select(c => c.Prompt).ToList();
-
-        /// <summary>
-        /// Makes the next turn throw the way an adapter does when the CLI never
-        /// launches — before any session is bound, so the prompt never reached an agent.
-        /// </summary>
-        public bool FailNextTurnBeforeLaunch { get; set; }
-
-        public string Name => "fake";
-        public string[] SupportedProviderTypes => ["fake"];
-        public ConfigFieldDescriptor[] ConfigSchema => [];
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            _contexts.Add(context);
-            if (FailNextTurnBeforeLaunch)
-            {
-                FailNextTurnBeforeLaunch = false;
-                throw new InvalidOperationException("claude: command not found");
-            }
-            return Task.FromResult(NodeExecutionResult.Ok("ok", context.Prompt, context.SessionId ?? "sess-1"));
-        }
     }
 }

@@ -6,6 +6,7 @@ using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Tests.Fakes;
 using Moq;
 
 namespace ILD.Tests;
@@ -535,49 +536,6 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
     // ------------------------------------------------------------------
     // Fixtures.
     // ------------------------------------------------------------------
-
-    /// <summary>
-    /// Records every turn, not just the last — the whole subject here is how
-    /// turn 2 differs from turn 1.
-    /// </summary>
-    private sealed class RecordingChatAdapter : IAgentAdapter
-    {
-        public List<AgentExecutionContext> Contexts { get; } = new();
-        public List<string> Prompts => Contexts.Select(c => c.Prompt).ToList();
-
-        /// <summary>
-        /// Set to make this and every later turn bind a DIFFERENT agent session,
-        /// as a fork or a snapshot that could not be restored would.
-        /// </summary>
-        public string? NextSessionId { get; set; }
-
-        /// <summary>
-        /// Set to make the next turn throw the way an adapter does when the CLI
-        /// never launches — before any session is bound, so nothing this turn was
-        /// handed can have reached an agent. Cleared once it has fired.
-        /// </summary>
-        public bool FailNextTurnBeforeLaunch { get; set; }
-
-        public string Name => "fake";
-        public string[] SupportedProviderTypes => ["fake"];
-        public ConfigFieldDescriptor[] ConfigSchema => [];
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            Contexts.Add(context);
-            if (FailNextTurnBeforeLaunch)
-            {
-                FailNextTurnBeforeLaunch = false;
-                throw new InvalidOperationException("claude: command not found");
-            }
-            // Bind a session on the first turn and hold it, exactly as a real CLI
-            // does — this is what makes turn 2 a resume rather than a fresh start.
-            return Task.FromResult(
-                NodeExecutionResult.Ok("ok", context.Prompt, NextSessionId ?? context.SessionId ?? "sess-1"));
-        }
-    }
 
     private ChatService NewService(IAgentAdapter adapter)
         => new(
