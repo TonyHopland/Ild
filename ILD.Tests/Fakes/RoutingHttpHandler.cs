@@ -19,8 +19,8 @@ internal sealed class RoutingHttpHandler : HttpMessageHandler
 
     public IEnumerable<(HttpMethod Method, string Url, string Body)> Bodies => Calls.Where(c => c.Body.Length > 0);
 
-    public IEnumerable<string> GraphQlBodies
-        => Bodies.Where(c => c.Url.EndsWith("/graphql", StringComparison.Ordinal)).Select(c => c.Body);
+    public IReadOnlyList<string> GraphQlBodies
+        => Bodies.Where(c => c.Url.EndsWith("/graphql", StringComparison.Ordinal)).Select(c => c.Body).ToList();
 
     public RoutingHttpHandler Map(Func<string, bool> match, Func<string> body)
     {

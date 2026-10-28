@@ -456,6 +456,7 @@ public class RemotePrReviewLedgerPagingTests
         Assert.Equal(2, handler.GraphQlBodies.Count);
         Assert.Contains("CURSOR_2", handler.GraphQlBodies[1], StringComparison.Ordinal);
     }
+
     [Fact]
     public async Task With_no_threads_reported_a_reply_chain_still_shares_one_thread_id()
     {
