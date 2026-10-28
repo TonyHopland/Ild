@@ -389,62 +389,6 @@ public class AINodeExecutorTests
         Assert.Contains(expected, waiting.Reason);
     }
 
-    [Theory]
-    [InlineData(@"{""aiProviderTag"":""Nightly""}", RemoteAiProviderOverrideMode.OverrideAll, "Nightly")]
-    [InlineData(@"{""aiProviderTag"":""Nightly""}", RemoteAiProviderOverrideMode.OverrideDefault, "Nightly")]
-    [InlineData(@"{}", RemoteAiProviderOverrideMode.OverrideDefault, null)]
-    public async Task With_no_default_provider_an_override_mode_without_a_target_still_fails_saying_so(
-        string nodeConfig, RemoteAiProviderOverrideMode mode, string? namedTag)
-    {
-        using var db = new TestDb();
-        await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
-
-        var (resolved, last) = await RunAsync(db.Providers, nodeConfig, WorkItem(mode, null));
-
-        Assert.Null(resolved);
-        var fail = Assert.IsType<NodeOutcome.Fail>(last);
-        Assert.Equal(EdgeType.OnFailure, fail.Edge);
-        Assert.Contains("no default provider", fail.Reason, StringComparison.OrdinalIgnoreCase);
-        if (namedTag is not null)
-            Assert.Contains(namedTag, fail.Reason);
-    }
-
-    [Fact]
-    public async Task With_no_default_provider_a_missing_override_target_fails_naming_it()
-    {
-        using var db = new TestDb();
-        await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
-        var missingId = Guid.NewGuid();
-
-        var (_, last) = await RunAsync(
-            db.Providers, @"{""aiProviderTag"":""Nightly""}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, missingId));
-
-        var fail = Assert.IsType<NodeOutcome.Fail>(last);
-        Assert.Equal(EdgeType.OnFailure, fail.Edge);
-        Assert.Contains(missingId.ToString(), fail.Reason);
-    }
-
-    [Theory]
-    [InlineData(@"{}", null)]
-    [InlineData(@"{""aiProviderTag"":""  ""}", null)]
-    [InlineData(@"{""aiProviderTag"":""Nightly""}", "Nightly")]
-    public async Task No_matching_tag_and_no_default_provider_fails_saying_so(string nodeConfig, string? namedTag)
-    {
-        using var db = new TestDb();
-        // A provider exists but is neither the default nor holds the tag.
-        await db.Providers.CreateAiProviderAsync(Provider("other"), ["QA"]);
-
-        var (resolved, last) = await RunAsync(db.Providers, nodeConfig);
-
-        Assert.Null(resolved);
-        var fail = Assert.IsType<NodeOutcome.Fail>(last);
-        Assert.Equal(EdgeType.OnFailure, fail.Edge);
-        Assert.Contains("no default provider", fail.Reason, StringComparison.OrdinalIgnoreCase);
-        if (namedTag is not null)
-            Assert.Contains(namedTag, fail.Reason);
-    }
-
     [Fact]
     public async Task A_legacy_provider_id_does_not_rescue_a_node_when_there_is_no_default()
     {

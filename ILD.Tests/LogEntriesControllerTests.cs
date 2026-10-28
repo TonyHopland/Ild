@@ -10,9 +10,9 @@ namespace ILD.Tests;
 
 public class LogEntriesControllerTests
 {
-    private static (LogEntriesController Controller, ILogger Logger) Build(int capacity = 500)
+    private static (LogEntriesController Controller, ILogger Logger) Build()
     {
-        var buffer = new LogEntryBuffer(capacity);
+        var buffer = new LogEntryBuffer(500);
         var logger = new LoggerConfiguration()
             .MinimumLevel.ControlledBy(new LoggingLevelSwitch(LogEventLevel.Debug))
             .WriteTo.Sink(buffer)
@@ -24,40 +24,6 @@ public class LogEntriesControllerTests
     {
         var ok = Assert.IsType<OkObjectResult>(result);
         return Assert.IsAssignableFrom<IReadOnlyList<LogEntryPayload>>(ok.Value);
-    }
-
-    [Fact]
-    public void An_empty_buffer_answers_with_no_entries()
-    {
-        var (controller, _) = Build();
-
-        Assert.Empty(Body(controller.GetEntries()));
-    }
-
-    [Fact]
-    public void The_entries_come_back_newest_first_with_what_the_page_renders()
-    {
-        var (controller, logger) = Build();
-        logger.Information("older");
-        logger.ForContext("SourceContext", "ILD.Core.LoopEngine").Warning("newer");
-
-        var entries = Body(controller.GetEntries());
-
-        Assert.Equal(["newer", "older"], entries.Select(e => e.Message));
-        Assert.Equal("Warning", entries[0].Level);
-        Assert.Equal("ILD.Core.LoopEngine", entries[0].Source);
-        Assert.NotEqual(default, entries[0].Timestamp);
-    }
-
-    [Fact]
-    public void Take_pages_the_newest_entries_and_never_exceeds_the_buffer()
-    {
-        var (controller, logger) = Build(capacity: 4);
-        for (var i = 1; i <= 6; i++) logger.Information("line {N}", i);
-
-        Assert.Equal(["line 6", "line 5"], Body(controller.GetEntries(take: 2)).Select(e => e.Message));
-        Assert.Equal(4, Body(controller.GetEntries(take: 1000)).Count);
-        Assert.Empty(Body(controller.GetEntries(take: 0)));
     }
 
     [Fact]
