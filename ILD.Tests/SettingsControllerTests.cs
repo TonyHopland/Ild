@@ -253,7 +253,7 @@ public sealed class SettingsControllerTests : IDisposable
     {
         Assert.Equal("monitor", StatedValue(await Build().Get(AppSettingKeys.NetworkMode, TestContext.Current.CancellationToken)));
 
-        await _db.Settings.UpsertAsync(ILD.Data.Migrations.NetworkModeMonitorMigrator.MarkerKey, "done");
+        await _db.Settings.UpsertAsync(ILD.Data.Migrations.NetworkModeMonitorMigrator.MarkerKey, "done", TestContext.Current.CancellationToken);
         var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
         var rows = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(all)!;
         Assert.Equal("monitor", rows.Single(r => r["key"] == AppSettingKeys.NetworkMode)["value"]);
