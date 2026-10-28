@@ -168,14 +168,6 @@ internal sealed class LoopEngineHarness : IDisposable
     /// <summary>Drives the engine inline until it parks. Returns when no node is currently executing.</summary>
     public Task RunAsync() => _engine.RunUntilParkAsync(RunId, CancellationToken.None);
 
-    // The signal/retry resume paths do not drive the run inline: they commit the
-    // resume and launch RunUntilParkAsync on a fire-and-forget Task.Run
-    // (LaunchAfterAwaitAsync). That background drive keeps using this harness's
-    // single shared SqliteConnection after the re-park is observable, so tests wait
-    // on the engine's stored drive Task to know the connection is quiescent.
-    private static Task? OutstandingDriveTask(LoopEngine engine, Guid runId)
-        => engine._runTasks.TryGetValue(runId, out var t) ? t : null;
-
     /// <summary>
     /// Waits until this harness's run has no in-flight drive — i.e. any
     /// fire-and-forget resume launched by <see cref="ILoopEngine.SignalNodeResultAsync"/>
@@ -201,7 +193,7 @@ internal sealed class LoopEngineHarness : IDisposable
         {
             // Await the actual drive Task (it completes cleanly — the engine catches
             // inside the loop), then re-check in case a relaunch chained another one.
-            if (OutstandingDriveTask(engine, runId) is { IsCompleted: false } drive)
+            if (engine.DriveOf(runId) is { IsCompleted: false } drive)
             {
                 try { await drive.WaitAsync(limit - sw.Elapsed); } catch { /* drained or timed out */ }
                 continue;

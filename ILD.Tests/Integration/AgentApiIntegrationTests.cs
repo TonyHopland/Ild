@@ -1045,9 +1045,9 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
     public async Task ListWorkItems_orders_by_priority_in_board_order_and_get_carries_the_number()
     {
         // Own host: it orders and counts every work item on the board.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(ownHost, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
         var older = await CreateAsync(client, "older", runId, repoId);
         var newer = await CreateAsync(client, "newer", runId, repoId);
@@ -1244,9 +1244,9 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
     public async Task GetBacklogSummary_returns_counts_and_blocked_vs_actionable()
     {
         // Own host: it orders and counts every work item on the board.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(ownHost, intake: WorkItemStatus.Backlog);
 
         await CreateAsync(client, "one", null, repoId);
         await CreateAsync(client, "two", null, repoId);

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
@@ -235,7 +236,7 @@ public sealed class RepositoryManagerTests : IDisposable
         // delete that fails for both git and the agent. root is exempt from that.
         if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
 
-        var logger = new RecordingLogger();
+        var logger = new RecordingLogger<RepositoryManager>();
         var mgr = NewManager(Path.Combine(_tmp, "wt"), logger);
         var path = await mgr.CreateWorktreeAsync(Repo, "feature-stuck");
         var parent = Path.GetDirectoryName(path)!;
@@ -251,21 +252,6 @@ public sealed class RepositoryManagerTests : IDisposable
         finally
         {
             File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
-    }
-
-    private sealed class RecordingLogger : ILogger<RepositoryManager>
-    {
-        public List<string> Warnings { get; } = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning)
-                Warnings.Add(formatter(state, exception));
         }
     }
 
@@ -1149,7 +1135,6 @@ public sealed class RepositoryManagerTests : IDisposable
         Assert.False(rebase.Orchestrator);
         Assert.DoesNotContain(rebase.Environment?.Keys ?? [], k => k is "GIT_ASKPASS" or "ILD_GIT_USERNAME" or "ILD_GIT_PASSWORD");
     }
-
 
     [Fact]
     public async Task GetUncommittedFilesAsync_names_tracked_changes_and_ignores_untracked_files()

@@ -8,6 +8,7 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -327,25 +328,6 @@ public sealed class McpConfigWriteFailureTests : IDisposable
             "echo 'done'\n");
         File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
-    }
-
-    private class RecordingLogger : ILogger
-    {
-        public List<string> Warnings { get; } = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning)
-                Warnings.Add(formatter(state, exception));
-        }
-    }
-
-    private sealed class RecordingLogger<T> : RecordingLogger, ILogger<T>
-    {
     }
 
     private sealed class RecordingLoggerProvider : ILoggerProvider

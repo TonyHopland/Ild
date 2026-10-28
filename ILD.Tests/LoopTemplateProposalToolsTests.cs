@@ -79,7 +79,7 @@ public class LoopTemplateProposalToolsTests
     {
         Assert.Equal(
             new[] { "get_loop_template", "list_loop_template_proposals", "list_loop_templates", "propose_loop_template_change" },
-            McpServerToolReflection.Names()
+            McpToolInvoker.Names()
                 .Where(n => n.Contains("loop_template", StringComparison.Ordinal))
                 .OrderBy(n => n, StringComparer.Ordinal));
     }

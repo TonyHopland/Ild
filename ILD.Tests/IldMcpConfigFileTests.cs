@@ -9,8 +9,8 @@ namespace ILD.Tests;
 /// <summary>
 /// The MCP configs handed to the Copilot and Claude Code CLIs carry the ILD API
 /// token, so they are written into the agent read root — readable by the agent
-/// group, changeable by the orchestrator only — and the ones a dead process left
-/// behind are swept at startup.
+/// group, changeable by the orchestrator only — deleted with their run, and the
+/// ones a dead process left behind are swept at startup.
 /// </summary>
 public sealed class IldMcpConfigFileTests : IDisposable
 {
@@ -55,6 +55,24 @@ public sealed class IldMcpConfigFileTests : IDisposable
             new[] { claude, copilot },
             IldMcpServer.StaleConfigFiles(_root, started).Order(StringComparer.Ordinal));
         Assert.Empty(IldMcpServer.StaleConfigFiles(Path.Combine(_root, "missing"), started));
+    }
+
+    [Fact]
+    public void A_runs_configs_are_deleted_with_it_and_no_other_runs()
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(_root, "ild-mcp-config")).FullName;
+        var run = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var mine = new[] { $"ild-copilot-mcp-{run:N}-1.json", $"ild-claude-mcp-{run:N}-2.json" };
+        var theirs = Path.Combine(directory, $"ild-copilot-mcp-{other:N}-3.json");
+        foreach (var name in mine)
+            File.WriteAllText(Path.Combine(directory, name), "{\"token\":\"t\"}");
+        File.WriteAllText(theirs, "{\"token\":\"t\"}");
+
+        IldMcpServer.DeleteConfigFiles(_root, run);
+        IldMcpServer.DeleteConfigFiles(Path.Combine(_root, "missing"), run);
+
+        Assert.Equal(new[] { theirs }, Directory.GetFiles(directory));
     }
 
     [Fact]

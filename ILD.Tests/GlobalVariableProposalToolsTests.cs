@@ -57,7 +57,7 @@ public class GlobalVariableProposalToolsTests
     {
         Assert.Equal(
             new[] { "get_global_variables", "list_global_variable_proposals", "propose_global_variable_change" },
-            McpServerToolReflection.Names()
+            McpToolInvoker.Names()
                 .Where(n => n.Contains("global_variable", StringComparison.Ordinal))
                 .OrderBy(n => n, StringComparer.Ordinal));
     }

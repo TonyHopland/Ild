@@ -44,12 +44,6 @@ public class RemotePrReviewLedgerTests
         db.Context.SaveChanges();
     }
 
-    private sealed class ThrowingHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => throw new HttpRequestException("connection reset");
-    }
-
     private const string ReviewBody =
         "### Changes recommended\n\n<details>\n<summary>Review details</summary>\n\n### Suppressed comments (1)\n\n"
         + "**frontend/src/utils/attachments.ts:30**\n* `attachedNote` trims what the human typed; preserve it.\n"

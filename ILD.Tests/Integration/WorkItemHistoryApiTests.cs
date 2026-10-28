@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Reflection;
 using System.Text.Json;
 using System.Web;
 using ILD.Core.Services.Interfaces;
@@ -9,7 +8,6 @@ using ILD.Core.Services.Remote;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
-using ILD.McpServer;
 using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -364,35 +362,12 @@ public class WorkItemHistoryApiTests : IClassFixture<WorkItemHistoryApiTests.Hos
     [InlineData(null, "false")]
     public async Task The_get_workitem_tool_passes_includeHistory_through(bool? includeHistory, string expected)
     {
-        HttpRequestMessage? seen = null;
-        var handler = new StubHandler(req =>
-        {
-            seen = req;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") });
-        });
-        const string baseAddress = "http://ild-host:8080/";
-        var ild = new IldClient(
-            new HttpClient(handler) { BaseAddress = new Uri(baseAddress) },
-            new IldClientOptions(baseAddress.TrimEnd('/'), "the-agent-token", LoopRunId: null));
-        var method = typeof(ILD.McpServer.Tools.ListingTools).GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Single(m => m.CustomAttributes.Any(a =>
-                a.AttributeType.Name == "McpServerToolAttribute"
-                && a.NamedArguments.Any(n => n.MemberName == "Name" && (string?)n.TypedValue.Value == "get_workitem")));
-        var parameter = Assert.Single(method.GetParameters(), p => p.Name == "includeHistory");
-        Assert.Equal(false, parameter.DefaultValue);
-        var args = method.GetParameters()
-            .Select(p => p.Name switch
-            {
-                "id" => "42",
-                "includeHistory" when includeHistory is { } given => given,
-                _ => p.DefaultValue,
-            })
-            .ToArray();
+        var args = new Dictionary<string, object?> { ["id"] = "42" };
+        if (includeHistory is { } given) args["includeHistory"] = given;
 
-        await (Task<string>)method.Invoke(new ILD.McpServer.Tools.ListingTools(ild), args)!;
+        var (_, seen, _) = await McpToolInvoker.InvokeAsync("get_workitem", args);
 
-        Assert.NotNull(seen);
-        Assert.Equal("/api/v1/agent/workitems/42", seen!.RequestUri!.AbsolutePath);
+        Assert.Equal("/api/v1/agent/workitems/42", seen.RequestUri!.AbsolutePath);
         Assert.Equal(expected, HttpUtility.ParseQueryString(seen.RequestUri.Query)["includeHistory"] ?? "false");
     }
 

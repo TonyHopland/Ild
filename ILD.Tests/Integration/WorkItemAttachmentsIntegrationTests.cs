@@ -168,12 +168,12 @@ public class WorkItemAttachmentsIntegrationTests(SharedApiFactory factory) : ICl
     public async Task The_limits_endpoint_follows_the_configured_values()
     {
         // Own host: the attachment limits come from the host environment.
-        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        await using var ownHost = new ApiFactory(environment: new Dictionary<string, string?>
         {
             ["ILD_MAX_ATTACHMENT_MB"] = "3",
             ["ILD_MAX_ATTACHMENTS_TOTAL_MB"] = "9",
         });
-        var client = await factory.CreateAuthenticatedClientAsync();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
 
         var limits = await client.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments", TestContext.Current.CancellationToken);
 
@@ -185,12 +185,12 @@ public class WorkItemAttachmentsIntegrationTests(SharedApiFactory factory) : ICl
     public async Task A_file_over_the_configured_maximum_is_refused_with_400_by_the_api_itself()
     {
         // Own host: the attachment limits come from the host environment.
-        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        await using var ownHost = new ApiFactory(environment: new Dictionary<string, string?>
         {
             ["ILD_MAX_ATTACHMENT_MB"] = "1",
         });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var id = await CreateWorkItemAsync(factory, client);
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var id = await CreateWorkItemAsync(ownHost, client);
 
         var resp = await UploadAsync(client, id, ("big.bin", "application/octet-stream", AttachmentUpload.Bytes(2 * Megabyte)));
 
@@ -227,14 +227,14 @@ public class WorkItemAttachmentsIntegrationTests(SharedApiFactory factory) : ICl
         // 40 MB per file puts the derived ceiling above the 30 MB a hosted server
         // caps a request at by default, which is the whole point of deriving it.
         // Own host: the attachment limits come from the host environment.
-        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        await using var ownHost = new ApiFactory(environment: new Dictionary<string, string?>
         {
             ["ILD_MAX_ATTACHMENT_MB"] = "40",
         });
         var expected = ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(
             name => name == "ILD_MAX_ATTACHMENT_MB" ? "40" : null);
 
-        var form = factory.Services
+        var form = ownHost.Services
             .GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Http.Features.FormOptions>>().Value;
 
         Assert.True(expected.MaxRequestBytes > RecordingMaxRequestBodySizeFeature.HostDefault);
@@ -246,20 +246,20 @@ public class WorkItemAttachmentsIntegrationTests(SharedApiFactory factory) : ICl
     public async Task Only_the_attachment_endpoint_raises_the_request_body_limit()
     {
         // Own host: the attachment limits come from the host environment.
-        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        await using var ownHost = new ApiFactory(environment: new Dictionary<string, string?>
         {
             ["ILD_MAX_ATTACHMENT_MB"] = "40",
         });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var token = await factory.GetAdminTokenAsync();
-        var id = await CreateWorkItemAsync(factory, client);
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var token = await ownHost.GetAdminTokenAsync();
+        var id = await CreateWorkItemAsync(ownHost, client);
         var expected = ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(
             name => name == "ILD_MAX_ATTACHMENT_MB" ? "40" : null);
 
         using var body = AttachmentUpload.Of("modest.png", "image/png", AttachmentUpload.Bytes(2048));
-        var (uploadContext, uploadLimit) = await factory.Server.ObserveBodySizeLimitAsync(
+        var (uploadContext, uploadLimit) = await ownHost.Server.ObserveBodySizeLimitAsync(
             "POST", $"/api/v1/workitems/{id}/attachments", token, body);
-        var (listContext, listLimit) = await factory.Server.ObserveBodySizeLimitAsync(
+        var (listContext, listLimit) = await ownHost.Server.ObserveBodySizeLimitAsync(
             "GET", $"/api/v1/workitems/{id}/attachments", token);
 
         Assert.Equal((int)HttpStatusCode.Created, uploadContext.Response.StatusCode);
@@ -276,13 +276,13 @@ public class WorkItemAttachmentsIntegrationTests(SharedApiFactory factory) : ICl
         // mapped to 503 "WorkItemServer unreachable", which would tell the user
         // their instance is down when in fact their upload was simply too big.
         // Own host: the attachment limits come from the host environment.
-        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        await using var ownHost = new ApiFactory(environment: new Dictionary<string, string?>
         {
             ["ILD_MAX_ATTACHMENT_MB"] = "1",
             ["ILD_MAX_ATTACHMENTS_TOTAL_MB"] = "1",
         });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var id = await CreateWorkItemAsync(factory, client);
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var id = await CreateWorkItemAsync(ownHost, client);
 
         var first = await UploadAsync(client, id, ("first.bin", "application/octet-stream", AttachmentUpload.Bytes(600 * 1024)));
         var second = await UploadAsync(client, id, ("second.bin", "application/octet-stream", AttachmentUpload.Bytes(600 * 1024)));

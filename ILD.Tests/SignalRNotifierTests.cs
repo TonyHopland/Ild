@@ -150,7 +150,8 @@ public class SignalRNotifierTests
 
         await row.Send(clients.Object);
 
-        Assert.NotNull(sent);
+        proxy.Verify(p => p.SendCoreAsync(row.Event, It.IsAny<object?[]>(), It.IsAny<CancellationToken>()), Times.Once);
+        proxy.VerifyNoOtherCalls();
         var payload = Assert.Single(sent!);
         if (row.PayloadType is not null) Assert.IsType(row.PayloadType, payload);
         row.Verify(payload);

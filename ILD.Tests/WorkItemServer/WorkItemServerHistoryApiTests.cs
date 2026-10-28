@@ -1,17 +1,10 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Remote;
 using ILD.WorkItemServer;
-using ILD.WorkItemServer.Auth;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using RemoteActor = ILD.Core.Services.Remote.WorkItemActor;
 
@@ -31,51 +24,21 @@ public sealed class WorkItemServerHistoryApiTests : IClassFixture<WorkItemServer
 
     public sealed class Server : IAsyncLifetime
     {
-        private readonly SqliteConnection _connection = new("DataSource=:memory:");
-
-        public WebApplicationFactory<WorkItemServerProgram> Factory { get; private set; } = null!;
+        public WorkItemServerFactory Factory { get; } = new(ApiKey);
         public HttpClient Http { get; private set; } = null!;
         public WorkItemServerClient Client { get; private set; } = null!;
 
         public ValueTask InitializeAsync()
         {
-            _connection.Open();
-            Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-            Factory = new WebApplicationFactory<WorkItemServerProgram>().WithWebHostBuilder(b =>
-            {
-                b.UseEnvironment("Testing");
-                b.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["WorkItemServer:ApiKeys"] = ApiKey,
-                    ["Serilog:WriteToConsole"] = "false",
-                }));
-                b.ConfigureServices(services =>
-                {
-                    services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
-                    services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
-                    var existing = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                    if (existing != null) services.Remove(existing);
-                    services.AddDbContext<WorkItemServerDbContext>(o =>
-                    {
-                        o.UseSqlite(_connection);
-                        o.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
-                    });
-                });
-            });
-            Http = Factory.CreateClient();
-            Http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+            Http = Factory.KeyedClient();
             Client = new WorkItemServerClient(Factory.CreateClient());
             return ValueTask.CompletedTask;
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            await Factory.DisposeAsync();
-            _connection.Dispose();
-        }
+        public ValueTask DisposeAsync() => Factory.DisposeAsync();
     }
 
-    private readonly WebApplicationFactory<WorkItemServerProgram> _factory;
+    private readonly WorkItemServerFactory _factory;
     private readonly HttpClient _http;
     private readonly WorkItemServerClient _client;
     private readonly WorkItemServerOptions _opts = new() { BaseUrl = "http://localhost", ApiKey = ApiKey };

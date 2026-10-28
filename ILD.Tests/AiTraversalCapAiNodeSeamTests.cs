@@ -5,6 +5,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -19,48 +20,6 @@ namespace ILD.Tests;
 /// </summary>
 public class AiTraversalCapAiNodeSeamTests
 {
-    private sealed class CapturingAdapter : IAgentAdapter
-    {
-        private readonly string? _reportSessionId;
-        public CapturingAdapter(string? reportSessionId) => _reportSessionId = reportSessionId;
-
-        public List<AgentExecutionContext> Calls { get; } = new();
-        public string Name => "Capturing";
-        public string[] SupportedProviderTypes => ["claude-code"];
-        public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            Calls.Add(context);
-            // Real adapters report the live session id mid-stream; the executor
-            // persists it on the run, which is what makes a later Resume able to
-            // continue it — and what a cap park has to clear.
-            if (_reportSessionId is not null) context.OnSessionId?.Invoke(_reportSessionId);
-            return Task.FromResult(NodeExecutionResult.Ok("done", context.Prompt, _reportSessionId));
-        }
-    }
-
-    private sealed class FakeRegistry : IAgentAdapterRegistry
-    {
-        private readonly IAgentAdapter _adapter;
-        public FakeRegistry(IAgentAdapter adapter) => _adapter = adapter;
-        public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => _adapter;
-        public string[] GetAllSupportedProviderTypes() => ["claude-code"];
-        public AdapterModelSupport GetModelSupport(string providerType) => _adapter.ModelSupport;
-        public AgentAdapterTraits GetTraits(string? providerType) => _adapter.Traits;
-    }
-
-    /// <summary>A provider that is always full, so the AI node defers before it runs.</summary>
-    private sealed class AlwaysFullTracker : IAiProviderConcurrencyTracker
-    {
-        public bool HasCapacity(Guid providerId, int parallelism) => false;
-        public bool TryEnter(Guid providerId, int parallelism) => false;
-        public void Exit(Guid providerId) { }
-        public int ActiveCount(Guid providerId) => int.MaxValue;
-    }
-
     private static LoopEngineHarness Harness(
         CapturingAdapter adapter, IAiProviderConcurrencyTracker? concurrency = null)
     {
@@ -79,7 +38,7 @@ public class AiTraversalCapAiNodeSeamTests
         return new LoopEngineHarness(configure: services =>
         {
             services.AddSingleton(providerStore.Object);
-            services.AddSingleton<IAgentAdapterRegistry>(new FakeRegistry(adapter));
+            services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
             services.AddSingleton<IPromptRenderingService>(sp => new PromptRenderingService(
                 new PromptTemplateResolver(), sp.GetRequiredService<IEventLogStore>(),
                 new RunConversationService(sp.GetRequiredService<IEventLogStore>(), sp.GetRequiredService<ILoopRunStore>()),
@@ -98,7 +57,7 @@ public class AiTraversalCapAiNodeSeamTests
     [Fact]
     public async Task Resuming_a_capped_park_runs_the_pending_node_from_its_own_prompt()
     {
-        var adapter = new CapturingAdapter(reportSessionId: "sess-from-the-previous-step");
+        var adapter = new CapturingAdapter(reportedSessionId: "sess-from-the-previous-step");
         using var h = Harness(adapter);
         await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "1", TestContext.Current.CancellationToken);
         h.AddNode("a", NodeType.AI);
@@ -136,7 +95,7 @@ public class AiTraversalCapAiNodeSeamTests
     [Fact]
     public async Task Resuming_a_missing_global_park_runs_the_node_from_its_prompt_with_the_value_set_since()
     {
-        var adapter = new CapturingAdapter(reportSessionId: "sess-from-the-previous-step");
+        var adapter = new CapturingAdapter(reportedSessionId: "sess-from-the-previous-step");
         using var h = Harness(adapter);
         h.AddNode("first", NodeType.AI);
         h.AddNode("a", NodeType.AI);
@@ -179,7 +138,7 @@ public class AiTraversalCapAiNodeSeamTests
     [Fact]
     public async Task A_node_deferred_by_provider_capacity_costs_no_budget()
     {
-        var adapter = new CapturingAdapter(reportSessionId: null);
+        var adapter = new CapturingAdapter(reportedSessionId: null);
         using var h = Harness(adapter, new AlwaysFullTracker());
         await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "2", TestContext.Current.CancellationToken);
         h.AddNode("a", NodeType.AI);

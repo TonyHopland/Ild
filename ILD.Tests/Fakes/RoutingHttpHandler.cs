@@ -10,7 +10,7 @@ namespace ILD.Tests.Fakes;
 /// </summary>
 internal sealed class RoutingHttpHandler : HttpMessageHandler
 {
-    private readonly List<(Func<string, bool> Match, Func<string, HttpResponseMessage> Respond)> _urlRules = new();
+    private readonly List<(HttpMethod? Method, Func<string, bool> Match, Func<string, HttpResponseMessage> Respond)> _urlRules = new();
     private readonly List<(HttpMethod? Method, Func<string, bool> Match, Func<string> Body)> _rules = new();
 
     public List<(HttpMethod Method, string Url, string Body)> Calls { get; } = new();
@@ -35,10 +35,13 @@ internal sealed class RoutingHttpHandler : HttpMessageHandler
         return this;
     }
 
-    /// <summary>A rule that can see the URL, so a test can answer page 1 and page 2 differently.</summary>
-    public RoutingHttpHandler MapUrl(Func<string, bool> match, Func<string, HttpResponseMessage> respond)
+    /// <summary>
+    /// A rule that can see the URL and sets the whole response, so a test can answer page 1 and page 2
+    /// differently or refuse a call. With a <paramref name="method"/> it answers only that method.
+    /// </summary>
+    public RoutingHttpHandler MapUrl(Func<string, bool> match, Func<string, HttpResponseMessage> respond, HttpMethod? method = null)
     {
-        _urlRules.Add((match, respond));
+        _urlRules.Add((method, match, respond));
         return this;
     }
 
@@ -48,8 +51,8 @@ internal sealed class RoutingHttpHandler : HttpMessageHandler
         var sent = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
         Calls.Add((request.Method, url, sent));
 
-        foreach (var (match, respond) in _urlRules)
-            if (match(url))
+        foreach (var (method, match, respond) in _urlRules)
+            if ((method is null || method == request.Method) && match(url))
                 return respond(url);
 
         foreach (var (method, match, body) in _rules)

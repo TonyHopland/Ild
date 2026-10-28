@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -27,24 +28,6 @@ namespace ILD.Tests;
 public sealed class ChatTurnRunnerTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// Records what the runner logs. A cancellation that raced a disposal is
-    /// swallowed into <c>LogDebug</c> by the drain, so "nothing was logged" is how
-    /// a test sees that the ownership rules held rather than merely survived.
-    /// </summary>
-    private sealed class RecordingLogger : ILogger<ChatTurnRunner>
-    {
-        public ConcurrentQueue<string> Entries { get; } = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Entries.Enqueue($"{logLevel}: {formatter(state, exception)} | {exception?.GetType().Name}");
-    }
 
     /// <summary>
     /// One turn, scripted: it blocks until cancelled, then stays in finalization —
@@ -78,7 +61,12 @@ public sealed class ChatTurnRunnerTests
         private readonly List<(int Count, TaskCompletionSource Tcs)> _activityWaiters = new();
 
         public required ChatTurnRunner Runner { get; init; }
-        public required RecordingLogger Log { get; init; }
+        /// <summary>
+        /// What the runner logs. A cancellation that raced a disposal is swallowed
+        /// into <c>LogDebug</c> by the drain, so "nothing was logged" is how a test
+        /// sees that the ownership rules held rather than merely survived.
+        /// </summary>
+        public required RecordingLogger<ChatTurnRunner> Log { get; init; }
         public ConcurrentQueue<Guid> Started { get; } = new();
         public ConcurrentQueue<(Guid TurnId, bool Interrupted)> Completed { get; } = new();
         public ConcurrentDictionary<Guid, Guid> StartedIn { get; } = new();
@@ -204,7 +192,7 @@ public sealed class ChatTurnRunnerTests
             chat = mock.Object;
         }
 
-        var log = new RecordingLogger();
+        var log = new RecordingLogger<ChatTurnRunner>();
         var services = new ServiceCollection()
             .AddScoped(_ => new RunsWhenTheTurnsScopeCloses(onScopeClose))
             // Resolved with the service so the scope owns the hook and closes it at

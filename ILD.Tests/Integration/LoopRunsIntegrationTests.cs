@@ -17,8 +17,8 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
         // Own host: it asserts the whole run list is empty.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
@@ -44,10 +44,10 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     {
         var reclaimer = new StubRunReclaimer(succeeds: true);
         // Own host: it swaps the run reclaimer for the whole host.
-        await using var factory = NewFactory(reclaimer);
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/reclaim-me");
-        await SeedSnapshotAsync(factory, runId);
+        await using var ownHost = NewFactory(reclaimer);
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(ownHost, LoopRunStatus.Completed, branch: "feature/reclaim-me");
+        await SeedSnapshotAsync(ownHost, runId);
 
         Assert.Contains("already used locally", await BranchWarningAsync(client, "feature/reclaim-me"));
 
@@ -55,11 +55,11 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         Assert.Equal([runId], reclaimer.Reclaimed);
-        var run = ReadRun(factory, runId);
+        var run = ReadRun(ownHost, runId);
         Assert.NotNull(run);
         Assert.Null(run!.WorktreePath);
         Assert.Null(run.BranchName);
-        Assert.Equal(0, await SnapshotCountAsync(factory, runId));
+        Assert.Equal(0, await SnapshotCountAsync(ownHost, runId));
         Assert.Null(await BranchWarningAsync(client, "feature/reclaim-me"));
     }
 
@@ -67,16 +67,16 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     public async Task Cleanup_of_a_pinned_run_with_only_session_snapshots_left_deletes_them_and_keeps_the_pinned_run()
     {
         // Own host: it swaps the run reclaimer for the whole host.
-        await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var runId = SeedRun(factory, LoopRunStatus.Completed, branch: null, retain: true);
-        await SeedSnapshotAsync(factory, runId);
+        await using var ownHost = NewFactory(new StubRunReclaimer(succeeds: true));
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(ownHost, LoopRunStatus.Completed, branch: null, retain: true);
+        await SeedSnapshotAsync(ownHost, runId);
 
         var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-        Assert.Equal(0, await SnapshotCountAsync(factory, runId));
-        var run = ReadRun(factory, runId);
+        Assert.Equal(0, await SnapshotCountAsync(ownHost, runId));
+        var run = ReadRun(ownHost, runId);
         Assert.NotNull(run);
         Assert.True(run!.Retain);
     }
@@ -89,15 +89,15 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     public async Task GetById_says_until_when_an_ended_runs_history_is_kept()
     {
         // Own host: it changes the host-wide run.retentionDays setting.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
         var ended = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
-        var completed = SeedRun(factory, LoopRunStatus.Completed, branch: null, completedAt: ended);
-        var cancelled = SeedRun(factory, LoopRunStatus.Cancelled, branch: null, completedAt: ended);
-        var pinned = SeedRun(factory, LoopRunStatus.Completed, branch: null, retain: true, completedAt: ended);
-        var running = SeedRun(factory, LoopRunStatus.Running, branch: "feature/live");
-        var waiting = SeedRun(factory, LoopRunStatus.WaitingHuman, branch: "feature/waiting");
+        var completed = SeedRun(ownHost, LoopRunStatus.Completed, branch: null, completedAt: ended);
+        var cancelled = SeedRun(ownHost, LoopRunStatus.Cancelled, branch: null, completedAt: ended);
+        var pinned = SeedRun(ownHost, LoopRunStatus.Completed, branch: null, retain: true, completedAt: ended);
+        var running = SeedRun(ownHost, LoopRunStatus.Running, branch: "feature/live");
+        var waiting = SeedRun(ownHost, LoopRunStatus.WaitingHuman, branch: "feature/waiting");
 
         async Task<DateTime?> KeptUntil(Guid id)
         {
@@ -124,15 +124,15 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     {
         var reclaimer = new StubRunReclaimer(succeeds: true);
         // Own host: it swaps the run reclaimer for the whole host.
-        await using var factory = NewFactory(reclaimer);
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var runId = SeedRun(factory, LoopRunStatus.Running, branch: "feature/live");
+        await using var ownHost = NewFactory(reclaimer);
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(ownHost, LoopRunStatus.Running, branch: "feature/live");
 
         var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Empty(reclaimer.Reclaimed);
-        Assert.Equal("feature/live", ReadRun(factory, runId)!.BranchName);
+        Assert.Equal("feature/live", ReadRun(ownHost, runId)!.BranchName);
     }
 
     [Fact]
@@ -140,16 +140,16 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     {
         var reclaimer = new StubRunReclaimer(succeeds: false);
         // Own host: it swaps the run reclaimer for the whole host.
-        await using var factory = NewFactory(reclaimer);
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var runId = SeedRun(factory, LoopRunStatus.Failed, branch: "feature/stuck");
+        await using var ownHost = NewFactory(reclaimer);
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(ownHost, LoopRunStatus.Failed, branch: "feature/stuck");
 
         var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null, TestContext.Current.CancellationToken);
 
         // Clearing the pointers on a reclaim that did not happen would hide a
         // worktree and branch that are still on disk from every later sweep.
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        var run = ReadRun(factory, runId);
+        var run = ReadRun(ownHost, runId);
         Assert.Equal("feature/stuck", run!.BranchName);
         Assert.Equal("/tmp/ild-test-worktree", run.WorktreePath);
     }
@@ -171,9 +171,9 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     public async Task GetAll_reports_reclaimability_without_exposing_server_paths()
     {
         // Own host: it swaps the run reclaimer for the whole host.
-        await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/listed");
+        await using var ownHost = NewFactory(new StubRunReclaimer(succeeds: true));
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(ownHost, LoopRunStatus.Completed, branch: "feature/listed");
 
         var listed = await client.GetStringAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
 
@@ -206,11 +206,11 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     public async Task A_run_parked_for_missing_globals_names_those_still_missing_now(NodeType type, string config)
     {
         // Own host: global variable names are host-wide.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
         Guid parkedId, humanHaltedId;
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = ownHost.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"globals-{Guid.NewGuid():N}" };
@@ -276,11 +276,32 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
         Assert.Equal(new[] { "GAMMA" }, await FromList(parkedId));
     }
 
-    /// <summary>
-    /// A run's detail lists its saved sessions from their metadata alone: however
-    /// large a transcript is, and whether or not it has been converted yet, the
-    /// read never fetches its content.
-    /// </summary>
+    [Fact]
+    public async Task GetById_lists_the_runs_variables()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(factory, LoopRunStatus.Running, branch: "feature/variables");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.LoopRunVariables.Add(new LoopRunVariable
+            {
+                LoopRunId = runId,
+                Name = "handoff",
+                Value = "# Summary\n\nall done",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-5),
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
+        using var detail = JsonDocument.Parse(await client.GetStringAsync($"/api/v1/loopruns/{runId}", ct));
+
+        var variable = Assert.Single(detail.RootElement.GetProperty("availableVariables").EnumerateArray());
+        Assert.Equal("handoff", variable.GetProperty("name").GetString());
+        Assert.Equal("# Summary\n\nall done", variable.GetProperty("value").GetString());
+    }
+
     [Fact]
     public async Task GetById_says_why_ILD_could_not_merge_an_AutoMerge_pull_request()
     {
@@ -304,26 +325,31 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
         Assert.Equal(JsonValueKind.Null, none.RootElement.GetProperty("prAutoMerge").ValueKind);
     }
 
+    /// <summary>
+    /// A run's detail lists its saved sessions from their metadata alone: however
+    /// large a transcript is, and whether or not it has been converted yet, the
+    /// read never fetches its content.
+    /// </summary>
     [Fact]
     public async Task GetById_lists_sessions_without_reading_any_transcript_content()
     {
         var ct = TestContext.Current.CancellationToken;
         var sql = new SnapshotSqlRecorder();
         // Own host: it records every SQL statement the host runs.
-        await using var factory = new ApiFactory(configureServices: services =>
+        await using var ownHost = new ApiFactory(configureServices: services =>
         {
             services.RemoveHostedService<ILD.Core.Services.Implementations.SessionSnapshotMigrationService>();
             services.ConfigureDbContext<AppDbContext>(options => options.AddInterceptors(sql));
         });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/large-session");
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(ownHost, LoopRunStatus.Completed, branch: "feature/large-session");
         var random = new Random(386);
         var lines = Enumerable.Range(0, 9000)
             .Select(n => $"{{\"type\":\"assistant\",\"n\":{n},\"text\":\"{new string(Enumerable.Range(0, 1000).Select(_ => (char)('a' + random.Next(26))).ToArray())}\"}}\n")
             .ToList();
         var raw = Encoding.UTF8.GetBytes(string.Concat(lines));
         Guid legacyId;
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = ownHost.Services.CreateScope())
         {
             var store = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IAdapterSessionSnapshotStore>();
             await SessionSnapshotTestSupport.SeedAsync(
@@ -351,7 +377,7 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
         Assert.Equal(JsonValueKind.Null, legacy.GetProperty("format").ValueKind);
         Assert.Equal(JsonValueKind.Null, legacy.GetProperty("byteLength").ValueKind);
         Assert.Equal(JsonValueKind.Null, legacy.GetProperty("eventCount").ValueKind);
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = ownHost.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             Assert.NotNull(await SessionSnapshotTestSupport.ReadLegacySessionJsonAsync(db, legacyId, ct));

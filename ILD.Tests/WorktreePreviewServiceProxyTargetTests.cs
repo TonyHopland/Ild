@@ -327,8 +327,8 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var workItems = WorkItemsPointingAtThisWorktree();
 
-        var runtime = Assert.Single(service._runtimes.Values);
-        var held = runtime.Processes;
+        var held = service.RunningProcesses(_worktree);
+        Assert.NotNull(held);
         var before = held.ToArray();
 
         await service.StopServiceAsync(_worktree, "api", TestContext.Current.CancellationToken);

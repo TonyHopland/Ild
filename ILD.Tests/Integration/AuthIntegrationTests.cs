@@ -89,9 +89,9 @@ public class AuthIntegrationTests(SharedApiFactory factory) : IClassFixture<Shar
     public async Task Sessions_lists_every_device_without_leaking_a_token()
     {
         // Own host: it asserts the whole list of the admin's signed-in sessions.
-        await using var factory = new ApiFactory();
-        var phone = await factory.CreateAuthenticatedClientAsync();
-        var desktopToken = await factory.GetAdminTokenAsync();
+        await using var ownHost = new ApiFactory();
+        var phone = await ownHost.CreateAuthenticatedClientAsync();
+        var desktopToken = await ownHost.GetAdminTokenAsync();
 
         var response = await phone.GetAsync("/api/v1/auth/sessions", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -109,9 +109,9 @@ public class AuthIntegrationTests(SharedApiFactory factory) : IClassFixture<Shar
     public async Task Revoking_a_session_signs_that_device_out()
     {
         // Own host: the signed-in sessions of the one admin user are host-wide.
-        await using var factory = new ApiFactory();
-        var phone = await factory.CreateAuthenticatedClientAsync();
-        var desktop = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var phone = await ownHost.CreateAuthenticatedClientAsync();
+        var desktop = await ownHost.CreateAuthenticatedClientAsync();
 
         var sessions = await phone.GetFromJsonAsync<SessionBody[]>("/api/v1/auth/sessions", CaseInsensitive, TestContext.Current.CancellationToken);
         var other = sessions!.Single(s => !s.IsCurrent);
@@ -127,10 +127,10 @@ public class AuthIntegrationTests(SharedApiFactory factory) : IClassFixture<Shar
     public async Task Revoking_others_keeps_the_calling_device_signed_in()
     {
         // Own host: the signed-in sessions of the one admin user are host-wide.
-        await using var factory = new ApiFactory();
-        var phone = await factory.CreateAuthenticatedClientAsync();
-        var desktop = await factory.CreateAuthenticatedClientAsync();
-        var tablet = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var phone = await ownHost.CreateAuthenticatedClientAsync();
+        var desktop = await ownHost.CreateAuthenticatedClientAsync();
+        var tablet = await ownHost.CreateAuthenticatedClientAsync();
 
         var response = await phone.PostAsync("/api/v1/auth/sessions/revoke-others", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -146,8 +146,8 @@ public class AuthIntegrationTests(SharedApiFactory factory) : IClassFixture<Shar
     {
         var sql = new SqlCapture();
         // Own host: it counts every SQL statement the host runs.
-        await using var factory = new ApiFactory(configureServices: sql.Register);
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory(configureServices: sql.Register);
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         int SessionReads() => sql.Commands.Count(c => c.Contains("FROM \"UserSessions\""));
 
         var before = SessionReads();

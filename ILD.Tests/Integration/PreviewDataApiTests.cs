@@ -36,18 +36,18 @@ public class PreviewDataApiTests(SharedApiFactory factory) : IClassFixture<Share
     public async Task One_work_items_preview_holds_the_repositorys_data_against_other_starts_and_every_removal_until_it_stops()
     {
         // Own host: it runs the real preview service, from the same container as the delete.
-        await using var factory = new ApiFactory(configureServices: services =>
+        await using var ownHost = new ApiFactory(configureServices: services =>
         {
             services.RemoveAll<IWorktreePreviewService>();
             services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
         });
-        var user = await factory.CreateAuthenticatedClientAsync();
-        var agent = AgentClient(factory);
-        var repositoryId = await SeedRepositoryAsync(factory, "alpha");
-        await SetKeepAsync(factory, repositoryId, keep: true);
-        var (a, aTitle, _) = await PreviewableWorkItemAsync(factory, user, repositoryId, "First item", "wt-a");
-        var (b, bTitle, bWorktree) = await PreviewableWorkItemAsync(factory, user, repositoryId, "Second item", "wt-b");
-        var folder = PreviewDataFolder(factory, repositoryId);
+        var user = await ownHost.CreateAuthenticatedClientAsync();
+        var agent = AgentClient(ownHost);
+        var repositoryId = await SeedRepositoryAsync(ownHost, "alpha");
+        await SetKeepAsync(ownHost, repositoryId, keep: true);
+        var (a, aTitle, _) = await PreviewableWorkItemAsync(ownHost, user, repositoryId, "First item", "wt-a");
+        var (b, bTitle, bWorktree) = await PreviewableWorkItemAsync(ownHost, user, repositoryId, "Second item", "wt-b");
+        var folder = PreviewDataFolder(ownHost, repositoryId);
 
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsJsonAsync($"/api/v1/workitems/{a}/preview/start", new { }, Ct)).StatusCode);
         Assert.True(File.Exists(Path.Combine(folder, "data", "file")));
@@ -79,7 +79,7 @@ public class PreviewDataApiTests(SharedApiFactory factory) : IClassFixture<Share
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsync($"/api/v1/workitems/{b}/preview/stop", null, Ct)).StatusCode);
 
         // A keep-off preview holds the repository too.
-        await SetKeepAsync(factory, repositoryId, keep: false);
+        await SetKeepAsync(ownHost, repositoryId, keep: false);
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsJsonAsync($"/api/v1/workitems/{b}/preview/start", new { }, Ct)).StatusCode);
         Directory.CreateDirectory(Path.Combine(folder, "data"));
         File.WriteAllText(Path.Combine(folder, "data", "left"), "x");

@@ -198,9 +198,9 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             {
                 return NodeExecutionResult.Fail(KillAndDescribe(p, "opencode stream read timed out"));
             }
-            var sessionId = ExtractTextAndSessionIdFromJsonEvents(stdout).SessionId;
-            if (sessionId is not null) onSessionSeen?.Invoke(sessionId);
-            var effectiveSessionId = sessionId ?? sessionIdToUse;
+            var events = ExtractTextAndSessionIdFromJsonEvents(stdout);
+            if (events.SessionId is not null) onSessionSeen?.Invoke(events.SessionId);
+            var effectiveSessionId = events.SessionId ?? sessionIdToUse;
             string? exportedSessionJson = null;
             if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
             {
@@ -209,7 +209,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     exportedSessionJson = sessionJson;
             }
 
-            return AssembleResult(stdout, stderr, p.ExitCode, ctx.Prompt, sessionIdToUse, ctx.IncomingSessionId, exportedSessionJson);
+            return AssembleResult(stdout, events, stderr, p.ExitCode, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, exportedSessionJson);
         }
         catch (Exception ex)
         {
@@ -227,14 +227,14 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     /// stdout is not JSON at all (e.g. tests using a stub binary), keep
     /// the raw stdout as the response.
     /// </remarks>
-    /// <param name="fallbackSessionId">The session id the run was started with, used when the stream names none.</param>
+    /// <param name="events">What <paramref name="stdout"/> says, parsed once by the caller.</param>
+    /// <param name="sessionId">The session the run ended on: the one its stream named, else the one it was started with.</param>
     /// <param name="exportedSessionJson">The session as exported afterwards, read for the answer when the stream carried no text.</param>
     internal static NodeExecutionResult AssembleResult(
-        string stdout, string stderr, int exitCode, string prompt,
-        string? fallbackSessionId, string? incomingSessionId, string? exportedSessionJson)
+        string stdout, JsonEvents events, string stderr, int exitCode, string prompt,
+        string? sessionId, string? incomingSessionId, string? exportedSessionJson)
     {
-        var (response, sessionId, jsonError, sawJsonEvents) = ExtractTextAndSessionIdFromJsonEvents(stdout);
-        var effectiveSessionId = sessionId ?? fallbackSessionId;
+        var (response, _, jsonError, sawJsonEvents) = events;
 
         if (string.IsNullOrEmpty(response) && !string.IsNullOrWhiteSpace(exportedSessionJson))
         {
@@ -274,7 +274,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             return NodeExecutionResult.Fail(response);
 
         return exitCode == 0
-            ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParseOpenCode(stdout))
+            ? NodeExecutionResult.Ok(response, prompt, sessionId, incomingSessionId, AdapterUsageParser.ParseOpenCode(stdout))
             : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
     }
 
@@ -539,7 +539,10 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return sb.ToString();
     }
 
-    internal static (string Text, string? SessionId, string? Error, bool SawJsonEvents) ExtractTextAndSessionIdFromJsonEvents(string raw)
+    /// <summary>What a run's <c>--format json</c> stdout says: its text, the last session id named, the last session error, and whether it was an event stream at all.</summary>
+    internal sealed record JsonEvents(string Text, string? SessionId, string? Error, bool SawJsonEvents);
+
+    internal static JsonEvents ExtractTextAndSessionIdFromJsonEvents(string raw)
     {
         var sb = new StringBuilder();
         string? lastSessionId = null;
@@ -587,7 +590,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
             catch { }
         }
-        return (sb.ToString(), lastSessionId, lastError, sawJsonEvents);
+        return new JsonEvents(sb.ToString(), lastSessionId, lastError, sawJsonEvents);
     }
 
     static string? ExtractErrorMessage(JsonElement error)

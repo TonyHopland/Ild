@@ -3,17 +3,17 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using ILD.Tests.Fakes;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// What an MCP client sees of the real <c>ild-mcp-server.dll</c> over stdio, for
-/// every protocol version a client may still ask for: the handshake, the tool
-/// list with each tool's input schema (pinned in
+/// What an MCP client sees of the real <c>ild-mcp-server.dll</c> over stdio: the
+/// handshake, the tool list with each tool's input schema (pinned in
 /// <c>Fixtures/mcp-tool-input-schemas.json</c>, captured from the server), and
 /// the content a tools/call returns for an answer and for a refusal from the
-/// ILD API, which a loopback stand-in plays here. A version the server does not
-/// know is refused with the versions the client can retry with.
+/// ILD API, which a loopback stand-in plays here. Which protocol versions it
+/// negotiates is the MCP SDK's, so it is not pinned here.
 /// </summary>
 public sealed class McpServerStdioCompatibilityTests : IDisposable
 {
@@ -46,10 +46,10 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
         _cts.Dispose();
     }
 
-    [Theory]
-    [InlineData("2025-11-25")]
-    public async Task A_client_on_this_protocol_version_gets_the_same_tools_and_answers(string protocolVersion)
+    [Fact]
+    public async Task A_client_gets_the_pinned_tools_and_the_apis_answers_and_refusals()
     {
+        const string protocolVersion = "2025-11-25";
         var ct = _cts.Token;
         StartServer();
 
@@ -65,7 +65,7 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
 
         var tools = await ListToolsAsync(ct);
         Assert.Equal(
-            McpServerToolReflection.Names().OrderBy(n => n, StringComparer.Ordinal),
+            McpToolInvoker.Names().OrderBy(n => n, StringComparer.Ordinal),
             tools.Keys.OrderBy(n => n, StringComparer.Ordinal));
 
         var expected = JsonNode.Parse(RepositoryFiles.ReadAllText(
@@ -171,7 +171,7 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        psi.ArgumentList.Add(McpServerToolReflection.RunnableServerDll);
+        psi.ArgumentList.Add(McpServerBinary.RunnableServerDll);
         foreach (var name in psi.Environment.Keys.ToArray())
         {
             if (name.StartsWith("ILD_", StringComparison.Ordinal)

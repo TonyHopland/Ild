@@ -183,7 +183,7 @@ public class PrSyncServiceWebhookTests
     }
 
     [Fact]
-    public async Task A_merge_with_no_on_merged_edge_is_recorded_and_signals_and_wakes_nothing()
+    public async Task A_merge_with_no_on_merged_edge_is_recorded_without_signalling_or_waking_anything()
     {
         // The merge is still recorded, but no signal is emitted (emitting an
         // unconnected custom edge would fail the run), and a merge carries

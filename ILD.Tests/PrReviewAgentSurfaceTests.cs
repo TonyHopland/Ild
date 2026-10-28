@@ -1,5 +1,6 @@
 using System.Reflection;
 using ILD.Api.Controllers;
+using ILD.Tests.Fakes;
 using Microsoft.AspNetCore.Mvc.Routing;
 
 namespace ILD.Tests;
@@ -52,26 +53,18 @@ public class PrReviewAgentSurfaceTests
                 .Select(a => (Method: a.HttpMethods.First(), Template: a.Template ?? string.Empty)))
             .ToArray();
 
-    private static IReadOnlyList<string> PrReviewTools()
-        => typeof(ILD.McpServer.Tools.PrReviewTools)
-            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-            .SelectMany(m => m.CustomAttributes)
-            .Where(a => a.AttributeType.Name == "McpServerToolAttribute")
-            .Select(a => (string)a.NamedArguments.Single(n => n.MemberName == "Name").TypedValue.Value!)
-            .ToArray();
-
     [Fact]
     public void The_mcp_server_offers_exactly_these_seven_things_to_do_with_a_review()
     {
-        Assert.Equal(ExpectedTools.OrderBy(n => n, StringComparer.Ordinal), PrReviewTools().OrderBy(n => n, StringComparer.Ordinal));
-        // …and each of them is really registered on the server, not just on the class.
-        Assert.All(ExpectedTools, name => Assert.Contains(name, McpServerToolReflection.Names()));
+        Assert.Equal(
+            ExpectedTools.OrderBy(n => n, StringComparer.Ordinal),
+            McpToolInvoker.Names(typeof(ILD.McpServer.Tools.PrReviewTools)).OrderBy(n => n, StringComparer.Ordinal));
     }
 
     [Fact]
     public void No_mcp_tool_can_approve_merge_or_dismiss()
     {
-        var names = McpServerToolReflection.Names();
+        var names = McpToolInvoker.Names();
 
         foreach (var verb in ForbiddenVerbs)
             Assert.DoesNotContain(names, n => n.Contains(verb, StringComparison.OrdinalIgnoreCase));
@@ -83,7 +76,7 @@ public class PrReviewAgentSurfaceTests
         // Not the pull request. The verb is allowed exactly once, on exactly the
         // tool that takes a comment id — a tool named for closing anything else
         // fails here rather than being read as this one.
-        var closing = McpServerToolReflection.Names()
+        var closing = McpToolInvoker.Names()
             .Where(n => n.Contains("clos", StringComparison.OrdinalIgnoreCase))
             .ToArray();
 

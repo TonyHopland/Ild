@@ -33,7 +33,7 @@ public sealed class LoopEngine : ILoopEngine
     private readonly ILogger<LoopEngine> _logger;
 
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _runCts = new();
-    internal readonly ConcurrentDictionary<Guid, Task> _runTasks = new();
+    private readonly ConcurrentDictionary<Guid, Task> _runTasks = new();
 
     /// <summary>Upper bound for a crash/fail reason persisted to
     /// <c>LoopRun.HumanFeedbackReason</c>, whose column is <c>varchar(512)</c>
@@ -835,6 +835,9 @@ public sealed class LoopEngine : ILoopEngine
         }
         await LaunchAsync(runId).ConfigureAwait(false);
     }
+
+    /// <summary>The task driving the run in the background, or null when none is stored.</summary>
+    internal Task? DriveOf(Guid runId) => _runTasks.TryGetValue(runId, out var drive) ? drive : null;
 
     internal Task LaunchAsync(Guid runId)
     {

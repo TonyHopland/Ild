@@ -15,8 +15,8 @@ public class RepositoriesIntegrationTests(SharedApiFactory factory) : IClassFixt
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
         // Own host: it asserts the whole repository list is empty.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/repositories", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
@@ -310,13 +310,13 @@ public class RepositoriesIntegrationTests(SharedApiFactory factory) : IClassFixt
     {
         var tester = new RecordingConnectionTester();
         // Own host: it swaps the connection tester for the whole host.
-        await using var factory = new ApiFactory(configureServices: services =>
+        await using var ownHost = new ApiFactory(configureServices: services =>
         {
             services.RemoveAll<IConnectionTester>();
             services.AddSingleton<IConnectionTester>(tester);
         });
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var (id, providerId) = await SeedRepositoryAsync(factory, "https://git.example.com/team/app.git", providerApiKey: "stored-key-1");
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var (id, providerId) = await SeedRepositoryAsync(ownHost, "https://git.example.com/team/app.git", providerApiKey: "stored-key-1");
 
         var response = await client.PostAsync($"/api/v1/repositories/{id}/test", null, TestContext.Current.CancellationToken);
 
@@ -357,11 +357,11 @@ public class RepositoriesIntegrationTests(SharedApiFactory factory) : IClassFixt
     public async Task GetAll_pages_repositories_with_the_same_name_in_a_stable_order()
     {
         // Own host: the page order is asserted over every row the host holds.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-        var providerId = Guid.Parse(await SeedProviderAsync(factory));
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
+        var providerId = Guid.Parse(await SeedProviderAsync(ownHost));
         var ids = new[] { "33333333-0000-0000-0000-000000000000", "22222222-0000-0000-0000-000000000000", "11111111-0000-0000-0000-000000000000" };
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = ownHost.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             foreach (var id in ids)

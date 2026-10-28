@@ -1,21 +1,12 @@
 using System.Net;
 using ILD.Core.Services.Remote;
-using ILD.WorkItemServer;
-using ILD.WorkItemServer.Auth;
-
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Data.Sqlite;
 
 namespace ILD.Tests.WorkItemServer;
 
 /// <summary>
-/// Verifies the typed HTTP client lines up with the live server. Reuses the
-/// same WebApplicationFactory pattern as the API tests so these never go
-/// stale relative to the server contract.
+/// Verifies the typed HTTP client lines up with the live server. It runs against the
+/// same test host as the API tests so these never go stale relative to the
+/// server contract.
 /// </summary>
 public sealed class WorkItemServerClientTests : IClassFixture<WorkItemServerClientTests.Server>
 {
@@ -23,52 +14,17 @@ public sealed class WorkItemServerClientTests : IClassFixture<WorkItemServerClie
 
     public sealed class Server : IAsyncLifetime
     {
-        private SqliteConnection _conn = null!;
-        private WebApplicationFactory<WorkItemServerProgram> _factory = null!;
+        private readonly WorkItemServerFactory _factory = new(ApiKey);
 
         public WorkItemServerClient Client { get; private set; } = null!;
 
         public ValueTask InitializeAsync()
         {
-            _conn = new SqliteConnection("DataSource=:memory:");
-            _conn.Open();
-
-            Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-
-            _factory = new WebApplicationFactory<WorkItemServerProgram>().WithWebHostBuilder(b =>
-            {
-                b.UseEnvironment("Testing");
-                b.ConfigureAppConfiguration((_, config) =>
-                {
-                    config.AddInMemoryCollection(new Dictionary<string, string?>
-                    {
-                        ["WorkItemServer:ApiKeys"] = ApiKey,
-                        ["Serilog:WriteToConsole"] = "false",
-                    });
-                });
-                b.ConfigureServices(services =>
-                {
-                    services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
-                    services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
-                    var existing = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                    if (existing != null) services.Remove(existing);
-                    services.AddDbContext<WorkItemServerDbContext>(o =>
-                    {
-                        o.UseSqlite(_conn);
-                        o.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
-                    });
-                });
-            });
-
             Client = new WorkItemServerClient(_factory.CreateClient());
             return ValueTask.CompletedTask;
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            await _factory.DisposeAsync();
-            _conn.Dispose();
-        }
+        public ValueTask DisposeAsync() => _factory.DisposeAsync();
     }
 
     private readonly WorkItemServerClient _client;

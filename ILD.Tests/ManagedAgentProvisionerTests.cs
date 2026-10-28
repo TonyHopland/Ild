@@ -58,7 +58,10 @@ public class ManagedAgentProvisionerTests
         var provisioner = Create(sp);
         provisioner.EnsureInstalledForProviderType("openai");
 
-        Assert.Empty(provisioner._inFlight);
+        // The install runs in the background, so Verify alone could look before a
+        // queued one started; a queued ensure is recorded synchronously, and with an
+        // install that never ends it would stay recorded.
+        Assert.False(provisioner.AnyEnsureInFlight);
         svc.Verify(
             s => s.EnsureInstalledAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);

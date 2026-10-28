@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
@@ -167,7 +168,7 @@ public class ClaudeCodeAdapterTests
     {
         var worktreeDir = CreateWorktree();
         var scriptPath = WriteArgvEcho(worktreeDir);
-        var logger = new RecordingLogger();
+        var logger = new RecordingLogger<ClaudeCodeAdapter>();
 
         try
         {
@@ -188,17 +189,6 @@ public class ClaudeCodeAdapterTests
         finally
         {
             Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    private sealed class RecordingLogger : ILogger<ClaudeCodeAdapter>
-    {
-        public List<string> Warnings { get; } = new();
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning) Warnings.Add(formatter(state, exception));
         }
     }
 

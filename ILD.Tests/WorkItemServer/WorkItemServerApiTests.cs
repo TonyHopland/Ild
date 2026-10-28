@@ -3,15 +3,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
 using ILD.WorkItemServer;
-using ILD.WorkItemServer.Auth;
 using ILD.WorkItemServer.Dtos;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-
 
 namespace ILD.Tests.WorkItemServer;
 
@@ -22,60 +15,15 @@ namespace ILD.Tests.WorkItemServer;
 /// </summary>
 public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTests.Factory>
 {
-    public sealed class Factory : WebApplicationFactory<WorkItemServerProgram>
+    public sealed class Factory() : WorkItemServerFactory(ApiKey)
     {
         public const string ApiKey = "test-key";
-        private readonly SqliteConnection _conn;
-
-        public Factory()
-        {
-            _conn = new SqliteConnection("DataSource=:memory:");
-            _conn.Open();
-        }
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-            builder.UseEnvironment("Testing");
-            builder.ConfigureAppConfiguration((_, config) =>
-            {
-                config.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["WorkItemServer:ApiKeys"] = ApiKey,
-                    ["Serilog:WriteToConsole"] = "false",
-                });
-            });
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
-                services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
-                var dbDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                if (dbDescriptor != null) services.Remove(dbDescriptor);
-                services.AddDbContext<WorkItemServerDbContext>(opt =>
-                {
-                    opt.UseSqlite(_conn);
-                    opt.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
-                });
-            });
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            base.Dispose(disposing);
-            if (disposing) _conn.Dispose();
-        }
     }
 
     private readonly Factory _factory;
     public WorkItemServerApiTests(Factory factory) => _factory = factory;
 
-    private HttpClient AuthedClient()
-    {
-        var c = _factory.CreateClient();
-        c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Factory.ApiKey);
-        c.DefaultRequestHeaders.Add(ILD.Core.Services.Remote.WorkItemActor.HeaderName, TestActors.Human.ToHeaderValue());
-        return c;
-    }
+    private HttpClient AuthedClient() => _factory.AuthedClient();
 
     [Fact]
     public async Task Health_endpoint_reports_the_stamped_version()

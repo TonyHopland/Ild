@@ -1,23 +1,8 @@
-using System.Reflection;
-
 namespace ILD.Tests;
 
-/// <summary>
-/// The ILD MCP server's tool names, read straight off its
-/// <c>[McpServerTool(Name = …)]</c> attributes — the one tool definition every
-/// adapter is checked against.
-/// </summary>
-internal static class McpServerToolReflection
+/// <summary>Where the built ILD MCP server is, for the tests that load or launch it.</summary>
+internal static class McpServerBinary
 {
-    public static IReadOnlyList<string> Names()
-        => typeof(ILD.McpServer.Tools.LoopTools).Assembly.GetTypes()
-            .SelectMany(t => t.GetMethods(
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-            .SelectMany(m => m.CustomAttributes)
-            .Where(a => a.AttributeType.Name == "McpServerToolAttribute")
-            .Select(a => (string)a.NamedArguments.Single(n => n.MemberName == "Name").TypedValue.Value!)
-            .ToArray();
-
     public static string ServerDll => Path.Combine(AppContext.BaseDirectory, "ild-mcp-server.dll");
 
     /// <summary>

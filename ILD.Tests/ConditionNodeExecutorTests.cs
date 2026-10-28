@@ -2,6 +2,7 @@ using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -9,17 +10,6 @@ namespace ILD.Tests;
 
 public class ConditionNodeExecutorTests
 {
-    /// <summary>
-    /// Stand-in renderer that resolves only the one placeholder these tests
-    /// exercise (<c>{{Node.Input}}</c> → previous-node output), mirroring the
-    /// real resolver closely enough to prove pass-through behaviour.
-    /// </summary>
-    private sealed class FakeRendering : IPromptRenderingService
-    {
-        public Task<string> RenderAsync(string? template, Guid runId, WorkItemView workItem, string? previousNodeOutput)
-            => Task.FromResult((template ?? string.Empty).Replace("{{Node.Input}}", previousNodeOutput ?? string.Empty));
-    }
-
     private static LoopRun MakeRun(string? previousOutput = null, string? prUrl = null) => new()
     {
         Id = Guid.NewGuid(),

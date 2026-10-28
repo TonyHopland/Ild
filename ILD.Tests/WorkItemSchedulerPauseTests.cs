@@ -1,5 +1,6 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -76,7 +77,7 @@ public class WorkItemSchedulerPauseTests
     [Fact]
     public async Task Scheduler_reports_a_pass_blocked_by_the_concurrency_cap()
     {
-        var log = new RecordingLogger();
+        var log = new RecordingLogger<WorkItemScheduler>();
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var coord = new Mock<IRemoteWorkItemCoordinator>();
@@ -113,41 +114,9 @@ public class WorkItemSchedulerPauseTests
         try { await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken); }
         finally { await scheduler.StopAsync(CancellationToken.None); }
 
-        Assert.Contains(log.Messages, m =>
+        Assert.Contains(log.Entries, m =>
             m.Level == LogLevel.Information &&
             m.Text.Contains("wi-1", StringComparison.Ordinal) &&
             m.Text.Contains("cap", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private sealed class RecordingLogger : ILogger<WorkItemScheduler>
-    {
-        private readonly List<(LogLevel Level, string Text)> _messages = new();
-        private readonly Lock _gate = new();
-
-        /// <summary>Snapshot — the scheduler writes from its own loop task.</summary>
-        public IReadOnlyList<(LogLevel Level, string Text)> Messages
-        {
-            get { lock (_gate) return _messages.ToList(); }
-        }
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            lock (_gate) _messages.Add((logLevel, formatter(state, exception)));
-        }
-    }
-
-    private sealed class StaticOptionsMonitor<T> : IOptionsMonitor<T>
-    {
-        private readonly T _value;
-        public StaticOptionsMonitor(T value) { _value = value; }
-        public T CurrentValue => _value;
-        public T Get(string? name) => _value;
-        public IDisposable OnChange(Action<T, string?> listener) => new Noop();
-        private sealed class Noop : IDisposable { public void Dispose() { } }
     }
 }

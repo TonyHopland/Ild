@@ -77,16 +77,28 @@ public class AgentIsolationSpawnSiteTests
     }
 
     [Theory]
+    // Inline, as ProcessRunner does it.
+    [InlineData("Process.Start(AgentIsolation.DropInheritedCapabilities(psi));", true)]
+    // Through an object initializer, as the Cmd node executor does it.
+    [InlineData("using var p = new Process { StartInfo = AgentIsolation.Route(psi), EnableRaisingEvents = true };", true)]
     // Through a builder, as WorktreePreviewService does it.
     [InlineData("var proc = Process.Start(BuildWrapped(step)) ?? throw new InvalidOperationException(\"no\");", true)]
+    [InlineData("var p = new Process(); p.StartInfo = psi;", false)]
+    [InlineData("Process.Start(psi);", false)]
     // A builder that does not wrap must not launder the spawn.
     [InlineData("Process.Start(BuildPlain(step));", false)]
+    // A method that merely CONTAINS a wrapped spawn is not a launcher — naming it
+    // must not vouch for a second, unwrapped one.
+    [InlineData("Process.Start(RunAsync().StartInfo);", false)]
+    // AgentIsolation is more than the wrap; the rest of it isolates nothing.
+    [InlineData("Process.Start(new ProcessStartInfo(AgentIsolation.ScratchRoot));", false)]
     public void The_scan_tells_a_wrapped_spawn_from_a_drifted_one(string statement, bool wrapped)
     {
         var launchers = LauncherNames(new[]
         {
             Redact("class F { ProcessStartInfo BuildWrapped(S s) => AgentIsolation.Route(Psi(s)); }"),
             Redact("class F { ProcessStartInfo BuildPlain(S s) { return Psi(s); } }"),
+            Redact("class F { async Task<R> RunAsync(S s) { return R(Process.Start(AgentIsolation.Route(Psi(s)))); } }"),
         });
         var source = Redact(statement);
         var site = SpawnSite.Match(source);
@@ -95,11 +107,28 @@ public class AgentIsolationSpawnSiteTests
         Assert.Equal(wrapped, IsWrapped(Statement(source, site.Index), launchers));
     }
 
+    [Fact]
+    public void A_spawn_named_only_in_a_message_is_not_a_spawn()
+    {
+        // Every CLI adapter carries `throw new InvalidOperationException("Process.Start
+        // returned null")`, so a scan that reads string literals reports six phantom
+        // sites and gets muted.
+        Assert.DoesNotMatch(SpawnSite, Redact("""
+            var p = proc ?? throw new InvalidOperationException("Process.Start returned null");
+            """));
+    }
+
     [Theory]
-    // A plain literal, a verbatim one opening on an escaped quote (which used to run
-    // the scan off the end of it), and a comment.
+    // Plain, verbatim, raw, interpolated — plus the two that used to run the scan
+    // off the end of the literal: a verbatim string opening on an escaped quote,
+    // and one closing on a backslash behind an @$ prefix. Then a comment.
     [InlineData("var s = \"Process.Start(x)\";")]
+    [InlineData("var s = @\"Process.Start(x)\";")]
     [InlineData("var s = @\"\"\"Process.Start(x)\";")]
+    [InlineData("var s = \"\"\"Process.Start(x)\"\"\";")]
+    [InlineData("var s = $\"{n} Process.Start(x)\";")]
+    [InlineData("var s = @$\"x\\\";")]
+    [InlineData("var s = $@\"x\\\";")]
     [InlineData("var c = '\"'; // Process.Start(x)")]
     public void Redaction_hides_a_literal_without_swallowing_the_code_after_it(string literal)
     {

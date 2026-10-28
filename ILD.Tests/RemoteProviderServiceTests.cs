@@ -427,12 +427,6 @@ public class RemoteProviderServiceTests
         Assert.DoesNotContain("10.1.2.3", window.Message);
     }
 
-    private sealed class ThrowingHandler(string message) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => throw new HttpRequestException(message);
-    }
-
     /// <summary>Serves a large log from a generator, so the fixture never holds it either.</summary>
     private sealed class StreamingLogHandler(int lineCount, int lineLength) : HttpMessageHandler
     {

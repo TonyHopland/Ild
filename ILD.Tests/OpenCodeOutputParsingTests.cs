@@ -16,7 +16,9 @@ public class OpenCodeOutputParsingTests
     private static string Events(params string[] lines) => string.Join("\n", lines);
 
     private static NodeExecutionResult Assemble(string stdout, int exitCode = 0, string stderr = "", string? exportedSessionJson = null)
-        => OpenCodeAdapter.AssembleResult(stdout, stderr, exitCode, "the prompt", fallbackSessionId: null, incomingSessionId: null, exportedSessionJson);
+        => OpenCodeAdapter.AssembleResult(
+            stdout, OpenCodeAdapter.ExtractTextAndSessionIdFromJsonEvents(stdout), stderr, exitCode, "the prompt",
+            sessionId: null, incomingSessionId: null, exportedSessionJson);
 
     [Theory]
     [InlineData("{\"text\":\"hello\",\"sessionId\":\"session-from-output\"}", "session-from-output")]
@@ -166,25 +168,6 @@ public class OpenCodeOutputParsingTests
 
         Assert.False(result.Success);
         Assert.Equal("exit=3 stderr=boom", result.Error);
-    }
-
-    [Fact]
-    public void The_session_id_in_the_stream_wins_over_the_one_the_call_was_given()
-    {
-        var result = OpenCodeAdapter.AssembleResult(
-            Events(StepStart, TextEvent), "", 0, "the prompt", fallbackSessionId: "given", incomingSessionId: "incoming", exportedSessionJson: null);
-
-        Assert.Equal("ses_x", result.SessionId);
-        Assert.Equal("incoming", result.IncomingSessionId);
-    }
-
-    [Fact]
-    public void The_given_session_id_is_kept_when_the_stream_names_none()
-    {
-        var result = OpenCodeAdapter.AssembleResult(
-            Events("{\"type\":\"text\",\"text\":\"hi\"}"), "", 0, "the prompt", fallbackSessionId: "given", incomingSessionId: null, exportedSessionJson: null);
-
-        Assert.Equal("given", result.SessionId);
     }
 
     [Fact]

@@ -5,6 +5,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -18,30 +19,6 @@ namespace ILD.Tests;
 /// </summary>
 public class LoopEngineSetVariableTests
 {
-    private sealed class CapturingAdapter : IAgentAdapter
-    {
-        public List<AgentExecutionContext> Calls { get; } = new();
-        public string Name => "Capturing";
-        public string[] SupportedProviderTypes => ["claude-code"];
-        public ConfigFieldDescriptor[] ConfigSchema => [];
-        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
-
-        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
-        {
-            Calls.Add(context);
-            return Task.FromResult(NodeExecutionResult.Ok("done", context.Prompt, context.SessionId ?? "sess-1"));
-        }
-    }
-
-    private sealed class FakeAdapterRegistry(IAgentAdapter adapter) : IAgentAdapterRegistry
-    {
-        public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => adapter;
-        public string[] GetAllSupportedProviderTypes() => ["claude-code"];
-        public AdapterModelSupport GetModelSupport(string providerType) => adapter.ModelSupport;
-        public AgentAdapterTraits GetTraits(string? providerType) => adapter.Traits;
-    }
-
     private sealed class InterleavingRendering(IPromptRenderingService inner, Action<string?>? whileRendering) : IPromptRenderingService
     {
         public Task<string> RenderAsync(string? template, Guid runId, WorkItemView workItem, string? previousNodeOutput)
@@ -51,7 +28,7 @@ public class LoopEngineSetVariableTests
         }
     }
 
-    private readonly CapturingAdapter _adapter = new();
+    private readonly CapturingAdapter _adapter = new(newSessionId: "sess-1");
 
     /// <param name="whileRendering">Runs as each template is rendered, before the real renderer sees it.</param>
     private LoopEngineHarness Harness(Action<string?>? whileRendering = null)
@@ -71,7 +48,7 @@ public class LoopEngineSetVariableTests
         var h = new LoopEngineHarness(configure: services =>
         {
             services.AddSingleton(providerStore.Object);
-            services.AddSingleton<IAgentAdapterRegistry>(new FakeAdapterRegistry(_adapter));
+            services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(_adapter));
             services.AddSingleton<IPromptRenderingService>(sp => new InterleavingRendering(new PromptRenderingService(
                 new PromptTemplateResolver(), sp.GetRequiredService<IEventLogStore>(),
                 new RunConversationService(sp.GetRequiredService<IEventLogStore>(), sp.GetRequiredService<ILoopRunStore>()),

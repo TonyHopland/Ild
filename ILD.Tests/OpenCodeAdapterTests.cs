@@ -692,6 +692,34 @@ public class OpenCodeAdapterTests
         }
     }
 
+    [Theory]
+    [InlineData("{\"type\":\"text\",\"text\":\"hello\",\"sessionId\":\"streamed\"}", "streamed")]
+    [InlineData("{\"type\":\"text\",\"text\":\"hello\"}", "given")]
+    public async Task ExecuteAsync_ends_on_the_session_its_stream_names_else_the_one_it_was_given(string line, string expected)
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-sid-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath, $"#!/bin/sh\necho '{line}'\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var result = await new OpenCodeAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                sessionId: "given"));
+
+            Assert.True(result.Success, result.Error);
+            Assert.Equal(expected, result.SessionId);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_invokes_OnSessionId_once_with_first_session_id()
     {

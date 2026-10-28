@@ -70,37 +70,37 @@ public class ChatSidebarApiTests(SharedApiFactory factory) : IClassFixture<Share
     public async Task A_user_stars_and_unstars_their_own_chat_without_touching_its_last_activity_and_never_another_users()
     {
         // Own host: it asserts the starred state of every chat on the host.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         var mine = Guid.NewGuid();
         var other = Guid.NewGuid();
         var bobs = Guid.NewGuid();
-        await SeedChatAsync(factory, mine, factory.AdminUsername);
-        await SeedChatAsync(factory, other, factory.AdminUsername);
-        await SeedChatAsync(factory, bobs, "bob");
-        var activity = await StoredUpdatedAtAsync(factory, mine);
-        var bobsActivity = await StoredUpdatedAtAsync(factory, bobs);
+        await SeedChatAsync(ownHost, mine, ownHost.AdminUsername);
+        await SeedChatAsync(ownHost, other, ownHost.AdminUsername);
+        await SeedChatAsync(ownHost, bobs, "bob");
+        var activity = await StoredUpdatedAtAsync(ownHost, mine);
+        var bobsActivity = await StoredUpdatedAtAsync(ownHost, bobs);
 
         Assert.Equal(new Dictionary<Guid, bool> { [mine] = false, [other] = false }, await FavoritesAsync(client));
 
         Assert.Equal(HttpStatusCode.NoContent, await PutFavoriteAsync(client, mine, """{"favorite":true}"""));
         Assert.Equal(new Dictionary<Guid, bool> { [mine] = true, [other] = false }, await FavoritesAsync(client));
-        Assert.Equal(activity, await StoredUpdatedAtAsync(factory, mine));
+        Assert.Equal(activity, await StoredUpdatedAtAsync(ownHost, mine));
 
         Assert.Equal(HttpStatusCode.NoContent, await PutFavoriteAsync(client, mine, """{"favorite":false}"""));
         Assert.Equal(new Dictionary<Guid, bool> { [mine] = false, [other] = false }, await FavoritesAsync(client));
-        Assert.Equal(activity, await StoredUpdatedAtAsync(factory, mine));
+        Assert.Equal(activity, await StoredUpdatedAtAsync(ownHost, mine));
 
         Assert.Equal(HttpStatusCode.NotFound, await PutFavoriteAsync(client, bobs, """{"favorite":true}"""));
         Assert.Equal(HttpStatusCode.NotFound, await PutFavoriteAsync(client, Guid.NewGuid(), """{"favorite":true}"""));
         Assert.Equal(HttpStatusCode.BadRequest, await PutFavoriteAsync(client, mine, "{}"));
         Assert.Equal(HttpStatusCode.BadRequest, await PutFavoriteAsync(client, mine, """{"favorite":"yes"}"""));
         Assert.Equal(HttpStatusCode.BadRequest, await PutFavoriteAsync(client, mine, """{"favorite":null}"""));
-        Assert.Equal(HttpStatusCode.Unauthorized, await PutFavoriteAsync(factory.CreateClient(), mine, """{"favorite":true}"""));
+        Assert.Equal(HttpStatusCode.Unauthorized, await PutFavoriteAsync(ownHost.CreateClient(), mine, """{"favorite":true}"""));
 
         Assert.Equal(new Dictionary<Guid, bool> { [mine] = false, [other] = false }, await FavoritesAsync(client));
-        Assert.Equal(bobsActivity, await StoredUpdatedAtAsync(factory, bobs));
-        using (var scope = factory.Services.CreateScope())
+        Assert.Equal(bobsActivity, await StoredUpdatedAtAsync(ownHost, bobs));
+        using (var scope = ownHost.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var bobStarred = await db.ChatSessions.AsNoTracking().Where(c => c.Id == bobs)
@@ -151,20 +151,20 @@ public class ChatSidebarApiTests(SharedApiFactory factory) : IClassFixture<Share
     public async Task Batch_delete_over_HTTP_removes_the_callers_listed_chats_and_leaves_everything_else()
     {
         // Own host: it asserts the whole chat table after the delete.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
         var first = Guid.NewGuid();
         var second = Guid.NewGuid();
         var kept = Guid.NewGuid();
         var bobs = Guid.NewGuid();
-        await SeedChatAsync(factory, first, factory.AdminUsername);
-        await SeedChatAsync(factory, second, factory.AdminUsername);
-        await SeedChatAsync(factory, kept, factory.AdminUsername);
-        await SeedChatAsync(factory, bobs, "bob");
+        await SeedChatAsync(ownHost, first, ownHost.AdminUsername);
+        await SeedChatAsync(ownHost, second, ownHost.AdminUsername);
+        await SeedChatAsync(ownHost, kept, ownHost.AdminUsername);
+        await SeedChatAsync(ownHost, bobs, "bob");
 
         using (var response = await client.PostAsJsonAsync("/api/v1/chat/delete", new { ids = new[] { first, second, bobs } }, TestContext.Current.CancellationToken))
             Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = ownHost.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var left = await db.ChatSessions.AsNoTracking().Select(c => c.Id).ToListAsync(TestContext.Current.CancellationToken);
@@ -174,7 +174,7 @@ public class ChatSidebarApiTests(SharedApiFactory factory) : IClassFixture<Share
         using var empty = new StringContent("{}", Encoding.UTF8, "application/json");
         using (var response = await client.PostAsync("/api/v1/chat/delete", empty, TestContext.Current.CancellationToken))
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        using (var response = await factory.CreateClient().PostAsJsonAsync("/api/v1/chat/delete", new { ids = new[] { kept } }, TestContext.Current.CancellationToken))
+        using (var response = await ownHost.CreateClient().PostAsJsonAsync("/api/v1/chat/delete", new { ids = new[] { kept } }, TestContext.Current.CancellationToken))
             Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 }

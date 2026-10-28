@@ -8,6 +8,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -33,7 +34,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
 
     private readonly TestDb _db = new();
     private readonly string _worktree = Directory.CreateTempSubdirectory("ild-feed-run-wt-").FullName;
-    private readonly RecordingLogger _resolverLog = new();
+    private readonly RecordingLogger<PackageFeedResolver> _resolverLog = new();
 
     public void Dispose()
     {
@@ -105,17 +106,6 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
         services.AddSingleton(_db.Providers);
         services.AddSingleton<ILogger<PackageFeedResolver>>(_resolverLog);
         return ActivatorUtilities.CreateInstance<PackageFeedResolver>(services.BuildServiceProvider());
-    }
-
-    private sealed class RecordingLogger : ILogger<PackageFeedResolver>
-    {
-        public List<string> Warnings { get; } = new();
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            if (logLevel == LogLevel.Warning) Warnings.Add(formatter(state, exception));
-        }
     }
 
     // ── Resolution ───────────────────────────────────────────────────────

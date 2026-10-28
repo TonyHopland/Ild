@@ -29,11 +29,11 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
     public async Task Template_analytics_equal_the_dashboard_overview_and_add_per_node_figures_from_live_runs()
     {
         // Own host: it asserts run and template analytics over every run on the host.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
 
         Guid alpha, beta, gamma, coder1, tests1, coder2;
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = ownHost.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var t1 = AddTemplate(db, $"retro-alpha-{Guid.NewGuid():N}");
@@ -88,7 +88,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
 
         // Week of June 1–4 on claude, provider given in another case.
         var week = await GetOkAsync(client, "/api/v1/agent/analytics/templates?from=2026-06-01&to=2026-06-04&provider=CLAUDE");
-        var weekOverview = await OverviewAsync(factory, new AnalyticsQuery(new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 4), "CLAUDE"));
+        var weekOverview = await OverviewAsync(ownHost, new AnalyticsQuery(new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 4), "CLAUDE"));
         Assert.Equal(3, weekOverview.Templates.Single(t => t.TemplateId == alpha).TotalRuns);
         AssertRowsMatchOverview(weekOverview.Templates, week.GetProperty("templates"));
         Assert.Equal(new[] { alpha, beta }.Order(), weekOverview.Templates.Select(t => t.TemplateId).Order());
@@ -112,7 +112,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
 
         // One day, every provider: the never-started run counts by its CreatedAt day.
         var day = await GetOkAsync(client, "/api/v1/agent/analytics/templates?from=2026-06-02&to=2026-06-02");
-        var dayOverview = await OverviewAsync(factory, new AnalyticsQuery(new DateOnly(2026, 6, 2), new DateOnly(2026, 6, 2)));
+        var dayOverview = await OverviewAsync(ownHost, new AnalyticsQuery(new DateOnly(2026, 6, 2), new DateOnly(2026, 6, 2)));
         AssertRowsMatchOverview(dayOverview.Templates, day.GetProperty("templates"));
         Assert.Equal(new[] { alpha, gamma }.Order(), dayOverview.Templates.Select(t => t.TemplateId).Order());
         var alphaDay = Row(day, alpha);
@@ -123,7 +123,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
 
         // templateId narrows to that template, figures as the unfiltered overview has them.
         var onlyBeta = await GetOkAsync(client, $"/api/v1/agent/analytics/templates?templateId={beta}");
-        var allOverview = await OverviewAsync(factory, new AnalyticsQuery());
+        var allOverview = await OverviewAsync(ownHost, new AnalyticsQuery());
         AssertRowsMatchOverview(allOverview.Templates.Where(t => t.TemplateId == beta).ToList(), onlyBeta.GetProperty("templates"));
         Assert.Equal(beta, onlyBeta.GetProperty("templateId").GetGuid());
         Assert.Equal(2, Row(onlyBeta, beta).GetProperty("totalRuns").GetInt32());
@@ -160,15 +160,15 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
     public async Task ListLoopRuns_filters_by_start_day_template_and_work_item_newest_first_with_template_version()
     {
         // Own host: it asserts run and template analytics over every run on the host.
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
+        await using var ownHost = new ApiFactory();
+        var client = await ownHost.CreateAuthenticatedClientAsync();
 
         // Ids differ only in their last digit, so every store orders them the same way.
         static Guid Id(int n) => new($"00000000-0000-0000-0000-00000000000{n}");
         var (a, b, c, d, e, f, g) = (Id(1), Id(2), Id(3), Id(4), Id(5), Id(6), Id(7));
         Guid template;
         string templateName;
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = ownHost.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var t = AddTemplate(db, $"list-{Guid.NewGuid():N}");

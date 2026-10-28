@@ -107,7 +107,7 @@ public class AttachmentToolsTests
     [Fact]
     public void The_server_offers_exactly_one_attachment_tool_and_it_only_reads()
     {
-        var names = McpServerToolReflection.Names();
+        var names = McpToolInvoker.Names();
 
         Assert.Contains("get_workitem_attachment", names);
         Assert.Equal(

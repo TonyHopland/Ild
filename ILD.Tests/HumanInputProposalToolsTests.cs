@@ -1,8 +1,5 @@
-using System.Reflection;
 using System.Text.Json;
-using ILD.McpServer;
 using ILD.Tests.Fakes;
-using ModelContextProtocol.Server;
 
 namespace ILD.Tests;
 
@@ -12,11 +9,6 @@ namespace ILD.Tests;
 /// </summary>
 public class HumanInputProposalToolsTests
 {
-    private static MethodInfo ToolNamed(string toolName)
-        => typeof(IldClient).Assembly.GetTypes()
-            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-            .Single(m => m.GetCustomAttribute<McpServerToolAttribute>()?.Name == toolName);
-
     [Fact]
     public async Task propose_human_input_posts_the_output_the_text_and_the_rationale_for_the_escaped_work_item()
     {
@@ -42,7 +34,7 @@ public class HumanInputProposalToolsTests
     [Fact]
     public void propose_human_input_takes_exactly_the_four_string_parameters_and_adds_no_other_tool()
     {
-        var parameters = ToolNamed("propose_human_input").GetParameters();
+        var parameters = McpToolInvoker.Tool("propose_human_input").GetParameters();
 
         Assert.Equal(
             new[] { "workItemId", "output", "text", "rationale" }.OrderBy(n => n, StringComparer.Ordinal),
@@ -50,6 +42,6 @@ public class HumanInputProposalToolsTests
         Assert.All(parameters, p => Assert.Equal(typeof(string), p.ParameterType));
         Assert.Equal(
             new[] { "propose_human_input" },
-            McpServerToolReflection.Names().Where(n => n.Contains("human_input", StringComparison.Ordinal)));
+            McpToolInvoker.Names().Where(n => n.Contains("human_input", StringComparison.Ordinal)));
     }
 }

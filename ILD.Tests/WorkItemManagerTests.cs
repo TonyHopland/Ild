@@ -4,6 +4,7 @@ using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -159,13 +160,6 @@ public class WorkItemManagerTests
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Backlog, wi!.Status);
-    }
-
-    private sealed class TestClock : TimeProvider
-    {
-        public DateTime Now;
-        public TestClock(DateTime now) => Now = now;
-        public override DateTimeOffset GetUtcNow() => new(Now, TimeSpan.Zero);
     }
 
     [Fact]

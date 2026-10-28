@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Tests.Fakes;
 
 namespace ILD.Tests;
 
@@ -22,11 +23,11 @@ public class IldMcpToolNamesTests : IDisposable
     [Fact]
     public void Read_returns_every_McpServerTool_name_in_the_server_dll()
     {
-        var names = IldMcpToolNames.Read(McpServerToolReflection.ServerDll);
+        var names = IldMcpToolNames.Read(McpServerBinary.ServerDll);
 
         Assert.Contains("get_workitem", names);
         Assert.Equal(
-            McpServerToolReflection.Names().OrderBy(n => n, StringComparer.Ordinal),
+            McpToolInvoker.Names().OrderBy(n => n, StringComparer.Ordinal),
             names.OrderBy(n => n, StringComparer.Ordinal));
     }
 
@@ -49,7 +50,7 @@ public class IldMcpToolNamesTests : IDisposable
     public void Read_rereads_a_dll_replaced_at_the_same_path()
     {
         var dll = Path.Combine(_tempDir, "ild-mcp-server.dll");
-        File.Copy(McpServerToolReflection.ServerDll, dll);
+        File.Copy(McpServerBinary.ServerDll, dll);
         Assert.NotEmpty(IldMcpToolNames.Read(dll));
 
         File.WriteAllText(dll, "not a PE image");

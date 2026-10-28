@@ -1,16 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
 using ILD.WorkItemServer;
-using ILD.WorkItemServer.Auth;
 using ILD.WorkItemServer.Backup;
 using ILD.WorkItemServer.Domain;
-using ILD.WorkItemServer.Hosting;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.WorkItemServer;
@@ -60,39 +53,11 @@ public sealed class BackupEndpointsTests
         }
     }
 
-    private sealed class Server : WebApplicationFactory<WorkItemServerProgram>
+    private sealed class Server() : WorkItemServerFactory(ApiKey)
     {
-        private readonly SqliteConnection _connection = new("DataSource=:memory:");
         public RecordingArchive Archive { get; } = new();
 
-        public Server()
-        {
-            _connection.Open();
-            Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-        }
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Testing");
-            builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["WorkItemServer:ApiKeys"] = ApiKey,
-                ["Serilog:WriteToConsole"] = "false",
-            }));
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveHostedService<StaleWorkItemReclaimer>();
-                services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
-                var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                if (descriptor != null) services.Remove(descriptor);
-                services.AddDbContext<WorkItemServerDbContext>(opt =>
-                {
-                    opt.UseSqlite(_connection);
-                    opt.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
-                });
-                services.AddSingleton<IDatabaseArchive>(Archive);
-            });
-        }
+        protected override void ConfigureServices(IServiceCollection services) => services.AddSingleton<IDatabaseArchive>(Archive);
 
         /// <summary>Marks every migration applied, so the import's forward migration finds nothing to do on this SQLite copy.</summary>
         public void MarkMigrationsApplied()
@@ -106,16 +71,7 @@ public sealed class BackupEndpointsTests
                     "INSERT OR IGNORE INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, {1})", id, "10.0.0");
         }
 
-        public HttpClient Client(bool withKey = true)
-        {
-            var client = CreateClient();
-            if (withKey)
-            {
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-                client.DefaultRequestHeaders.Add(ILD.Core.Services.Remote.WorkItemActor.HeaderName, TestActors.Human.ToHeaderValue());
-            }
-            return client;
-        }
+        public HttpClient Client(bool withKey = true) => withKey ? AuthedClient() : CreateClient();
 
         public string Seed(WorkItemStatus status, DateTime? heartbeat)
         {
@@ -141,12 +97,6 @@ public sealed class BackupEndpointsTests
             var db = scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>();
             var item = db.WorkItems.AsNoTracking().Single(w => w.Id == id);
             return (item.Status, item.LastHeartbeatAt);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            base.Dispose(disposing);
-            if (disposing) _connection.Dispose();
         }
     }
 

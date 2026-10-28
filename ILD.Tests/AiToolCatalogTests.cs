@@ -40,22 +40,21 @@ public class AiToolCatalogTests
         Assert.Contains(AiToolCatalog.Ild, keys);
     }
 
-    public static TheoryData<string[], int, string[]> Selections => new()
+    public static TheoryData<string[], string[]> Selections => new()
     {
-        { ["read", "execute"], 2, ["read", "execute"] },
-        { ["read", "unsupported-tool"], 1, ["read"] },
-        { ["READ", "Execute"], 2, [] },
-        { ["read", "read", "READ"], 1, [] },
+        { ["read", "execute"], ["read", "execute"] },
+        { ["read", "unsupported-tool"], ["read"] },
+        { ["READ", "Execute"], ["READ", "Execute"] },
+        { ["read", "read", "READ"], ["read"] },
     };
 
     [Theory]
     [MemberData(nameof(Selections))]
-    public void NormalizeSelectedToolKeys_keeps_supported_keys_case_insensitively_without_duplicates(string[] selected, int count, string[] expectedKeys)
+    public void NormalizeSelectedToolKeys_keeps_supported_keys_case_insensitively_without_duplicates(string[] selected, string[] expectedKeys)
     {
         var result = AiToolCatalog.NormalizeSelectedToolKeys(DeclaredTraits.For("opencode"), selected);
 
-        Assert.Equal(count, result.Count);
-        foreach (var key in expectedKeys) Assert.Contains(key, result);
+        Assert.Equal(expectedKeys, result);
     }
 
     /// <summary>Copilot and Codex: their only tool is ild, so an explicit list without it turns ILD off.</summary>

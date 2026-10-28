@@ -29,7 +29,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private static readonly Regex PreviewHostLabelRegex =
         new(@"^wi-(?<id>[0-9]+)(?:-(?<service>.+))?$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    internal readonly ConcurrentDictionary<string, PreviewRuntime> _runtimes = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, PreviewRuntime> _runtimes = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
@@ -548,6 +548,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     public bool AnyPreviewRunning() => !_runtimes.IsEmpty;
+
+    /// <summary>The process list a reader of <paramref name="worktreePath"/>'s running preview takes, or null when none runs.</summary>
+    internal IReadOnlyList<ManagedPreviewProcess>? RunningProcesses(string worktreePath)
+        => _runtimes.TryGetValue(NormalizeWorktreePath(worktreePath), out var runtime) ? runtime.Processes : null;
 
     public async Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default)
     {
@@ -1908,7 +1912,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     internal sealed record ResolvedStep(string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment);
     private sealed record CommandResult(int ExitCode, string StdOut, string StdErr);
 
-    internal sealed class PreviewRuntime
+    private sealed class PreviewRuntime
     {
         public PreviewRuntime(
             string worktreePath,
