@@ -2,12 +2,12 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import type { ChatMessage, ChatSession, WorkItem, WorkItemEditProposal } from "../types";
 import {
+  chatMessageOf,
+  chatSessionOf,
   documentOrder,
   emitHubEvent,
-  openChatFromList,
-  openChatPanel,
+  openResumedChat as openResumed,
   proposalCardAround,
-  renderChatBubble,
   signalRHub,
   stubChatServices,
 } from "../test-support";
@@ -16,28 +16,20 @@ vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fak
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
-const { chatService, aiProviderService, workItemService } = stubChatServices();
+const { workItemService } = stubChatServices();
 
 function session(): ChatSession {
-  return {
+  return chatSessionOf({
     id: "s1",
     name: "Tidy the backlog",
-    aiProviderId: "p1",
-    providerType: "claude-code",
-    tools: ["ild"],
-    createdAt: "2026-01-01T00:00:00Z",
     messages: [
-      {
+      chatMessageOf({
         id: "m1",
-        role: "assistant",
         content: "I proposed a sharper title for wi-9.",
-        interrupted: false,
         sequence: 1,
-        createdAt: "2026-01-01T00:00:00Z",
-      },
+      }),
     ],
-    activeTurnId: null,
-  };
+  });
 }
 
 function proposal(overrides: Partial<WorkItemEditProposal> = {}): WorkItemEditProposal {
@@ -85,23 +77,6 @@ function card(
   return proposal({ id, proposed: { title }, chatReplySequence: anchor, createdAt, ...overrides });
 }
 
-async function openResumed(view: ChatSession = session()) {
-  chatService.listHistory.mockResolvedValue([
-    {
-      id: "s1",
-      name: "Tidy the backlog",
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-02T00:00:00Z",
-    },
-  ]);
-  chatService.getById.mockResolvedValue(view);
-  aiProviderService.getAll.mockResolvedValue([]);
-  await renderChatBubble();
-  await openChatPanel();
-  await openChatFromList("Tidy the backlog");
-  await screen.findByLabelText("Chat message");
-}
-
 afterEach(() => {
   signalRHub.reset();
   vi.clearAllMocks();
@@ -116,7 +91,7 @@ describe("ChatBubble edit proposals", () => {
       workItem: {} as WorkItem,
     });
 
-    await openResumed();
+    await openResumed(session());
 
     const transcript = (await screen.findByText("I proposed a sharper title for wi-9.")).closest(
       ".chat-panel-body",

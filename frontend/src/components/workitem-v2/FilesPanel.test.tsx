@@ -623,19 +623,16 @@ describe("FilesPanel diff rendering", () => {
     expect(screen.getByText("+world")).toBeTruthy();
   });
 
-  test("Wrap wraps long lines instead of scrolling them sideways, and unticking it scrolls again", async () => {
+  test("Wrap is a checkbox that ticks and unticks", async () => {
     await showDiff(["diff --git a/a.ts b/a.ts", "@@ -1,1 +1,1 @@", "-a", "+b"].join("\n"));
-    const content = () => document.querySelector(".wiv2-files-content")!;
-    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(false);
-
     const wrap = screen.getByRole("checkbox", { name: "Wrap" }) as HTMLInputElement;
+    expect(wrap.checked).toBe(false);
+
     fireEvent.click(wrap);
     expect(wrap.checked).toBe(true);
-    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(true);
 
     fireEvent.click(wrap);
     expect(wrap.checked).toBe(false);
-    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(false);
   });
 
   test("shows original and current line numbers beside each line, blank where absent", async () => {

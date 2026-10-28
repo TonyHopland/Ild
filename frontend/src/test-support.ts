@@ -465,6 +465,41 @@ export function chatSession(
   };
 }
 
+/** A message with a random id; `partial` sets the fields a test cares about. */
+export function chatMessageOf(partial: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: partial.id ?? crypto.randomUUID(),
+    role: partial.role ?? "assistant",
+    content: partial.content ?? "",
+    interrupted: partial.interrupted ?? false,
+    sequence: partial.sequence ?? 0,
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+}
+
+/** A chat as the server returns it when opened, "Past chat" by default; `partial` sets the fields a test cares about. */
+export function chatSessionOf(partial: Partial<ChatSession> = {}): ChatSession {
+  return {
+    ...chatSession(partial.id ?? "s1", partial.name ?? "Past chat", partial.messages ?? []),
+    aiProviderId: partial.aiProviderId ?? "p1",
+    providerType: partial.providerType ?? "claude-code",
+    tools: partial.tools ?? ["ild"],
+    createdAt: partial.createdAt ?? "2026-01-01T00:00:00Z",
+    activeTurnId: partial.activeTurnId ?? null,
+  };
+}
+
+/** Opens the bubble with `session` as the only chat in the history and resumes it from the list. */
+export async function openResumedChat(session: ChatSession, initialPath = "/") {
+  vi.mocked(chatService.listHistory).mockResolvedValue([chatSummary(session.id, session.name)]);
+  vi.mocked(chatService.getById).mockResolvedValue(session);
+  vi.mocked(aiProviderService.getAll).mockResolvedValue([]);
+  const view = await renderChatBubble(initialPath);
+  await openChatPanel();
+  await resumeChat(session.name ?? "Untitled chat");
+  return view;
+}
+
 /**
  * Spies on the chat, provider and edit-proposal methods the chat bubble calls,
  * each answering with nothing (an empty list for the list reads) until a test

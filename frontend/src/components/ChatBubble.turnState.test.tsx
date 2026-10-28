@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, act } from "@testing-library/react";
-import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
+import type { ChatSession, ChatSessionSummary } from "../types";
 import {
   chatBubbleTree,
+  chatMessageOf as msg,
+  chatSessionOf as chatSession,
   chatSummary as summary,
   deferred,
   emitChatEvent as emit,
   openChatFromList,
+  openResumedChat,
   renderChatBubble,
   settle,
   showChatActions,
@@ -26,30 +29,6 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn(
 
 const { chatService, aiProviderService } = stubChatServices();
 
-function chatSession(partial: Partial<ChatSession> = {}): ChatSession {
-  return {
-    id: partial.id ?? "s1",
-    name: partial.name ?? "Past chat",
-    aiProviderId: "p1",
-    providerType: "claude-code",
-    tools: ["ild"],
-    createdAt: "2026-01-01T00:00:00Z",
-    messages: partial.messages ?? [],
-    activeTurnId: partial.activeTurnId ?? null,
-  };
-}
-
-function msg(partial: Partial<ChatMessage>): ChatMessage {
-  return {
-    id: partial.id ?? crypto.randomUUID(),
-    role: partial.role ?? "assistant",
-    content: partial.content ?? "",
-    interrupted: false,
-    sequence: partial.sequence ?? 0,
-    createdAt: "2026-01-01T00:00:00Z",
-  };
-}
-
 /** Open the bubble on the chat list, with the given chats in the history. */
 async function openList(...chats: ChatSessionSummary[]) {
   chatService.listHistory.mockResolvedValue(chats);
@@ -63,11 +42,7 @@ async function openList(...chats: ChatSessionSummary[]) {
  * `getById` mock afterwards is swapping it for its own read and not for that one.
  */
 async function openResumed(session: ChatSession) {
-  const view = await openList(summary(session.id, session.name ?? "Past chat"));
-  chatService.getById.mockResolvedValue(session);
-  fireEvent.click(await screen.findByLabelText("Open chat"));
-  await openChatFromList(session.name ?? "Past chat");
-  await screen.findByLabelText("Chat message");
+  const view = await openResumedChat(session);
   await settle();
   return view;
 }

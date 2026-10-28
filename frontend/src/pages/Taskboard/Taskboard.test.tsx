@@ -1013,19 +1013,23 @@ describe("Taskboard server-paged columns", () => {
       ],
     );
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     renderTaskboard();
-    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    await advance(0);
+    expect(cardTitles("Backlog")).toHaveLength(20);
     expect(cardTitles("Backlog")).not.toContain("ancient");
     // Options come from the server, not from the cards that happen to be loaded.
-    expect(await screen.findByRole("option", { name: "Gamma" })).toBeTruthy();
-    expect(await screen.findByRole("button", { name: "ancient" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Gamma" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "ancient" })).toBeTruthy();
 
     let before = server.getPage.mock.calls.length;
     fireEvent.change(screen.getByLabelText("Filter by repository"), {
       target: { value: "repo-2" },
     });
-    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["beta-newer", "ancient"]));
-    await waitFor(() => expect(cardTitles("Done")).toEqual(["beta-done"]));
+    await advance(0);
+    expect(cardTitles("Backlog")).toEqual(["beta-newer", "ancient"]);
+    await advance(0);
+    expect(cardTitles("Done")).toEqual(["beta-done"]);
     expect(badge("Backlog")).toBe("2");
     expect(badge("Done")).toBe("1");
     for (const [q] of server.getPage.mock.calls.slice(before)) {
@@ -1035,8 +1039,10 @@ describe("Taskboard server-paged columns", () => {
 
     before = server.getPage.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "ancient" }));
-    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["ancient"]));
-    await waitFor(() => expect(cardTitles("Done")).toEqual([]));
+    await advance(0);
+    expect(cardTitles("Backlog")).toEqual(["ancient"]);
+    await advance(0);
+    expect(cardTitles("Done")).toEqual([]);
     expect(badge("Backlog")).toBe("1");
     expect(badge("Done")).toBe("0");
     const tagged = server.getPage.mock.calls.slice(before).map(([q]) => q);

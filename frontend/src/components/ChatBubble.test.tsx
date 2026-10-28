@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { setPreference, getPreference, PreferenceKeys } from "../utils/userPreferences";
-import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary } from "../types";
+import type { AiProvider } from "../types";
 import {
+  chatMessageOf as msg,
+  chatSessionOf as chatSession,
+  chatSummary,
   emitChatEvent as emit,
+  openResumedChat as openResumed,
   openChatFromList,
   openChatList,
   renderChatBubble,
@@ -35,54 +39,6 @@ const provider: AiProvider = {
   parallelism: 1,
   createdAt: "2026-01-01T00:00:00Z",
 };
-
-function msg(partial: Partial<ChatMessage>): ChatMessage {
-  return {
-    id: partial.id ?? crypto.randomUUID(),
-    role: partial.role ?? "assistant",
-    content: partial.content ?? "",
-    interrupted: partial.interrupted ?? false,
-    sequence: partial.sequence ?? 0,
-    createdAt: "2026-01-01T00:00:00Z",
-  };
-}
-
-function chatSession(partial: Partial<ChatSession> = {}): ChatSession {
-  return {
-    id: partial.id ?? "s1",
-    name: partial.name ?? "Past chat",
-    aiProviderId: partial.aiProviderId ?? "p1",
-    providerType: partial.providerType ?? "claude-code",
-    tools: partial.tools ?? ["ild"],
-    createdAt: partial.createdAt ?? "2026-01-01T00:00:00Z",
-    messages: partial.messages ?? [],
-    // The turn the server has in flight for this chat, or null when it is idle.
-    activeTurnId: partial.activeTurnId ?? null,
-  };
-}
-
-function summary(partial: Partial<ChatSessionSummary> = {}): ChatSessionSummary {
-  return {
-    id: partial.id ?? "s1",
-    name: partial.name ?? "Past chat",
-    createdAt: partial.createdAt ?? "2026-01-01T00:00:00Z",
-    updatedAt: partial.updatedAt ?? "2026-01-02T00:00:00Z",
-  };
-}
-
-/**
- * Open the bubble and resume the given chat from the history list, leaving the
- * conversation view active. The history-list behaviour is the new entry point —
- * the bubble no longer auto-loads a single session on mount.
- */
-async function openResumed(session: ChatSession, initialPath = "/") {
-  chatService.listHistory.mockResolvedValue([summary({ id: session.id, name: session.name })]);
-  chatService.getById.mockResolvedValue(session);
-  await renderChatBubble(initialPath);
-  fireEvent.click(await screen.findByLabelText("Open chat"));
-  await openChatFromList(session.name ?? "Untitled chat");
-  await screen.findByLabelText("Chat message");
-}
 
 afterEach(() => {
   signalRHub.reset();
@@ -260,10 +216,7 @@ describe("ChatBubble", () => {
   });
 
   test("a chat's actions open one row at a time and close on Escape, without it reaching the page below, or on a click outside", async () => {
-    chatService.listHistory.mockResolvedValue([
-      summary({ id: "s1", name: "One" }),
-      summary({ id: "s2", name: "Two" }),
-    ]);
+    chatService.listHistory.mockResolvedValue([chatSummary("s1", "One"), chatSummary("s2", "Two")]);
     aiProviderService.getAll.mockResolvedValue([provider]);
     const pageEscape = vi.fn();
     const onPageKey = (e: KeyboardEvent) => {
@@ -305,7 +258,7 @@ describe("ChatBubble", () => {
   // out of sight. jsdom does no layout and has no scrollIntoView, so stub it to
   // observe that an opened menu is brought into view.
   test("a chat's opened actions are scrolled into view within the list", async () => {
-    chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Last row" })]);
+    chatService.listHistory.mockResolvedValue([chatSummary("s1", "Last row")]);
     aiProviderService.getAll.mockResolvedValue([provider]);
     const scrolled: Element[] = [];
     const scrollIntoView = vi.fn(function (this: Element) {
@@ -329,7 +282,7 @@ describe("ChatBubble", () => {
   });
 
   test("a failed message search with no title match says so, not that nothing matched", async () => {
-    chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Deploy loop" })]);
+    chatService.listHistory.mockResolvedValue([chatSummary("s1", "Deploy loop")]);
     aiProviderService.getAll.mockResolvedValue([provider]);
     let fail!: (reason: unknown) => void;
     chatService.searchChats.mockImplementation(
@@ -377,8 +330,8 @@ describe("ChatBubble", () => {
 
   test("an unsent draft stays with its chat: another chat and New chat start empty", async () => {
     chatService.listHistory.mockResolvedValue([
-      summary({ id: "s1", name: "First chat" }),
-      summary({ id: "s2", name: "Other chat" }),
+      chatSummary("s1", "First chat"),
+      chatSummary("s2", "Other chat"),
     ]);
     chatService.getById.mockImplementation((id: string) =>
       Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
@@ -406,7 +359,7 @@ describe("ChatBubble", () => {
   });
 
   test("reloads providers when ending a chat if the first load failed", async () => {
-    chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Old chat" })]);
+    chatService.listHistory.mockResolvedValue([chatSummary("s1", "Old chat")]);
     chatService.getById.mockResolvedValue(chatSession({ id: "s1", name: "Old chat" }));
     // The first provider load fails (e.g. a transient auth hiccup right at
     // startup); the retry when the start form re-appears succeeds.
