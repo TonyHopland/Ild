@@ -69,8 +69,7 @@ public class PrPollHandoverTests
         public NodeSignal? Fired { get; private set; }
 
         /// <summary>The persisted column — deliberately NOT the copy the pass carries.</summary>
-        public string? Row => _db.Fresh().LoopRuns.AsNoTracking()
-            .Where(r => r.Id == Run.Id).Select(r => r.PrCommentLedger).Single();
+        public string? Row => PrRunSeed.LedgerOf(_db, Run.Id);
 
         /// <param name="writesLand">
         /// False lets another writer change the row between the pass's read of it and its write,

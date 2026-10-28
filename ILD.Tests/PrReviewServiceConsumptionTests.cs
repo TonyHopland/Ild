@@ -38,8 +38,8 @@ public class PrReviewServiceConsumptionTests
         public LoopRun Run { get; }
         public Mock<IRemoteProvider> Remote { get; } = new();
 
-        public string? RecordedLedger => ColumnOf(r => r.PrCommentLedger);
-        public string? RecordedQueue => ColumnOf(r => r.PrCommentQueue);
+        public string? RecordedLedger => PrRunSeed.LedgerOf(Db, Run.Id);
+        public string? RecordedQueue => PrRunSeed.QueueOf(Db, Run.Id);
 
         public Harness(RemotePrReviewLedger ledger, string? prUrl = PrUrl)
         {
@@ -49,9 +49,6 @@ public class PrReviewServiceConsumptionTests
         }
 
         public PrReviewService Build() => new(new LoopRunStore(Db.Fresh()), Remote.Object);
-
-        private string? ColumnOf(System.Linq.Expressions.Expression<Func<LoopRun, string?>> column)
-            => Db.Fresh().LoopRuns.AsNoTracking().Where(r => r.Id == Run.Id).Select(column).Single();
 
         public void Dispose() => Db.Dispose();
     }

@@ -43,8 +43,8 @@ public class PrFindingPutBackTests
         public LoopRun Run { get; }
         public Mock<IRemoteProvider> Remote { get; } = new();
 
-        public string? QueueJson => ColumnOf(r => r.PrCommentQueue);
-        public string? LedgerJson => ColumnOf(r => r.PrCommentLedger);
+        public string? QueueJson => PrRunSeed.QueueOf(Db, Run.Id);
+        public string? LedgerJson => PrRunSeed.LedgerOf(Db, Run.Id);
 
         public Harness()
         {
@@ -70,9 +70,6 @@ public class PrFindingPutBackTests
         public IReadOnlyList<RemotePrReviewItem> WouldFireFor(RemotePrReviewItem restated)
             => PrCommentDelivery.Decide(
                 Fetched(restated), Head, PrCommentLedgerJson.TryParse(LedgerJson)).Items;
-
-        private string? ColumnOf(System.Linq.Expressions.Expression<Func<LoopRun, string?>> column)
-            => Db.Fresh().LoopRuns.AsNoTracking().Where(r => r.Id == Run.Id).Select(column).Single();
 
         public void Dispose() => Db.Dispose();
     }

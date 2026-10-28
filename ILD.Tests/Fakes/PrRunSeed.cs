@@ -31,10 +31,9 @@ internal static class PrRunSeed
     }
 
     /// <summary>A run parked on its PR node, waiting for the merge: the state the heartbeat's targeted write lands on.</summary>
-    public static Task<LoopRun> SeedParkedAsync(
-        TestDb db, Guid? id = null, Guid? currentNodeId = null, string workItemId = "wi-1", string? ledger = null, string? queue = null)
-        => SeedAsync(db, LoopRunStatus.WaitingHuman, workItemId: workItemId, queue: queue, ledger: ledger,
-            currentNodeId: currentNodeId ?? Guid.NewGuid(), humanFeedbackReason: HumanFeedbackReasons.PrAwaitingMerge, id: id);
+    public static Task<LoopRun> SeedParkedAsync(TestDb db, Guid currentNodeId, string? ledger)
+        => SeedAsync(db, LoopRunStatus.WaitingHuman, ledger: ledger,
+            currentNodeId: currentNodeId, humanFeedbackReason: HumanFeedbackReasons.PrAwaitingMerge);
 
     /// <summary>A seed for harness constructors, which cannot await: an in-memory database completes every call synchronously.</summary>
     public static LoopRun Seed(
@@ -123,6 +122,16 @@ internal static class PrRunSeed
 
     public static Task SetPrUrlAsync(TestDb db, Guid runId, string? url)
         => db.Fresh().LoopRuns.Where(r => r.Id == runId).ExecuteUpdateAsync(s => s.SetProperty(r => r.PrUrl, url));
+
+    public static string? QueueOf(TestDb db, Guid runId) => ColumnOf(db, runId, r => r.PrCommentQueue);
+
+    public static string? LedgerOf(TestDb db, Guid runId) => ColumnOf(db, runId, r => r.PrCommentLedger);
+
+    private static string? ColumnOf(TestDb db, Guid runId, System.Linq.Expressions.Expression<Func<LoopRun, string?>> column)
+    {
+        using var ctx = db.Fresh();
+        return ctx.LoopRuns.AsNoTracking().Where(r => r.Id == runId).Select(column).Single();
+    }
 
     public static async Task<LoopRun> ReadAsync(TestDb db, Guid runId)
     {

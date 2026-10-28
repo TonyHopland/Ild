@@ -1,8 +1,5 @@
 using ILD.Api.Configuration;
 using ILD.Api.Hubs;
-using ILD.Core.Services.Remote;
-using ILD.Data.DTOs.SignalRPayloads;
-using ILD.Data.Enums;
 using Microsoft.AspNetCore.SignalR;
 using Moq;
 

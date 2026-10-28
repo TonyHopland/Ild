@@ -94,14 +94,8 @@ public sealed class BackupEndpointsTests
         {
             _connection.Open();
             Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-            var archiveType = typeof(ILD.WorkItemServer.Backup.IDatabaseArchive);
-            ArchiveType = archiveType;
-            Archive = (ArchiveProxy)typeof(DispatchProxy).GetMethods()
-                .Single(m => m.Name == nameof(DispatchProxy.Create) && m.GetGenericArguments().Length == 2)
-                .MakeGenericMethod(archiveType, typeof(ArchiveProxy)).Invoke(null, null)!;
+            Archive = (ArchiveProxy)DispatchProxy.Create<ILD.WorkItemServer.Backup.IDatabaseArchive, ArchiveProxy>();
         }
-
-        private Type ArchiveType { get; }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -122,7 +116,7 @@ public sealed class BackupEndpointsTests
                     opt.UseSqlite(_connection);
                     opt.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
                 });
-                services.AddSingleton(ArchiveType, Archive);
+                services.AddSingleton(typeof(ILD.WorkItemServer.Backup.IDatabaseArchive), Archive);
             });
         }
 

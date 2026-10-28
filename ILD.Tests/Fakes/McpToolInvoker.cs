@@ -41,7 +41,8 @@ internal static class McpToolInvoker
             .ToArray();
 
         var result = await (Task<string>)method.Invoke(tools, values)!;
-        return (result, seen!, body);
+        Assert.NotNull(seen);
+        return (result, seen, body);
     }
 
     private static object? ConvertTo(object? value, Type type)

@@ -85,8 +85,8 @@ public class PrOwnQueuedWriteTests
         public PrReviewService Service
             => new(new LoopRunStore(Db.Fresh()), Remote.Object, Notifier.Object, Events.Object);
 
-        public string? QueueJson => Db.Fresh().LoopRuns.AsNoTracking().Where(r => r.Id == Run.Id).Select(r => r.PrCommentQueue).Single();
-        public string? LedgerJson => Db.Fresh().LoopRuns.AsNoTracking().Where(r => r.Id == Run.Id).Select(r => r.PrCommentLedger).Single();
+        public string? QueueJson => PrRunSeed.QueueOf(Db, Run.Id);
+        public string? LedgerJson => PrRunSeed.LedgerOf(Db, Run.Id);
 
         public IReadOnlyList<PrQueuedWrite> Queue => PrCommentQueueJson.TryParse(QueueJson);
 

@@ -33,10 +33,10 @@ public class PRNodeExecutorPrCommentTests
         public LoopRun Run => Node.Run;
         public string? PostedBody { get; private set; }
 
-        public string? RecordedLedger => ColumnOf(r => r.PrCommentLedger);
+        public string? RecordedLedger => PrRunSeed.LedgerOf(Db, Run.Id);
 
         /// <summary>The persisted queue column, which is what the node reads and claims.</summary>
-        public string? Row => ColumnOf(r => r.PrCommentQueue);
+        public string? Row => PrRunSeed.QueueOf(Db, Run.Id);
 
         private readonly RemotePrWriteResult _result;
         private readonly bool _withRunStore;
@@ -71,9 +71,6 @@ public class PRNodeExecutorPrCommentTests
             if (_withRunStore)
                 Node.Runs = PrRunSeed.OverRealWrites(new LoopRunStore(Db.Fresh())).Object;
         }
-
-        private string? ColumnOf(System.Linq.Expressions.Expression<Func<LoopRun, string?>> column)
-            => Db.Fresh().LoopRuns.AsNoTracking().Where(r => r.Id == Run.Id).Select(column).Single();
 
         public Task<List<NodeOutcome>> RunNodeAsync() => Node.RunAsync();
 

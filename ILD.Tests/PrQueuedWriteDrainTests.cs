@@ -65,9 +65,9 @@ public class PrQueuedWriteDrainTests
         public LoopRun Run => Node.Run;
 
         /// <summary>The persisted queue column, which is what the node reads and claims.</summary>
-        public string? Row => ColumnOf(r => r.PrCommentQueue);
+        public string? Row => PrRunSeed.QueueOf(Db, Run.Id);
 
-        public string? RecordedLedger => ColumnOf(r => r.PrCommentLedger);
+        public string? RecordedLedger => PrRunSeed.LedgerOf(Db, Run.Id);
 
         public int Reads { get; private set; }
 
@@ -128,9 +128,6 @@ public class PrQueuedWriteDrainTests
                 return read;
             });
         }
-
-        private string? ColumnOf(System.Linq.Expressions.Expression<Func<LoopRun, string?>> column)
-            => Db.Fresh().LoopRuns.AsNoTracking().Where(r => r.Id == Run.Id).Select(column).Single();
 
         public Task<List<NodeOutcome>> RunNodeAsync()
         {

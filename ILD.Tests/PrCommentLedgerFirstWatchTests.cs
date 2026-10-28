@@ -57,7 +57,6 @@ public class PrCommentLedgerFirstWatchTests
         return ((await PrRunSeed.ReadAsync(db, b.Run.Id)).PrCommentLedger, b.Run);
     }
 
-
     [Fact]
     public async Task A_ledger_the_pr_node_opened_says_it_has_never_watched_the_pull_request()
     {

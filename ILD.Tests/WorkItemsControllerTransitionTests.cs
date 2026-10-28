@@ -117,7 +117,6 @@ public class WorkItemsControllerTransitionTests
         Assert.Equal(RemoteWorkItemStatus.Backlog, after!.Status);
     }
 
-
     // A second lap round the board: the item ran, its run ended, and it is
     // sitting in Ready again. Nothing is alive underneath it, so it moves back
     // like any unstarted item — the refusal below keys on a live run, not on
