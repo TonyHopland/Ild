@@ -10,8 +10,8 @@ namespace ILD.Core.Services.Implementations;
 /// expressed through <c>setpriv</c> and Unix modes:
 ///
 /// <list type="number">
-///   <item><b>Crossing to the agent uid</b> — <see cref="Route(ProcessStartInfo)"/>
-///   for a spawn, <see cref="RouteCommand(string, IReadOnlyList{string})"/> for
+///   <item><b>Crossing to the agent uid</b> — <see cref="Route(ProcessStartInfo, Guid?, NetworkMode)"/>
+///   for a spawn, <see cref="RouteCommand(string, IReadOnlyList{string}, Guid?, NetworkMode)"/> for
 ///   APIs that take a command plus argv (the interactive terminal's PTY). Both
 ///   also strip the orchestrator's secrets (<see cref="SecretEnvironmentKeys"/>)
 ///   from the environment the agent inherits.</item>
@@ -243,25 +243,9 @@ public static class AgentIsolation
     /// directory and environment already configured on <paramref name="psi"/>;
     /// <c>setpriv</c> inherits all three and passes them through to the agent.
     /// </summary>
-    public static ProcessStartInfo Route(ProcessStartInfo psi)
-        => Route(psi, aiProviderId: null);
-
-    /// <summary>
-    /// <see cref="Route(ProcessStartInfo)"/> for a launch made on behalf of one AI
-    /// provider: the egress proxy URL then names the provider, so the whitelist and
-    /// blacklist entries scoped to it apply to this child's connections.
-    /// </summary>
-    public static ProcessStartInfo Route(ProcessStartInfo psi, Guid? aiProviderId)
-        => Route(psi, aiProviderId, NetworkMode.Monitor);
-
-    /// <summary>
-    /// <see cref="Route(ProcessStartInfo, Guid?)"/> for the network mode in force at launch
-    /// (<see cref="ResolveLaunchNetwork(NetworkMode, string?, string?, Guid?)"/>). A launch whose mode is unknown passes
-    /// <see cref="NetworkMode.Monitor"/>, the proxied launch every deployment had before Off existed.
-    /// </summary>
     public static ProcessStartInfo Route(ProcessStartInfo psi, Guid? aiProviderId, NetworkMode mode)
     {
-        var (proxy, regid) = ResolveLaunchNetwork(mode, Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), NetworkOpenGroup, aiProviderId);
+        var (proxy, regid) = ResolveLaunchNetwork(mode, aiProviderId);
         return Route(psi, AgentUser, AgentGroup, AgentHome, proxy, regid);
     }
 
@@ -280,7 +264,7 @@ public static class AgentIsolation
 
     /// <summary>
     /// The wrap primitive with explicit parameters — the env-based
-    /// <see cref="Route(ProcessStartInfo)"/> is the production convenience over
+    /// <see cref="Route(ProcessStartInfo, Guid?, NetworkMode)"/> is the production convenience over
     /// this. Exposed so the rewrite can be verified without mutating (global)
     /// process environment variables. No-op when <paramref name="agentUser"/> is
     /// null/blank; <paramref name="agentGroup"/> defaults to the user and
@@ -454,17 +438,9 @@ public static class AgentIsolation
     /// a <see cref="ProcessStartInfo"/> — the interactive provider terminal runs
     /// its CLI through a PTY. Returns the command unchanged when isolation is off.
     /// </summary>
-    public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments)
-        => RouteCommand(fileName, arguments, aiProviderId: null);
-
-    /// <inheritdoc cref="Route(ProcessStartInfo, Guid?)"/>
-    public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments, Guid? aiProviderId)
-        => RouteCommand(fileName, arguments, aiProviderId, NetworkMode.Monitor);
-
-    /// <inheritdoc cref="Route(ProcessStartInfo, Guid?, NetworkMode)"/>
     public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments, Guid? aiProviderId, NetworkMode mode)
     {
-        var (proxy, regid) = ResolveLaunchNetwork(mode, Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), NetworkOpenGroup, aiProviderId);
+        var (proxy, regid) = ResolveLaunchNetwork(mode, aiProviderId);
         return RouteCommand(fileName, arguments, AgentUser, AgentGroup, AgentHome, proxy, regid);
     }
 
@@ -512,6 +488,13 @@ public static class AgentIsolation
 
         return new AgentCommand(SetprivCommand, argv, environment);
     }
+
+    /// <summary>
+    /// <see cref="ResolveLaunchNetwork(NetworkMode, string?, string?, Guid?)"/> for this process's configured
+    /// proxy port and open group. What every production launch calls.
+    /// </summary>
+    public static (string? Proxy, string? Regid) ResolveLaunchNetwork(NetworkMode mode, Guid? aiProviderId)
+        => ResolveLaunchNetwork(mode, Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), NetworkOpenGroup, aiProviderId);
 
     /// <summary>
     /// What a launch in <paramref name="mode"/> is given: the proxy URL for its environment and the group for

@@ -61,8 +61,10 @@ function normalizeLogEntry(entry: NetworkLogEntry): NetworkLogEntry {
   return { ...entry, decision: normalizeDecision(entry.decision) };
 }
 
-function isMode(value: string): value is NetworkMode {
-  return value === "off" || value === "monitor" || value === "whitelist" || value === "blacklist";
+/** The stored value is kept as sent, so it is read the way the backend reads it: trimmed, any case. */
+function parseMode(value: string): NetworkMode | null {
+  const name = value.trim().toLowerCase();
+  return MODES.find((m) => m.value === name)?.value ?? null;
 }
 
 /** Whether a rule of this kind is in effect; before the mode has loaded, none is marked as ignored. */
@@ -615,7 +617,7 @@ export default function NetworkSettings() {
     void settingsService
       .get(NetworkSettingKeys.Mode)
       .then((s) => {
-        if (isMode(s.value)) setMode(s.value);
+        setMode(parseMode(s.value));
       })
       .catch(() => {});
     void aiProviderService
@@ -638,7 +640,7 @@ export default function NetworkSettings() {
       void settingsService
         .get(NetworkSettingKeys.Mode)
         .then((s) => {
-          if (isMode(s.value)) setMode(s.value);
+          setMode(parseMode(s.value));
         })
         .catch(() => {});
     };

@@ -390,6 +390,29 @@ public sealed class CodexAdapterTests : IDisposable
         }
         """;
 
+    [Fact]
+    public async Task A_custom_server_of_an_Off_run_is_given_no_proxy_variables_but_keeps_its_own()
+    {
+        _environment.Set(AgentIsolation.EgressProxyPortEnvVar, "3128");
+        var ownerId = Guid.NewGuid();
+        var provider = Provider(WriteCodex(Success("ok")), customMcpServersJson: DocsServer);
+
+        var result = await Adapter().ExecuteAsync(Context(provider) with
+        {
+            RunContext = RunContext(ownerId, _worktree),
+            NetworkMode = NetworkMode.Off,
+        });
+
+        Assert.True(result.Success, result.Error);
+        var docsStrings = TomlStrings(McpOverride(Argv(), "docs"));
+        using var launch = JsonDocument.Parse(ReadCopy(docsStrings[3]));
+        var env = launch.RootElement.GetProperty("env");
+        Assert.Equal("docs-secret", env.GetProperty("DOCS_TOKEN").GetString());
+        Assert.Equal("docs.example.com", env.GetProperty("NO_PROXY").GetString());
+        foreach (var key in new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY" })
+            Assert.False(env.TryGetProperty(key, out _), $"{key} set for an Off run");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -934,6 +934,17 @@ describe("Network modes", () => {
     expect(banner.textContent).toMatch(/Off is unavailable/);
   });
 
+  test.each(["OFF", " Off "])(
+    "a mode stored as %j is read as Off, as the backend reads it",
+    async (stored) => {
+      mockServices(enforced, stored);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+      await waitFor(() => expect(pressed("Off")).toBe(true));
+      expect(offWarning().length).toBeGreaterThan(0);
+    },
+  );
+
   test("no Off warning in a mode that has a proxy", async () => {
     mockServices(enforced, "monitor");
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });

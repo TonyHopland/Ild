@@ -55,8 +55,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         using var feeds = PackageFeedCredentialFiles.Materialize(
             packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
         var mode = await ctx.Services.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken);
-        var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(
-            mode, Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar), AgentIsolation.NetworkOpenGroup, aiProviderId: null);
+        var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(mode, aiProviderId: null);
         using var p = new Process
         {
             StartInfo = IsolateCommand(

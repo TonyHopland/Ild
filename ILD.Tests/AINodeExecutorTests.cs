@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations.Executors;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -38,7 +39,8 @@ public class AINodeExecutorTests
         IWorkItemManager? workItemManager = null,
         IAgentAdapterRegistry? registry = null,
         WorkItemView? workItem = null,
-        IAiProviderConcurrencyTracker? concurrency = null)
+        IAiProviderConcurrencyTracker? concurrency = null,
+        IEgressPolicy? egressPolicy = null)
     {
         var wi = workItem ?? new WorkItemView { Id = "WI-1", RepositoryId = null };
         var wimMock = workItemManager ?? Mock.Of<IWorkItemManager>(m =>
@@ -61,6 +63,8 @@ public class AINodeExecutorTests
             services.AddSingleton(registry);
         if (concurrency is not null)
             services.AddSingleton(concurrency);
+        if (egressPolicy is not null)
+            services.AddSingleton(egressPolicy);
         return services.BuildServiceProvider();
     }
 
@@ -114,6 +118,47 @@ public class AINodeExecutorTests
 
     // Two rules both match "REJECT and review" (the first case-insensitively);
     // last-match-wins must route to whichever pattern sits later in the output.
+    private sealed class CapturingAdapter : IAgentAdapter
+    {
+        public AgentExecutionContext? Seen { get; private set; }
+        public string Name => "capture";
+        public string[] SupportedProviderTypes => ["stub"];
+        public ConfigFieldDescriptor[] ConfigSchema => [];
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
+
+        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
+        {
+            Seen = context;
+            return Task.FromResult(NodeExecutionResult.Ok("done"));
+        }
+    }
+
+    private static async Task<NetworkMode> LaunchModeOfAsync(IEgressPolicy? policy)
+    {
+        var adapter = new CapturingAdapter();
+        var provider = new AiProvider { Id = Guid.NewGuid(), Name = "default", Type = "stub", IsDefault = true, Parallelism = 1, CreatedAt = DateTime.UtcNow };
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
+        var registry = Mock.Of<IAgentAdapterRegistry>(r =>
+            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
+        var sp = BuildServices(providerStore.Object, registry: registry, egressPolicy: policy);
+
+        await foreach (var _ in new AINodeExecutor().ExecuteAsync(BuildCtx(MakeNode("{}"), MakeRun(), sp))) { }
+
+        return adapter.Seen!.NetworkMode;
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Off)]
+    [InlineData(NetworkMode.Blacklist)]
+    public async Task An_AI_node_launches_in_the_mode_the_policy_reports(NetworkMode mode)
+        => Assert.Equal(mode, await LaunchModeOfAsync(EgressPolicies.Reporting(mode)));
+
+    [Fact]
+    public async Task An_AI_node_without_a_policy_launches_proxied_as_Monitor()
+        => Assert.Equal(NetworkMode.Monitor, await LaunchModeOfAsync(null));
+
     private const string TwoRuleConfig =
         @"{""matchRules"":[{""pattern"":""reject"",""edgeName"":""Reject""},{""pattern"":""review"",""edgeName"":""Review""}]}";
 

@@ -123,10 +123,14 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// decides whether the child is proxied (ADR-0019).
     /// </param>
     protected static Process? StartAgentProcess(ProcessStartInfo psi, AgentExecutionContext ctx)
+        => Process.Start(RouteForExecution(psi, ctx));
+
+    /// <summary>The launch <see cref="StartAgentProcess"/> starts: <paramref name="psi"/> with the execution's environment, crossed to the agent uid.</summary>
+    internal static ProcessStartInfo RouteForExecution(ProcessStartInfo psi, AgentExecutionContext ctx)
     {
         foreach (var (name, value) in ctx.Environment ?? new Dictionary<string, string>())
             psi.Environment[name] = value;
-        return Process.Start(AgentIsolation.Route(psi, ctx.Provider.Id, ctx.NetworkMode));
+        return AgentIsolation.Route(psi, ctx.Provider.Id, ctx.NetworkMode);
     }
 
     /// <summary>
