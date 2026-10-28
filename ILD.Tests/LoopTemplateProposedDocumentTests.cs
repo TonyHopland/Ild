@@ -93,6 +93,24 @@ public class LoopTemplateProposedDocumentTests
         Assert.Empty(result.ValidationErrors);
     }
 
+public static TheoryData<string, string> OversizedOrAmbiguous => new()
+    {
+        { "name over 256", $$"""{"$schema":"ild-loop-template/v2","name":"{{new string('n', 257)}}","recoveryPolicy":"AutoResume",{{Graph}}}""" },
+        { "description over 8192", $$"""{"$schema":"ild-loop-template/v2","name":"x","description":"{{new string('d', 8193)}}","recoveryPolicy":"AutoResume",{{Graph}}}""" },
+        { "a key given twice", $$"""{"name":"Twice","$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"AutoResume",{{Graph}}}""" },
+    };
+
+    [Theory]
+    [MemberData(nameof(OversizedOrAmbiguous))]
+    public void A_document_with_an_oversized_field_or_a_repeated_key_is_refused(string _, string document)
+    {
+        var result = Manager.CheckProposedDocument(document);
+
+        Assert.False(string.IsNullOrWhiteSpace(result.Error), "the refusal gives no reason");
+        Assert.Null(result.Request);
+        Assert.Null(result.Document);
+    }
+
     [Fact]
     public void A_graph_that_breaks_the_save_rules_comes_back_as_validation_errors()
     {
