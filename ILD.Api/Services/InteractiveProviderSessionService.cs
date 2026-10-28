@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Data.Entities;
 using Porta.Pty;
 
@@ -15,10 +16,12 @@ namespace ILD.Api.Services;
 public sealed class InteractiveProviderSessionService
 {
     private readonly ILogger<InteractiveProviderSessionService> _logger;
+    private readonly IEgressPolicy? _egressPolicy;
 
-    public InteractiveProviderSessionService(ILogger<InteractiveProviderSessionService> logger)
+    public InteractiveProviderSessionService(ILogger<InteractiveProviderSessionService> logger, IEgressPolicy? egressPolicy = null)
     {
         _logger = logger;
+        _egressPolicy = egressPolicy;
     }
 
     public async Task RunAsync(
@@ -69,7 +72,8 @@ public sealed class InteractiveProviderSessionService
             var (extraArgs, notice) = ResolveExtraArgs(provider);
             if (notice is not null)
                 await PtyWebSocketBridge.SendNoticeAsync(socket, notice, cancellationToken);
-            var routed = AgentIsolation.RouteCommand(binaryPath, extraArgs, provider.Id);
+            var routed = AgentIsolation.RouteCommand(
+                binaryPath, extraArgs, provider.Id, await _egressPolicy.LaunchModeAsync(cancellationToken));
             var environment = new Dictionary<string, string>(routed.Environment);
 
             var options = new PtyOptions

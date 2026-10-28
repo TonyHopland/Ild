@@ -86,7 +86,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
                     sessionDirectory,
                     sessionIdToUse,
                     sessionPathToUse,
-                    ExtraCliArgs.ForLaunch(ctx.Provider, _logger)), ctx.Provider.Id, ctx.Environment);
+                    ExtraCliArgs.ForLaunch(ctx.Provider, _logger)), ctx);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

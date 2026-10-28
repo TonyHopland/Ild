@@ -27,17 +27,19 @@ public static class EgressRules
         switch (value?.Trim().ToLowerInvariant())
         {
             case "off": mode = NetworkMode.Off; return true;
+            case "monitor": mode = NetworkMode.Monitor; return true;
             case "whitelist": mode = NetworkMode.Whitelist; return true;
             case "blacklist": mode = NetworkMode.Blacklist; return true;
-            default: mode = NetworkMode.Off; return false;
+            default: mode = NetworkMode.Monitor; return false;
         }
     }
 
     public static string ModeName(NetworkMode mode) => mode switch
     {
+        NetworkMode.Off => "off",
         NetworkMode.Whitelist => "whitelist",
         NetworkMode.Blacklist => "blacklist",
-        _ => "off",
+        _ => "monitor",
     };
 
     /// <summary>
@@ -195,7 +197,9 @@ public static class EgressRules
         string host,
         Guid? aiProviderId)
     {
-        if (mode == NetworkMode.Off)
+        // Off is only ever seen by connections that were proxied before the switch to it;
+        // they are judged as Monitor.
+        if (mode is NetworkMode.Off or NetworkMode.Monitor)
             return NetworkDecision.Advisory;
 
         var canonical = NormalizeHost(host);

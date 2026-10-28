@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data;
@@ -49,6 +50,7 @@ public sealed class ChatService : IChatService
     private readonly IChatTitleScheduler? _titles;
     private readonly IChatScheduleNotifier? _schedules;
     private readonly ClaudeProjectFolders _claudeProjects;
+    private readonly IEgressPolicy? _egressPolicy;
 
     public ChatService(
         AppDbContext db,
@@ -63,7 +65,8 @@ public sealed class ChatService : IChatService
         ILogger<ChatService>? log = null,
         IChatTitleScheduler? titles = null,
         IChatScheduleNotifier? schedules = null,
-        ClaudeProjectFolders? claudeProjects = null)
+        ClaudeProjectFolders? claudeProjects = null,
+        IEgressPolicy? egressPolicy = null)
     {
         _db = db;
         _providers = providers;
@@ -78,6 +81,7 @@ public sealed class ChatService : IChatService
         _titles = titles;
         _schedules = schedules;
         _claudeProjects = claudeProjects ?? ClaudeProjectFolders.ForProcess();
+        _egressPolicy = egressPolicy;
     }
 
     public async Task<IReadOnlyList<ChatSessionSummaryView>> ListForUserAsync(string userId, CancellationToken ct = default)
@@ -336,7 +340,8 @@ public sealed class ChatService : IChatService
             OnSessionId: sid => capturedSessionId = sid,
             ForkFromSessionId: null,
             ChatSessionId: session.Id,
-            AdditionalAllowedDirectories: additionalAllowedDirectories);
+            AdditionalAllowedDirectories: additionalAllowedDirectories,
+            NetworkMode: await _egressPolicy.LaunchModeAsync(ct));
 
         NodeExecutionResult result;
         try

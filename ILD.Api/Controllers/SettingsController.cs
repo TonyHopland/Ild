@@ -3,6 +3,7 @@ using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
+using ILD.Data.Migrations;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -83,7 +84,8 @@ public class SettingsController : ControllerBase
         var all = await _store.GetAllAsync(ct);
         // Always return the canonical keys (with defaults if missing) so the
         // frontend never has to special-case absence.
-        var map = all.ToDictionary(s => s.Key, s => s.Value, StringComparer.Ordinal);
+        var map = all.Where(s => s.Key != NetworkModeMonitorMigrator.MarkerKey)
+            .ToDictionary(s => s.Key, s => s.Value, StringComparer.Ordinal);
         if (!map.ContainsKey(AppSettingKeys.SchedulerMaxConcurrent))
             map[AppSettingKeys.SchedulerMaxConcurrent] = AppSettingKeys.DefaultMaxConcurrent.ToString();
         if (!map.ContainsKey(AppSettingKeys.SchedulerIsPaused))
@@ -293,7 +295,7 @@ public class SettingsController : ControllerBase
             case AppSettingKeys.NetworkMode:
                 if (!EgressRules.TryParseMode(value, out _))
                 {
-                    error = "network.mode must be 'off', 'whitelist' or 'blacklist'";
+                    error = "network.mode must be 'off', 'monitor', 'whitelist' or 'blacklist'";
                     return false;
                 }
                 break;

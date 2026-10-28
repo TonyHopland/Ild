@@ -1,4 +1,5 @@
 using ILD.Data.Enums;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,12 +54,14 @@ public sealed class CmdNodeExecutor : INodeExecutor
         var err = new StringBuilder();
         using var feeds = PackageFeedCredentialFiles.Materialize(
             packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
+        var mode = await ctx.Services.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken);
+        var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(
+            mode, Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar), AgentIsolation.NetworkOpenGroup, aiProviderId: null);
         using var p = new Process
         {
             StartInfo = IsolateCommand(
                 ShellStartInfo(command, workingDirectory),
-                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
-                AgentIsolation.EgressProxyUrl(aiProviderId: null)),
+                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, proxy, regid),
             EnableRaisingEvents = true,
         };
         foreach (var (name, value) in feeds.Environment)
@@ -131,8 +134,8 @@ public sealed class CmdNodeExecutor : INodeExecutor
     /// still read the orchestrator's <c>/proc/&lt;pid&gt;/environ</c>.
     /// </summary>
     internal static ProcessStartInfo IsolateCommand(
-        ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy)
-        => AgentIsolation.Route(AgentIsolation.StripOrchestratorEnvironment(psi), agentUser, agentGroup, agentHome, egressProxy);
+        ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy, string? regidOverride = null)
+        => AgentIsolation.Route(AgentIsolation.StripOrchestratorEnvironment(psi), agentUser, agentGroup, agentHome, egressProxy, regidOverride);
 
     // Long enough that only a tree genuinely stuck in the kernel — an
     // uninterruptible write to a slow mount — reaches the timeout, short enough

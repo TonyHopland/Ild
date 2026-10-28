@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ILD.Data.Enums;
 using System.Runtime.Versioning;
 
 namespace ILD.Core.Services.Implementations;
@@ -66,6 +67,16 @@ public static class AgentIsolation
     /// Files the agent only reads, such as the git mirrors, are handed to it. Never use it for <c>--regid</c>.
     /// </summary>
     public const string SharedGroupEnvVar = "ILD_SHARED_GROUP";
+
+    /// <summary>
+    /// The group an agent launched in network mode Off runs under (the entrypoint's <c>NETWORK_OPEN_GROUP</c>),
+    /// for the drop's <c>--regid</c> in that mode only. The firewall accepts this group's traffic from the agent
+    /// uid, so such a launch needs no proxy. Exported only when the entrypoint installed that rule. Distinct from
+    /// the agent's primary group (<see cref="AgentGroupEnvVar"/>, <c>--regid</c> in every other mode) and the
+    /// shared group (<see cref="SharedGroupEnvVar"/>, a supplementary group, never <c>--regid</c>); the agent is
+    /// not a member of it, so only the orchestrator, which chooses <c>--regid</c>, can put a process in it.
+    /// </summary>
+    public const string NetworkOpenGroupEnvVar = "ILD_NETWORK_OPEN_GROUP";
 
     /// <summary>
     /// <c>HOME</c> to set for the agent process so it resolves its own CLI config
@@ -182,6 +193,9 @@ public static class AgentIsolation
     /// <summary>The group shared by the orchestrator and the agent, or <c>null</c> when unset. Not the group for <c>--regid</c>.</summary>
     public static string? SharedGroup => NonEmpty(Environment.GetEnvironmentVariable(SharedGroupEnvVar));
 
+    /// <summary>The open group for a network-mode Off launch, or <c>null</c> when the entrypoint did not enable it.</summary>
+    public static string? NetworkOpenGroup => NonEmpty(Environment.GetEnvironmentVariable(NetworkOpenGroupEnvVar));
+
     /// <summary>
     /// The configured agent home, or <c>null</c> when unset. Callers deciding what a
     /// crossing does to <c>HOME</c> want <see cref="ResolveChildHome"/>, not this —
@@ -238,7 +252,18 @@ public static class AgentIsolation
     /// blacklist entries scoped to it apply to this child's connections.
     /// </summary>
     public static ProcessStartInfo Route(ProcessStartInfo psi, Guid? aiProviderId)
-        => Route(psi, AgentUser, AgentGroup, AgentHome, EgressProxyUrl(aiProviderId));
+        => Route(psi, aiProviderId, NetworkMode.Monitor);
+
+    /// <summary>
+    /// <see cref="Route(ProcessStartInfo, Guid?)"/> for the network mode in force at launch
+    /// (<see cref="ResolveLaunchNetwork(NetworkMode, string?, string?, Guid?)"/>). A launch whose mode is unknown passes
+    /// <see cref="NetworkMode.Monitor"/>, the proxied launch every deployment had before Off existed.
+    /// </summary>
+    public static ProcessStartInfo Route(ProcessStartInfo psi, Guid? aiProviderId, NetworkMode mode)
+    {
+        var (proxy, regid) = ResolveLaunchNetwork(mode, Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), NetworkOpenGroup, aiProviderId);
+        return Route(psi, AgentUser, AgentGroup, AgentHome, proxy, regid);
+    }
 
     /// <summary>
     /// Keeps a <c>dotnet build</c> inside a launched process from leaving MSBuild
@@ -263,8 +288,9 @@ public static class AgentIsolation
     /// <paramref name="egressProxy"/> is applied whenever it is set, uid crossing
     /// or not: the funnel is a property of the launch, the firewall behind it of
     /// the uid, and a single-uid deployment still gets the log.
+    /// <paramref name="regidOverride"/> replaces the group for <c>--regid</c> (network mode Off).
     /// </summary>
-    public static ProcessStartInfo Route(ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy = null)
+    public static ProcessStartInfo Route(ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy = null, string? regidOverride = null)
     {
         foreach (var (key, value) in BuildServerEnvironment)
             psi.Environment.TryAdd(key, value);
@@ -278,7 +304,7 @@ public static class AgentIsolation
         var user = NonEmpty(agentUser);
         if (user is null) return psi;
 
-        var group = NonEmpty(agentGroup) ?? user;
+        var group = NonEmpty(regidOverride) ?? NonEmpty(agentGroup) ?? user;
 
         // The agent resolves its login/config state from $HOME. Point it at the
         // agent user's home so it reads the shared credential store through that
@@ -344,6 +370,7 @@ public static class AgentIsolation
         AgentUserEnvVar,
         AgentGroupEnvVar,
         SharedGroupEnvVar,
+        NetworkOpenGroupEnvVar,
         AgentHomeEnvVar,
         ScratchRootEnvVar,
         PrivateRootEnvVar,
@@ -432,7 +459,14 @@ public static class AgentIsolation
 
     /// <inheritdoc cref="Route(ProcessStartInfo, Guid?)"/>
     public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments, Guid? aiProviderId)
-        => RouteCommand(fileName, arguments, AgentUser, AgentGroup, AgentHome, EgressProxyUrl(aiProviderId));
+        => RouteCommand(fileName, arguments, aiProviderId, NetworkMode.Monitor);
+
+    /// <inheritdoc cref="Route(ProcessStartInfo, Guid?, NetworkMode)"/>
+    public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments, Guid? aiProviderId, NetworkMode mode)
+    {
+        var (proxy, regid) = ResolveLaunchNetwork(mode, Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), NetworkOpenGroup, aiProviderId);
+        return RouteCommand(fileName, arguments, AgentUser, AgentGroup, AgentHome, proxy, regid);
+    }
 
     /// <inheritdoc cref="RouteCommand(string, IReadOnlyList{string})"/>
     public static AgentCommand RouteCommand(
@@ -441,7 +475,8 @@ public static class AgentIsolation
         string? agentUser,
         string? agentGroup,
         string? agentHome,
-        string? egressProxy = null)
+        string? egressProxy = null,
+        string? regidOverride = null)
     {
         // The environment overrides travel WITH the command, for the same reason
         // Route applies them to the psi: they are part of the crossing, not extras
@@ -457,7 +492,7 @@ public static class AgentIsolation
         if (user is null)
             return new AgentCommand(fileName, arguments, environment.Count == 0 ? EmptyEnvironment : environment);
 
-        var argv = new List<string>(BuildSetprivArgs(user, NonEmpty(agentGroup) ?? user)) { fileName };
+        var argv = new List<string>(BuildSetprivArgs(user, NonEmpty(regidOverride) ?? NonEmpty(agentGroup) ?? user)) { fileName };
         argv.AddRange(arguments);
 
         // HOME: forgetting it is silent and expensive — the login TUI would write
@@ -477,6 +512,28 @@ public static class AgentIsolation
 
         return new AgentCommand(SetprivCommand, argv, environment);
     }
+
+    /// <summary>
+    /// What a launch in <paramref name="mode"/> is given: the proxy URL for its environment and the group for
+    /// <c>--regid</c> in place of the agent's primary group, each <c>null</c> when the launch gets none. The one
+    /// place that decides it, so every launch path treats a mode the same way.
+    /// <list type="bullet">
+    /// <item>Monitor, Whitelist, Blacklist: the proxy (<see cref="ResolveEgressProxyUrl"/>), the primary group.</item>
+    /// <item>Off: no proxy, and <paramref name="openGroup"/> when the entrypoint enabled it. Without it the
+    /// launch keeps the primary group, which under the firewall has no network.</item>
+    /// </list>
+    /// </summary>
+    public static (string? Proxy, string? Regid) ResolveLaunchNetwork(NetworkMode mode, string? configuredPort, string? openGroup, Guid? aiProviderId)
+        => ResolveLaunchNetwork(mode, ResolveEgressProxyUrl(configuredPort, aiProviderId), openGroup);
+
+    /// <inheritdoc cref="ResolveLaunchNetwork(NetworkMode, string?, string?, Guid?)"/>
+    /// <param name="mode">The mode the launch follows.</param>
+    /// <param name="proxyUrl">The proxy URL the launch would use in a proxied mode, or null for none.</param>
+    /// <param name="openGroup">The open group, or null when Off is not enabled.</param>
+    public static (string? Proxy, string? Regid) ResolveLaunchNetwork(NetworkMode mode, string? proxyUrl, string? openGroup)
+        => mode == NetworkMode.Off
+            ? (null, NonEmpty(openGroup))
+            : (NonEmpty(proxyUrl), null);
 
     /// <summary>
     /// The proxy URL a launch is pointed at, or <c>null</c> when

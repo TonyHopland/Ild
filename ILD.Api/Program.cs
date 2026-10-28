@@ -215,6 +215,10 @@ try
             if (prCommentTemplatesDropped > 0)
                 Log.Information("Dropped the unused PR comment template from {Count} loop node(s)", prCommentTemplatesDropped);
 
+            var networkModesRenamed = await ILD.Data.Migrations.NetworkModeMonitorMigrator.MigrateAsync(dbContext);
+            if (networkModesRenamed > 0)
+                Log.Information("Renamed the stored network mode off to monitor: it logged every connection, and off now means no proxy");
+
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also
             // clears dangling paths whose files a redeploy already wiped.

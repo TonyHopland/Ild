@@ -2,6 +2,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -199,7 +200,8 @@ public sealed class AINodeExecutor : INodeExecutor
                 ManageSession: manageSession,
                 OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid),
                 ForkFromSessionId: forkFromSessionId,
-                Environment: feeds.Environment);
+                Environment: feeds.Environment,
+                NetworkMode: await sp.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken));
             result = await adapter.ExecuteAsync(agentCtx);
         }
         catch (Exception ex)
