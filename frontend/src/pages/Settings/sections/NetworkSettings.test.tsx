@@ -66,6 +66,7 @@ function mockServices(
   status: NetworkStatus = enforced,
   mode = "off",
   forwards: NetworkForward[] = [postgres],
+  internalAllow = "",
 ) {
   routeHubs(signalRHook, { "/hubs/work-item": hub });
   vi.spyOn(services.networkService, "getStatus").mockResolvedValue(status);
@@ -74,7 +75,12 @@ function mockServices(
   vi.spyOn(services.networkService, "getLog").mockResolvedValue([npmLine]);
   vi.spyOn(services.settingsService, "get").mockImplementation(async (key: string) => ({
     key,
-    value: key === services.NetworkSettingKeys.Mode ? mode : "30",
+    value:
+      key === services.NetworkSettingKeys.Mode
+        ? mode
+        : key === services.NetworkSettingKeys.InternalAllow
+          ? internalAllow
+          : "30",
   }));
   vi.spyOn(services.aiProviderService, "getAll").mockResolvedValue([
     { id: "p1", name: "Claude", type: "claude-code" } as any,
@@ -738,5 +744,43 @@ describe("Network settings", () => {
     emit("NetworkPolicyChanged", {});
     await waitFor(() => expect(getEntries).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText("evil.example")).toBeNull());
+  });
+
+  test("shows the stored internal destinations and saves an edit, showing what the server kept", async () => {
+    mockServices(enforced, "off", [postgres], "git.example");
+    const put = vi
+      .spyOn(services.settingsService, "put")
+      .mockResolvedValue({ key: services.NetworkSettingKeys.InternalAllow, value: "git.example\n10.0.0.0/8" });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const box = (await screen.findByLabelText("Internal destinations")) as HTMLTextAreaElement;
+    await waitFor(() => expect(box.value).toBe("git.example"));
+
+    fireEvent.change(box, { target: { value: "git.example\n 10.0.0.0/8 " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        services.NetworkSettingKeys.InternalAllow,
+        "git.example\n 10.0.0.0/8 ",
+      ),
+    );
+    await waitFor(() => expect(box.value).toBe("git.example\n10.0.0.0/8"));
+  });
+
+  test("shows the server's refusal inline and keeps what was typed", async () => {
+    mockServices();
+    vi.spyOn(services.settingsService, "put").mockRejectedValue({
+      status: 400,
+      message: "network.internalAllow: 'git.example:3000' is not a host name",
+    });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const box = (await screen.findByLabelText("Internal destinations")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "git.example:3000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText(/git\.example:3000' is not a host name/);
+    expect(box.value).toBe("git.example:3000");
   });
 });
