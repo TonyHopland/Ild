@@ -16,7 +16,7 @@ namespace ILD.Tests.Integration;
 /// there is nothing on this surface that writes — an agent may not add or remove
 /// a human's files.
 /// </summary>
-public class AgentAttachmentApiTests
+public class AgentAttachmentApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private static async Task<Guid> SeedRepositoryAsync(ApiFactory factory)
     {
@@ -68,7 +68,6 @@ public class AgentAttachmentApiTests
     [Fact]
     public async Task Get_workitem_carries_the_attachment_metadata_and_never_the_bytes()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
         var bytes = Encoding.UTF8.GetBytes("a sketch of the layout");
@@ -90,7 +89,6 @@ public class AgentAttachmentApiTests
     [Fact]
     public async Task An_item_with_no_attachments_reports_an_empty_array_rather_than_nothing()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
 
@@ -104,7 +102,6 @@ public class AgentAttachmentApiTests
     [Fact]
     public async Task An_agent_can_download_an_attachment_it_saw_on_the_work_item()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
         var bytes = AttachmentUpload.Bytes(512);
@@ -122,7 +119,6 @@ public class AgentAttachmentApiTests
     [Fact]
     public async Task The_agent_download_route_is_404_for_an_unknown_item_or_attachment()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
         var real = await UploadAsync(client, id, "real.png", "image/png", AttachmentUpload.Bytes(8));
@@ -140,7 +136,6 @@ public class AgentAttachmentApiTests
     [Fact]
     public async Task The_agent_surface_reads_attachments_and_writes_none()
     {
-        await using var factory = new ApiFactory();
         _ = factory.CreateClient();
 
         var routes = factory.Services.GetRequiredService<EndpointDataSource>().Endpoints

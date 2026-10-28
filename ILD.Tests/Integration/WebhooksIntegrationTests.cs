@@ -4,12 +4,11 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
-public class WebhooksIntegrationTests
+public class WebhooksIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Fact]
     public async Task Forgejo_with_token_but_no_secret_configured_returns_401()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         // No RemoteProvider.WebhookSecret configured -> verifier rejects with 401.
         var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { }, cancellationToken: TestContext.Current.CancellationToken);
@@ -24,7 +23,6 @@ public class WebhooksIntegrationTests
         // session token — so this route asks only for an authenticated caller and
         // leaves the real gate to HMAC. A 403 would mean a working webhook
         // configuration had been broken; the 401 is the signature check refusing.
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
         var agentToken = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", agentToken);
@@ -40,7 +38,6 @@ public class WebhooksIntegrationTests
     [Fact]
     public async Task GitHub_with_token_but_no_secret_configured_returns_401()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/webhooks/github")
         {

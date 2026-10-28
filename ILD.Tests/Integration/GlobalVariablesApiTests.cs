@@ -13,6 +13,7 @@ namespace ILD.Tests.Integration;
 /// user manages (and the agent token may not touch), the length limit setting
 /// that bounds them, and the loop templates that use each one.
 /// </summary>
+// A host per test: global variable names and the length-limit setting are host-wide.
 public class GlobalVariablesApiTests
 {
     private const string Url = "/api/v1/global-variables";

@@ -7,12 +7,11 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
-public class AiProvidersIntegrationTests
+public class AiProvidersIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Fact]
     public async Task Create_with_unsupported_type_returns_400()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.PostAsJsonAsync("/api/v1/aiproviders", new
@@ -30,7 +29,6 @@ public class AiProvidersIntegrationTests
     [Fact]
     public async Task SetDefault_endpoint_promotes_provider_and_demotes_previous_default()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var aResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
@@ -71,7 +69,6 @@ public class AiProvidersIntegrationTests
     [Fact]
     public async Task CustomMcpServers_round_trips_through_create_response_and_update()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         // The raw servers JSON the UI sends via the dedicated, non-secret field.
@@ -119,7 +116,6 @@ public class AiProvidersIntegrationTests
     [Fact]
     public async Task Editing_a_provider_preserves_other_config_keys_the_ui_never_sees()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         // Seed a provider whose config carries a secret (an embedded apiKey the Pi
@@ -169,7 +165,6 @@ public class AiProvidersIntegrationTests
     [Fact]
     public async Task ExtraArgs_round_trips_survives_an_edit_that_omits_it_and_a_blank_value_clears_it()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
         object Body(string? extraArgs) => new
@@ -225,7 +220,6 @@ public class AiProvidersIntegrationTests
     public async Task Create_with_invalid_extraArgs_returns_400_naming_the_problem_and_saves_nothing(
         string type, string extraArgs, string? expected)
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
 
@@ -250,7 +244,6 @@ public class AiProvidersIntegrationTests
     [Fact]
     public async Task Update_with_a_reserved_flag_returns_400_and_keeps_the_saved_value_whether_sent_as_field_or_config()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
         object Body(string? extraArgs, string? config) => new

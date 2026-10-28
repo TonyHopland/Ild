@@ -10,11 +10,12 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ILD.Tests.Integration;
 
-public class RepositoriesIntegrationTests
+public class RepositoriesIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Fact]
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
+        // Own host: it asserts the whole repository list is empty.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/repositories", TestContext.Current.CancellationToken);
@@ -55,7 +56,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Create_accepts_preview_env_but_never_echoes_it_in_plaintext()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
@@ -80,7 +80,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Update_with_blank_preview_env_keeps_the_stored_value()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
@@ -100,7 +99,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Keep_preview_data_is_off_by_default_settable_and_kept_by_a_PUT_that_leaves_it_out()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
         var ct = TestContext.Current.CancellationToken;
@@ -142,7 +140,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Parallelism_is_unlimited_by_default_settable_kept_when_left_out_and_validated()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
         var ct = TestContext.Current.CancellationToken;
@@ -200,7 +197,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task PreviewEnv_endpoint_returns_the_decrypted_text_to_a_signed_in_user()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
@@ -217,7 +213,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task PreviewEnv_endpoint_is_forbidden_to_the_agent_token()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
@@ -238,7 +233,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Delete_preview_env_clears_the_stored_value()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
@@ -254,7 +248,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Update_with_a_new_preview_env_replaces_the_stored_value()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
@@ -282,7 +275,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Test_returns_the_result_as_data_for_a_stored_repository()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         // A blank clone URL answers without running git.
         var (id, _) = await SeedRepositoryAsync(factory, cloneUrl: "");
@@ -318,6 +310,7 @@ public class RepositoriesIntegrationTests
     public async Task Test_probes_the_repository_with_its_stored_provider_credentials()
     {
         var tester = new RecordingConnectionTester();
+        // Own host: it swaps the connection tester for the whole host.
         await using var factory = new ApiFactory(configureServices: services =>
         {
             services.RemoveAll<IConnectionTester>();
@@ -340,7 +333,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Test_rejects_a_malformed_id_and_an_unknown_one()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var malformed = await client.PostAsync("/api/v1/repositories/not-a-guid/test", null, TestContext.Current.CancellationToken);
@@ -353,7 +345,6 @@ public class RepositoriesIntegrationTests
     [Fact]
     public async Task Test_is_for_signed_in_users_only()
     {
-        await using var factory = new ApiFactory();
         var (id, _) = await SeedRepositoryAsync(factory, cloneUrl: "");
 
         var anonymous = await factory.CreateClient().PostAsync($"/api/v1/repositories/{id}/test", null, TestContext.Current.CancellationToken);
@@ -367,6 +358,7 @@ public class RepositoriesIntegrationTests
     public async Task GetAll_pages_repositories_with_the_same_name_in_a_stable_order()
     {
         var sql = new SqlCapture();
+        // Own host: it counts every SQL statement the host runs.
         await using var factory = new ApiFactory(configureServices: sql.Register);
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = Guid.Parse(await SeedProviderAsync(factory));

@@ -3,12 +3,11 @@ using System.Net.Http.Json;
 
 namespace ILD.Tests.Integration;
 
-public class AuthIntegrationTests
+public class AuthIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Fact]
     public async Task Login_with_valid_admin_password_returns_200_and_token()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/v1/auth/login", new
@@ -26,7 +25,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Login_with_wrong_password_returns_401()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/v1/auth/login", new
@@ -41,7 +39,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Me_with_valid_token_returns_200()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken);
@@ -52,7 +49,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Login_reports_when_the_session_expires()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/api/v1/auth/login", new
@@ -69,7 +65,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task A_second_login_leaves_the_first_device_signed_in()
     {
-        await using var factory = new ApiFactory();
         var phone = await factory.CreateAuthenticatedClientAsync();
 
         // The headline bug: this used to overwrite the one session column.
@@ -81,7 +76,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Logout_signs_out_only_the_device_that_called_it()
     {
-        await using var factory = new ApiFactory();
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktop = await factory.CreateAuthenticatedClientAsync();
 
@@ -94,7 +88,6 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Sessions_lists_every_device_without_leaking_a_token()
     {
-        await using var factory = new ApiFactory();
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktopToken = await factory.GetAdminTokenAsync();
 
@@ -113,6 +106,7 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Revoking_a_session_signs_that_device_out()
     {
+        // Own host: the signed-in sessions of the one admin user are host-wide.
         await using var factory = new ApiFactory();
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktop = await factory.CreateAuthenticatedClientAsync();
@@ -130,6 +124,7 @@ public class AuthIntegrationTests
     [Fact]
     public async Task Revoking_others_keeps_the_calling_device_signed_in()
     {
+        // Own host: the signed-in sessions of the one admin user are host-wide.
         await using var factory = new ApiFactory();
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktop = await factory.CreateAuthenticatedClientAsync();
@@ -148,6 +143,7 @@ public class AuthIntegrationTests
     public async Task An_authenticated_request_reads_its_session_once_and_keeps_its_name()
     {
         var sql = new SqlCapture();
+        // Own host: it counts every SQL statement the host runs.
         await using var factory = new ApiFactory(configureServices: sql.Register);
         var client = await factory.CreateAuthenticatedClientAsync();
         int SessionReads() => sql.Commands.Count(c => c.Contains("FROM \"UserSessions\""));

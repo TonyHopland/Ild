@@ -12,7 +12,7 @@ namespace ILD.Tests.Integration;
 /// The chat title surface over HTTP: the two app settings as a fresh install
 /// reports them, clearing the provider tag, and renaming a chat.
 /// </summary>
-public class ChatTitlesApiTests
+public class ChatTitlesApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private static async Task<string> SettingAsync(HttpClient client, string key)
     {
@@ -23,7 +23,6 @@ public class ChatTitlesApiTests
     [Fact]
     public async Task A_fresh_install_reports_smart_titles_off_with_no_tag_and_the_tag_can_be_cleared_again()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var all = await client.GetFromJsonAsync<JsonElement[]>("/api/v1/settings", TestContext.Current.CancellationToken);
@@ -46,7 +45,6 @@ public class ChatTitlesApiTests
     [Fact]
     public async Task A_user_renames_their_own_chat_and_never_another_users()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var mine = Guid.NewGuid();
         var bobs = Guid.NewGuid();

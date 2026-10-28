@@ -19,7 +19,7 @@ namespace ILD.Tests.Integration;
 /// the same filter, and every tag in use. Items are seeded straight into the
 /// WorkItem server so creation times and ids are exact.
 /// </summary>
-public class WorkItemPageApiTests
+public class WorkItemPageApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private static readonly string[] StatusNames =
         ["Backlog", "WorkQueue", "Ready", "Running", "HumanFeedback", "WaitingForIld", "Done"];

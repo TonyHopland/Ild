@@ -13,7 +13,7 @@ namespace ILD.Tests.Integration;
 /// id, the conversation projected from those events, and the
 /// <c>{{Conversation.*}}</c> prompt variables built from that same projection.
 /// </summary>
-public class RunConversationApiTests
+public class RunConversationApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private sealed class Seed
     {
@@ -99,7 +99,6 @@ public class RunConversationApiTests
     [Fact]
     public async Task Events_page_by_event_id_with_the_id_as_cursor()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         Guid runId;
         Guid nodeId, runNodeId;
@@ -155,7 +154,6 @@ public class RunConversationApiTests
     [Fact]
     public async Task The_conversation_of_a_run_written_before_the_new_events_existed_is_its_ai_turns_and_replies_in_write_order()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         Guid runId;
         EventLog implemented, reply, emptyReply, reviewed;
@@ -208,7 +206,6 @@ public class RunConversationApiTests
     [Fact]
     public async Task Run_level_and_park_events_join_the_conversation_as_system_messages_named_for_a_reader()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         Guid runId;
         using (var scope = factory.Services.CreateScope())
@@ -253,7 +250,6 @@ public class RunConversationApiTests
     [Fact]
     public async Task The_conversation_of_an_unknown_run_is_404_and_of_a_malformed_id_400()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var unknown = await client.GetAsync($"/api/v1/loopruns/{Guid.NewGuid()}/conversation", TestContext.Current.CancellationToken);
@@ -276,7 +272,6 @@ public class RunConversationApiTests
     [Fact]
     public async Task The_conversation_reads_on_after_an_event_id_and_reports_the_last_event_it_covered()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         Guid runId, emptyRunId;
         EventLog started, aiStarted, ai, reply, edge;
@@ -326,7 +321,6 @@ public class RunConversationApiTests
     [InlineData("abc")]
     public async Task A_malformed_or_negative_after_is_400(string after)
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         Guid runId;
         using (var scope = factory.Services.CreateScope())

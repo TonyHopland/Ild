@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 namespace ILD.Tests.Integration;
 
 /// <summary>The preferences endpoints through the real pipeline: behind a session, and a round trip.</summary>
+// A host per test: the signed-in user's preferences are host-wide.
 public class PreferencesEndpointTests
 {
     [Fact]

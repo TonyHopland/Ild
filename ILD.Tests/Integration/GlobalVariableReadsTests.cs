@@ -11,7 +11,7 @@ namespace ILD.Tests.Integration;
 /// and parked runs there are: one query for the templates' latest nodes, and one
 /// node read per template version a page of runs shares.
 /// </summary>
-public class GlobalVariableReadsTests
+public class GlobalVariableReadsTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 

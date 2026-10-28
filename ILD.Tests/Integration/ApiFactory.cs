@@ -22,7 +22,7 @@ namespace ILD.Tests.Integration;
 /// (or use it as an <c>IClassFixture</c>) so the database, file system, and
 /// singleton service instances cannot leak between tests.
 /// </summary>
-public sealed class ApiFactory : WebApplicationFactory<Program>
+public class ApiFactory : WebApplicationFactory<Program>
 {
     private readonly SqliteConnection _connection;
     private readonly FakeWorkItemServerHarness _serverHarness;
@@ -214,4 +214,13 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         public AgentAdapterTraits GetTraits(string? providerType)
             => DeclaredTraits.For(providerType);
     }
+}
+
+/// <summary>
+/// The default <see cref="ApiFactory"/> as an <c>IClassFixture</c> type, which xunit only accepts
+/// with a single public constructor. One host serves every test in the class, so a test there
+/// leaves nothing host-wide behind (settings, clock, filesystem root) and reads only its own data.
+/// </summary>
+public sealed class SharedApiFactory : ApiFactory
+{
 }

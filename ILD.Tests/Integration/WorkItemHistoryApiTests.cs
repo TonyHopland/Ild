@@ -26,7 +26,7 @@ namespace ILD.Tests.Integration;
 /// proposal), the user and agent routes that read it, and the MCP tool option
 /// that asks for it.
 /// </summary>
-public class WorkItemHistoryApiTests
+public class WorkItemHistoryApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private const string RunHeader = "X-ILD-Run-Id";
     private const string ChatHeader = "X-ILD-Chat-Session-Id";

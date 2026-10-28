@@ -11,12 +11,11 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
-public class LoopRunsIntegrationTests
+public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Fact]
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -28,7 +27,6 @@ public class LoopRunsIntegrationTests
     [Fact]
     public async Task GetById_for_unknown_id_returns_404()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -200,6 +198,7 @@ public class LoopRunsIntegrationTests
     [MemberData(nameof(NodesUsingThreeGlobals))]
     public async Task A_run_parked_for_missing_globals_names_those_still_missing_now(NodeType type, string config)
     {
+        // Own host: global variable names are host-wide.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
@@ -279,7 +278,6 @@ public class LoopRunsIntegrationTests
     public async Task GetById_says_why_ILD_could_not_merge_an_AutoMerge_pull_request()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var failed = SeedRun(factory, LoopRunStatus.WaitingHuman, branch: "feature/automerge-failed");
         var plain = SeedRun(factory, LoopRunStatus.WaitingHuman, branch: "feature/not-automerge");
@@ -304,6 +302,7 @@ public class LoopRunsIntegrationTests
     {
         var ct = TestContext.Current.CancellationToken;
         var sql = new SnapshotSqlRecorder();
+        // Own host: it records every SQL statement the host runs.
         await using var factory = new ApiFactory(configureServices: services =>
         {
             services.RemoveHostedService<ILD.Core.Services.Implementations.SessionSnapshotMigrationService>();

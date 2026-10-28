@@ -19,7 +19,7 @@ namespace ILD.Tests.Integration;
 /// ild-loop-template/v2 document, the run list filtered by date and template,
 /// and one run's path, feedback and review comments as a bounded summary.
 /// </summary>
-public class AgentRetroReadApiTests
+public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -28,6 +28,7 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task Template_analytics_equal_the_dashboard_overview_and_add_per_node_figures_from_live_runs()
     {
+        // Own host: it asserts run and template analytics over every run on the host.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
@@ -134,7 +135,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task A_malformed_filter_is_a_400_and_the_analytics_error_names_the_parameter()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         foreach (var (query, parameter) in new[] { ("from=2026-02-30", "from"), ("to=last-week", "to"), ("to=06/01/2026", "to"), ("templateId=retro", "templateId") })
@@ -159,6 +159,7 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task ListLoopRuns_filters_by_start_day_template_and_work_item_newest_first_with_template_version()
     {
+        // Own host: it asserts run and template analytics over every run on the host.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
@@ -218,7 +219,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task GetLoopTemplate_returns_a_saved_version_as_a_v2_document_by_name_or_id()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var name = $"Team/Retro loop {Guid.NewGuid():N}";
 
@@ -267,7 +267,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task GetLoopTemplate_finds_archived_templates_by_name_and_refuses_an_ambiguous_name()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var archivedName = $"Old retro {Guid.NewGuid():N}";
         var twinName = $"Twin {Guid.NewGuid():N}";
@@ -301,7 +300,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task GetLoopTemplate_matches_a_name_ignoring_case_beyond_ascii_and_any_surrounding_whitespace()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         Guid umlaut, accented;
@@ -363,7 +361,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task GetLoopTemplate_document_is_accepted_unchanged_by_update_current_loop()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         Guid templateId;
@@ -396,7 +393,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task GetLoopRun_reports_the_path_feedback_counters_and_pr_review_as_a_bounded_summary()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var t0 = At(6, 1, 10);
@@ -573,7 +569,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task GetLoopRun_reports_a_pr_without_a_snapshot_and_no_pr_without_a_url()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         Guid merged, noPr;
@@ -606,7 +601,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task GetLoopRun_credits_the_last_visit_with_the_edge_the_run_followed_toward_its_current_node()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var t0 = At(6, 2, 10);
@@ -697,7 +691,6 @@ public class AgentRetroReadApiTests
     [Fact]
     public async Task GetLoopRun_rejects_a_malformed_id_and_reports_an_unknown_run()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/api/v1/agent/loop-runs/not-a-guid", Ct)).StatusCode);
