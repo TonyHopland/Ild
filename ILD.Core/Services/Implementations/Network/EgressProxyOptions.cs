@@ -10,7 +10,7 @@ namespace ILD.Core.Services.Implementations.Network;
 /// and the port a launch's <c>HTTP_PROXY</c> names cannot drift. Unset means no
 /// proxy: nothing listens and no launch is pointed anywhere.
 /// </summary>
-public sealed record EgressProxyOptions(bool Enabled, int Port)
+public sealed record EgressProxyOptions(bool Enabled, int Port, (string Host, int Port)? ApiEndpoint = null)
 {
     public static readonly IPAddress ListenAddress = IPAddress.Loopback;
 
@@ -25,7 +25,19 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
     public const string ScopeUser = "provider";
 
     public static EgressProxyOptions FromEnvironment()
-        => Parse(Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar));
+        => Parse(Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar)) with
+        {
+            ApiEndpoint = ReadApiEndpoint(Environment.GetEnvironmentVariable("ILD_API_URL")),
+        };
+
+    /// <summary>
+    /// The host and port of <c>ILD_API_URL</c>, the one private destination the
+    /// proxy reaches without an allow entry: the orchestrator's own API.
+    /// </summary>
+    private static (string Host, int Port)? ReadApiEndpoint(string? apiUrl)
+        => Uri.TryCreate(apiUrl?.Trim(), UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
+            ? (EgressRules.NormalizeHost(uri.Host), uri.Port)
+            : null;
 
     public static EgressProxyOptions Parse(string? configuredPort)
         => int.TryParse(configuredPort?.Trim(), out var port) && port > 0 && port <= 65535
