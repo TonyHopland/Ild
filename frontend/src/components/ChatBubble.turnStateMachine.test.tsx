@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
-import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
-import { openChatFromList, type ChatHubEvents } from "../test-support";
+import { screen, fireEvent, waitFor, act } from "@testing-library/react";
+import type { ChatMessage, ChatSession } from "../types";
+import {
+  chatBubbleTree,
+  chatSummary,
+  emitChatEvent as emit,
+  openChatFromList,
+  openChatPanel,
+  renderChatBubble,
+  signalRHub,
+  stubChatServices,
+} from "../test-support";
 
 // One table over the whole turn lifecycle. Every case is a sequence of the things
 // that can happen to a chat — a send, the server announcing a turn, streamed text,
@@ -15,52 +23,11 @@ import { openChatFromList, type ChatHubEvents } from "../test-support";
 // No single event is required for any of it: a lost start, a lost completion and a
 // dropped connection all appear below, and the view still has to end up matching
 // the server.
-const {
-  handlers,
-  invoke,
-  connection,
-  chatService,
-  aiProviderService,
-  workItemService,
-  getOpenLoopDocument,
-} = vi.hoisted(() => ({
-  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-  invoke: vi.fn(() => Promise.resolve()),
-  connection: { state: "connected" as string },
-  chatService: {
-    listHistory: vi.fn(),
-    getById: vi.fn(),
-    start: vi.fn(),
-    sendMessage: vi.fn(),
-    interrupt: vi.fn(),
-    deleteOne: vi.fn(),
-    deleteMany: vi.fn(),
-  },
-  aiProviderService: { getAll: vi.fn() },
-  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
-  getOpenLoopDocument: vi.fn(),
-}));
-
-vi.mock("../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: connection.state,
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event] = handler;
-    },
-    off: (event: string) => {
-      delete handlers[event];
-    },
-    invoke,
-  }),
-}));
-
-vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
-vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
+vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
+vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
-import ChatBubble from "./ChatBubble";
-import { ChatInboxProvider } from "./ChatInbox";
-import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
+const { chatService, aiProviderService } = stubChatServices();
 
 const CHAT = "s1";
 
@@ -88,10 +55,6 @@ function msg(id: string, content: string, interrupted = false): ChatMessage {
   };
 }
 
-function summary(): ChatSessionSummary {
-  return { id: CHAT, name: "Past chat", createdAt: "2026-01-01T00:00:00Z", updatedAt: null };
-}
-
 /** What the server would answer a state read with, until a step changes it. */
 let serverTurn: string | null = null;
 /** Whether the next state read answers straight away or hangs, to be answered late. */
@@ -112,6 +75,8 @@ type Step =
   | { append: string; text: string; interrupted?: boolean }
   /** The server reports that `turn` has ended. */
   | { complete: string }
+  /** Another chat's streamed text, finalized reply and completion, all under `turn`: none of it is this chat's. */
+  | { elsewhere: string }
   /** The turn ends server-side and the client is never told — a dropped broadcast. */
   | { serverEnds: true }
   /** The user presses stop; the server reports the chat idle afterwards. */
@@ -130,11 +95,14 @@ type Step =
 /** Any step may pin what the view must show the moment it has been played. */
 type Expected = "working" | "idle";
 
+/** What the working indicator says while the chat is working. */
+type Reads = "Thinking" | "Responding";
+
 interface Case {
   name: string;
   /** The turn the chat is running when it is opened, if any. */
   resumeWith?: string | null;
-  steps: (Step & { shows?: Expected })[];
+  steps: (Step & { shows?: Expected; reads?: Reads })[];
   /** What the view must show once every step has been played. */
   ends: "working" | "idle";
 }
@@ -148,6 +116,22 @@ const CASES: Case[] = [
   {
     name: "a turn still streaming keeps the controls",
     steps: [{ send: "t1" }, { start: "t1" }, { progress: "t1", text: "hi" }],
+    ends: "working",
+  },
+  {
+    name: "the indicator reads Thinking until text streams, then Responding, until the turn ends",
+    steps: [
+      { send: "t1", reads: "Thinking" },
+      { start: "t1", reads: "Thinking" },
+      { progress: "t1", text: "half an ans", reads: "Responding" },
+      { append: "t1", text: "half an answer", reads: "Thinking" },
+      { complete: "t1", shows: "idle" },
+    ],
+    ends: "idle",
+  },
+  {
+    name: "another chat's text, reply and completion never touch the working one",
+    steps: [{ send: "t1" }, { start: "t1" }, { elsewhere: "t1", shows: "working" }],
     ends: "working",
   },
   {
@@ -280,12 +264,6 @@ const REPLACED_TURN_COMPLETION: Case = {
   ends: "working",
 };
 
-function emit<E extends keyof ChatHubEvents>(event: E, payload: ChatHubEvents[E]) {
-  act(() => {
-    handlers[event]?.({ payload });
-  });
-}
-
 /** Stop button and working indicator, which must always agree with each other. */
 function shown() {
   const stop = screen.queryByLabelText("Stop") !== null;
@@ -295,10 +273,8 @@ function shown() {
 }
 
 afterEach(() => {
-  cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   vi.clearAllMocks();
-  connection.state = "connected";
   serverTurn = null;
   nextRead = "answers";
   heldRead = null;
@@ -308,9 +284,11 @@ afterEach(() => {
 
 describe("ChatBubble turn state machine", () => {
   async function runCase({ resumeWith, steps, ends }: Case) {
-    chatService.listHistory.mockResolvedValue([summary()]);
+    chatService.listHistory.mockResolvedValue([
+      chatSummary(CHAT, "Past chat", { updatedAt: null }),
+    ]);
     aiProviderService.getAll.mockResolvedValue([]);
-    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.sendMessage.mockResolvedValue(null);
     chatService.interrupt.mockResolvedValue(undefined);
     // Every read answers with whatever the server would say at that moment, unless
     // a step is deliberately holding one open.
@@ -325,15 +303,8 @@ describe("ChatBubble turn state machine", () => {
     });
 
     serverTurn = resumeWith ?? null;
-    const view = render(
-      <MemoryRouter initialEntries={["/"]}>
-        <ChatInboxProvider>
-          <ChatBubble />
-        </ChatInboxProvider>
-      </MemoryRouter>,
-      { wrapper: WorkItemHubProvider },
-    );
-    fireEvent.click(await screen.findByLabelText("Open chat"));
+    const view = await renderChatBubble();
+    await openChatPanel();
     await openChatFromList("Past chat");
     await screen.findByLabelText("Chat message");
     await waitFor(() => expect(chatService.getById).toHaveBeenCalled());
@@ -348,8 +319,8 @@ describe("ChatBubble turn state machine", () => {
         // The request hangs: the message is on its way and the server has not
         // registered its turn yet, which is the window everything else lands in.
         chatService.sendMessage.mockReturnValue(
-          new Promise<void>((resolve, reject) => {
-            heldSend = { accept: resolve, reject, turn: step.sendPending };
+          new Promise<string | null>((resolve, reject) => {
+            heldSend = { accept: () => resolve(null), reject, turn: step.sendPending };
           }),
         );
         const input = screen.getByLabelText("Chat message");
@@ -370,7 +341,7 @@ describe("ChatBubble turn state machine", () => {
           else held.reject(new Error("Network error."));
         });
         await act(async () => {});
-        chatService.sendMessage.mockResolvedValue(undefined);
+        chatService.sendMessage.mockResolvedValue(null);
         continue;
       }
 
@@ -385,6 +356,7 @@ describe("ChatBubble turn state machine", () => {
         });
         // A send always leaves the chat working: it has been accepted.
         expect(shown(), where).toBe("working");
+        if (step.reads) expect(screen.getByRole("status").textContent, where).toContain(step.reads);
         continue;
       }
 
@@ -412,6 +384,24 @@ describe("ChatBubble turn state machine", () => {
           turnId: step.complete,
           interrupted: false,
         });
+      } else if ("elsewhere" in step) {
+        emit("ChatTurnProgress", {
+          chatSessionId: "s2",
+          turnId: step.elsewhere,
+          delta: "not mine",
+        });
+        emit("ChatMessageAppended", {
+          chatSessionId: "s2",
+          turnId: step.elsewhere,
+          message: msg(`z${i}`, "someone else's reply"),
+        });
+        emit("ChatTurnCompleted", {
+          chatSessionId: "s2",
+          turnId: step.elsewhere,
+          interrupted: false,
+        });
+        expect(screen.queryByText("not mine"), where).toBeNull();
+        expect(screen.queryByText("someone else's reply"), where).toBeNull();
       } else if ("serverEnds" in step) {
         // Nothing is emitted: the turn is over and the client has no way to know
         // until it next asks.
@@ -421,18 +411,12 @@ describe("ChatBubble turn state machine", () => {
         await act(async () => {
           fireEvent.click(screen.getByLabelText("Stop"));
         });
+        expect(chatService.interrupt, where).toHaveBeenCalledWith(CHAT);
       } else if ("reconnect" in step) {
-        for (const state of ["reconnecting", "connected"]) {
-          connection.state = state;
-          act(() => {
-            view.rerender(
-              <MemoryRouter initialEntries={["/"]}>
-                <ChatInboxProvider>
-                  <ChatBubble />
-                </ChatInboxProvider>
-              </MemoryRouter>,
-            );
-          });
+        for (const state of ["reconnecting", "connected"] as const) {
+          signalRHub.setState(state);
+          const tree = await chatBubbleTree();
+          act(() => view.rerender(tree));
         }
         await act(async () => {});
       } else if ("holdRead" in step) {
@@ -451,6 +435,7 @@ describe("ChatBubble turn state machine", () => {
       // where the case pins a state for this point, they show it.
       const state = shown();
       if (step.shows) expect(state, where).toBe(step.shows);
+      if (step.reads) expect(screen.getByRole("status").textContent, where).toContain(step.reads);
     }
 
     await waitFor(() => expect(shown()).toBe(ends));

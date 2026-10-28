@@ -1,43 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import type { User } from "../../types";
-import { openChatList } from "../../test-support";
+import { emitHubEvent, openChatList, signalRHub } from "../../test-support";
 
-const { handlers, authService } = vi.hoisted(() => ({
-  // Every handler registered for an event, across every mounted hub connection.
-  handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
-  authService: {
-    getUser: vi.fn(),
-    getToken: vi.fn(() => "test-token"),
-    getMe: vi.fn(),
-    clearAuth: vi.fn(),
-    logout: vi.fn(() => Promise.resolve()),
-    onTokenChange: vi.fn(() => () => {}),
-  },
-}));
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
 
-vi.mock("../../hooks/useSignalR", () => {
-  const on = (event: string, handler: (msg: { payload: unknown }) => void) => {
-    (handlers[event] ??= new Set()).add(handler);
-  };
-  const off = (event: string, handler: (msg: { payload: unknown }) => void) => {
-    handlers[event]?.delete(handler);
-  };
-  return {
-    useSignalR: () => ({ connectionState: "connected", on, off, invoke: () => Promise.resolve() }),
-  };
-});
-
-vi.mock("../../services/auth", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../services/auth")>()),
-  authService,
-}));
-
-import App from "../../App";
+import Chat from ".";
+import Schedules from "./Schedules";
 import ChatBubble from "../../components/ChatBubble";
 import { ChatInboxProvider } from "../../components/ChatInbox";
 import { AuthContext } from "../../hooks/useAuth";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
 const user: User = { id: "1", username: "test", createdAt: "" };
 
@@ -215,8 +191,6 @@ function seed() {
 }
 
 beforeEach(() => {
-  authService.getUser.mockReturnValue(user);
-  authService.getMe.mockResolvedValue(user);
   localStorage.setItem("auth_token", "test-token");
   vi.stubGlobal(
     "fetch",
@@ -233,7 +207,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   schedules = [];
   history = [];
   paused = false;
@@ -247,18 +221,53 @@ afterEach(() => {
     vi.fn(() => Promise.reject(new Error("offline"))),
   );
   localStorage.clear();
-  window.history.replaceState(null, "", "/");
 });
 
-function emit(event: string, payload: unknown) {
-  act(() => {
-    for (const handler of Array.from(handlers[event] ?? [])) handler({ payload });
-  });
+const emit = emitHubEvent;
+
+const auth = {
+  user,
+  token: "test-token",
+  isAuthenticated: true,
+  isLoading: false,
+  login: vi.fn(),
+  logout: vi.fn(),
+};
+
+function LocationProbe() {
+  return <p data-testid="location">{useLocation().pathname}</p>;
 }
 
-function renderAt(path: string) {
-  window.history.replaceState(null, "", path);
-  return render(<App />);
+function currentPath() {
+  return screen.getByTestId("location").textContent;
+}
+
+/** The Chat tab at `path`: the chat list beside the open chat or the schedules. */
+function renderChatPage(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <AuthContext.Provider value={auth}>
+        <ChatInboxProvider>
+          <Routes>
+            <Route path="/chat" element={<Chat />} />
+            <Route path="/chat/schedules" element={<Chat view="schedules" />} />
+            <Route path="/chat/:chatId" element={<Chat />} />
+          </Routes>
+          <LocationProbe />
+        </ChatInboxProvider>
+      </AuthContext.Provider>
+    </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
+  );
+}
+
+function renderSchedules() {
+  return render(
+    <MemoryRouter>
+      <Schedules />
+    </MemoryRouter>,
+    { wrapper: WorkItemHubProvider },
+  );
 }
 
 function pageSidebar() {
@@ -324,11 +333,11 @@ function lastRequest(method: string, path: string) {
 describe("The schedules list in the Chat tab", () => {
   test("/chat/schedules keeps the Chat tab's chat list beside the schedules, opens no chat and shows no bubble", async () => {
     seed();
-    renderAt("/chat/schedules");
+    renderChatPage("/chat/schedules");
 
     await scheduleRow("Weekly retro");
     await scheduleRow("Dependency check");
-    expect(window.location.pathname).toBe("/chat/schedules");
+    expect(currentPath()).toBe("/chat/schedules");
     expect(within(pageSidebar()).getByText("Retro chat")).toBeTruthy();
     expect(screen.queryByText(/chat not found/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "Open chat" })).toBeNull();
@@ -337,7 +346,7 @@ describe("The schedules list in the Chat tab", () => {
 
   test("the chat list's Schedules entry leads from a chat to the list", async () => {
     seed();
-    renderAt("/chat/c2");
+    renderChatPage("/chat/c2");
 
     const entry = await within(
       await screen.findByRole("complementary", { name: "Chats" }),
@@ -346,7 +355,7 @@ describe("The schedules list in the Chat tab", () => {
     fireEvent.click(entry);
 
     await scheduleRow("Weekly retro");
-    expect(window.location.pathname).toBe("/chat/schedules");
+    expect(currentPath()).toBe("/chat/schedules");
     expect(
       within(pageSidebar()).getByRole("link", { name: "Schedules" }).getAttribute("href"),
     ).toBe("/chat/schedules");
@@ -354,7 +363,7 @@ describe("The schedules list in the Chat tab", () => {
 
   test("each row shows what the schedule is, how it last went and where its chat is", async () => {
     seed();
-    renderAt("/chat/schedules");
+    renderSchedules();
 
     const retro = await scheduleRow("Weekly retro");
     expect(retro.textContent).toContain("nightly");
@@ -382,7 +391,7 @@ describe("The schedules list in the Chat tab", () => {
 
   test("the enabled toggle saves the schedule and Run now fires it", async () => {
     seed();
-    renderAt("/chat/schedules");
+    renderSchedules();
 
     fireEvent.click(toggleIn(await scheduleRow("Weekly retro")));
     await waitFor(() => expect(lastRequest("PUT", "/api/v1/chat/schedules/s1")).toBeTruthy());
@@ -408,7 +417,7 @@ describe("The schedules list in the Chat tab", () => {
   test("says while the scheduler is paused, and stops saying it the moment it resumes", async () => {
     seed();
     paused = true;
-    renderAt("/chat/schedules");
+    renderSchedules();
 
     await scheduleRow("Weekly retro");
     await waitFor(() => expect(pausedNotices().length).toBeGreaterThan(0));
@@ -424,22 +433,19 @@ describe("The schedules list in the Chat tab", () => {
 
   test("leaving the page takes its scheduler listener off the shared hub", async () => {
     seed();
-    renderAt("/chat/schedules");
+    const page = renderSchedules();
     await scheduleRow("Weekly retro");
-    const listeners = () => handlers["SchedulerStateChanged"]?.size ?? 0;
+    const listeners = () => signalRHub.handlers["SchedulerStateChanged"]?.size ?? 0;
     const onPage = listeners();
 
-    act(() => {
-      window.history.pushState(null, "", "/repositories");
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    });
+    page.unmount();
 
-    await waitFor(() => expect(listeners()).toBe(onPage - 1));
+    expect(listeners()).toBe(onPage - 1);
   });
 
   test("a change announced on the chat hub is read back into the list", async () => {
     seed();
-    renderAt("/chat/schedules");
+    renderSchedules();
     await scheduleRow("Weekly retro");
 
     schedules = [
@@ -464,7 +470,7 @@ describe("The schedules list in the Chat tab", () => {
       timeZone: "America/New_York",
     });
     nextCreate = [{ status: 400, body: { error: "That cron never fires." } }];
-    renderAt("/chat/schedules");
+    renderSchedules();
     await scheduleRow("Weekly retro");
 
     fireEvent.click(
@@ -503,7 +509,7 @@ describe("The schedules list in the Chat tab", () => {
 
   test("a schedule is edited in the form and deleted only once confirmed", async () => {
     seed();
-    renderAt("/chat/schedules");
+    renderSchedules();
 
     fireEvent.click(
       within(await scheduleRow("Weekly retro")).getByRole("button", { name: /edit/i }),
@@ -537,7 +543,7 @@ describe("The schedules list in the Chat tab", () => {
 describe("Scheduled chats in the chat lists", () => {
   test("the Chat tab marks a scheduled chat, naming its schedule on hover", async () => {
     seed();
-    renderAt("/chat/c2");
+    renderChatPage("/chat/c2");
 
     const sidebar = await screen.findByRole("complementary", { name: "Chats" });
     const scheduled = (await within(sidebar).findByText("Retro chat")).closest("li") as HTMLElement;
@@ -548,14 +554,6 @@ describe("Scheduled chats in the chat lists", () => {
 
   test("the bubble gets no Schedules entry, no schedule controls and no marks", async () => {
     seed();
-    const auth = {
-      user,
-      token: "test-token",
-      isAuthenticated: true,
-      isLoading: false,
-      login: vi.fn(),
-      logout: vi.fn(),
-    };
     render(
       <MemoryRouter initialEntries={["/taskboard"]}>
         <AuthContext.Provider value={auth}>

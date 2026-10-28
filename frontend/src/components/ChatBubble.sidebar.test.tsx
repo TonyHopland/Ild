@@ -1,194 +1,45 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, waitFor, act, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
-import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { cleanup, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
+import type { ChatMessage } from "../types";
 import {
   PANEL_POSITION_KEY,
   PANEL_SIZE_KEY,
   SIDEBAR_OPEN_KEY,
   saveSidebarOpen,
 } from "./chatPlacement";
+import {
+  chatMessage,
+  chatServer,
+  chatSession,
+  chatSummary,
+  deferred,
+  emitHubEvent,
+  openChatPanel,
+  renderChatBubble,
+  settle,
+  showChatActions,
+  signalRHub,
+  stubChatServices,
+} from "../test-support";
+import { setPreference, getPreference, seedPreferences } from "../utils/userPreferences";
 
-const {
-  handlers,
-  connection,
-  invoke,
-  chatService,
-  aiProviderService,
-  workItemService,
-  getOpenLoopDocument,
-  setCurrentChatSessionId,
-} = vi.hoisted(() => ({
-  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-  connection: {
-    state: "connected" as "disconnected" | "connecting" | "connected" | "reconnecting",
-  },
-  invoke: vi.fn((..._args: unknown[]) => Promise.resolve()),
-  chatService: {
-    listHistory: vi.fn(),
-    getById: vi.fn(),
-    start: vi.fn(),
-    sendMessage: vi.fn(),
-    interrupt: vi.fn(),
-    deleteOne: vi.fn(),
-    deleteMany: vi.fn(),
-    markRead: vi.fn(),
-    rename: vi.fn(),
-    setFavorite: vi.fn(),
-    searchChats: vi.fn(),
-  },
-  aiProviderService: { getAll: vi.fn(() => Promise.resolve([])) },
-  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
-  getOpenLoopDocument: vi.fn(),
-  setCurrentChatSessionId: vi.fn(),
-}));
+const { setCurrentChatSessionId } = vi.hoisted(() => ({ setCurrentChatSessionId: vi.fn() }));
 
-vi.mock("../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: connection.state,
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event] = handler;
-    },
-    off: (event: string) => {
-      delete handlers[event];
-    },
-    invoke,
-  }),
-}));
-
-vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
-vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
+vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
+vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
-import ChatBubble from "./ChatBubble";
-import { ChatInboxProvider } from "./ChatInbox";
-import { showChatActions } from "../test-support";
-import { setPreference, getPreference, seedPreferences } from "../utils/userPreferences";
-import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
-
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason: unknown) => void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-// A stand-in for the server: what GET /chat/history answers right now (in its
-// last-activity order), and the writes that change it. A test can hold history
-// reads and answer them later with a snapshot of its choosing.
-let server: ChatSessionSummary[] = [];
-let heldReads: Deferred<ChatSessionSummary[]>[] = [];
-let readsToHold = 0;
-let searches: { q: string; answer: Deferred<string[]> }[] = [];
-const sessions: Record<string, ChatSession> = {};
-
-function summary(
-  id: string,
-  name: string | null,
-  extra: Partial<ChatSessionSummary> = {},
-): ChatSessionSummary {
-  return {
-    id,
-    name,
-    createdAt: "2026-01-01T00:00:00Z",
-    updatedAt: "2026-01-02T00:00:00Z",
-    hasUnread: false,
-    ...extra,
-  };
-}
+const services = stubChatServices();
+const { chatService } = services;
+const server = chatServer(services);
 
 function msg(chat: string, sequence: number, role: "user" | "assistant"): ChatMessage {
-  return {
-    id: `${chat}-${sequence}`,
-    role,
-    content: `${role} message ${sequence} of ${chat}`,
-    interrupted: false,
-    sequence,
-    createdAt: "2026-01-01T00:00:00Z",
-  };
+  return chatMessage(chat, sequence, role, `${role} message ${sequence} of ${chat}`);
 }
-
-function chat(id: string, name: string, messages: ChatMessage[]): ChatSession {
-  return {
-    id,
-    name,
-    aiProviderId: "p1",
-    providerType: "claude-code",
-    tools: ["ild"],
-    createdAt: "2026-01-01T00:00:00Z",
-    messages,
-    activeTurnId: null,
-  };
-}
-
-function holdHistoryReads(count: number) {
-  readsToHold += count;
-}
-
-function setUnread(id: string, hasUnread: boolean) {
-  server = server.map((c) => (c.id === id ? { ...c, hasUnread } : c));
-}
-
-beforeEach(() => {
-  chatService.listHistory.mockImplementation(() => {
-    if (readsToHold > 0) {
-      readsToHold -= 1;
-      const held = deferred<ChatSessionSummary[]>();
-      heldReads.push(held);
-      return held.promise;
-    }
-    return Promise.resolve(server.map((c) => ({ ...c })));
-  });
-  chatService.getById.mockImplementation((id: string) => Promise.resolve(sessions[id]));
-  chatService.markRead.mockImplementation((id: string) => {
-    setUnread(id, false);
-    return Promise.resolve();
-  });
-  chatService.deleteOne.mockImplementation((id: string) => {
-    server = server.filter((c) => c.id !== id);
-    return Promise.resolve();
-  });
-  chatService.deleteMany.mockImplementation((ids: string[]) => {
-    server = server.filter((c) => !ids.includes(c.id));
-    return Promise.resolve();
-  });
-  chatService.rename.mockImplementation((id: string, name: string) => {
-    server = server.map((c) => (c.id === id ? { ...c, name } : c));
-    return Promise.resolve();
-  });
-  chatService.setFavorite.mockImplementation((id: string, favorite: boolean) => {
-    server = server.map((c) => (c.id === id ? { ...c, isFavorite: favorite } : c));
-    return Promise.resolve();
-  });
-  chatService.searchChats.mockImplementation((q: string) => {
-    const answer = deferred<string[]>();
-    searches.push({ q, answer });
-    return answer.promise;
-  });
-  chatService.sendMessage.mockResolvedValue("t1");
-});
 
 afterEach(() => {
   vi.useRealTimers();
-  cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
-  for (const k of Object.keys(sessions)) delete sessions[k];
-  connection.state = "connected";
-  server = [];
-  heldReads = [];
-  readsToHold = 0;
-  searches = [];
-  vi.clearAllMocks();
-  localStorage.clear();
+  server.reset();
   window.innerWidth = 1024;
   window.innerHeight = 768;
 });
@@ -199,22 +50,6 @@ function widePanel() {
 }
 // Without a stored size the panel takes its 384px default: narrow.
 
-function bubble() {
-  return (
-    <MemoryRouter initialEntries={["/"]}>
-      <ChatInboxProvider>
-        <ChatBubble />
-      </ChatInboxProvider>
-    </MemoryRouter>
-  );
-}
-
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-}
-
 /** Lets answered promises reach the view without running any timer (fake timers safe). */
 async function flush() {
   await act(async () => {
@@ -223,7 +58,7 @@ async function flush() {
 }
 
 async function openPanel() {
-  fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+  await openChatPanel();
   await waitFor(() => expect(screen.queryByText("Loading…")).toBeNull());
 }
 
@@ -284,23 +119,19 @@ function resizeWindow(width: number) {
 }
 
 function emitAppended(chatSessionId: string, message: ChatMessage) {
-  act(() => {
-    handlers.ChatMessageAppended?.({ payload: { chatSessionId, turnId: "t1", message } });
-  });
+  emitHubEvent("ChatMessageAppended", { chatSessionId, turnId: "t1", message });
 }
 
 function emitUnreadChanged(chatSessionId: string) {
-  act(() => {
-    handlers.ChatUnreadChanged?.({ payload: { chatSessionId } });
-  });
+  emitHubEvent("ChatUnreadChanged", { chatSessionId });
 }
 
 describe("chat sidebar layout", () => {
   test("wide: the list sits beside a usable chat, the toggle hides it completely, and no Back button remains", async () => {
     widePanel();
-    server = [summary("a", "Alpha"), summary("b", "Beta")];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
+    await renderChatBubble();
     await openPanel();
 
     // Open by default on a wide panel, beside the start form.
@@ -320,9 +151,7 @@ describe("chat sidebar layout", () => {
       expect(chatService.sendMessage).toHaveBeenCalledWith("a", "hello", null, null),
     );
     await settle();
-    act(() => {
-      handlers.ChatTurnStarted?.({ payload: { chatSessionId: "a", turnId: "t1" } });
-    });
+    emitHubEvent("ChatTurnStarted", { chatSessionId: "a", turnId: "t1" });
     expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
 
     fireEvent.click(toggle());
@@ -341,9 +170,9 @@ describe("chat sidebar layout", () => {
   });
 
   test("narrow: the open list fills the panel; a row or New chat closes it and shows that chat or the start form", async () => {
-    server = [summary("a", "Alpha"), summary("b", "Beta")];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
+    await renderChatBubble();
     await openPanel();
 
     // Closed by default on a narrow panel: the start form is shown, no list.
@@ -371,13 +200,13 @@ describe("chat sidebar layout", () => {
     expect(querySidebar()).toBeNull();
     expect(screen.queryByLabelText("Chat message")).toBeNull();
     expect(setCurrentChatSessionId).toHaveBeenLastCalledWith(null);
-    expect(invoke).toHaveBeenCalledWith("UnsubscribeFromChat", "a");
+    expect(signalRHub.invoke).toHaveBeenCalledWith("UnsubscribeFromChat", "a");
     expect(chatService.deleteOne).not.toHaveBeenCalled();
     expect(chatService.deleteMany).not.toHaveBeenCalled();
   });
 
   test("pressing and dragging the toggle does not move the panel", async () => {
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    await renderChatBubble();
     await openPanel();
     const panel = screen.getByRole("dialog", { name: "AI chat" });
     const left = panel.style.left;
@@ -414,8 +243,8 @@ describe("chat sidebar layout", () => {
   test.each(DEFAULT_CASES)("initial state: $name", async ({ wide, stored, open }) => {
     if (wide) widePanel();
     stored();
-    server = [summary("a", "Alpha")];
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha")];
+    await renderChatBubble();
     await openPanel();
     expect(toggle().getAttribute("aria-expanded")).toBe(String(open));
     expect(querySidebar() !== null).toBe(open);
@@ -423,15 +252,15 @@ describe("chat sidebar layout", () => {
 
   test("the open/closed state survives a reload, including the narrow auto-close", async () => {
     widePanel();
-    server = [summary("a", "Alpha")];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha")];
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
+    await renderChatBubble();
     await openPanel();
     fireEvent.click(toggle());
     expect(querySidebar()).toBeNull();
 
     cleanup();
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    await renderChatBubble();
     await openPanel();
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
     expect(querySidebar()).toBeNull();
@@ -441,32 +270,30 @@ describe("chat sidebar layout", () => {
     // Back to the default (narrow) panel size.
     seedPreferences();
     saveSidebarOpen(true);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    await renderChatBubble();
     await openPanel();
     expect(querySidebar()).not.toBeNull();
     await pick("Alpha");
     expect(querySidebar()).toBeNull();
 
     cleanup();
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    await renderChatBubble();
     await openPanel();
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
 
   test("resizing across the breakpoint switches presentation and keeps the open chat, its turn and the typed draft", async () => {
     widePanel();
-    server = [summary("a", "Alpha"), summary("b", "Beta")];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
+    await renderChatBubble();
     await openPanel();
     await pick("Alpha");
     // The open reads the chat, and its join reads it again; neither is a reload.
     await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(2));
     await settle();
     const reads = chatService.getById.mock.calls.length;
-    act(() => {
-      handlers.ChatTurnStarted?.({ payload: { chatSessionId: "a", turnId: "t9" } });
-    });
+    emitHubEvent("ChatTurnStarted", { chatSessionId: "a", turnId: "t9" });
     fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "half typed" } });
 
     // The window shrinks, and the panel with it: the open list now fills the panel.
@@ -491,15 +318,15 @@ describe("chat sidebar list", () => {
     widePanel();
     const fiveMinAgo = new Date(Date.now() - 5 * 60_000).toISOString();
     const threeHoursAgo = new Date(Date.now() - 3 * 3_600_000).toISOString();
-    server = [
-      summary("a", "Alpha", { updatedAt: fiveMinAgo }),
-      summary("b", "Beta", { isFavorite: true }),
-      summary("c", null, { createdAt: threeHoursAgo, updatedAt: null }),
-      summary("d", "Delta", { isFavorite: true }),
+    server.chats = [
+      chatSummary("a", "Alpha", { updatedAt: fiveMinAgo }),
+      chatSummary("b", "Beta", { isFavorite: true }),
+      chatSummary("c", null, { createdAt: threeHoursAgo, updatedAt: null }),
+      chatSummary("d", "Delta", { isFavorite: true }),
     ];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    sessions.b = chat("b", "Beta", [msg("b", 0, "user")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
+    server.sessions.b = chatSession("b", "Beta", [msg("b", 0, "user")]);
+    await renderChatBubble();
     await openPanel();
 
     const names = ["Alpha", "Beta", "Untitled chat", "Delta"];
@@ -536,9 +363,9 @@ describe("chat sidebar list", () => {
 
   test("rename, delete and bulk delete work from the list while a chat is open; deleting the open chat leaves it", async () => {
     widePanel();
-    server = [summary("a", "Alpha"), summary("b", "Beta"), summary("c", "Gamma")];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta"), chatSummary("c", "Gamma")];
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
+    await renderChatBubble();
     await openPanel();
     await pick("Alpha");
 
@@ -567,19 +394,19 @@ describe("chat sidebar list", () => {
     );
     await waitFor(() => expect(within(sidebar()).queryAllByRole("listitem")).toHaveLength(0));
     expect(chatService.deleteMany).toHaveBeenCalledTimes(1);
-    expect(chatService.deleteMany.mock.calls[0][0].toSorted()).toEqual(["b", "c"]);
+    expect([...chatService.deleteMany.mock.calls[0][0]].sort()).toEqual(["b", "c"]);
   });
 });
 
 describe("chat favourites", () => {
   test("starring and unstarring reorder at once, a failure leaves the star alone, and a read from before cannot undo it", async () => {
     widePanel();
-    server = [
-      summary("a", "Alpha"),
-      summary("b", "Beta"),
-      summary("c", "Gamma", { isFavorite: true }),
+    server.chats = [
+      chatSummary("a", "Alpha"),
+      chatSummary("b", "Beta"),
+      chatSummary("c", "Gamma", { isFavorite: true }),
     ];
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    await renderChatBubble();
     await openPanel();
     const names = ["Alpha", "Beta", "Gamma"];
     expect(rowOrder(names)).toEqual(["Gamma", "Alpha", "Beta"]);
@@ -587,14 +414,14 @@ describe("chat favourites", () => {
     expect(star("Alpha").getAttribute("aria-pressed")).toBe("false");
 
     // A history read goes out before the star, and answers after it.
-    holdHistoryReads(1);
+    server.holdHistoryReads(1);
     emitUnreadChanged("a");
-    await waitFor(() => expect(heldReads).toHaveLength(1));
+    await waitFor(() => expect(server.heldReads).toHaveLength(1));
 
     const starring = deferred<void>();
     chatService.setFavorite.mockImplementationOnce((id: string, favorite: boolean) =>
       starring.promise.then(() => {
-        server = server.map((c) => (c.id === id ? { ...c, isFavorite: favorite } : c));
+        server.update(id, { isFavorite: favorite });
       }),
     );
     fireEvent.click(star("Beta"));
@@ -604,7 +431,7 @@ describe("chat favourites", () => {
     expect((star("Alpha") as HTMLButtonElement).disabled).toBe(false);
 
     // Shown on success without waiting for any re-read.
-    holdHistoryReads(1);
+    server.holdHistoryReads(1);
     await act(async () => starring.resolve());
     await flush();
     expect(star("Beta").getAttribute("aria-pressed")).toBe("true");
@@ -612,17 +439,17 @@ describe("chat favourites", () => {
     expect(rowOrder(names)).toEqual(["Beta", "Gamma", "Alpha"]);
 
     await act(async () =>
-      heldReads[0].resolve([
-        summary("a", "Alpha"),
-        summary("b", "Beta"),
-        summary("c", "Gamma", { isFavorite: true }),
+      server.heldReads[0].resolve([
+        chatSummary("a", "Alpha"),
+        chatSummary("b", "Beta"),
+        chatSummary("c", "Gamma", { isFavorite: true }),
       ]),
     );
     await settle();
     expect(star("Beta").getAttribute("aria-pressed")).toBe("true");
     expect(rowOrder(names)).toEqual(["Beta", "Gamma", "Alpha"]);
-    for (const held of heldReads.slice(1)) {
-      await act(async () => held.resolve(server.map((c) => ({ ...c }))));
+    for (const held of server.heldReads.slice(1)) {
+      await act(async () => held.resolve(server.chats.map((c) => ({ ...c }))));
     }
     await settle();
 
@@ -646,13 +473,13 @@ describe("chat favourites", () => {
 describe("chat search", () => {
   test("filters by shown title at once and by message content via a debounced server search, applying only the current query's answer", async () => {
     widePanel();
-    server = [
-      summary("a", "Deploy pipeline"),
-      summary("b", "Bug triage", { isFavorite: true }),
-      summary("c", null),
-      summary("d", "Release notes", { isFavorite: true }),
+    server.chats = [
+      chatSummary("a", "Deploy pipeline"),
+      chatSummary("b", "Bug triage", { isFavorite: true }),
+      chatSummary("c", null),
+      chatSummary("d", "Release notes", { isFavorite: true }),
     ];
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    await renderChatBubble();
     await openPanel();
     const names = ["Deploy pipeline", "Bug triage", "Untitled chat", "Release notes"];
     const box = within(sidebar()).getByLabelText("Search chats");
@@ -675,7 +502,7 @@ describe("chat search", () => {
     expect(chatService.searchChats.mock.calls).toEqual([["DEPL"]]);
 
     // Content matches join in, starred first; an id the list does not hold is ignored.
-    await act(async () => searches[0].answer.resolve(["b", "zzz"]));
+    await act(async () => server.searches[0].answer.resolve(["b", "zzz"]));
     await flush();
     expect(rowOrder(names)).toEqual(["Bug triage", "Deploy pipeline"]);
 
@@ -685,12 +512,12 @@ describe("chat search", () => {
     advance(1000);
     type("triage");
     advance(1000);
-    expect(searches.map((s) => s.q)).toEqual(["DEPL", "notes", "triage"]);
-    await act(async () => searches[2].answer.resolve(["c"]));
+    expect(server.searches.map((s) => s.q)).toEqual(["DEPL", "notes", "triage"]);
+    await act(async () => server.searches[2].answer.resolve(["c"]));
     await flush();
     expect(rowOrder(names)).toEqual(["Bug triage", "Untitled chat"]);
     // The answer for "notes" comes back late and is never applied.
-    await act(async () => searches[1].answer.resolve(["a"]));
+    await act(async () => server.searches[1].answer.resolve(["a"]));
     await flush();
     expect(rowOrder(names)).toEqual(["Bug triage", "Untitled chat"]);
 
@@ -699,13 +526,13 @@ describe("chat search", () => {
     expect(within(sidebar()).getByText("Searching…")).toBeTruthy();
     advance(1000);
     type("qqqq");
-    await act(async () => searches[3].answer.resolve(["a"]));
+    await act(async () => server.searches[3].answer.resolve(["a"]));
     await flush();
     expect(rowOrder(names)).toEqual([]);
     expect(within(sidebar()).getByText("Searching…")).toBeTruthy();
     advance(1000);
-    expect(searches[4].q).toBe("qqqq");
-    await act(async () => searches[4].answer.resolve([]));
+    expect(server.searches[4].q).toBe("qqqq");
+    await act(async () => server.searches[4].answer.resolve([]));
     await flush();
     expect(within(sidebar()).getByText("No chats match")).toBeTruthy();
 
@@ -713,7 +540,7 @@ describe("chat search", () => {
     type("untitled");
     expect(rowOrder(names)).toEqual(["Untitled chat"]);
     advance(1000);
-    const failed = searches[searches.length - 1];
+    const failed = server.searches[server.searches.length - 1];
     expect(failed.q).toBe("untitled");
     await act(async () => failed.answer.reject(new Error("search failed")));
     await flush();
@@ -746,12 +573,12 @@ describe("chat search", () => {
 describe("chat sidebar unread", () => {
   test("unread rows carry the dot; a needs-you chat carries its own different marker", async () => {
     widePanel();
-    server = [
-      summary("a", "Alpha", { hasUnread: true }),
-      summary("b", "Beta", { needsYou: true }),
-      summary("c", "Gamma"),
+    server.chats = [
+      chatSummary("a", "Alpha", { hasUnread: true }),
+      chatSummary("b", "Beta", { needsYou: true }),
+      chatSummary("c", "Gamma"),
     ];
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    await renderChatBubble();
     await openPanel();
     expect(within(row("Alpha")).queryByRole("img", { name: "New messages" })).not.toBeNull();
     expect(within(row("Alpha")).queryByRole("img", { name: "Needs you" })).toBeNull();
@@ -761,9 +588,9 @@ describe("chat sidebar unread", () => {
   });
 
   test("narrow: a chat hidden behind the open list is not marked read until the list closes or the panel widens", async () => {
-    server = [summary("a", "Alpha")];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha")];
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user"), msg("a", 1, "assistant")]);
+    await renderChatBubble();
     await openPanel();
     fireEvent.click(toggle());
     await pick("Alpha");
@@ -789,14 +616,14 @@ describe("chat sidebar unread", () => {
 
   test("wide: a reply in another chat lights its row live, and a reply in the chat beside the list is read", async () => {
     widePanel();
-    server = [summary("a", "Alpha"), summary("b", "Beta")];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
+    await renderChatBubble();
     await openPanel();
     await pick("Alpha");
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 0));
 
-    setUnread("b", true);
+    server.update("b", { hasUnread: true });
     emitUnreadChanged("b");
     await waitFor(() =>
       expect(within(row("Beta")).queryByRole("img", { name: "New messages" })).not.toBeNull(),
@@ -807,27 +634,34 @@ describe("chat sidebar unread", () => {
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 1));
   });
 
-  test("the toggle shows how many chats are unread only while the list is hidden", async () => {
-    server = [summary("a", "Alpha"), summary("b", "Beta")];
-    render(bubble(), { wrapper: WorkItemHubProvider });
+  test("the toggle describes how many chats are unread, only while the list is hidden", async () => {
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta")];
+    await renderChatBubble();
     await openPanel();
+    expect(toggle().getAttribute("aria-describedby")).toBeNull();
     expect(within(header()).queryByText(/^\d+$/)).toBeNull();
 
-    setUnread("b", true);
+    server.update("b", { hasUnread: true });
     emitUnreadChanged("b");
-    await waitFor(() => expect(badge(1)).not.toBeNull());
-    setUnread("a", true);
+    expect(await screen.findByRole("button", { name: "Chat list", description: "1" })).toBe(
+      toggle(),
+    );
+    server.update("a", { hasUnread: true });
     emitUnreadChanged("a");
-    await waitFor(() => expect(badge(2)).not.toBeNull());
-    expect(badge(1)).toBeNull();
+    expect(await screen.findByRole("button", { name: "Chat list", description: "2" })).toBe(
+      toggle(),
+    );
+    expect(badge(2)).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Chat list", description: "1" })).toBeNull();
 
     fireEvent.click(toggle());
+    expect(toggle().getAttribute("aria-describedby")).toBeNull();
     expect(within(header()).queryByText(/^\d+$/)).toBeNull();
     expect(within(row("Alpha")).queryByRole("img", { name: "New messages" })).not.toBeNull();
     expect(within(row("Beta")).queryByRole("img", { name: "New messages" })).not.toBeNull();
 
     fireEvent.click(toggle());
-    expect(badge(2)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Chat list", description: "2" })).toBe(toggle());
   });
 });
 
@@ -843,10 +677,10 @@ describe("bulk delete mode", () => {
 
   async function openWithThree() {
     widePanel();
-    server = [summary("a", "Alpha"), summary("b", "Beta"), summary("c", null)];
-    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
-    sessions.b = chat("b", "Beta", [msg("b", 0, "user")]);
-    render(bubble(), { wrapper: WorkItemHubProvider });
+    server.chats = [chatSummary("a", "Alpha"), chatSummary("b", "Beta"), chatSummary("c", null)];
+    server.sessions.a = chatSession("a", "Alpha", [msg("a", 0, "user")]);
+    server.sessions.b = chatSession("b", "Beta", [msg("b", 0, "user")]);
+    await renderChatBubble();
     await openPanel();
   }
 
@@ -1026,7 +860,7 @@ describe("bulk delete mode", () => {
 
     await waitFor(() => expect(within(sidebar()).queryByText("Alpha")).toBeNull());
     expect(chatService.deleteMany).toHaveBeenCalledTimes(1);
-    expect(chatService.deleteMany.mock.calls[0][0].toSorted()).toEqual(["a", "c"]);
+    expect([...chatService.deleteMany.mock.calls[0][0]].sort()).toEqual(["a", "c"]);
     expect(chatService.deleteOne).not.toHaveBeenCalled();
     expect(within(sidebar()).getByText("Beta")).toBeTruthy();
     expect(within(sidebar()).queryByText("Untitled chat")).toBeNull();
@@ -1065,7 +899,7 @@ describe("bulk delete mode", () => {
     await openWithThree();
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     chatService.deleteMany.mockImplementationOnce((ids: string[]) => {
-      server = server.filter((c) => c.id !== ids[0]);
+      server.chats = server.chats.filter((c) => c.id !== ids[0]);
       return Promise.reject(new Error("boom"));
     });
     enterSelecting();
@@ -1101,12 +935,12 @@ describe("bulk delete mode", () => {
     enterSelecting();
     fireEvent.click(boxOf("Alpha"));
 
-    server = [];
+    server.chats = [];
     emitUnreadChanged("a");
     await waitFor(() => expect(within(sidebar()).queryAllByRole("listitem")).toHaveLength(0));
     expect(within(sidebar()).queryByRole("checkbox", { name: "Select all" })).toBeNull();
 
-    server = [summary("z", "Zulu")];
+    server.chats = [chatSummary("z", "Zulu")];
     emitUnreadChanged("a");
     await within(sidebar()).findByText("Zulu");
     expect(within(sidebar()).queryAllByRole("checkbox")).toHaveLength(0);

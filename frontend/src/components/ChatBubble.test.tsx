@@ -1,92 +1,28 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, waitFor, act, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { screen, fireEvent, waitFor, within, act } from "@testing-library/react";
+import { setPreference, getPreference, PreferenceKeys } from "../utils/userPreferences";
 import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary } from "../types";
 import {
+  emitChatEvent as emit,
   openChatFromList,
   openChatList,
-  showChatActions,
+  renderChatBubble,
+  signalRHub,
   startNewChat,
-  type ChatHubEvents,
+  stubChatServices,
 } from "../test-support";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 
-// Hoisted so the vi.mock factories (which are hoisted to the top) can reference
-// them without a temporal-dead-zone error.
-const {
-  handlers,
-  connection,
-  invoke,
-  chatService,
-  aiProviderService,
-  workItemService,
-  getOpenLoopDocument,
-  setCurrentChatSessionId,
-} = vi.hoisted(() => ({
-  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-  // The live connection's state, mutable so a test can drop it and bring it back.
-  // The bubble only reads it while rendering, so `setConnectionState` re-renders
-  // the tree after changing it.
-  connection: {
-    state: "connected" as "disconnected" | "connecting" | "connected" | "reconnecting",
-  },
-  // One stable instance, as the real hook's useCallback([]) gives: the bubble's
-  // join effect depends on its identity, so a fresh function per render would
-  // make it leave and rejoin the chat group on every render.
-  invoke: vi.fn(() => Promise.resolve()),
-  chatService: {
-    listHistory: vi.fn(),
-    getById: vi.fn(),
-    start: vi.fn(),
-    sendMessage: vi.fn(),
-    interrupt: vi.fn(),
-    deleteOne: vi.fn(),
-    deleteMany: vi.fn(),
-    searchChats: vi.fn(),
-  },
-  aiProviderService: {
-    getAll: vi.fn(),
-  },
-  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
+const { getOpenLoopDocument, setCurrentChatSessionId } = vi.hoisted(() => ({
   getOpenLoopDocument: vi.fn(),
   setCurrentChatSessionId: vi.fn(),
 }));
 
-vi.mock("../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: connection.state,
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event] = handler;
-    },
-    off: (event: string) => {
-      delete handlers[event];
-    },
-    invoke,
-  }),
-}));
-
-vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
+vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule());
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
-import ChatBubble from "./ChatBubble";
-import { ChatInboxProvider } from "./ChatInbox";
-import { setPreference, getPreference, PreferenceKeys } from "../utils/userPreferences";
-import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
-
-// The bubble reads the open work item from the route (useMatch), so every render
-// must sit inside a Router. `initialPath` lets a test simulate having a work item
-// open (e.g. "/taskboard/wi-77").
-function renderBubble(initialPath = "/") {
-  return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <ChatInboxProvider>
-        <ChatBubble />
-      </ChatInboxProvider>
-    </MemoryRouter>,
-    { wrapper: WorkItemHubProvider },
-  );
-}
+const { chatService, aiProviderService } = stubChatServices();
 
 const provider: AiProvider = {
   id: "p1",
@@ -125,35 +61,6 @@ function chatSession(partial: Partial<ChatSession> = {}): ChatSession {
   };
 }
 
-/** Deliver one hub event exactly as the bubble's own handler receives it. */
-function emit<E extends keyof ChatHubEvents>(event: E, payload: ChatHubEvents[E]) {
-  act(() => {
-    handlers[event]?.({ payload });
-  });
-}
-
-/**
- * Drop or restore the live connection. The bubble reads `connectionState` while
- * rendering, so the tree is re-rendered after the change — the same thing the
- * real hook's state update does.
- */
-function setConnectionState(
-  view: ReturnType<typeof renderBubble>,
-  state: "disconnected" | "connecting" | "connected" | "reconnecting",
-  initialPath = "/",
-) {
-  connection.state = state;
-  act(() => {
-    view.rerender(
-      <MemoryRouter initialEntries={[initialPath]}>
-        <ChatInboxProvider>
-          <ChatBubble />
-        </ChatInboxProvider>
-      </MemoryRouter>,
-    );
-  });
-}
-
 function summary(partial: Partial<ChatSessionSummary> = {}): ChatSessionSummary {
   return {
     id: partial.id ?? "s1",
@@ -171,17 +78,14 @@ function summary(partial: Partial<ChatSessionSummary> = {}): ChatSessionSummary 
 async function openResumed(session: ChatSession, initialPath = "/") {
   chatService.listHistory.mockResolvedValue([summary({ id: session.id, name: session.name })]);
   chatService.getById.mockResolvedValue(session);
-  const view = renderBubble(initialPath);
+  await renderChatBubble(initialPath);
   fireEvent.click(await screen.findByLabelText("Open chat"));
   await openChatFromList(session.name ?? "Untitled chat");
   await screen.findByLabelText("Chat message");
-  return view;
 }
 
 afterEach(() => {
-  cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
-  connection.state = "connected";
+  signalRHub.reset();
   vi.clearAllMocks();
   // clearAllMocks keeps return-value implementations, so a per-test loop document
   // would leak into later tests; reset it back to "no loop open".
@@ -197,7 +101,7 @@ describe("ChatBubble", () => {
     chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    renderBubble();
+    await renderChatBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     expect(await screen.findByText("Claude (claude-code)")).toBeTruthy();
@@ -232,7 +136,7 @@ describe("ChatBubble", () => {
     chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue(providers);
 
-    renderBubble();
+    await renderChatBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     const select = (await screen.findByLabelText("AI provider")) as HTMLSelectElement;
@@ -270,7 +174,7 @@ describe("ChatBubble", () => {
   ];
 
   test.each(CHAT_CONTEXT_CASES)("$name", async ({ path, liveLoop, text, workItemId }) => {
-    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.sendMessage.mockResolvedValue(null);
     if (liveLoop) getOpenLoopDocument.mockReturnValue(liveLoop);
     await openResumed(chatSession(), path);
 
@@ -289,7 +193,7 @@ describe("ChatBubble", () => {
   });
 
   test("the message box goes back to one line once its message is sent", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.sendMessage.mockResolvedValue(null);
     aiProviderService.getAll.mockResolvedValue([provider]);
     await openResumed(chatSession(), "/taskboard");
 
@@ -303,7 +207,7 @@ describe("ChatBubble", () => {
   });
 
   test("Enter sends the message and Shift+Enter does not", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.sendMessage.mockResolvedValue(null);
     aiProviderService.getAll.mockResolvedValue([provider]);
     await openResumed(chatSession(), "/taskboard");
 
@@ -326,7 +230,7 @@ describe("ChatBubble", () => {
     // Joining the new chat's live stream re-reads its state from the server.
     chatService.getById.mockResolvedValue(chatSession({ name: null }));
 
-    renderBubble();
+    await renderChatBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
     fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "p1" } });
     fireEvent.click(screen.getByText("Start chat"));
@@ -355,23 +259,6 @@ describe("ChatBubble", () => {
     expect(chatService.getById).toHaveBeenCalledWith("s1");
   });
 
-  test("lists past chats in the chat list with a name and date-stamp", async () => {
-    chatService.listHistory.mockResolvedValue([
-      summary({ id: "s1", name: "Deploy loop help", updatedAt: "2026-03-04T00:00:00Z" }),
-      summary({ id: "s2", name: "Bug triage", updatedAt: "2026-03-03T00:00:00Z" }),
-    ]);
-    aiProviderService.getAll.mockResolvedValue([provider]);
-
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
-    await openChatList();
-
-    expect(await screen.findByText("Deploy loop help")).toBeTruthy();
-    expect(screen.getByText("Bug triage")).toBeTruthy();
-    // The date-stamp carries the full last-activity timestamp.
-    expect(screen.getByTitle(new Date("2026-03-04T00:00:00Z").toLocaleString())).toBeTruthy();
-  });
-
   test("a chat's actions open one row at a time and close on Escape, without it reaching the page below, or on a click outside", async () => {
     chatService.listHistory.mockResolvedValue([
       summary({ id: "s1", name: "One" }),
@@ -384,7 +271,7 @@ describe("ChatBubble", () => {
     };
     document.addEventListener("keydown", onPageKey);
     try {
-      renderBubble();
+      await renderChatBubble();
       fireEvent.click(await screen.findByLabelText("Open chat"));
       await openChatList();
       await screen.findByText("One");
@@ -427,7 +314,7 @@ describe("ChatBubble", () => {
     const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
     Element.prototype.scrollIntoView = scrollIntoView;
     try {
-      renderBubble();
+      await renderChatBubble();
       fireEvent.click(await screen.findByLabelText("Open chat"));
       await openChatList();
       fireEvent.click(await screen.findByRole("button", { name: "Actions for chat Last row" }));
@@ -451,7 +338,7 @@ describe("ChatBubble", () => {
           fail = reject;
         }),
     );
-    renderBubble();
+    await renderChatBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
     const list = await openChatList();
 
@@ -476,54 +363,6 @@ describe("ChatBubble", () => {
     }
   });
 
-  test("per-chat delete removes that chat without touching the others", async () => {
-    chatService.listHistory.mockResolvedValue([
-      summary({ id: "s1", name: "Keep me" }),
-      summary({ id: "s2", name: "Remove me" }),
-    ]);
-    chatService.deleteOne.mockResolvedValue(undefined);
-    aiProviderService.getAll.mockResolvedValue([provider]);
-
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
-    await openChatList();
-    await screen.findByText("Remove me");
-
-    showChatActions("Remove me");
-    fireEvent.click(screen.getByLabelText("Delete chat Remove me"));
-
-    await waitFor(() => expect(chatService.deleteOne).toHaveBeenCalledWith("s2"));
-    await waitFor(() => expect(screen.queryByText("Remove me")).toBeNull());
-    expect(screen.getByText("Keep me")).toBeTruthy();
-  });
-
-  test("bulk delete removes the checked chats only after the confirmation", async () => {
-    chatService.listHistory.mockResolvedValue([
-      summary({ id: "s1", name: "One" }),
-      summary({ id: "s2", name: "Two" }),
-    ]);
-    chatService.deleteMany.mockResolvedValue(undefined);
-    aiProviderService.getAll.mockResolvedValue([provider]);
-
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
-    await openChatList();
-    await screen.findByText("One");
-
-    fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete (2)" }));
-    expect(await screen.findByRole("alertdialog", { name: "Delete 2 chats?" })).toBeTruthy();
-    expect(chatService.deleteMany).not.toHaveBeenCalled();
-
-    fireEvent.click(
-      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }),
-    );
-    await waitFor(() => expect(chatService.deleteMany).toHaveBeenCalledTimes(1));
-    expect(chatService.deleteMany.mock.calls[0][0].toSorted()).toEqual(["s1", "s2"]);
-    await waitFor(() => expect(screen.queryByText("One")).toBeNull());
-  });
-
   test("New chat leaves the open chat for the start form and retains it (no delete)", async () => {
     await openResumed(chatSession({ name: "Retained chat" }));
 
@@ -545,7 +384,7 @@ describe("ChatBubble", () => {
       Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
     );
     aiProviderService.getAll.mockResolvedValue([provider]);
-    renderBubble();
+    await renderChatBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
     const draft = () => screen.getByLabelText("Chat message") as HTMLInputElement;
 
@@ -573,7 +412,7 @@ describe("ChatBubble", () => {
     // startup); the retry when the start form re-appears succeeds.
     aiProviderService.getAll.mockRejectedValueOnce(new Error("boom")).mockResolvedValue([provider]);
 
-    renderBubble();
+    await renderChatBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     // Resume the past chat (this does not need providers), then end it.
@@ -596,320 +435,8 @@ describe("ChatBubble", () => {
     await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith(null));
   });
 
-  test("shows an in-progress indicator from send through streaming until the turn ends", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    await openResumed(chatSession());
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "do the thing" } });
-    fireEvent.click(screen.getByText("Send"));
-
-    // Before any text streams back, the status reads "Thinking".
-    const status = await screen.findByRole("status");
-    expect(status.textContent).toContain("Thinking");
-
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    expect(screen.getByRole("status").textContent).toContain("Thinking");
-
-    // Once tokens stream in, the indicator must remain visible (the message is
-    // still in progress) and switch to "Responding".
-    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an ans" });
-    expect(await screen.findByText("half an ans")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toContain("Responding");
-
-    // The finalized reply replaces the streamed text — but it does not end the
-    // turn: only the server saying so does.
-    emit("ChatMessageAppended", {
-      chatSessionId: "s1",
-      turnId: "t1",
-      message: msg({ id: "a1", role: "assistant", content: "half an answer", sequence: 1 }),
-    });
-    expect(await screen.findByText("half an answer")).toBeTruthy();
-    expect(screen.queryByText("half an ans")).toBeNull();
-    expect(screen.getByRole("status")).toBeTruthy();
-
-    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t1", interrupted: false });
-    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
-    expect(screen.getByText("half an answer")).toBeTruthy();
-    expect(screen.queryByLabelText("Stop")).toBeNull();
-  });
-
-  test("the stop button only exists while a turn is in flight, and cancels it", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    chatService.interrupt.mockResolvedValue(undefined);
-    await openResumed(chatSession());
-    // What the server reports once the send below has started its turn.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
-
-    // Idle: nothing to stop.
-    expect(screen.queryByLabelText("Stop")).toBeNull();
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "long task" } });
-    fireEvent.click(screen.getByText("Send"));
-
-    // In flight: the stop button appears alongside the (still present) Send.
-    const stop = await screen.findByLabelText("Stop");
-    expect(screen.getByText("Send")).toBeTruthy();
-
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-
-    // Cancelling is asynchronous server-side: the turn is still in flight when
-    // the stop request comes back.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
-
-    fireEvent.click(stop);
-    await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
-
-    // Busy is not cleared optimistically — the server ends the turn over the hub.
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-
-    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t1", interrupted: true });
-    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-
-  test("a message that interrupts a running turn keeps the stop button and indicator", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    await openResumed(chatSession());
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "one" } });
-    fireEvent.click(screen.getByText("Send"));
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    expect(await screen.findByLabelText("Stop")).toBeTruthy();
-
-    // A message interrupts the running turn rather than queueing behind it. The
-    // server has handed over to its replacement by the time it answers the send.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t2" }));
-    fireEvent.change(input, { target: { value: "two" } });
-    fireEvent.click(screen.getByText("Send"));
-    await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalledTimes(2));
-
-    // The interrupted turn now finalizes — its partial reply is appended and it
-    // reports itself finished — while its replacement is still working. Neither
-    // event may take the stop button or the indicator away.
-    emit("ChatMessageAppended", {
-      chatSessionId: "s1",
-      // Finalized by the turn the second message interrupted, not by its replacement.
-      turnId: "t1",
-      message: msg({
-        id: "a1",
-        role: "assistant",
-        content: "half an answer",
-        interrupted: true,
-        sequence: 1,
-      }),
-    });
-    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t1", interrupted: true });
-
-    expect(await screen.findByText("interrupted")).toBeTruthy();
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-
-    // They stay until the replacement turn itself ends.
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-
-    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t2", interrupted: false });
-    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-
-  test("a completion for a turn that is no longer the current one changes nothing", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    await openResumed(chatSession());
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "one" } });
-    fireEvent.click(screen.getByText("Send"));
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    await screen.findByLabelText("Stop");
-
-    fireEvent.change(input, { target: { value: "two" } });
-    fireEvent.click(screen.getByText("Send"));
-    await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalledTimes(2));
-    // The replacement turn announces itself before the replaced one reports back:
-    // hub sends carry no ordering guarantee between turns.
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
-    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t1", interrupted: true });
-
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-
-    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t2", interrupted: false });
-    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-
-  test("resuming a chat whose turn is still running shows it as running and can stop it", async () => {
-    chatService.interrupt.mockResolvedValue(undefined);
-    // A fresh client — a page reload, or just opening this chat from the list —
-    // knows nothing about the turn until the server tells it.
-    await openResumed(
-      chatSession({
-        activeTurnId: "t9",
-        messages: [msg({ id: "m1", role: "user", content: "long task", sequence: 0 })],
-      }),
-    );
-
-    expect(await screen.findByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText("Stop"));
-    await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
-  });
-
-  test("an idle chat shows no indicator or stop button, before or after a turn", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    await openResumed(chatSession({ activeTurnId: null, name: "Idle chat" }));
-
-    expect(screen.queryByLabelText("Stop")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
-
-    // A turn that has been and gone leaves nothing behind…
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "quick one" } });
-    fireEvent.click(screen.getByText("Send"));
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    await screen.findByLabelText("Stop");
-    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t1", interrupted: false });
-    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
-    expect(screen.queryByRole("status")).toBeNull();
-
-    // …and neither does leaving the chat and coming in again.
-    await startNewChat();
-    await screen.findByText("Start chat");
-    await openChatFromList("Idle chat");
-    await screen.findByLabelText("Chat message");
-
-    expect(screen.queryByLabelText("Stop")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-
-  test("a reconnect clears a turn that ended while the connection was down", async () => {
-    const view = await openResumed(chatSession());
-
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an ans" });
-    expect(await screen.findByText("half an ans")).toBeTruthy();
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-
-    // The turn finished during the outage, so both its finalized reply and its
-    // completion were missed; the server now reports the chat idle.
-    chatService.getById.mockResolvedValue(
-      chatSession({
-        activeTurnId: null,
-        messages: [msg({ id: "a1", role: "assistant", content: "half an answer", sequence: 1 })],
-      }),
-    );
-
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
-
-    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
-    expect(screen.queryByRole("status")).toBeNull();
-    // The finalized reply is picked up and the stale streamed partial is gone.
-    expect(screen.getByText("half an answer")).toBeTruthy();
-    expect(screen.queryByText("half an ans")).toBeNull();
-  });
-
-  test("a reconnect shows a turn that is still running, and it can be stopped", async () => {
-    chatService.interrupt.mockResolvedValue(undefined);
-    const view = await openResumed(chatSession());
-    expect(screen.queryByLabelText("Stop")).toBeNull();
-
-    // The turn started while the client was away, so it never saw the event.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t7" }));
-
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
-
-    expect(await screen.findByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText("Stop"));
-    await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
-  });
-
-  test("a state read that resolves after a newer turn started never clears it", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    chatService.interrupt.mockResolvedValue(undefined);
-    await openResumed(chatSession());
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "one" } });
-    fireEvent.click(screen.getByText("Send"));
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    const stop = await screen.findByLabelText("Stop");
-
-    // The read the stop triggers hangs while the server is still cancelling.
-    let answerRead!: (session: ChatSession) => void;
-    chatService.getById.mockReturnValue(
-      new Promise<ChatSession>((resolve) => {
-        answerRead = resolve;
-      }),
-    );
-
-    fireEvent.click(stop);
-    await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
-
-    // Meanwhile the user sends again, and that turn starts. Its own read answers
-    // truthfully; the one the stop is still waiting on is the stale one.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t2" }));
-    fireEvent.change(input, { target: { value: "two" } });
-    fireEvent.click(screen.getByText("Send"));
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-
-    // The snapshot finally answers — taken back when t1 was being cancelled, so
-    // it must not clear a turn the client has since learned is running.
-    await act(async () => {
-      answerRead(chatSession({ activeTurnId: null }));
-    });
-
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-  });
-
-  test("events for another chat session never touch the open one", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    await openResumed(chatSession({ id: "s1" }));
-    chatService.getById.mockResolvedValue(chatSession({ id: "s1", activeTurnId: "t1" }));
-
-    // Idle: another chat's turn starting must not light this one up.
-    emit("ChatTurnStarted", { chatSessionId: "s2", turnId: "x1" });
-    expect(screen.queryByLabelText("Stop")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "mine" } });
-    fireEvent.click(screen.getByText("Send"));
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    await screen.findByLabelText("Stop");
-
-    // Busy: another chat's traffic must not end this turn or enter its transcript
-    // — not even when it happens to carry the same turn id.
-    emit("ChatTurnProgress", { chatSessionId: "s2", turnId: "x1", delta: "not mine" });
-    emit("ChatMessageAppended", {
-      chatSessionId: "s2",
-      turnId: "x1",
-      message: msg({ id: "z1", role: "assistant", content: "someone else's reply", sequence: 9 }),
-    });
-    emit("ChatTurnCompleted", { chatSessionId: "s2", turnId: "t1", interrupted: false });
-
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-    expect(screen.queryByText("not mine")).toBeNull();
-    expect(screen.queryByText("someone else's reply")).toBeNull();
-  });
-
   test("a stop that loses the race to the turn finishing is swallowed", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.sendMessage.mockResolvedValue(null);
     // The turn completed between render and click, so the chat no longer has one.
     chatService.interrupt.mockRejectedValue(new Error("Chat not found."));
     await openResumed(chatSession());
@@ -930,7 +457,7 @@ describe("ChatBubble", () => {
   });
 
   test("a second click cannot fire a stop while the first is in flight", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.sendMessage.mockResolvedValue(null);
     let release!: () => void;
     chatService.interrupt.mockReturnValue(
       new Promise<void>((resolve) => {
@@ -992,11 +519,11 @@ describe("ChatBubble", () => {
 });
 
 describe("ChatBubble placement", () => {
-  test("renders nothing when chat is disabled in settings", () => {
+  test("renders nothing when chat is disabled in settings", async () => {
     setPreference(PreferenceKeys.ChatEnabled, "false");
     chatService.listHistory.mockResolvedValue([]);
 
-    const { container } = renderBubble();
+    const { container } = await renderChatBubble();
     expect(screen.queryByLabelText("Open chat")).toBeNull();
     expect(container.firstChild).toBeNull();
   });
@@ -1012,7 +539,7 @@ describe("ChatBubble placement", () => {
     chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    renderBubble();
+    await renderChatBubble();
     const fab = (await screen.findByLabelText("Open chat")) as HTMLElement;
 
     // 1024×768 less the 60px tab bar: the corner is (952, 636).
@@ -1029,7 +556,7 @@ describe("ChatBubble placement", () => {
     chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    renderBubble();
+    await renderChatBubble();
     const fab = await screen.findByLabelText("Open chat");
 
     fireEvent.pointerDown(fab, { clientX: 500, clientY: 500 });
@@ -1052,7 +579,7 @@ describe("ChatBubble placement", () => {
     chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    renderBubble();
+    await renderChatBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     const panel = await screen.findByRole("dialog", { name: "AI chat" });
@@ -1075,7 +602,7 @@ describe("ChatBubble placement", () => {
     setPreference(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
     chatService.listHistory.mockResolvedValue([]);
 
-    renderBubble();
+    await renderChatBubble();
     const fab = await screen.findByLabelText("Open chat");
     expect((fab as HTMLElement).style.left).toBe("900px");
 
@@ -1106,7 +633,7 @@ describe("ChatBubble placement", () => {
     chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    renderBubble();
+    await renderChatBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     const panel = await screen.findByRole("dialog", { name: "AI chat" });

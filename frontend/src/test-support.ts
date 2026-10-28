@@ -1,9 +1,17 @@
 // Shared helpers for tests. Not a test file itself, so it is outside the
 // `src/**/*.test.{ts,tsx}` include and never collected as a suite.
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import { createElement, type ReactElement } from "react";
+import { MemoryRouter } from "react-router";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { vi, type Mock } from "vite-plus/test";
 import type { SignalRConnection } from "./hooks/useSignalR";
-import { workItemService } from "./services/auth";
+import {
+  aiProviderService,
+  chatService,
+  globalVariableService,
+  loopTemplateProposalService,
+  workItemService,
+} from "./services/auth";
 import { compareServerOrder } from "./utils/taskboardColumns";
 import { compareTags, matchesTaskboardFilter, sameTag } from "./utils/taskboardFilter";
 import { WorkItemStatus } from "./types";
@@ -11,6 +19,9 @@ import type {
   ChatMessageAppendedPayload,
   ChatTurnCompletedPayload,
   ChatTurnProgressPayload,
+  ChatMessage,
+  ChatSession,
+  ChatSessionSummary,
   ChatTurnStartedPayload,
   GlobalVariableProposal,
   LoopTemplateProposal,
@@ -389,4 +400,249 @@ export function proposalCardAround(element: Element): HTMLElement {
   const card = element.closest<HTMLElement>('[data-testid="proposal-card"]');
   if (card === null) throw new Error("The element is not inside a proposal card.");
   return card;
+}
+
+/** Delivers a hub event to every listener of {@link signalRHub}, inside act. */
+export function emitHubEvent(event: string, payload: unknown): void {
+  act(() => {
+    signalRHub.dispatch(event, payload);
+  });
+}
+
+/** Delivers a chat turn event with the payload the server really sends for it. */
+export function emitChatEvent<E extends keyof ChatHubEvents>(event: E, payload: ChatHubEvents[E]) {
+  emitHubEvent(event, payload);
+}
+
+/** A chat in the history list; `extra` sets the fields a test cares about. */
+export function chatSummary(
+  id: string,
+  name: string | null,
+  extra: Partial<ChatSessionSummary> = {},
+): ChatSessionSummary {
+  return {
+    id,
+    name,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-02T00:00:00Z",
+    hasUnread: false,
+    ...extra,
+  };
+}
+
+/** Message `sequence` of chat `chatId`; its text names its role and sequence unless given. */
+export function chatMessage(
+  chatId: string,
+  sequence: number,
+  role: "user" | "assistant",
+  content = `${role} message ${sequence}`,
+): ChatMessage {
+  return {
+    id: `${chatId}-${sequence}`,
+    role,
+    content,
+    interrupted: false,
+    sequence,
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+}
+
+/** A chat as the server returns it when opened; by default one user message and one reply. */
+export function chatSession(
+  id: string,
+  name: string | null,
+  messages: ChatMessage[] = [chatMessage(id, 0, "user"), chatMessage(id, 1, "assistant")],
+): ChatSession {
+  return {
+    id,
+    name,
+    aiProviderId: "p1",
+    providerType: "claude-code",
+    tools: ["ild"],
+    createdAt: "2026-01-01T00:00:00Z",
+    messages,
+    activeTurnId: null,
+  };
+}
+
+/**
+ * Spies on the chat, provider and edit-proposal methods the chat bubble calls,
+ * each answering with nothing (an empty list for the list reads) until a test
+ * says otherwise. Call it once at the top of a test file.
+ */
+export function stubChatServices() {
+  const unset = undefined as never;
+  return {
+    chatService: {
+      listHistory: vi.spyOn(chatService, "listHistory").mockResolvedValue([]),
+      getById: vi.spyOn(chatService, "getById").mockResolvedValue(unset),
+      start: vi.spyOn(chatService, "start").mockResolvedValue(unset),
+      sendMessage: vi.spyOn(chatService, "sendMessage").mockResolvedValue(unset),
+      interrupt: vi.spyOn(chatService, "interrupt").mockResolvedValue(unset),
+      markRead: vi.spyOn(chatService, "markRead").mockResolvedValue(unset),
+      rename: vi.spyOn(chatService, "rename").mockResolvedValue(unset),
+      setFavorite: vi.spyOn(chatService, "setFavorite").mockResolvedValue(unset),
+      searchChats: vi.spyOn(chatService, "searchChats").mockResolvedValue([]),
+      deleteOne: vi.spyOn(chatService, "deleteOne").mockResolvedValue(unset),
+      deleteMany: vi.spyOn(chatService, "deleteMany").mockResolvedValue(unset),
+    },
+    aiProviderService: {
+      getAll: vi.spyOn(aiProviderService, "getAll").mockResolvedValue([]),
+    },
+    proposalServices: {
+      listVariableProposals: vi.spyOn(globalVariableService, "listProposals").mockResolvedValue([]),
+      listTemplateProposals: vi.spyOn(loopTemplateProposalService, "list").mockResolvedValue([]),
+    },
+    workItemService: {
+      listEditProposals: vi.spyOn(workItemService, "listEditProposals").mockResolvedValue([]),
+      listEditProposalsFor: vi.spyOn(workItemService, "listEditProposalsFor").mockResolvedValue([]),
+      approveEditProposal: vi
+        .spyOn(workItemService, "approveEditProposal")
+        .mockResolvedValue(unset),
+      rejectEditProposal: vi.spyOn(workItemService, "rejectEditProposal").mockResolvedValue(unset),
+    },
+  };
+}
+
+/** A search request held back by {@link chatServer} until the test answers it. */
+export interface HeldSearch {
+  q: string;
+  answer: Deferred<string[]>;
+}
+
+/**
+ * A stateful stand-in for the chat endpoints behind the spies of
+ * {@link stubChatServices}: `chats` is what the history answers right now and
+ * `sessions` what opening a chat returns; mark-read, rename, favourite and delete
+ * change `chats` as the server would. `holdHistoryReads(n)` leaves the next `n`
+ * history reads in flight (in `heldReads`) and every search is held in `searches`.
+ * `reset` puts everything back, for an `afterEach`.
+ */
+export function chatServer(services: ReturnType<typeof stubChatServices>) {
+  const { chatService: api } = services;
+  const server = {
+    chats: [] as ChatSessionSummary[],
+    sessions: {} as Record<string, ChatSession>,
+    heldReads: [] as Deferred<ChatSessionSummary[]>[],
+    searches: [] as HeldSearch[],
+    readsToHold: 0,
+    holdHistoryReads(count: number) {
+      server.readsToHold += count;
+    },
+    update(id: string, change: Partial<ChatSessionSummary>) {
+      server.chats = server.chats.map((c) => (c.id === id ? { ...c, ...change } : c));
+    },
+    install() {
+      api.listHistory.mockImplementation(() => {
+        if (server.readsToHold > 0) {
+          server.readsToHold -= 1;
+          const held = deferred<ChatSessionSummary[]>();
+          server.heldReads.push(held);
+          return held.promise;
+        }
+        return Promise.resolve(server.chats.map((c) => ({ ...c })));
+      });
+      api.getById.mockImplementation((id: string) => Promise.resolve(server.sessions[id]));
+      api.markRead.mockImplementation((id: string) => {
+        server.update(id, { hasUnread: false });
+        return Promise.resolve();
+      });
+      api.rename.mockImplementation((id: string, name: string) => {
+        server.update(id, { name });
+        return Promise.resolve();
+      });
+      api.setFavorite.mockImplementation((id: string, isFavorite: boolean) => {
+        server.update(id, { isFavorite });
+        return Promise.resolve();
+      });
+      api.deleteOne.mockImplementation((id: string) => {
+        server.chats = server.chats.filter((c) => c.id !== id);
+        return Promise.resolve();
+      });
+      api.deleteMany.mockImplementation((ids: string[]) => {
+        server.chats = server.chats.filter((c) => !ids.includes(c.id));
+        return Promise.resolve();
+      });
+      api.searchChats.mockImplementation((q: string) => {
+        const answer = deferred<string[]>();
+        server.searches.push({ q, answer });
+        return answer.promise;
+      });
+      api.sendMessage.mockResolvedValue("t1");
+    },
+    reset() {
+      server.chats = [];
+      for (const id of Object.keys(server.sessions)) delete server.sessions[id];
+      server.heldReads = [];
+      server.searches = [];
+      server.readsToHold = 0;
+      signalRHub.reset();
+      vi.clearAllMocks();
+      localStorage.clear();
+      server.install();
+    },
+  };
+  server.install();
+  return server;
+}
+
+/** The chat bubble in a router and the chat inbox, as the app mounts it. */
+export async function chatBubbleTree(initialPath = "/"): Promise<ReactElement> {
+  const [{ default: ChatBubble }, { ChatInboxProvider }] = await Promise.all([
+    import("./components/ChatBubble"),
+    import("./components/ChatInbox"),
+  ]);
+  return createElement(
+    MemoryRouter,
+    { initialEntries: [initialPath] },
+    createElement(ChatInboxProvider, null, createElement(ChatBubble)),
+  );
+}
+
+/** Renders {@link chatBubbleTree} under the shared work-item hub; rerender with `await chatBubbleTree()`. */
+export async function renderChatBubble(initialPath = "/") {
+  const { WorkItemHubProvider } = await import("./hooks/useWorkItemHub");
+  return render(await chatBubbleTree(initialPath), { wrapper: WorkItemHubProvider });
+}
+
+/** Opens the chat bubble's panel from its button. */
+export async function openChatPanel(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+}
+
+/** Lets every answer already given reach the view, and every effect it causes run. */
+export async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** Opens a chat from the list and waits for its message box. */
+export async function resumeChat(name: string): Promise<void> {
+  await openChatFromList(name);
+  await screen.findByLabelText("Chat message");
+}
+
+/** Leaves the open chat, then shows the list again. */
+export async function backToChatList(): Promise<void> {
+  await startNewChat();
+  await screen.findByText("Start chat");
+  await openChatList();
+}
+
+/** A promise a test settles by hand. */
+export interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+}
+
+export function deferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
