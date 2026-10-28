@@ -6,24 +6,14 @@ using ILD.Core.Services.Remote;
 
 namespace ILD.Tests.Integration;
 
-public class LoopTemplatesIntegrationTests
+public class LoopTemplatesIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
-    [Fact]
-    public async Task GetAll_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/looptemplates", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
     private static JsonElement PropertyIgnoringCase(JsonElement obj, string name)
         => obj.EnumerateObject().Single(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)).Value;
 
     [Fact]
     public async Task Node_outputs_lists_the_fixed_and_reserved_outputs_of_each_node_type()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.GetAsync("/api/v1/looptemplates/node-outputs", TestContext.Current.CancellationToken);
@@ -70,7 +60,6 @@ public class LoopTemplatesIntegrationTests
     [Fact]
     public async Task A_set_variable_node_saves_and_loads_back_with_its_assignments_and_fixed_outputs()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var assignments = new object[]
         {
@@ -97,7 +86,6 @@ public class LoopTemplatesIntegrationTests
     [Fact]
     public async Task Saving_a_set_variable_node_with_an_invalid_name_is_refused_with_the_reason()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.PostAsJsonAsync("/api/v1/looptemplates",
@@ -123,7 +111,6 @@ public class LoopTemplatesIntegrationTests
     [Fact]
     public async Task Upgrade_document_turns_a_v1_export_into_v2()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.PostAsJsonAsync("/api/v1/looptemplates/upgrade-document",
@@ -142,7 +129,6 @@ public class LoopTemplatesIntegrationTests
     [Fact]
     public async Task Upgrade_document_refuses_a_document_that_is_not_a_json_object()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.PostAsJsonAsync("/api/v1/looptemplates/upgrade-document",

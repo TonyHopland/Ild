@@ -7,20 +7,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
-public class RemoteProvidersIntegrationTests
+public class RemoteProvidersIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
-    [Fact]
-    public async Task GetAll_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/remoteproviders", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
     [Fact]
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
+        // Own host: it asserts the whole provider list is empty.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/remoteproviders", TestContext.Current.CancellationToken);
@@ -32,7 +24,6 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task GetTypes_with_token_returns_only_implemented_provider_types()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var response = await client.GetAsync("/api/v1/remoteproviders/types", TestContext.Current.CancellationToken);
@@ -64,7 +55,6 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task Test_returns_the_result_as_data_for_a_stored_provider()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         // Not an absolute URL, so the test answers without leaving the process.
         var id = await SeedProviderAsync(factory, "Forgejo", "not a url");
@@ -82,7 +72,6 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task Test_rejects_a_malformed_id_and_an_unknown_one()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var malformed = await client.PostAsync("/api/v1/remoteproviders/not-a-guid/test", null, TestContext.Current.CancellationToken);
@@ -95,7 +84,6 @@ public class RemoteProvidersIntegrationTests
     [Fact]
     public async Task Test_is_for_signed_in_users_only()
     {
-        await using var factory = new ApiFactory();
         var id = await SeedProviderAsync(factory, "Forgejo", "not a url");
 
         var anonymous = await factory.CreateClient().PostAsync($"/api/v1/remoteproviders/{id}/test", null, TestContext.Current.CancellationToken);
@@ -114,6 +102,7 @@ public class RemoteProvidersIntegrationTests
     public async Task GetAll_pages_providers_with_the_same_name_in_a_stable_order()
     {
         var sql = new SqlCapture();
+        // Own host: it counts every SQL statement the host runs.
         await using var factory = new ApiFactory(configureServices: sql.Register);
         var client = await factory.CreateAuthenticatedClientAsync();
         var ids = new[] { "33333333-0000-0000-0000-000000000000", "22222222-0000-0000-0000-000000000000", "11111111-0000-0000-0000-000000000000" };

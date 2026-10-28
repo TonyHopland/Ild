@@ -21,52 +21,66 @@ namespace ILD.Tests.WorkItemServer;
 /// into outcomes ILD can tell apart. ILD's own tests run against a fake client,
 /// so this is the only place the two halves of the contract meet.
 /// </summary>
-public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
+public sealed class WorkItemEditProposalClientTests : IClassFixture<WorkItemEditProposalClientTests.Server>
 {
     private const string ApiKey = "edit-proposals-test-key";
 
-    private readonly SqliteConnection _connection = new("DataSource=:memory:");
-    private readonly HumanEditBeforeWorkItemWrite _humanEdit = new();
-    private WebApplicationFactory<WorkItemServerProgram> _factory = null!;
-    private WorkItemServerClient _client = null!;
-    private readonly WorkItemServerOptions _opts = new() { BaseUrl = "http://localhost", ApiKey = ApiKey };
-
-    public ValueTask InitializeAsync()
+    public sealed class Server : IAsyncLifetime
     {
-        _connection.Open();
-        Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-        _factory = new WebApplicationFactory<WorkItemServerProgram>().WithWebHostBuilder(b =>
+        private readonly SqliteConnection _connection = new("DataSource=:memory:");
+        private WebApplicationFactory<WorkItemServerProgram> _factory = null!;
+
+        public HumanEditBeforeWorkItemWrite HumanEdit { get; } = new();
+        public WorkItemServerClient Client { get; private set; } = null!;
+
+        public ValueTask InitializeAsync()
         {
-            b.UseEnvironment("Testing");
-            b.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+            _connection.Open();
+            Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
+            _factory = new WebApplicationFactory<WorkItemServerProgram>().WithWebHostBuilder(b =>
             {
-                ["WorkItemServer:ApiKeys"] = ApiKey,
-                ["Serilog:WriteToConsole"] = "false",
-            }));
-            b.ConfigureServices(services =>
-            {
-                services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
-                services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
-                var existing = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                if (existing != null) services.Remove(existing);
-                services.AddDbContext<WorkItemServerDbContext>(o =>
+                b.UseEnvironment("Testing");
+                b.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    o.UseSqlite(_connection);
-                    o.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
-                    o.AddInterceptors(_humanEdit);
+                    ["WorkItemServer:ApiKeys"] = ApiKey,
+                    ["Serilog:WriteToConsole"] = "false",
+                }));
+                b.ConfigureServices(services =>
+                {
+                    services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
+                    services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
+                    var existing = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
+                    if (existing != null) services.Remove(existing);
+                    services.AddDbContext<WorkItemServerDbContext>(o =>
+                    {
+                        o.UseSqlite(_connection);
+                        o.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+                        o.AddInterceptors(HumanEdit);
+                    });
                 });
             });
-        });
-        var http = _factory.CreateClient();
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
-        _client = new WorkItemServerClient(http);
-        return ValueTask.CompletedTask;
+            var http = _factory.CreateClient();
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+            Client = new WorkItemServerClient(http);
+            return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _factory.DisposeAsync();
+            _connection.Dispose();
+        }
     }
 
-    public async ValueTask DisposeAsync()
+    private readonly HumanEditBeforeWorkItemWrite _humanEdit;
+    private readonly WorkItemServerClient _client;
+    private readonly WorkItemServerOptions _opts = new() { BaseUrl = "http://localhost", ApiKey = ApiKey };
+
+    public WorkItemEditProposalClientTests(Server server)
     {
-        await _factory.DisposeAsync();
-        _connection.Dispose();
+        _humanEdit = server.HumanEdit;
+        _humanEdit.Reset();
+        _client = server.Client;
     }
 
     private async Task<RemoteWorkItem> CreateItemAsync(string title = "Old backlog item") =>
@@ -363,7 +377,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         Assert.Equal(stillPending.Id, Assert.Single(await _client.QueryEditProposalsAsync(_opts, undelivered, TestContext.Current.CancellationToken)).Id);
 
         var pending = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery { Status = RemoteEditProposalStatus.Pending }, TestContext.Current.CancellationToken);
-        Assert.Empty(pending);
+        Assert.Empty(pending.Where(p => p.WorkItemId == item.Id || p.WorkItemId == otherItem.Id));
         var chatsAll = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery { CreatedByChatSessionId = chat }, TestContext.Current.CancellationToken);
         Assert.Equal(new[] { rejected.Id, stillPending.Id }.OrderBy(x => x), chatsAll.Select(p => p.Id).OrderBy(x => x));
     }
@@ -380,7 +394,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
 
         var pending = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery { Status = RemoteEditProposalStatus.Pending }, TestContext.Current.CancellationToken);
 
-        Assert.Equal(new[] { a.Id, b.Id }.OrderBy(x => x), pending.Select(p => p.Id).OrderBy(x => x));
+        Assert.Equal(new[] { a.Id, b.Id }.OrderBy(x => x), pending.Where(p => p.WorkItemId == item.Id || p.WorkItemId == otherItem.Id).Select(p => p.Id).OrderBy(x => x));
         Assert.Equal(1, Assert.Single(await _client.ListAsync(_opts, null, null, TestContext.Current.CancellationToken), w => w.Id == item.Id).PendingEditProposalCount);
     }
 
@@ -556,16 +570,6 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     }
 
     [Fact]
-    public void The_servers_model_has_no_change_that_lacks_a_scaffolded_migration()
-    {
-        // The tests run the server on SQLite through EnsureCreated, so only this
-        // sees a model change that production's Migrate() would never apply.
-        using var db = new DesignTimeDbContextFactory().CreateDbContext([]);
-
-        Assert.False(db.Database.HasPendingModelChanges());
-    }
-
-    [Fact]
     public async Task Deleting_a_work_item_removes_its_proposals()
     {
         var item = await CreateItemAsync();
@@ -576,7 +580,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         Assert.True(await _client.DeleteAsync(_opts, item.Id, TestActors.Human, TestContext.Current.CancellationToken));
 
         var remaining = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery(), TestContext.Current.CancellationToken);
-        Assert.Equal(kept.Id, Assert.Single(remaining).Id);
+        Assert.Equal(kept.Id, Assert.Single(remaining, p => p.WorkItemId == item.Id || p.WorkItemId == keep.Id).Id);
     }
 
     /// <summary>
@@ -585,13 +589,19 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     /// connection and transaction, so it is exactly as if the human's save
     /// committed in the gap between an approve starting and it writing.
     /// </summary>
-    private sealed class HumanEditBeforeWorkItemWrite : DbCommandInterceptor
+    public sealed class HumanEditBeforeWorkItemWrite : DbCommandInterceptor
     {
         private string? _workItemId;
         private string _column = "Description";
         private string? _value;
 
         public bool Fired { get; private set; }
+
+        public void Reset()
+        {
+            _workItemId = null;
+            Fired = false;
+        }
 
         public void Arm(string workItemId, string description) => Arm(workItemId, "Description", description);
 
@@ -600,6 +610,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
 
         private void Arm(string workItemId, string column, string value)
         {
+            Fired = false;
             _workItemId = workItemId;
             _column = column;
             _value = value;

@@ -7,7 +7,7 @@ namespace ILD.Tests.Integration;
 /// revalidated every time; the content-hashed bundle it names can then be cached
 /// for good, since a new build names new files.
 /// </summary>
-public class SpaCacheHeadersTests
+public class SpaCacheHeadersTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     [Theory]
     [InlineData("/")]                    // UseDefaultFiles -> index.html
@@ -16,7 +16,6 @@ public class SpaCacheHeadersTests
     [InlineData("/assets/some-route")]   // under assets/, but no such file: the fallback's shell
     public async Task The_SPA_shell_is_revalidated_before_every_reuse(string path)
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
@@ -32,7 +31,6 @@ public class SpaCacheHeadersTests
     [Fact]
     public async Task A_static_file_outside_assets_is_revalidated_before_every_reuse()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.GetAsync("/favicon.svg", TestContext.Current.CancellationToken);
@@ -44,7 +42,6 @@ public class SpaCacheHeadersTests
     [Fact]
     public async Task A_build_asset_is_cached_for_a_year_as_immutable()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.GetAsync("/assets/app.js", TestContext.Current.CancellationToken);
@@ -60,7 +57,6 @@ public class SpaCacheHeadersTests
     [Fact]
     public async Task An_api_response_gets_no_long_lived_caching()
     {
-        await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/v1/health", TestContext.Current.CancellationToken);

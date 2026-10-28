@@ -30,6 +30,7 @@ namespace ILD.Tests.Integration;
 /// application/octet-stream body). The archive it serves begins with a 4-byte
 /// big-endian length, then that many bytes of manifest JSON, then opaque bytes.
 /// </summary>
+// A host per test: backups read and write the host's data root and the settings it holds.
 public class BackupApiTests
 {
     private const string Url = "/api/v1/storage/backups";

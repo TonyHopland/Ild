@@ -187,6 +187,7 @@ public class StorageApiTests
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
 [SupportedOSPlatform("linux")]
+// A host per test: each measures the host's own data root and the process-wide agent scratch root.
 public class StorageOverviewTests
 {
     [Fact]

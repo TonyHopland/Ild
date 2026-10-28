@@ -219,6 +219,15 @@ public class ExtraCliArgsTests
         Assert.Contains("--", error);
     }
 
+    [Fact]
+    public void Validate_rejects_an_end_of_options_separator_at_the_end_and_names_it()
+    {
+        var error = ExtraCliArgs.Validate(DeclaredTraits.For("opencode").ExtraCliArgs, "--variant high --");
+
+        Assert.NotNull(error);
+        Assert.Contains("--", error);
+    }
+
     [Theory]
     [InlineData("claude-code", "--effort \"high")]
     [InlineData("pi", "--thinking high\\")]

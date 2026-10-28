@@ -16,6 +16,7 @@ namespace ILD.Tests.Integration;
 /// scheduler pass and turn runner on a scripted agent: when it fires, what the
 /// turn is given, which chat it lands in, and how each firing is recorded.
 /// </summary>
+// A host per test: each test drives its own manual clock and scheduler passes.
 public sealed class ChatScheduleFiringTests
 {
     private static readonly string[] AllToolGroups = ["read", "write", "execute", "ild"];

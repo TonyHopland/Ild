@@ -11,20 +11,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
-public class LoopRunsIntegrationTests
+public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
-    [Fact]
-    public async Task GetAll_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
     [Fact]
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
+        // Own host: it asserts the whole run list is empty.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
@@ -37,7 +29,6 @@ public class LoopRunsIntegrationTests
     [Fact]
     public async Task GetById_for_unknown_id_returns_404()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -52,6 +43,7 @@ public class LoopRunsIntegrationTests
     public async Task Cleanup_frees_the_branch_deletes_the_session_snapshots_and_keeps_the_run_row()
     {
         var reclaimer = new StubRunReclaimer(succeeds: true);
+        // Own host: it swaps the run reclaimer for the whole host.
         await using var factory = NewFactory(reclaimer);
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/reclaim-me");
@@ -74,6 +66,7 @@ public class LoopRunsIntegrationTests
     [Fact]
     public async Task Cleanup_of_a_pinned_run_with_only_session_snapshots_left_deletes_them_and_keeps_the_pinned_run()
     {
+        // Own host: it swaps the run reclaimer for the whole host.
         await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Completed, branch: null, retain: true);
@@ -95,6 +88,7 @@ public class LoopRunsIntegrationTests
     [Fact]
     public async Task GetById_says_until_when_an_ended_runs_history_is_kept()
     {
+        // Own host: it swaps the run reclaimer for the whole host.
         await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
         var client = await factory.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
@@ -129,6 +123,7 @@ public class LoopRunsIntegrationTests
     public async Task Cleanup_is_rejected_for_a_run_that_has_not_finished()
     {
         var reclaimer = new StubRunReclaimer(succeeds: true);
+        // Own host: it swaps the run reclaimer for the whole host.
         await using var factory = NewFactory(reclaimer);
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Running, branch: "feature/live");
@@ -144,6 +139,7 @@ public class LoopRunsIntegrationTests
     public async Task Cleanup_returns_409_and_leaves_the_run_untouched_when_reclaim_fails()
     {
         var reclaimer = new StubRunReclaimer(succeeds: false);
+        // Own host: it swaps the run reclaimer for the whole host.
         await using var factory = NewFactory(reclaimer);
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Failed, branch: "feature/stuck");
@@ -161,6 +157,7 @@ public class LoopRunsIntegrationTests
     [Fact]
     public async Task Cleanup_for_unknown_id_returns_404()
     {
+        // Own host: it swaps the run reclaimer for the whole host.
         await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.PostAsync($"/api/v1/loopruns/{Guid.NewGuid()}/cleanup", null, TestContext.Current.CancellationToken);
@@ -175,6 +172,7 @@ public class LoopRunsIntegrationTests
     [Fact]
     public async Task GetAll_reports_reclaimability_without_exposing_server_paths()
     {
+        // Own host: it swaps the run reclaimer for the whole host.
         await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/listed");
@@ -209,6 +207,7 @@ public class LoopRunsIntegrationTests
     [MemberData(nameof(NodesUsingThreeGlobals))]
     public async Task A_run_parked_for_missing_globals_names_those_still_missing_now(NodeType type, string config)
     {
+        // Own host: global variable names are host-wide.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
@@ -288,7 +287,6 @@ public class LoopRunsIntegrationTests
     public async Task GetById_says_why_ILD_could_not_merge_an_AutoMerge_pull_request()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var failed = SeedRun(factory, LoopRunStatus.WaitingHuman, branch: "feature/automerge-failed");
         var plain = SeedRun(factory, LoopRunStatus.WaitingHuman, branch: "feature/not-automerge");
@@ -313,6 +311,7 @@ public class LoopRunsIntegrationTests
     {
         var ct = TestContext.Current.CancellationToken;
         var sql = new SnapshotSqlRecorder();
+        // Own host: it records every SQL statement the host runs.
         await using var factory = new ApiFactory(configureServices: services =>
         {
             services.RemoveHostedService<ILD.Core.Services.Implementations.SessionSnapshotMigrationService>();

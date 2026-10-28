@@ -14,6 +14,7 @@ namespace ILD.Tests.Integration;
 /// file as it is stored, served so the browser saves it and never renders it,
 /// and nothing past the worktree's edge.
 /// </summary>
+// A host per test: each test serves its own worktree directory through its own WorkItem stub.
 public sealed class WorkItemFileRawApiTests : IDisposable
 {
     private const string ItemWithWorktree = "WI-7";

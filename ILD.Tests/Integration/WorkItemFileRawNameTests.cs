@@ -14,6 +14,7 @@ namespace ILD.Tests.Integration;
 /// or a "." onto the file, and the name has to follow it there, or the response
 /// loses its attachment disposition with it.
 /// </summary>
+// A host per test: each row serves its own worktree directory through its own WorkItem stub.
 public sealed class WorkItemFileRawNameTests : IDisposable
 {
     private const string Item = "WI-7";

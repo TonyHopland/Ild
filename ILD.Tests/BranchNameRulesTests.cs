@@ -36,6 +36,7 @@ public class BranchNameRulesTests
     [InlineData("feature/.hidden")]
     [InlineData("feature.lock")]
     [InlineData("feature/foo.lock")]
+    [InlineData("../escape")]
     public void Rejects_names_git_rejects(string name)
         => Assert.NotNull(BranchNameRules.Validate(name));
 

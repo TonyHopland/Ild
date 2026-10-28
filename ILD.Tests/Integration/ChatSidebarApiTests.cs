@@ -13,7 +13,7 @@ namespace ILD.Tests.Integration;
 /// The chat sidebar's server surface over HTTP: starring a chat and searching
 /// chats by message content, both scoped to the caller's own chats.
 /// </summary>
-public class ChatSidebarApiTests
+public class ChatSidebarApiTests(SharedApiFactory factory) : IClassFixture<SharedApiFactory>
 {
     private static async Task SeedChatAsync(ApiFactory factory, Guid id, string owner, params (string Role, string Content)[] messages)
     {
@@ -69,6 +69,7 @@ public class ChatSidebarApiTests
     [Fact]
     public async Task A_user_stars_and_unstars_their_own_chat_without_touching_its_last_activity_and_never_another_users()
     {
+        // Own host: it asserts the starred state of every chat on the host.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var mine = Guid.NewGuid();
@@ -111,7 +112,6 @@ public class ChatSidebarApiTests
     [Fact]
     public async Task Search_finds_the_callers_chats_whose_messages_contain_the_query_case_insensitively_and_literally()
     {
-        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var deploy = Guid.NewGuid();
         var percent = Guid.NewGuid();
@@ -150,6 +150,7 @@ public class ChatSidebarApiTests
     [Fact]
     public async Task Batch_delete_over_HTTP_removes_the_callers_listed_chats_and_leaves_everything_else()
     {
+        // Own host: it asserts the whole chat table after the delete.
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var first = Guid.NewGuid();

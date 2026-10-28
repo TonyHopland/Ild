@@ -19,6 +19,7 @@ namespace ILD.Tests.Integration;
 /// the same filter, and every tag in use. Items are seeded straight into the
 /// WorkItem server so creation times and ids are exact.
 /// </summary>
+// A host per test: the tests page and count every work item on the host's board.
 public class WorkItemPageApiTests
 {
     private static readonly string[] StatusNames =
