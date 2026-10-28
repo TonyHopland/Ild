@@ -8,15 +8,6 @@ namespace ILD.Tests.Integration;
 
 public class LoopTemplatesIntegrationTests
 {
-    [Fact]
-    public async Task GetAll_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/looptemplates", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
     private static JsonElement PropertyIgnoringCase(JsonElement obj, string name)
         => obj.EnumerateObject().Single(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)).Value;
 

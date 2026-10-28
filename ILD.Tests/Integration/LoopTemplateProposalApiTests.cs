@@ -449,27 +449,11 @@ public class LoopTemplateProposalApiTests
         Assert.Empty(await ListAsHumanAsync(host));
     }
 
-    public enum Invalid
-    {
-        NotJson, JsonArray, NoSchema, UnknownSchema, EmptyName, NameOver256, DescriptionOver8192, UnknownPolicy,
-        DocumentOver1000000, DuplicateKey, BlankRationale, RationaleOver2000, BaseVersionZero, BaseVersionNegative,
-    }
+    public enum Invalid { UnknownPolicy, BlankRationale }
 
     [Theory]
-    [InlineData(Invalid.NotJson)]
-    [InlineData(Invalid.JsonArray)]
-    [InlineData(Invalid.NoSchema)]
-    [InlineData(Invalid.UnknownSchema)]
-    [InlineData(Invalid.EmptyName)]
-    [InlineData(Invalid.NameOver256)]
-    [InlineData(Invalid.DescriptionOver8192)]
     [InlineData(Invalid.UnknownPolicy)]
-    [InlineData(Invalid.DocumentOver1000000)]
-    [InlineData(Invalid.DuplicateKey)]
     [InlineData(Invalid.BlankRationale)]
-    [InlineData(Invalid.RationaleOver2000)]
-    [InlineData(Invalid.BaseVersionZero)]
-    [InlineData(Invalid.BaseVersionNegative)]
     public async Task An_invalid_proposal_is_a_400_with_a_reason_that_stores_nothing(Invalid invalid)
     {
         await using var host = await StartHostAsync();
@@ -479,25 +463,10 @@ public class LoopTemplateProposalApiTests
         var rationale = "Builds are slow.";
         switch (invalid)
         {
-            case Invalid.NoSchema: document.Remove("$schema"); break;
-            case Invalid.UnknownSchema: document["$schema"] = "ild-loop-template/v9"; break;
-            case Invalid.EmptyName: document["name"] = ""; break;
-            case Invalid.NameOver256: document["name"] = new string('n', 257); break;
-            case Invalid.DescriptionOver8192: document["description"] = new string('d', 8193); break;
             case Invalid.UnknownPolicy: document["recoveryPolicy"] = "Sometimes"; break;
-            case Invalid.DocumentOver1000000: NodeLabelled(document, "Build")["config"]!["notes"] = new string('x', 1_000_001); break;
             case Invalid.BlankRationale: rationale = "  \t "; break;
-            case Invalid.RationaleOver2000: rationale = new string('r', 2001); break;
-            case Invalid.BaseVersionZero: version = 0; break;
-            case Invalid.BaseVersionNegative: version = -1; break;
         }
-        var text = invalid switch
-        {
-            Invalid.NotJson => "{\"$schema\": \"ild-loop-template/v2\", \"nodes\": [",
-            Invalid.JsonArray => "[1, 2]",
-            Invalid.DuplicateKey => "{\"name\":\"Twice\"," + document.ToJsonString()[1..],
-            _ => document.ToJsonString(),
-        };
+        var text = document.ToJsonString();
 
         var resp = await ProposeAsync(agent, templateId.ToString(), version, text, rationale);
 

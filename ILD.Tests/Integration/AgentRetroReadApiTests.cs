@@ -131,21 +131,27 @@ public class AgentRetroReadApiTests
         Assert.Empty(unknown.GetProperty("templates").EnumerateArray());
     }
 
-    [Theory]
-    [InlineData("from=2026-02-30", "from")]
-    [InlineData("to=last-week", "to")]
-    [InlineData("to=06/01/2026", "to")]
-    [InlineData("templateId=retro", "templateId")]
-    public async Task Template_analytics_reject_a_malformed_filter_naming_it(string query, string parameter)
+    [Fact]
+    public async Task A_malformed_filter_is_a_400_and_the_analytics_error_names_the_parameter()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var resp = await client.GetAsync($"/api/v1/agent/analytics/templates?{query}", Ct);
+        foreach (var (query, parameter) in new[] { ("from=2026-02-30", "from"), ("to=last-week", "to"), ("to=06/01/2026", "to"), ("templateId=retro", "templateId") })
+        {
+            var resp = await client.GetAsync($"/api/v1/agent/analytics/templates?{query}", Ct);
 
-        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        var error = (await ReadJsonAsync(resp)).GetProperty("error").GetString();
-        Assert.Matches(new Regex($@"\b{parameter}\b"), error);
+            Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+            var error = (await ReadJsonAsync(resp)).GetProperty("error").GetString();
+            Assert.Matches(new Regex($@"\b{parameter}\b"), error);
+        }
+
+        foreach (var query in new[] { "from=yesterday", "from=06/01/2026", "to=2026-13-01", "templateId=not-a-guid" })
+        {
+            var resp = await client.GetAsync($"/api/v1/agent/loop-runs?{query}", Ct);
+
+            Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        }
     }
 
     // ---- list_loop_runs ---------------------------------------------------------
@@ -205,21 +211,6 @@ public class AgentRetroReadApiTests
         Assert.Equal(templateName, rows[b].GetProperty("templateName").GetString());
         Assert.Equal(2, rows[b].GetProperty("templateVersion").GetInt32());
         Assert.Equal(1, rows[a].GetProperty("templateVersion").GetInt32());
-    }
-
-    [Theory]
-    [InlineData("from=yesterday")]
-    [InlineData("from=06/01/2026")]
-    [InlineData("to=2026-13-01")]
-    [InlineData("templateId=not-a-guid")]
-    public async Task ListLoopRuns_rejects_a_malformed_filter(string query)
-    {
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-
-        var resp = await client.GetAsync($"/api/v1/agent/loop-runs?{query}", Ct);
-
-        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
     // ---- get_loop_template ------------------------------------------------------

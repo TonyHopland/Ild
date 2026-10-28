@@ -152,18 +152,56 @@ public class PackageFeedsApiTests
         Assert.Empty(await ListFeedsAsync(client));
     }
 
-    [Theory]
-    [InlineData("abcd1234", "••••1234")]
-    [InlineData("abc1234", "••••")]
-    [InlineData("x", "••••")]
-    public async Task The_pat_hint_shows_the_last_four_characters_only_of_a_pat_long_enough_to_spare_them(string pat, string hint)
+    [Fact]
+    public async Task A_bad_name_or_missing_pat_is_refused_with_a_reason_and_nothing_is_stored()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
+        await CreateFeedAsync(client, "company", CompanyUrl);
 
-        var created = await CreateFeedAsync(client, "company", CompanyUrl, pat);
+        var cases = new (object Body, string Because)[]
+        {
+            (new { name = "", feedUrl = ToolsUrl, pat = Pat }, "empty name"),
+            (new { name = "   ", feedUrl = ToolsUrl, pat = Pat }, "blank name"),
+            (new { name = new string('n', 129), feedUrl = ToolsUrl, pat = Pat }, "name over 128 characters"),
+            (new { name = "COMPANY", feedUrl = ToolsUrl, pat = Pat }, "name taken, ignoring case"),
+            (new { name = "tools", feedUrl = ToolsUrl }, "no pat"),
+            (new { name = "tools", feedUrl = ToolsUrl, pat = "" }, "empty pat"),
+        };
+        foreach (var (body, because) in cases)
+            await AssertBadRequestWithReasonAsync(await client.PostAsJsonAsync("/api/v1/package-feeds", body, Ct), because);
 
-        Assert.Equal(hint, created.GetProperty("patHint").GetString());
+        Assert.Single(await ListFeedsAsync(client));
+        await CreateFeedAsync(client, new string('n', 128), ToolsUrl);
+    }
+
+    [Fact]
+    public async Task A_feed_url_that_is_not_an_azure_artifacts_feed_is_refused_on_create_and_update_and_the_legacy_host_is_accepted()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var id = (await CreateFeedAsync(client, "company", CompanyUrl)).GetProperty("id").GetString()!;
+
+        const string badUrl = "https://pkgs.dev.azure.com/example-org/_packaging/company?api-version=7.1";
+        await AssertBadRequestWithReasonAsync(
+            await client.PostAsJsonAsync("/api/v1/package-feeds", new { name = "bad", feedUrl = badUrl, pat = Pat }, Ct),
+            "create with a bad url");
+        await AssertBadRequestWithReasonAsync(
+            await client.PutAsJsonAsync($"/api/v1/package-feeds/{id}", new { feedUrl = badUrl }, Ct),
+            "update to a bad url");
+
+        Assert.Equal(CompanyUrl, Assert.Single(await ListFeedsAsync(client)).GetProperty("feedUrl").GetString());
+
+        const string replacement = "newPAT-0000-abcd";
+        var replaced = await client.PutAsJsonAsync($"/api/v1/package-feeds/{id}", new { feedUrl = CompanyUrl, pat = replacement }, Ct);
+        Assert.True(replaced.IsSuccessStatusCode);
+        AssertNoPat(await replaced.Content.ReadAsStringAsync(Ct), Pat, replacement);
+        Assert.Equal("••••abcd", (await Json(replaced)).GetProperty("patHint").GetString());
+        Assert.Equal(replacement, await StoredPatAsync(factory, id));
+
+        var deleted = await client.DeleteAsync($"/api/v1/package-feeds/{id}", Ct);
+        Assert.True(deleted.IsSuccessStatusCode);
+        Assert.Empty(await ListFeedsAsync(client));
     }
 
     [Fact]

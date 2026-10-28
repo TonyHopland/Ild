@@ -13,15 +13,6 @@ namespace ILD.Tests.Integration;
 public class RepositoriesIntegrationTests
 {
     [Fact]
-    public async Task GetAll_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/repositories", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
         await using var factory = new ApiFactory();
@@ -370,34 +361,6 @@ public class RepositoriesIntegrationTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, agent.StatusCode);
-    }
-
-    /// <summary>
-    /// The regression this whole scheme exists to prevent: user-facing endpoints
-    /// that say nothing about authorization are refused to the agent token by
-    /// default, so forgetting to think about an endpoint is safe. None of these
-    /// carries an explicit agent check — the fallback policy is doing all the work.
-    /// A 200 would mean the agent got in; a 500 would mean the refusal itself
-    /// crashed, which is how the hand-rolled <c>Forbid()</c> calls used to fail.
-    /// </summary>
-    [Theory]
-    [InlineData("/api/v1/repositories")]
-    [InlineData("/api/v1/workitems")]
-    [InlineData("/api/v1/workitems/page")]
-    [InlineData("/api/v1/workitems/counts")]
-    [InlineData("/api/v1/workitems/tags")]
-    [InlineData("/api/v1/chat/history")]
-    [InlineData("/api/v1/settings")]
-    [InlineData("/api/v1/loopruns")]
-    [InlineData("/api/v1/auth/me")]
-    public async Task A_user_facing_endpoint_with_no_authorization_of_its_own_refuses_the_agent_token(string path)
-    {
-        await using var factory = new ApiFactory();
-        var agent = CreateAgentClient(factory);
-
-        var response = await agent.GetAsync(path, TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]

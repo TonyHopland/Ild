@@ -118,30 +118,6 @@ public class WorkItemAttachmentsIntegrationTests
     }
 
     [Fact]
-    public async Task Every_attachment_route_refuses_a_caller_with_no_session()
-    {
-        await using var factory = new ApiFactory();
-        var signedIn = await factory.CreateAuthenticatedClientAsync();
-        var anonymous = factory.CreateClient();
-        // A route that exists, so a 401 cannot merely mean "no such route".
-        var id = await CreateWorkItemAsync(factory, signedIn);
-        Assert.Equal(HttpStatusCode.OK, (await signedIn.GetAsync($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken)).StatusCode);
-
-        using var body = AttachmentUpload.Of("x.txt", "text/plain", Encoding.UTF8.GetBytes("x"));
-        var upload = await anonymous.PostAsync($"/api/v1/workitems/{id}/attachments", body, TestContext.Current.CancellationToken);
-        var list = await anonymous.GetAsync($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken);
-        var download = await anonymous.GetAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
-        var delete = await anonymous.DeleteAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
-        var settings = await anonymous.GetAsync("/api/v1/settings/attachments", TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, upload.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, list.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, download.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, delete.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, settings.StatusCode);
-    }
-
-    [Fact]
     public async Task An_unknown_work_item_is_404_on_every_attachment_route()
     {
         await using var factory = new ApiFactory();

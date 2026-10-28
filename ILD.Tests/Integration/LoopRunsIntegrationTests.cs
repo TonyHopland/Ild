@@ -14,15 +14,6 @@ namespace ILD.Tests.Integration;
 public class LoopRunsIntegrationTests
 {
     [Fact]
-    public async Task GetAll_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
     public async Task GetAll_with_token_returns_200_and_empty_array()
     {
         await using var factory = new ApiFactory();

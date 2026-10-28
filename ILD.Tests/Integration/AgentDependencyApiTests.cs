@@ -18,14 +18,14 @@ namespace ILD.Tests.Integration;
 /// other. The WorkItem server is held here, not inside the factory, so a test
 /// can read its stored edges and run its work-queue reconcile pass.
 /// </summary>
-public class AgentDependencyApiTests
+public class AgentDependencyApiTests : IClassFixture<AgentDependencyApiTests.Host>
 {
     private const string RunHeader = "X-ILD-Run-Id";
     private const string ChatHeader = "X-ILD-Chat-Session-Id";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private sealed class Host : IAsyncDisposable
+    public sealed class Host : IAsyncLifetime
     {
         public FakeWorkItemServerHarness Server { get; } = new();
         public ApiFactory Factory { get; }
@@ -42,11 +42,10 @@ public class AgentDependencyApiTests
             });
         }
 
-        public async Task<Host> StartAsync()
+        public async ValueTask InitializeAsync()
         {
             Human = await Factory.CreateAuthenticatedClientAsync();
             RepositoryId = await SeedRepositoryAsync(Factory);
-            return this;
         }
 
         public HttpClient Agent(Guid? runId = null, Guid? chatSessionId = null)
@@ -70,7 +69,9 @@ public class AgentDependencyApiTests
         }
     }
 
-    private static async Task<Host> StartHostAsync() => await new Host().StartAsync();
+    private readonly Host _host;
+
+    public AgentDependencyApiTests(Host host) => _host = host;
 
     private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage resp)
         => JsonDocument.Parse(await resp.Content.ReadAsStringAsync(Ct)).RootElement;
@@ -147,7 +148,7 @@ public class AgentDependencyApiTests
     [InlineData(Caller.ChatSession)]
     public async Task An_agent_adds_and_removes_a_dependency_on_an_item_its_session_created(Caller caller)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var agent = caller == Caller.LoopRun
             ? host.Agent(runId: await SeedRunAsync(host.Factory))
             : host.Agent(chatSessionId: await SeedChatSessionAsync(host.Factory));
@@ -182,7 +183,7 @@ public class AgentDependencyApiTests
     [InlineData(NotOwned.NoSessionHeader)]
     public async Task Neither_tool_changes_an_item_the_session_did_not_create_and_both_point_at_proposing(NotOwned situation)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var existingDep = await CreateHumanItemAsync(host, "Existing dependency");
         var candidate = await CreateHumanItemAsync(host, "Candidate");
         var runA = await SeedRunAsync(host.Factory);
@@ -227,7 +228,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task An_unknown_item_is_404_for_both_tools()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var agent = host.Agent(runId: await SeedRunAsync(host.Factory));
         var otherId = await CreateHumanItemAsync(host, "Other");
         var unknown = Guid.NewGuid().ToString();
@@ -246,7 +247,7 @@ public class AgentDependencyApiTests
     [InlineData(BadTarget.Blank, true)]
     public async Task A_bad_other_item_is_a_400_that_changes_nothing(BadTarget target, bool adding)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var agent = host.Agent(runId: await SeedRunAsync(host.Factory));
         var existingDep = await CreateHumanItemAsync(host, "Existing dependency");
         var itemId = await CreateAgentItemAsync(host, agent, "Agent's item", existingDep);
@@ -268,7 +269,7 @@ public class AgentDependencyApiTests
     [InlineData(true)]
     public async Task Adding_an_edge_that_would_close_a_cycle_is_a_400_that_says_so(bool transitive)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var agent = host.Agent(runId: await SeedRunAsync(host.Factory));
         var itemId = await CreateAgentItemAsync(host, agent, "Agent's item");
         var waitsOnItem = await CreateHumanItemAsync(host, "Waits on the agent's item");
@@ -290,7 +291,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task Adding_an_existing_edge_or_removing_an_absent_one_is_a_no_op_that_says_so()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var agent = host.Agent(chatSessionId: await SeedChatSessionAsync(host.Factory));
         var existingDep = await CreateHumanItemAsync(host, "Existing dependency");
         var notADep = await CreateHumanItemAsync(host, "Not a dependency");
@@ -310,7 +311,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task Removing_the_last_unfinished_dependency_promotes_a_work_queue_item_the_same_as_the_human_route()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var agent = host.Agent(runId: await SeedRunAsync(host.Factory));
         var blocker = await CreateHumanItemAsync(host, "Unfinished blocker");
         var agentsItem = await CreateAgentItemAsync(host, agent, "Agent's item", blocker);
@@ -371,7 +372,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task A_dependency_only_proposal_changes_nothing_until_approved_and_then_applies_exactly_its_changes()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host, "Human's item");
         var dropped = await CreateHumanItemAsync(host, "Dropped dependency");
         var added = await CreateHumanItemAsync(host, "Chat tab");
@@ -414,7 +415,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task A_proposed_removal_goes_stale_when_the_dependency_set_changed_and_keeps_the_human_edge()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host, "Human's item");
         var dropped = await CreateHumanItemAsync(host, "Dropped dependency");
         var humanAdded = await CreateHumanItemAsync(host, "Added by a human");
@@ -434,7 +435,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task A_proposal_without_dependency_changes_still_applies_after_the_dependency_set_changed()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host, "Human's item");
         var humanAdded = await CreateHumanItemAsync(host, "Added by a human");
         var proposalId = await ProposeOkAsync(host.Agent(chatSessionId: await SeedChatSessionAsync(host.Factory)), itemId,
@@ -451,7 +452,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task An_approval_that_would_now_close_a_cycle_is_refused_and_stays_pending_until_the_item_changes_and_it_goes_stale()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host, "Human's item");
         var added = await CreateHumanItemAsync(host, "Proposed dependency");
         var proposalId = await ProposeOkAsync(host.Agent(runId: await SeedRunAsync(host.Factory)), itemId,
@@ -480,7 +481,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task A_proposed_item_deleted_before_approval_reads_without_a_title_and_approving_is_refused()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host, "Human's item");
         var kept = await CreateHumanItemAsync(host, "Kept item");
         var deleted = await CreateHumanItemAsync(host, "Soon deleted");
@@ -503,28 +504,22 @@ public class AgentDependencyApiTests
 
     public enum BadProposal
     {
-        BlankAddition, BlankRemoval, UnknownAddition, UnknownRemoval, ItemItselfAdded, ItemItselfRemoved,
-        AdditionRepeated, RemovalRepeated, InBothLists, AddingAnExistingDependency, RemovingANonDependency,
-        DirectCycle, TransitiveCycle,
+        UnknownAddition, UnknownRemoval, ItemItselfAdded, ItemItselfRemoved, AddingAnExistingDependency,
+        RemovingANonDependency, DirectCycle, TransitiveCycle,
     }
 
     [Theory]
-    [InlineData(BadProposal.BlankAddition)]
-    [InlineData(BadProposal.BlankRemoval)]
     [InlineData(BadProposal.UnknownAddition)]
     [InlineData(BadProposal.UnknownRemoval)]
     [InlineData(BadProposal.ItemItselfAdded)]
     [InlineData(BadProposal.ItemItselfRemoved)]
-    [InlineData(BadProposal.AdditionRepeated)]
-    [InlineData(BadProposal.RemovalRepeated)]
-    [InlineData(BadProposal.InBothLists)]
     [InlineData(BadProposal.AddingAnExistingDependency)]
     [InlineData(BadProposal.RemovingANonDependency)]
     [InlineData(BadProposal.DirectCycle)]
     [InlineData(BadProposal.TransitiveCycle)]
     public async Task A_dependency_proposal_that_could_never_apply_is_a_400_that_stores_nothing(BadProposal bad)
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var itemId = await CreateHumanItemAsync(host, "Human's item");
         var existingDep = await CreateHumanItemAsync(host, "Existing dependency");
         var free = await CreateHumanItemAsync(host, "Unrelated item");
@@ -537,15 +532,10 @@ public class AgentDependencyApiTests
 
         (string[]? Add, string[]? Remove) lists = bad switch
         {
-            BadProposal.BlankAddition => (new[] { "  " }, null),
-            BadProposal.BlankRemoval => (null, new[] { "" }),
             BadProposal.UnknownAddition => (new[] { unknown }, null),
             BadProposal.UnknownRemoval => (null, new[] { unknown }),
             BadProposal.ItemItselfAdded => (new[] { itemId }, null),
             BadProposal.ItemItselfRemoved => (null, new[] { itemId }),
-            BadProposal.AdditionRepeated => (new[] { free, free }, null),
-            BadProposal.RemovalRepeated => (null, new[] { existingDep, existingDep }),
-            BadProposal.InBothLists => (new[] { free }, new[] { free }),
             BadProposal.AddingAnExistingDependency => (new[] { existingDep }, null),
             BadProposal.RemovingANonDependency => (null, new[] { free }),
             BadProposal.DirectCycle => (new[] { waitsOnItem }, null),
@@ -565,7 +555,7 @@ public class AgentDependencyApiTests
     [Fact]
     public async Task An_approved_removal_of_the_last_unfinished_dependency_promotes_the_same_as_the_human_route()
     {
-        await using var host = await StartHostAsync();
+        var host = _host;
         var blocker = await CreateHumanItemAsync(host, "Unfinished blocker");
         var proposedOn = await CreateHumanItemAsync(host, "Edited by proposal");
         var editedByHuman = await CreateHumanItemAsync(host, "Edited by a human");

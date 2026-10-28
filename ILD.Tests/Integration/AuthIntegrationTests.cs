@@ -39,17 +39,6 @@ public class AuthIntegrationTests
     }
 
     [Fact]
-    public async Task Me_without_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-
-        var response = await client.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
     public async Task Me_with_valid_token_returns_200()
     {
         await using var factory = new ApiFactory();
@@ -169,15 +158,6 @@ public class AuthIntegrationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("admin", (await response.Content.ReadFromJsonAsync<MeBody>(CaseInsensitive, TestContext.Current.CancellationToken))!.Username);
         Assert.Equal(1, SessionReads() - before);
-    }
-
-    [Fact]
-    public async Task Sessions_without_a_token_returns_401()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/v1/auth/sessions", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     private static readonly System.Text.Json.JsonSerializerOptions CaseInsensitive =

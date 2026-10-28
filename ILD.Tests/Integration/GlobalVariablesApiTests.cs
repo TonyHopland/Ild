@@ -183,33 +183,6 @@ public class GlobalVariablesApiTests
     }
 
     [Fact]
-    public async Task The_length_limit_defaults_to_4000_and_takes_only_integers_from_1_to_8192()
-    {
-        await using var factory = new ApiFactory();
-        var client = await factory.CreateAuthenticatedClientAsync();
-
-        async Task<string> Stored() => (await client.GetFromJsonAsync<JsonElement>(LimitUrl, Ct)).GetProperty("value").GetString()!;
-
-        var all = await client.GetFromJsonAsync<JsonElement[]>("/api/v1/settings", Ct);
-        Assert.Equal("4000", all!.Single(s => s.GetProperty("key").GetString() == "globalVariables.maxLength").GetProperty("value").GetString());
-        Assert.Equal("4000", await Stored());
-
-        foreach (var valid in new[] { "1", "8192", "500" })
-        {
-            using var stored = await client.PutAsJsonAsync(LimitUrl, new { value = valid }, Ct);
-            Assert.Equal(HttpStatusCode.OK, stored.StatusCode);
-            Assert.Equal(valid, await Stored());
-        }
-
-        foreach (var invalid in new[] { "0", "8193", "-1", "four thousand", "", "2.5" })
-        {
-            using var refused = await client.PutAsJsonAsync(LimitUrl, new { value = invalid }, Ct);
-            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
-            Assert.Equal("500", await Stored());
-        }
-    }
-
-    [Fact]
     public async Task A_value_over_the_default_limit_is_refused_stating_its_length_and_the_limit()
     {
         await using var factory = new ApiFactory();

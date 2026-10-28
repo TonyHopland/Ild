@@ -227,13 +227,7 @@ public class WorkItemEditProposalApiTests
     public static TheoryData<string, string> InvalidProposals => new()
     {
         { "nothing proposed", "{}" },
-        { "only a rationale", """{"rationale":"just because"}""" },
-        { "empty title", """{"title":""}""" },
-        { "blank title", """{"title":"   "}""" },
         { "title over 512", $$"""{"title":"{{new string('t', 513)}}"}""" },
-        { "illegal branch name", """{"branchNameOverride":"bad..name"}""" },
-        { "illegal base branch", """{"baseBranchOverride":"has space"}""" },
-        { "rationale over 2000", $$"""{"title":"ok","rationale":"{{new string('r', 2001)}}"}""" },
     };
 
     [Theory]

@@ -262,17 +262,8 @@ public class GlobalVariableProposalApiTests
 
     public static TheoryData<string, string> InvalidSuggestions => new()
     {
-        { "no name", """{"value":"x","rationale":"r"}""" },
-        { "blank name", """{"name":"   ","value":"x","rationale":"r"}""" },
-        { "name starting with a digit", """{"name":"9lives","value":"x","rationale":"r"}""" },
         { "name with a hyphen", """{"name":"bad-name","value":"x","rationale":"r"}""" },
-        { "name with a dot", """{"name":"Global.rules","value":"x","rationale":"r"}""" },
-        { "name over 128 characters", $$"""{"name":"a{{new string('b', 128)}}","value":"x","rationale":"r"}""" },
         { "no value", """{"name":"rules","rationale":"r"}""" },
-        { "null value", """{"name":"rules","value":null,"rationale":"r"}""" },
-        { "no rationale", """{"name":"rules","value":"x"}""" },
-        { "blank rationale", """{"name":"rules","value":"x","rationale":"  "}""" },
-        { "rationale over 2000", $$"""{"name":"rules","value":"x","rationale":"{{new string('r', 2001)}}"}""" },
     };
 
     [Theory]

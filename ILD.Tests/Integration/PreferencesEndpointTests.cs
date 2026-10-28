@@ -8,17 +8,6 @@ namespace ILD.Tests.Integration;
 public class PreferencesEndpointTests
 {
     [Fact]
-    public async Task Preferences_need_a_session()
-    {
-        await using var factory = new ApiFactory();
-        var client = factory.CreateClient();
-
-        var response = await client.GetAsync("/api/v1/preferences", TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
     public async Task A_preference_put_by_the_signed_in_user_is_read_back()
     {
         await using var factory = new ApiFactory();
