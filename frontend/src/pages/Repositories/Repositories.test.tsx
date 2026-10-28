@@ -458,12 +458,12 @@ function previewDataFetch(
       return Promise.resolve(reply({ previewEnv: null }));
     const one = /\/repositories\/([^/?]+)$/.exec(url);
     if (one && method === "PUT") {
-      const sent = JSON.parse(String(init?.body));
+      const sent = JSON.parse(init?.body as string);
       state.repos = state.repos.map((r) => (r.id === one[1] ? { ...r, ...sent, id: r.id } : r));
       return Promise.resolve(reply(state.repos.find((r) => r.id === one[1])));
     }
     if (url.endsWith("/repositories") && method === "POST") {
-      const created = { ...repo("repo-new", "new-repo"), ...JSON.parse(String(init?.body)) };
+      const created = { ...repo("repo-new", "new-repo"), ...JSON.parse(init?.body as string) };
       state.repos = [...state.repos, created];
       return Promise.resolve(reply(created, 201));
     }
