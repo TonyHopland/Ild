@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.McpServer;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.Configuration;
 using Moq;
 
@@ -234,11 +235,5 @@ public sealed class CloneRepositoryToolTests
         Assert.Equal($"{BaseAddress}api/v1/agent/chat/repositories/3f2c/clone", request.RequestUri!.AbsoluteUri);
         var json = JsonDocument.Parse(body!).RootElement;
         Assert.True(!json.TryGetProperty("branch", out var branch) || branch.ValueKind == JsonValueKind.Null);
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => respond(request);
     }
 }

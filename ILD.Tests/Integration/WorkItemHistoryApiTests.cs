@@ -10,6 +10,7 @@ using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.McpServer;
+using ILD.Tests.Fakes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Moq;
@@ -393,12 +394,6 @@ public class WorkItemHistoryApiTests : IClassFixture<WorkItemHistoryApiTests.Hos
         Assert.NotNull(seen);
         Assert.Equal("/api/v1/agent/workitems/42", seen!.RequestUri!.AbsolutePath);
         Assert.Equal(expected, HttpUtility.ParseQueryString(seen.RequestUri.Query)["includeHistory"] ?? "false");
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => respond(request);
     }
 
     // ── Seeding ────────────────────────────────────────────────────────────

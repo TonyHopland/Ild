@@ -585,7 +585,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         var rows = runtime.Processes
             .Select(p => new PreviewServiceRow(
-                p.Service.Name, p.Service.Public, p.Service.RewriteHost, p.IsRunning,
+                p.Service.Name, p.Service.Public, p.Service.RewriteHost, p.IsRunning, p.Service.Port,
                 runtime.Ports.TryGetValue(p.Service.Port, out var port) ? port : 0))
             .ToList();
         return SelectPreviewTarget(workItemId, serviceName, rows);
@@ -601,7 +601,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>One service of a running preview, as the proxy's target choice sees it.</summary>
-    internal sealed record PreviewServiceRow(string Name, bool Public, bool RewriteHost, bool IsRunning, int Port);
+    internal sealed record PreviewServiceRow(string Name, bool Public, bool RewriteHost, bool IsRunning, string PortAlias, int Port);
 
     /// <summary>
     /// Picks the service a preview hostname addresses: the named one, or with no name
@@ -649,7 +649,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             return PreviewTarget.Failed(
                 PreviewTargetOutcome.ServiceNotRunning,
-                $"Preview service '{row.Name}' has no port allocated.");
+                $"Preview service '{row.Name}' has no port allocated for alias '{row.PortAlias}'.");
         }
 
         return PreviewTarget.Resolved(row.Port, row.Name, row.RewriteHost);

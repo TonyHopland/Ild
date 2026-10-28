@@ -165,9 +165,9 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         Assert.Equal(File.ReadAllBytes(SessionPath), await StoredAsync());
         Assert.Equal(new FileInfo(SessionPath).Length, (await MetadataAsync())!.ByteLength);
 
-        _sql.Clear();
+        var unchanged = await MetadataAsync();
         await RunAsync();
-        Assert.DoesNotContain(_sql.Commands, c => WritesSnapshots(c.Sql));
+        Assert.Equal(unchanged, await MetadataAsync());
 
         var original = File.ReadAllBytes(SessionPath);
         File.Delete(SessionPath);
@@ -345,10 +345,10 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
             Assert.Null(await SessionSnapshotTestSupport.ReadLegacySessionJsonAsync(db, id, ct));
 
         var chunks = await ChunksAsync();
-        _sql.Clear();
+        var converted = await MetadataAsync();
         await RunMigrationAsync();
 
-        Assert.DoesNotContain(_sql.Commands, c => WritesSnapshots(c.Sql));
+        Assert.Equal(converted, await MetadataAsync());
         Assert.DoesNotContain(_migrationLog.Entries, e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning);
         Assert.All(chunks.Zip(await ChunksAsync()), pair => Assert.Equal(pair.First.Data, pair.Second.Data));
         Assert.Equal(File.ReadAllBytes(SessionPath), await StoredAsync());

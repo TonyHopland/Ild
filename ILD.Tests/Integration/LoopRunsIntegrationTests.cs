@@ -88,8 +88,8 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     [Fact]
     public async Task GetById_says_until_when_an_ended_runs_history_is_kept()
     {
-        // Own host: it swaps the run reclaimer for the whole host.
-        await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
+        // Own host: it changes the host-wide run.retentionDays setting.
+        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var ct = TestContext.Current.CancellationToken;
         var ended = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
@@ -157,8 +157,6 @@ public class LoopRunsIntegrationTests(SharedApiFactory factory) : IClassFixture<
     [Fact]
     public async Task Cleanup_for_unknown_id_returns_404()
     {
-        // Own host: it swaps the run reclaimer for the whole host.
-        await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.PostAsync($"/api/v1/loopruns/{Guid.NewGuid()}/cleanup", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);

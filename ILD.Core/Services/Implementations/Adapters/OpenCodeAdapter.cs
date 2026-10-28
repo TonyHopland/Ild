@@ -209,7 +209,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     exportedSessionJson = sessionJson;
             }
 
-            return AssembleResult(stdout, stderr, p.ExitCode, ctx.Prompt, ctx.IncomingSessionId, sessionIdToUse, exportedSessionJson);
+            return AssembleResult(stdout, stderr, p.ExitCode, ctx.Prompt, sessionIdToUse, ctx.IncomingSessionId, exportedSessionJson);
         }
         catch (Exception ex)
         {
@@ -221,11 +221,9 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     /// <remarks>
     /// opencode --format json emits a stream of typed events (step_start,
     /// tool_use, text, error, ...). Only `text` events carry assistant
-    /// output, and `error` events surface session failures. Previously
-    /// we fell back to dumping the raw NDJSON whenever no text was
-    /// extracted, which made the AI node output unreadable when the
-    /// model only produced tool calls or the session errored. Surface
-    /// a clear diagnostic instead and propagate session errors. When
+    /// output, and `error` events surface session failures. When no text
+    /// comes through, the response is a diagnostic rather than the raw
+    /// NDJSON, which is unreadable as AI node output. When
     /// stdout is not JSON at all (e.g. tests using a stub binary), keep
     /// the raw stdout as the response.
     /// </remarks>
@@ -233,7 +231,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     /// <param name="exportedSessionJson">The session as exported afterwards, read for the answer when the stream carried no text.</param>
     internal static NodeExecutionResult AssembleResult(
         string stdout, string stderr, int exitCode, string prompt,
-        string? incomingSessionId, string? fallbackSessionId, string? exportedSessionJson)
+        string? fallbackSessionId, string? incomingSessionId, string? exportedSessionJson)
     {
         var (response, sessionId, jsonError, sawJsonEvents) = ExtractTextAndSessionIdFromJsonEvents(stdout);
         var effectiveSessionId = sessionId ?? fallbackSessionId;

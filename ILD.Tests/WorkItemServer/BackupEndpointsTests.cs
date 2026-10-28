@@ -1,8 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
-using System.Reflection;
 using ILD.WorkItemServer;
 using ILD.WorkItemServer.Auth;
+using ILD.WorkItemServer.Backup;
 using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Hosting;
 using Microsoft.AspNetCore.Hosting;
@@ -21,18 +21,18 @@ namespace ILD.Tests.WorkItemServer;
 /// size and the heartbeat refresh after an import.
 ///
 /// <para>The database here is SQLite, so the server's PostgreSQL archive is
-/// replaced by a recording stand-in registered as <c>IDatabaseArchive</c> (a proxy, so the stand-in follows
-/// whatever members the interface has). The endpoints, their gate and the reclaimer are expected to work
-/// whenever such an archive is registered; production registers it only when a
-/// connection string is set.</para>
+/// replaced by a recording stand-in registered as <c>IDatabaseArchive</c>. The
+/// endpoints, their gate and the reclaimer are expected to work whenever such an
+/// archive is registered; production registers it only when a connection string
+/// is set.</para>
 /// </summary>
 public sealed class BackupEndpointsTests
 {
     private const string ApiKey = "backup-endpoints-key";
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    /// <summary>Answers every member of the archive interface; records and drains what is imported.</summary>
-    public class ArchiveProxy : DispatchProxy
+    /// <summary>Records what is exported and drains and counts what is imported.</summary>
+    public sealed class RecordingArchive : IDatabaseArchive
     {
         public long ImportedBytes;
         public int ImportCalls;
@@ -40,61 +40,35 @@ public sealed class BackupEndpointsTests
         public Task? HoldImport;
         public TaskCompletionSource ImportEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
-        {
-            var method = targetMethod!;
-            var stream = args?.OfType<Stream>().FirstOrDefault();
-            Task work = method.Name switch
-            {
-                var n when n.Contains("Import", StringComparison.Ordinal) => ImportAsync(stream),
-                var n when n.Contains("Export", StringComparison.Ordinal) => Export(),
-                _ => Task.CompletedTask,
-            };
-            if (method.ReturnType == typeof(Task)) return work;
-            if (method.ReturnType.IsGenericType && method.ReturnType.GetGenericTypeDefinition() == typeof(Task<>))
-            {
-                return typeof(ArchiveProxy).GetMethod(nameof(Wrap), BindingFlags.Static | BindingFlags.NonPublic)!
-                    .MakeGenericMethod(method.ReturnType.GetGenericArguments()[0]).Invoke(null, [work]);
-            }
-            return null;
-        }
+        public Task<ArchiveInfo> DescribeAsync(CancellationToken cancellationToken)
+            => Task.FromResult(new ArchiveInfo("0.0.0", [], DatabaseBytes: null));
 
-        private Task Export()
+        public Task ExportAsync(Stream output, string? keyCheck, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref ExportCalls);
             return Task.CompletedTask;
         }
 
-        private async Task ImportAsync(Stream? stream)
+        public async Task ImportAsync(Stream input, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref ImportCalls);
             ImportEntered.TrySetResult();
-            if (stream is not null)
-            {
-                var buffer = new byte[81920];
-                int read;
-                while ((read = await stream.ReadAsync(buffer)) > 0) Interlocked.Add(ref ImportedBytes, read);
-            }
+            var buffer = new byte[81920];
+            int read;
+            while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0) Interlocked.Add(ref ImportedBytes, read);
             if (HoldImport is not null) await HoldImport;
-        }
-
-        private static async Task<T?> Wrap<T>(Task work)
-        {
-            await work;
-            return default;
         }
     }
 
     private sealed class Server : WebApplicationFactory<WorkItemServerProgram>
     {
         private readonly SqliteConnection _connection = new("DataSource=:memory:");
-        public ArchiveProxy Archive { get; }
+        public RecordingArchive Archive { get; } = new();
 
         public Server()
         {
             _connection.Open();
             Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-            Archive = (ArchiveProxy)DispatchProxy.Create<ILD.WorkItemServer.Backup.IDatabaseArchive, ArchiveProxy>();
         }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -116,7 +90,7 @@ public sealed class BackupEndpointsTests
                     opt.UseSqlite(_connection);
                     opt.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
                 });
-                services.AddSingleton(typeof(ILD.WorkItemServer.Backup.IDatabaseArchive), Archive);
+                services.AddSingleton<IDatabaseArchive>(Archive);
             });
         }
 

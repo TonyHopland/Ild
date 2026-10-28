@@ -146,7 +146,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
 
     private static WorktreePreviewService.PreviewServiceRow Row(
         string name, bool isPublic = false, bool running = true, int port = 0, bool rewriteHost = true)
-        => new(name, isPublic, rewriteHost, running, port == 0 ? 4000 : port);
+        => new(name, isPublic, rewriteHost, running, "http", port == 0 ? 4000 : port);
 
     [Theory]
     [InlineData("wi-7", "7", null)]
@@ -267,9 +267,10 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     [Fact]
     public void A_running_service_without_a_port_is_reported_as_not_running()
     {
-        var target = WorktreePreviewService.SelectPreviewTarget("7", "api", [new("api", false, true, true, 0)]);
+        var target = WorktreePreviewService.SelectPreviewTarget("7", "api", [new("api", false, true, true, "http", 0)]);
 
         Assert.Equal(PreviewTargetOutcome.ServiceNotRunning, target.Outcome);
+        Assert.Contains("'http'", target.Message, StringComparison.Ordinal);
     }
 
     [Fact]

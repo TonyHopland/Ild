@@ -19,8 +19,8 @@ namespace ILD.Tests;
 /// through.</item>
 /// <item><see cref="Integration.StorageOverviewTests"/> points the agent scratch
 /// root (<c>ILD_AGENT_SCRATCH_ROOT</c>) at a directory of its own, which every
-/// scratch directory the process creates would then land in, and
-/// <see cref="Integration.StorageOverviewNotMeasuredTests"/> clears it.</item>
+/// scratch directory the process creates would then land in, and in another test
+/// clears it.</item>
 /// <item><see cref="SessionTokenHasherTests"/> and <see cref="AuthServicePepperTests"/>
 /// set the static session-token pepper, which every host and every
 /// <see cref="ILD.Core.Services.Implementations.AuthService"/> hashes tokens
