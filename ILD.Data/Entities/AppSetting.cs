@@ -4,9 +4,9 @@ namespace ILD.Data.Entities;
 
 public class AppSetting : IHasUpdatedAt
 {
-    [Key]
     public const int MaxValueLength = 4096;
 
+    [Key]
     public Guid Id { get; set; }
 
     [Required]
