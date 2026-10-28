@@ -25,6 +25,8 @@ namespace ILD.Tests;
 /// set the static session-token pepper, which every host and every
 /// <see cref="ILD.Core.Services.Implementations.AuthService"/> hashes tokens
 /// with.</item>
+/// <item><see cref="ProductionKeyDerivationTests"/> switches off the static PBKDF2 iteration
+/// overrides that lower every backup and sign-in in the process, to pin the production counts.</item>
 /// </list>
 /// </summary>
 [CollectionDefinition(Name, DisableParallelization = true)]
