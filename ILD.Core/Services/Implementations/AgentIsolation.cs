@@ -444,7 +444,7 @@ public static class AgentIsolation
         return RouteCommand(fileName, arguments, AgentUser, AgentGroup, AgentHome, proxy, regid);
     }
 
-    /// <inheritdoc cref="RouteCommand(string, IReadOnlyList{string})"/>
+    /// <inheritdoc cref="RouteCommand(string, IReadOnlyList{string}, Guid?, NetworkMode)"/>
     public static AgentCommand RouteCommand(
         string fileName,
         IReadOnlyList<string> arguments,

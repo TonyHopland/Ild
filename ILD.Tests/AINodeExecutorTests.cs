@@ -116,8 +116,6 @@ public class AINodeExecutorTests
         return last!;
     }
 
-    // Two rules both match "REJECT and review" (the first case-insensitively);
-    // last-match-wins must route to whichever pattern sits later in the output.
     private sealed class CapturingAdapter : IAgentAdapter
     {
         public AgentExecutionContext? Seen { get; private set; }
@@ -159,6 +157,8 @@ public class AINodeExecutorTests
     public async Task An_AI_node_without_a_policy_launches_proxied_as_Monitor()
         => Assert.Equal(NetworkMode.Monitor, await LaunchModeOfAsync(null));
 
+    // Two rules both match "REJECT and review" (the first case-insensitively);
+    // last-match-wins must route to whichever pattern sits later in the output.
     private const string TwoRuleConfig =
         @"{""matchRules"":[{""pattern"":""reject"",""edgeName"":""Reject""},{""pattern"":""review"",""edgeName"":""Review""}]}";
 
