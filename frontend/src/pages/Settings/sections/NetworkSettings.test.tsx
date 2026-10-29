@@ -962,3 +962,192 @@ describe("Network modes", () => {
     },
   );
 });
+
+describe("Editing a network forward", () => {
+  const redis: NetworkForward = {
+    ...postgres,
+    id: "f2",
+    name: "redis",
+    host: "cache",
+    port: 6379,
+    localPort: 16379,
+  };
+  const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+  const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
+  const startEditing = async (name = "postgres") => {
+    fireEvent.click(await screen.findByRole("button", { name: `Edit the ${name} forward` }));
+  };
+  const type = (label: string, value: string) =>
+    fireEvent.change(field(label), { target: { value } });
+
+  test("saves changed values, trimmed and numeric, and shows the server's row in place", async () => {
+    mockServices(enforced, "monitor", [postgres, redis]);
+    const updated: NetworkForward = {
+      ...postgres,
+      name: "primary",
+      host: "db.example",
+      port: 5433,
+      localPort: 15433,
+    };
+    const update = vi.spyOn(services.networkService, "updateForward").mockResolvedValue(updated);
+    vi.spyOn(services.networkService, "getForwards")
+      .mockResolvedValueOnce([postgres, redis])
+      .mockResolvedValue([updated, redis]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    expect(field("Name of the postgres forward").value).toBe("postgres");
+    expect(field("Destination host of the postgres forward").value).toBe("postgres");
+    expect(field("Destination port of the postgres forward").value).toBe("5432");
+    expect(field("Local port of the postgres forward").value).toBe("15432");
+
+    type("Name of the postgres forward", " primary ");
+    type("Destination host of the postgres forward", " db.example ");
+    type("Destination port of the postgres forward", "5433");
+    type("Local port of the postgres forward", "15433");
+    click("Save the postgres forward");
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith("f1", {
+        name: "primary",
+        host: "db.example",
+        port: 5433,
+        localPort: 15433,
+      }),
+    );
+    const table = await forwardTable();
+    expect(await table.findByText("primary")).toBeTruthy();
+    expect(table.getByText("db.example")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit the primary forward" })).toBeTruthy();
+    // The other row is untouched.
+    expect(table.getByText("redis")).toBeTruthy();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the edits and shows the server's reason in the row when a save is refused, then saves the fix", async () => {
+    mockServices(enforced, "monitor", [postgres, redis]);
+    const fixed: NetworkForward = { ...postgres, localPort: 17000 };
+    const update = vi
+      .spyOn(services.networkService, "updateForward")
+      .mockRejectedValueOnce({
+        status: 400,
+        message: "Local port 16379 already forwards to cache:6379",
+      })
+      .mockResolvedValue(fixed);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Local port of the postgres forward", "16379");
+    click("Save the postgres forward");
+
+    const row = within(
+      screen.getByRole("button", { name: "Save the postgres forward" }).closest("tr")!,
+    );
+    expect(await row.findByText(/already forwards to cache:6379/)).toBeTruthy();
+    expect(field("Local port of the postgres forward").value).toBe("16379");
+    expect(screen.getByRole("button", { name: "Save the postgres forward" })).toBeTruthy();
+
+    type("Local port of the postgres forward", "17000");
+    click("Save the postgres forward");
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update).toHaveBeenLastCalledWith("f1", {
+      name: "postgres",
+      host: "postgres",
+      port: 5432,
+      localPort: 17000,
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull());
+    expect(screen.queryByText(/already forwards to cache/)).toBeNull();
+  });
+
+  test("cancel throws the edits away without sending anything, and they do not come back", async () => {
+    mockServices();
+    const update = vi.spyOn(services.networkService, "updateForward");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Name of the postgres forward", "scribble");
+    type("Local port of the postgres forward", "9");
+    click("Cancel editing the postgres forward");
+
+    const table = await forwardTable();
+    expect(table.getByText("postgres")).toBeTruthy();
+    expect(table.queryByText("scribble")).toBeNull();
+    expect(screen.queryByLabelText("Name of the postgres forward")).toBeNull();
+
+    await startEditing();
+    expect(field("Name of the postgres forward").value).toBe("postgres");
+    expect(field("Local port of the postgres forward").value).toBe("15432");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test("will not save an incomplete draft, by button or by Enter, and says why for ports", async () => {
+    mockServices();
+    const update = vi.spyOn(services.networkService, "updateForward");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+    const save = () =>
+      screen.getByRole("button", { name: "Save the postgres forward" }) as HTMLButtonElement;
+
+    type("Name of the postgres forward", "   ");
+    expect(save().disabled).toBe(true);
+    fireEvent.keyDown(field("Name of the postgres forward"), { key: "Enter" });
+    type("Name of the postgres forward", "postgres");
+    type("Destination host of the postgres forward", "");
+    expect(save().disabled).toBe(true);
+    type("Destination host of the postgres forward", "postgres");
+    expect(save().disabled).toBe(false);
+
+    type("Local port of the postgres forward", "1e3");
+    expect(save().disabled).toBe(true);
+    expect(screen.getByText(/whole numbers between 1 and 65535/i)).toBeTruthy();
+    fireEvent.keyDown(field("Local port of the postgres forward"), { key: "Enter" });
+    type("Destination port of the postgres forward", "70000");
+    expect(save().disabled).toBe(true);
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test("Enter saves a complete draft, and a second Save while one is in flight sends nothing", async () => {
+    mockServices();
+    let finish: (f: NetworkForward) => void = () => {};
+    const update = vi
+      .spyOn(services.networkService, "updateForward")
+      .mockReturnValue(new Promise<NetworkForward>((resolve) => (finish = resolve)));
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+
+    type("Name of the postgres forward", "primary");
+    fireEvent.keyDown(field("Name of the postgres forward"), { key: "Enter" });
+    fireEvent.keyDown(field("Name of the postgres forward"), { key: "Enter" });
+    const save = screen.getByRole("button", { name: "Save the postgres forward" });
+    fireEvent.click(save);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    finish({ ...postgres, name: "primary" });
+    expect(await (await forwardTable()).findByText("primary")).toBeTruthy();
+  });
+
+  test("a live refresh while a row is being edited does not discard its edits or touch the add form", async () => {
+    mockServices(enforced, "monitor", [postgres, redis]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "draft-add" } });
+
+    await startEditing("redis");
+    type("Name of the redis forward", "cache-edit");
+    const getForwards = vi
+      .spyOn(services.networkService, "getForwards")
+      .mockResolvedValue([postgres, { ...redis, decision: "Blocked" }]);
+    emit("NetworkPolicyChanged", {});
+
+    await waitFor(() => expect(getForwards).toHaveBeenCalled());
+    await (await forwardTable()).findByText("Host not allowed by current mode");
+    expect(field("Name of the redis forward").value).toBe("cache-edit");
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("draft-add");
+    // Only the edited row is in edit mode.
+    expect(screen.queryByLabelText("Name of the postgres forward")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit the postgres forward" })).toBeTruthy();
+  });
+});
