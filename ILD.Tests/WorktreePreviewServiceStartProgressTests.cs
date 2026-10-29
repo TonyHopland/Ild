@@ -233,9 +233,10 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
     public async Task Concurrent_background_starts_of_one_worktree_run_one_install_and_one_launch_and_never_touch_a_running_preview()
     {
         var service = BuildService();
-        var (started, go) = (Fifo("started"), Fifo("go"));
+        var (started, go, launched) = (Fifo("started"), Fifo("go"), Fifo("launched"));
         var worktree = Worktree("wt-a",
-            [$"echo x >> \"${{WORKTREE}}/installs.txt\"; printf x > '{started}'; cat '{go}' > /dev/null"], [Web]);
+            [$"echo x >> \"${{WORKTREE}}/installs.txt\"; printf x > '{started}'; cat '{go}' > /dev/null"],
+            [Web with { Command = $"echo up >> \"${{WORKTREE}}/launches.txt\"; printf x > '{launched}'; exec sleep 60" }]);
 
         var calls = await Task.WhenAll(
             Task.Run(() => service.BeginStartAsync(worktree, Options, Ct), Ct),
@@ -248,6 +249,7 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
 
         await ReleaseAsync(go);
         var running = await Until(service, worktree, s => s.State == "running");
+        await WaitUntilOpenedAsync(launched);
         Assert.True(service.IsPreviewRunning(worktree));
         var again = await service.BeginStartAsync(worktree, Options, Ct);
 
@@ -328,10 +330,12 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
     {
         var health = new GatedHealth();
         var service = BuildService(health);
-        var worktree = Worktree("wt-a", [], [new Svc("web", "echo $$ > \"${WORKTREE}/pid.txt\"; exec sleep 60", "/never")]);
+        var written = Fifo("pid-written");
+        var worktree = Worktree("wt-a", [], [new Svc("web", $"echo $$ > \"${{WORKTREE}}/pid.txt\"; printf x > '{written}'; exec sleep 60", "/never")]);
 
         await service.BeginStartAsync(worktree, Options, Ct);
         var status = await Until(service, worktree, s => Row(s, "web").Status == "waitingForHealth");
+        await WaitUntilOpenedAsync(written);
         var pid = status.Services.Single().ProcessId!.Value;
         Assert.Equal(pid, int.Parse(File.ReadAllText(Path.Combine(worktree, "pid.txt")).Trim()));
         Assert.True(IsAlive(pid));
