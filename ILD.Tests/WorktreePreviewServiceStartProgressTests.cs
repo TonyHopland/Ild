@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ILD.Core.Services.Implementations;
@@ -19,6 +20,7 @@ namespace ILD.Tests;
 /// interleaving is scripted with named pipes and gated health probes.
 /// </summary>
 [Collection(PreviewPortsCollection.Name)]
+[SupportedOSPlatform("linux")]
 public class WorktreePreviewServiceStartProgressTests : IDisposable
 {
     private const string WorkItemId = "wi-7";
