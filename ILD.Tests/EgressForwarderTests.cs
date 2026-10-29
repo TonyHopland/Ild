@@ -283,10 +283,10 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     [Fact]
     public async Task A_forward_moved_to_another_local_port_stops_answering_on_the_old_one_and_answers_on_the_new_one()
     {
-        var bound = new ConcurrentDictionary<TcpListener, Socket>();
+        var bound = new ConcurrentDictionary<TcpListener, (Socket Socket, int Port)>();
         _forwarder!.AcceptClient = (listener, ct) =>
         {
-            bound.GetOrAdd(listener, l => l.Server);
+            bound.GetOrAdd(listener, l => (l.Server, ((IPEndPoint)l.LocalEndpoint).Port));
             return listener.AcceptTcpClientAsync(ct);
         };
         var forward = await DeclareAsync();
@@ -300,7 +300,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
 
         Assert.DoesNotContain(oldPort, _forwarder.ListeningPorts);
         Assert.Contains(newPort, _forwarder.ListeningPorts);
-        Assert.Contains(bound.Values, socket => ((IPEndPoint)socket.LocalEndPoint!).Port == oldPort && socket.SafeHandle.IsClosed);
+        Assert.Contains(bound.Values, b => b.Port == oldPort && b.Socket.SafeHandle.IsClosed);
         using var client = await DialAsync(newPort);
         Assert.Equal("on the new port", await EchoAsync(client, "on the new port"));
     }

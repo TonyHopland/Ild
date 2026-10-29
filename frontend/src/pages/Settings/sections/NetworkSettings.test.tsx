@@ -1073,7 +1073,7 @@ describe("Editing a network forward", () => {
     click("Cancel editing the postgres forward");
 
     const table = await forwardTable();
-    expect(table.getByText("postgres")).toBeTruthy();
+    expect(table.getByRole("button", { name: "Edit the postgres forward" })).toBeTruthy();
     expect(table.queryByText("scribble")).toBeNull();
     expect(screen.queryByLabelText("Name of the postgres forward")).toBeNull();
 
