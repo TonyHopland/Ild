@@ -264,58 +264,13 @@ public sealed class SettingsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task The_internal_allow_list_is_canonicalised_stored_and_applied_to_the_next_connection()
+    public async Task The_retired_internal_allow_key_is_an_unknown_setting()
     {
-        var result = await Put(AppSettingKeys.NetworkInternalAllow, " Git.Example.COM, 10.0.0.0/8\n10.0.0.0/8\r\n,");
-
-        Assert.Equal("git.example.com\n10.0.0.0/8", StatedValue(result));
-        Assert.Equal("git.example.com\n10.0.0.0/8", await Stored(AppSettingKeys.NetworkInternalAllow));
-        _policy.Verify(p => p.Invalidate(), Times.Once);
-        _networkNotifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
-    }
-
-    [Fact]
-    public async Task An_empty_internal_allow_list_clears_the_override()
-    {
-        await Put(AppSettingKeys.NetworkInternalAllow, "10.0.0.0/8");
-
-        var result = await Put(AppSettingKeys.NetworkInternalAllow, "");
-
-        Assert.Equal("", StatedValue(result));
-        Assert.Equal("", await Stored(AppSettingKeys.NetworkInternalAllow));
-    }
-
-    [Theory]
-    [InlineData("http://git.example/", "http://git.example/")]
-    [InlineData("git.example:3000", "git.example:3000")]
-    [InlineData("10.0.0.1/8", "10.0.0.1/8")]
-    [InlineData("10.0.0.0/33", "10.0.0.0/33")]
-    [InlineData("ok.example\nnot a host!", "not a host!")]
-    public async Task A_bad_internal_allow_pattern_is_refused_by_name_and_stores_nothing(string sent, string bad)
-    {
-        var result = await Put(AppSettingKeys.NetworkInternalAllow, sent);
-
-        var error = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<BadRequestObjectResult>(result).Value);
-        Assert.Contains(System.Text.Json.JsonSerializer.Serialize(bad).Trim('"'), error);
-        Assert.Null(await Stored(AppSettingKeys.NetworkInternalAllow));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
-    }
-
-    [Fact]
-    public async Task An_internal_allow_list_over_the_column_limit_is_refused()
-    {
-        var sent = string.Join('\n', Enumerable.Range(0, 400).Select(i => $"host{i}.example.com"));
-
-        Assert.IsType<BadRequestObjectResult>(await Put(AppSettingKeys.NetworkInternalAllow, sent));
-        Assert.Null(await Stored(AppSettingKeys.NetworkInternalAllow));
-    }
-
-    [Fact]
-    public async Task The_internal_allow_list_reads_empty_until_one_is_stored()
-    {
-        Assert.Equal("", StatedValue(await Build().Get(AppSettingKeys.NetworkInternalAllow, TestContext.Current.CancellationToken)));
+        Assert.IsType<NotFoundObjectResult>(await Build().Get("network.internalAllow", TestContext.Current.CancellationToken));
+        Assert.IsType<NotFoundObjectResult>(await Put("network.internalAllow", "10.0.0.0/8"));
+        Assert.Null(await Stored("network.internalAllow"));
 
         var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
-        Assert.Contains(AppSettingKeys.NetworkInternalAllow, all);
+        Assert.DoesNotContain("network.internalAllow", all);
     }
 }

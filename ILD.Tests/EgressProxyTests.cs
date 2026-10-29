@@ -48,11 +48,6 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        // Every scenario below that is not about the private-address block relays to
-        // loopback, so the fixture allows it the way an operator would.
-        await _db.Settings.UpsertAsync(AppSettingKeys.NetworkInternalAllow, "127.0.0.0/8\n::1");
-        _policy.Invalidate();
-
         _upstream = new TcpListener(IPAddress.Loopback, 0);
         _upstream.Start();
         _upstreamPort = ((IPEndPoint)_upstream.LocalEndpoint).Port;
@@ -938,11 +933,6 @@ public sealed class EgressProxyTests : IAsyncLifetime
         return await proxy.BoundPort.WaitAsync(Timeout);
     }
 
-    private async Task SetInternalAllowAsync(string value)
-    {
-        await _db.Settings.UpsertAsync(AppSettingKeys.NetworkInternalAllow, value);
-        _policy.Invalidate();
-    }
 
     private async Task<(TcpClient Client, string StatusLine)> ConnectViaAsync(int proxyPort, string host, int port)
     {
@@ -958,53 +948,74 @@ public sealed class EgressProxyTests : IAsyncLifetime
     private static readonly IPAddress[] Private10 = { IPAddress.Parse("10.1.2.3") };
 
     [Theory]
-    [InlineData(NetworkMode.Off, false)]
-    [InlineData(NetworkMode.Monitor, false)]
-    [InlineData(NetworkMode.Whitelist, true)]
-    [InlineData(NetworkMode.Blacklist, false)]
-    public async Task A_name_that_resolves_to_a_private_address_is_refused_in_every_mode_even_when_listed(NetworkMode mode, bool whitelisted)
+    [InlineData(NetworkMode.Monitor, false, false, NetworkDecision.Advisory)]
+    [InlineData(NetworkMode.Blacklist, false, false, NetworkDecision.Allowed)]
+    [InlineData(NetworkMode.Whitelist, true, true, NetworkDecision.Allowed)]
+    public async Task A_name_that_resolves_to_a_private_address_connects_when_the_mode_and_lists_allow_it(
+        NetworkMode mode, bool listed, bool whitelist, NetworkDecision expected)
     {
-        await SetInternalAllowAsync("");
         await SetModeAsync(mode);
-        if (whitelisted) await ListAsync("intranet.example", NetworkListKind.Whitelist);
+        if (listed) await ListAsync("status.lan.example", whitelist ? NetworkListKind.Whitelist : NetworkListKind.Blacklist);
+        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
+        var port = await StartProxyAsync(resolver);
+
+        var (client, status) = await ConnectViaAsync(port, "status.lan.example", _upstreamPort);
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            Assert.Equal("through the seam", await EchoAsync(client, "through the seam"));
+        }
+
+        Assert.Equal(("status.lan.example", _upstreamPort, expected, (Guid?)null), Assert.Single(_log.Entries));
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Blacklist, NetworkListKind.Blacklist, true)]
+    [InlineData(NetworkMode.Whitelist, NetworkListKind.Whitelist, false)]
+    public async Task A_name_that_resolves_to_a_private_address_is_refused_by_the_lists_alone_and_never_resolved(
+        NetworkMode mode, NetworkListKind kind, bool listed)
+    {
+        await SetModeAsync(mode);
+        if (listed) await ListAsync("status.lan.example", kind);
+        else await ListAsync("other.example", kind);
         var resolver = new CountingResolver(_ => Private10);
         var port = await StartProxyAsync(resolver);
 
-        var (client, status) = await ConnectViaAsync(port, "intranet.example", 8443);
+        var (client, status) = await ConnectViaAsync(port, "status.lan.example", _upstreamPort);
         using (client)
         {
             Assert.StartsWith("HTTP/1.1 403", status);
             var body = await ReadToEndAsync(client.GetStream());
-            Assert.Contains("intranet.example", body);
-            Assert.Contains("private", body);
-            Assert.Contains("Settings", body);
+            Assert.Contains("blocks status.lan.example", body);
+            Assert.DoesNotContain("private", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Internal destinations", body);
         }
 
-        Assert.Equal(("intranet.example", 8443, NetworkDecision.Blocked, (Guid?)null), Assert.Single(_log.Entries));
+        Assert.Equal(0, resolver.Calls);
+        Assert.Equal(("status.lan.example", _upstreamPort, NetworkDecision.Blocked, (Guid?)null), Assert.Single(_log.Entries));
     }
 
     [Theory]
-    [InlineData("10.1.2.3")]
-    [InlineData("169.254.169.254")]
-    [InlineData("[::ffff:169.254.169.254]")]
+    [InlineData("127.0.0.1")]
     [InlineData("[::1]")]
-    public async Task A_private_address_literal_is_refused(string literal)
+    public async Task A_private_address_literal_is_judged_only_by_the_mode(string literal)
     {
-        await SetInternalAllowAsync("");
         var port = await StartProxyAsync(null);
 
         var (client, status) = await ConnectViaAsync(port, literal, _upstreamPort);
-        client.Dispose();
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            Assert.Equal("through the seam", await EchoAsync(client, "through the seam"));
+        }
 
-        Assert.StartsWith("HTTP/1.1 403", status);
-        Assert.Equal(NetworkDecision.Blocked, Assert.Single(_log.Entries).Decision);
+        Assert.Equal(NetworkDecision.Advisory, Assert.Single(_log.Entries).Decision);
     }
 
     [Fact]
-    public async Task With_a_mixed_resolution_only_the_permitted_address_is_dialled_and_the_name_is_resolved_once()
+    public async Task A_name_is_resolved_once_and_the_resolved_address_is_dialled()
     {
-        // 127.0.0.0/8 is allowed by the fixture; 10.0.0.1 is not, and nothing listens there.
-        var resolver = new CountingResolver(_ => new[] { IPAddress.Parse("10.0.0.1"), IPAddress.Loopback });
+        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
         var port = await StartProxyAsync(resolver);
 
         var (client, status) = await ConnectViaAsync(port, "no-such-host.invalid", _upstreamPort);
@@ -1016,94 +1027,6 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
         Assert.Equal(1, resolver.Calls);
         Assert.Equal(("no-such-host.invalid", _upstreamPort, NetworkDecision.Advisory, (Guid?)null), Assert.Single(_log.Entries));
-    }
-
-    [Fact]
-    public async Task A_host_pattern_override_permits_the_names_it_matches_and_no_others()
-    {
-        await SetInternalAllowAsync(".lan.example");
-        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
-        var port = await StartProxyAsync(resolver);
-
-        var (allowed, allowedStatus) = await ConnectViaAsync(port, "db.lan.example", _upstreamPort);
-        using (allowed) Assert.StartsWith("HTTP/1.1 200", allowedStatus);
-        var (other, otherStatus) = await ConnectViaAsync(port, "db.other.example", _upstreamPort);
-        other.Dispose();
-
-        Assert.StartsWith("HTTP/1.1 403", otherStatus);
-    }
-
-    [Fact]
-    public async Task The_override_never_lifts_a_list_block_and_a_listed_out_host_is_not_resolved()
-    {
-        await SetInternalAllowAsync("127.0.0.0/8\n.lan.example");
-        await SetModeAsync(NetworkMode.Blacklist);
-        await ListAsync("db.lan.example", NetworkListKind.Blacklist);
-        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
-        var port = await StartProxyAsync(resolver);
-
-        var (client, status) = await ConnectViaAsync(port, "db.lan.example", _upstreamPort);
-        using (client)
-        {
-            Assert.StartsWith("HTTP/1.1 403", status);
-            Assert.Contains("blocks db.lan.example", await ReadToEndAsync(client.GetStream()));
-        }
-
-        Assert.Equal(0, resolver.Calls);
-    }
-
-    [Fact]
-    public async Task A_plain_http_request_to_a_private_host_gets_a_403_that_names_the_host()
-    {
-        await SetInternalAllowAsync("");
-        var resolver = new CountingResolver(_ => Private10);
-        var port = await StartProxyAsync(resolver);
-
-        using var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
-        var stream = client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes("GET http://intranet.example:8080/x HTTP/1.1\r\nHost: intranet.example:8080\r\n\r\n"), TestContext.Current.CancellationToken);
-        var response = await ReadToEndAsync(stream);
-
-        Assert.StartsWith("HTTP/1.1 403", response);
-        Assert.Contains("intranet.example", response);
-        Assert.Equal(("intranet.example", 8080, NetworkDecision.Blocked, (Guid?)null), Assert.Single(_log.Entries));
-    }
-
-    [Fact]
-    public async Task A_redirected_tls_flow_to_a_private_address_is_refused_with_the_alert()
-    {
-        await SetInternalAllowAsync("");
-        var port = await StartProxyAsync(new CountingResolver(_ => Private10));
-
-        using var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
-        var stream = client.GetStream();
-        await stream.WriteAsync(TlsClientHelloTests.Build("intranet.example"), TestContext.Current.CancellationToken);
-        using var cts = new CancellationTokenSource(Timeout);
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms, cts.Token);
-
-        Assert.Equal(new byte[] { 0x15, 0x03, 0x01, 0x00, 0x02, 0x02, 0x31 }, ms.ToArray());
-        Assert.Equal(("intranet.example", 443, NetworkDecision.Blocked, (Guid?)null), Assert.Single(_log.Entries));
-    }
-
-    [Fact]
-    public async Task The_orchestrators_own_api_endpoint_is_exempt_on_its_exact_host_and_port_only()
-    {
-        await SetInternalAllowAsync("");
-        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
-        var port = await StartProxyAsync(resolver, new EgressProxyOptions(true, 0, ("ild.internal.test", _upstreamPort)));
-
-        var (api, apiStatus) = await ConnectViaAsync(port, "ild.internal.test", _upstreamPort);
-        using (api) Assert.StartsWith("HTTP/1.1 200", apiStatus);
-        var (otherPort, otherPortStatus) = await ConnectViaAsync(port, "ild.internal.test", _upstreamPort + 1);
-        otherPort.Dispose();
-        var (otherHost, otherHostStatus) = await ConnectViaAsync(port, "elsewhere.internal.test", _upstreamPort);
-        otherHost.Dispose();
-
-        Assert.StartsWith("HTTP/1.1 403", otherPortStatus);
-        Assert.StartsWith("HTTP/1.1 403", otherHostStatus);
     }
 
     [Fact]
