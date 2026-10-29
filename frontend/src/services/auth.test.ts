@@ -351,3 +351,37 @@ describe("networkService.updateEntry", () => {
     expect(result).toEqual(entry);
   });
 });
+
+describe("networkService.updateForward", () => {
+  test("PUTs the forward to /api/v1/network/forwards/:id and resolves to the server's forward", async () => {
+    const forward = {
+      id: "f1",
+      name: "postgres",
+      host: "db.example.com",
+      port: 5432,
+      localPort: 15432,
+      createdAt: "2026-09-01T10:00:00Z",
+      decision: "Advisory",
+      listenError: null,
+    };
+    fetchSpy.mockResolvedValue(okJsonResponse(forward));
+
+    const result = await networkService.updateForward("f1", {
+      name: "postgres",
+      host: "db.example.com",
+      port: 5432,
+      localPort: 15432,
+    });
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/network/forwards/f1");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      name: "postgres",
+      host: "db.example.com",
+      port: 5432,
+      localPort: 15432,
+    });
+    expect(result).toEqual(forward);
+  });
+});

@@ -108,8 +108,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [progressText, setProgressText] = useState("");
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  // The user's own start request, which can run for minutes: its own flag so the
-  // quiet re-reads that follow its progress never touch previewLoading.
+  // The user's own start request: its own flag so the quiet re-reads that follow
+  // its progress never touch previewLoading.
   const [previewStarting, setPreviewStarting] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [pushBranchLoading, setPushBranchLoading] = useState(false);
@@ -310,9 +310,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   // Reads are tagged when they start: one applies only if it is still the latest read
   // and no write has settled since, so neither an older read nor one that began before
-  // a start/stop answered can overwrite a newer snapshot.
+  // a start/stop answered can overwrite a newer snapshot. A write's answer can itself be
+  // older than a change pushed while it ran (a start answers with its first progress),
+  // so a read begun during a write is taken again once the write settles.
   const readGen = useRef(0);
   const writeGen = useRef(0);
+  const writesInFlight = useRef(0);
+  const readDuringWrite = useRef(false);
 
   // A quiet read serves PreviewStateChanged and a failed write: it shows no loading
   // state, and a failure keeps what is on screen — unless the read follows a failed
@@ -326,6 +330,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         }
         return;
       }
+      if (writesInFlight.current > 0) readDuringWrite.current = true;
       const read = ++readGen.current;
       const write = writeGen.current;
       const isCurrent = () => read === readGen.current && write === writeGen.current;
@@ -367,17 +372,23 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     ) => {
       setBusy(true);
       setPreviewError(null);
+      writesInFlight.current++;
+      let failed = false;
       try {
         const result = await request();
         writeGen.current++;
         setPreview(result);
       } catch (error) {
         writeGen.current++;
+        failed = true;
         setPreviewError((error as { message?: string })?.message ?? failure);
-        void readPreview(true, true);
       } finally {
+        writesInFlight.current--;
         setBusy(false);
       }
+      const missed = readDuringWrite.current && writesInFlight.current === 0;
+      if (missed) readDuringWrite.current = false;
+      if (failed || missed) void readPreview(true, failed);
     },
     [readPreview],
   );
@@ -602,13 +613,16 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   // The work-item hub carries PreviewStateChanged, broadcast whenever a preview
   // is started or stopped out-of-band — most importantly by an AI agent driving
-  // the preview through the agent API. Human start/stop from this dialog already
-  // updates `preview` from the HTTP response; this keeps the open Preview tab in
-  // sync when the change originates anywhere else.
+  // the preview through the agent API — and by a start from this dialog, which
+  // answers with its first progress and reports the rest here. A push missed while
+  // the hub was disconnected is made up for by a read once it reconnects.
   const { on: wiOn, off: wiOff, connectionState: wiConnectionState } = useSharedWorkItemHub();
+  const previewHubConnectedBefore = useRef(false);
 
   useEffect(() => {
     if (!workItem?.id || wiConnectionState !== "connected") return;
+    if (previewHubConnectedBefore.current) void readPreview(true);
+    previewHubConnectedBefore.current = true;
 
     const onPreviewStateChanged = (message: TypedSignalRMessage<"PreviewStateChanged">) => {
       if (message.payload.workItemId !== workItem.id) return;

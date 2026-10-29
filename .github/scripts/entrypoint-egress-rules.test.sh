@@ -30,7 +30,7 @@ trap 'rm -rf "$work"' EXIT
 
 # --- Load the real functions without running the entrypoint's top-level body.
 funcs="$work/funcs.sh"
-for fn in has_cap_net_admin has_no_new_privs resolve_network_open_gid install_egress_rules_nft install_egress_rules_iptables install_agent_egress_rules; do
+for fn in has_cap_net_admin has_no_new_privs resolve_network_open_gid install_egress_rules_nft install_egress_rules_iptables install_egress_chain_iptables remove_egress_rules_iptables install_agent_egress_rules; do
   awk -v hdr="$fn() {" '$0==hdr{p=1} p{print} p&&$0=="}"{exit}' "$entrypoint" >> "$funcs"
   if ! grep -q "^$fn() {" "$funcs"; then
     echo "FAIL: could not extract $fn from $entrypoint"; exit 1
@@ -56,6 +56,13 @@ case " $* " in *" -C "*) exit 1 ;; esac
 exit 0
 STUB
 cp "$work/bin/iptables" "$work/bin/ip6tables"
+# An ip6tables that refuses every rule, for a family that fails after IPv4 is in place.
+cat > "$work/bin/ip6tables-refusing" <<'STUB'
+#!/usr/bin/env bash
+printf 'v6 %s\n' "$*" >> "$IPT_LOG"
+case " $* " in *" -A "*|*" -C "*) exit 1 ;; esac
+exit 0
+STUB
 chmod +x "$work/bin/"*
 export NFT_ARGS_LOG="$work/nft-args" NFT_RULES_LOG="$work/nft-rules" IPT_LOG="$work/ipt"
 
@@ -180,6 +187,22 @@ IPTABLES_BIN="$work/bin/none4"; IP6TABLES_BIN="$work/bin/none6"
 install_agent_egress_rules >/dev/null 2>&1
 unset NFT_EXIT
 [ "${ILD_NETWORK_ENFORCEMENT:-}" = advisory ] && pass "a failed install reports advisory" || fail "a failed install reported '${ILD_NETWORK_ENFORCEMENT:-}'"
+
+# --- 5b. IPv4 installs, IPv6 fails: IPv4 is taken down again, so the advisory report is true
+# and an Off agent is not left behind drops it cannot see.
+reset; with_status 000001ffffffffff 1; NETWORK_OPEN_GROUP=ild-net-open
+NFT_BIN="$work/bin/does-not-exist"; IP6TABLES_BIN="$work/bin/ip6tables-refusing"
+install_agent_egress_rules >/dev/null 2>&1
+ipt="$(cat "$IPT_LOG" 2>/dev/null)"
+[ "${ILD_NETWORK_ENFORCEMENT:-}" = advisory ] && pass "a family that fails reports advisory" || fail "a failed IPv6 install reported '${ILD_NETWORK_ENFORCEMENT:-}'"
+[ -z "${ILD_NETWORK_OPEN_GROUP:-}" ] && pass "a family that fails exports no open group" || fail "a failed IPv6 install exported '${ILD_NETWORK_OPEN_GROUP:-}'"
+grep -qx -- '-w -D OUTPUT -m owner --uid-owner 10002 -j ILD_AGENT_EGRESS' <<<"$ipt" \
+  && grep -qx -- '-w -X ILD_AGENT_EGRESS' <<<"$ipt" \
+  && pass "the IPv4 jump and chain are removed when IPv6 fails" || fail "IPv4 rules left in place after IPv6 failed: $ipt"
+v4_drop="$(grep -nx -- '-w -A ILD_AGENT_EGRESS -j DROP' <<<"$ipt" | cut -d: -f1)"
+v4_remove="$(grep -nx -- '-w -X ILD_AGENT_EGRESS' <<<"$ipt" | cut -d: -f1)"
+[ -n "$v4_drop" ] && [ -n "$v4_remove" ] && [ "$v4_drop" -lt "$v4_remove" ] \
+  && pass "IPv4 is removed after it was installed" || fail "IPv4 removal not after its install: $ipt"
 
 # --- 6. No proxy port: nothing to funnel into, advisory with a reason.
 reset; with_caps 000001ffffffffff

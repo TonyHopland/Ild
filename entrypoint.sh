@@ -520,29 +520,47 @@ install_egress_rules_nft() {
 }
 
 # Same rules through legacy iptables, for a kernel or image without nf_tables. The open-group
-# accept matches the effective gid only (no --suppl-groups), as the nft one does.
+# accept matches the effective gid only (no --suppl-groups), as the nft one does. A family that
+# fails takes the families already installed down with it: the report is then advisory, and
+# leftover drops would leave an Off agent, which skips the proxy, with no network.
 install_egress_rules_iptables() {
   uid="$1"
   open_gid="${2:-}"
   installed=0
   for ipt in "$IPTABLES_BIN" "$IP6TABLES_BIN"; do
     command -v "$ipt" >/dev/null 2>&1 || continue
-    if ! "$ipt" -w -N ILD_AGENT_EGRESS 2>/dev/null; then
-      "$ipt" -w -F ILD_AGENT_EGRESS || return 1
+    if ! install_egress_chain_iptables "$ipt" "$uid" "$open_gid"; then
+      remove_egress_rules_iptables "$uid"
+      return 1
     fi
-    if ! "$ipt" -w -C OUTPUT -m owner --uid-owner "$uid" -j ILD_AGENT_EGRESS 2>/dev/null; then
-      "$ipt" -w -I OUTPUT 1 -m owner --uid-owner "$uid" -j ILD_AGENT_EGRESS || return 1
-    fi
-    if [ -n "$open_gid" ]; then
-      "$ipt" -w -A ILD_AGENT_EGRESS -m owner --uid-owner "$uid" --gid-owner "$open_gid" -j ACCEPT || return 1
-    fi
-    "$ipt" -w -A ILD_AGENT_EGRESS -p udp --dport 53 -j DROP || return 1
-    "$ipt" -w -A ILD_AGENT_EGRESS -p tcp --dport 53 -j DROP || return 1
-    "$ipt" -w -A ILD_AGENT_EGRESS -o lo -j ACCEPT || return 1
-    "$ipt" -w -A ILD_AGENT_EGRESS -j DROP || return 1
     installed=1
   done
   [ "$installed" = 1 ]
+}
+
+install_egress_chain_iptables() {
+  if ! "$1" -w -N ILD_AGENT_EGRESS 2>/dev/null; then
+    "$1" -w -F ILD_AGENT_EGRESS || return 1
+  fi
+  if ! "$1" -w -C OUTPUT -m owner --uid-owner "$2" -j ILD_AGENT_EGRESS 2>/dev/null; then
+    "$1" -w -I OUTPUT 1 -m owner --uid-owner "$2" -j ILD_AGENT_EGRESS || return 1
+  fi
+  if [ -n "$3" ]; then
+    "$1" -w -A ILD_AGENT_EGRESS -m owner --uid-owner "$2" --gid-owner "$3" -j ACCEPT || return 1
+  fi
+  "$1" -w -A ILD_AGENT_EGRESS -p udp --dport 53 -j DROP || return 1
+  "$1" -w -A ILD_AGENT_EGRESS -p tcp --dport 53 -j DROP || return 1
+  "$1" -w -A ILD_AGENT_EGRESS -o lo -j ACCEPT || return 1
+  "$1" -w -A ILD_AGENT_EGRESS -j DROP || return 1
+}
+
+remove_egress_rules_iptables() {
+  for ipt in "$IPTABLES_BIN" "$IP6TABLES_BIN"; do
+    command -v "$ipt" >/dev/null 2>&1 || continue
+    "$ipt" -w -D OUTPUT -m owner --uid-owner "$1" -j ILD_AGENT_EGRESS 2>/dev/null || true
+    "$ipt" -w -F ILD_AGENT_EGRESS 2>/dev/null || true
+    "$ipt" -w -X ILD_AGENT_EGRESS 2>/dev/null || true
+  done
 }
 
 # Funnel the agent uid through the egress proxy, or say plainly why not. Runs as

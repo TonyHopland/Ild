@@ -760,15 +760,16 @@ confirm it and shows a warning while it is active.
   and the provider terminal follow the mode when they start; git run for the
   agent, chat repository clones and writes to agent-visible files never use the
   proxy.
-- **`off` needs `NET_ADMIN` and `no-new-privileges`.** The firewall tells the
-  agent apart by its group (`ILD_NETWORK_OPEN_GROUP`, set from
+- **Under an enforced firewall, `off` needs `no-new-privileges`.** The firewall
+  lets an `off` agent through by its group (`ILD_NETWORK_OPEN_GROUP`, set from
   `NETWORK_OPEN_GROUP`, `ild-net-open` in the image), and `no-new-privileges`
   keeps a setgid file in that group from lending it to other processes. Compose
   sets it; on podman, docker and Kubernetes set `--security-opt=no-new-privileges`
-  or `allowPrivilegeEscalation: false`. Without it, or without `NET_ADMIN`, `off`
-  is unavailable. Under an enforced firewall its agents would have no network, so
-  Settings refuses to switch to it; advisory, it differs from `monitor` only in
-  logging. The status `reason` says which.
+  or `allowPrivilegeEscalation: false`. Without it an `off` agent would have no
+  network, so Settings refuses to switch to `off`. Without `NET_ADMIN` there is no
+  firewall (advisory), so `off` is always available and differs from `monitor`
+  only in that nothing is logged. The status `offAvailable` and `reason` say which
+  applies.
 
 LAN and private hosts (self-hosted git, a local model server, cloud metadata at
 `169.254.169.254`) go through the proxy like any other host: the mode and lists

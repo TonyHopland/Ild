@@ -136,6 +136,14 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
         }
     }
 
+    private static async Task UntilJoined(WorktreePreviewService service, string worktree)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(30));
+        while (service.JoinedStartCount(worktree) == 0)
+            await Task.Delay(10, limit.Token);
+    }
+
     private static WorktreePreviewServiceResponse Row(WorktreePreviewResponse status, string name)
         => status.Services.Single(s => s.Name == name);
 
@@ -306,10 +314,52 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
         await WaitUntilOpenedAsync(started);
         await service.StopAsync(worktree, Ct);
 
-        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => start);
+        var failure = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => start);
         Assert.Contains("stopped", failure.Message);
         Assert.Equal(0, Lines(worktree, "launches.txt"));
         Assert.False(service.IsPreviewRunning(worktree));
+    }
+
+    [Fact]
+    public async Task A_blocking_start_that_joins_a_background_start_ends_with_it_and_a_stop_launches_nothing_after()
+    {
+        var service = BuildService();
+        var (started, go) = (Fifo("started"), Fifo("go"));
+        var worktree = Worktree("wt-a",
+            [$"echo x >> \"${{WORKTREE}}/installs.txt\"; printf x > '{started}'; cat '{go}' > /dev/null"], [Web]);
+
+        await service.BeginStartAsync(worktree, Options, Ct);
+        await WaitUntilOpenedAsync(started);
+        var joined = service.StartAsync(worktree, Options, Ct);
+        await UntilJoined(service, worktree);
+        await service.StopAsync(worktree, Ct);
+
+        var failure = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => joined);
+        Assert.Contains("stopped", failure.Message);
+        Assert.False(service.IsPreviewRunning(worktree));
+        Assert.Equal("stopped", (await service.GetStatusAsync(worktree, Ct)).State);
+        Assert.Equal(1, Lines(worktree, "installs.txt"));
+        Assert.Equal(0, Lines(worktree, "launches.txt"));
+    }
+
+    [Fact]
+    public async Task A_blocking_start_that_joins_a_background_start_answers_with_its_running_preview()
+    {
+        var service = BuildService();
+        var (started, go) = (Fifo("started"), Fifo("go"));
+        var worktree = Worktree("wt-a",
+            [$"echo x >> \"${{WORKTREE}}/installs.txt\"; printf x > '{started}'; cat '{go}' > /dev/null"], [Web]);
+
+        await service.BeginStartAsync(worktree, Options, Ct);
+        await WaitUntilOpenedAsync(started);
+        var joined = service.StartAsync(worktree, Options, Ct);
+        await UntilJoined(service, worktree);
+        await ReleaseAsync(go);
+
+        var running = await joined;
+        Assert.Equal("running", running.State);
+        Assert.Equal(running.Services.Single().ProcessId, Row(await service.GetStatusAsync(worktree, Ct), "web").ProcessId);
+        Assert.Equal(1, Lines(worktree, "installs.txt"));
     }
 
     // --- services ---

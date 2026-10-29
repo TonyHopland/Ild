@@ -81,7 +81,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[codex-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables, ctx.NetworkMode);
+            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             var sessionsDirectory = SessionsDirectory();
             if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId))
@@ -339,8 +339,8 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     /// </param>
     /// <param name="mode">The execution's network mode; custom servers are given the proxy only when it is proxied.</param>
     public static IReadOnlyList<CodexMcpServer> WriteMcpServers(
-        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null,
-        ILogger? logger = null, IProcessEnvironment? environment = null, NetworkMode mode = NetworkMode.Monitor)
+        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, NetworkMode mode,
+        Guid? chatSessionId = null, ILogger? logger = null, IProcessEnvironment? environment = null)
     {
         logger ??= NullLogger.Instance;
         environment ??= ProcessEnvironment.Current;

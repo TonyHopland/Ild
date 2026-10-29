@@ -132,8 +132,8 @@ describe("PreviewPanel while a start is in progress", () => {
     expect(start.disabled).toBe(true);
   });
 
-  test("a failed start leaves Start Preview and the row controls usable again", () => {
-    renderPanel("failed", [
+  test("a failed start leaves Start Preview and the row controls usable again", async () => {
+    const detail = renderPanel("failed", [
       service("a", "stopped"),
       service("b", "failed", { exitCode: 1, error: "exited" }),
     ]);
@@ -142,5 +142,8 @@ describe("PreviewPanel while a start is in progress", () => {
     const start = within(row("a")).getByRole("button", { name: "Start" }) as HTMLButtonElement;
     expect(start.disabled).toBe(false);
     fireEvent.click(within(row("b")).getByRole("button", { name: "Log" }));
+
+    expect(await screen.findByText(/boom: cannot bind/)).toBeTruthy();
+    expect(detail.fetchPreviewLogs).toHaveBeenCalledWith("b");
   });
 });

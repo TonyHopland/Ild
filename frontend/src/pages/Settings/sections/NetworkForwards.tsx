@@ -140,7 +140,7 @@ function ForwardRow({ forward, onUpdate, onRemove, onWhitelist }: ForwardRowProp
   const label = (what: string) => `${what} of the ${subject}`;
 
   return (
-    <tr className={state.tone === "ok" ? "" : "net-row-idle"}>
+    <tr className={state.tone === "ok" || row.editing ? "" : "net-row-idle"}>
       <td>
         {row.editing ? (
           <input

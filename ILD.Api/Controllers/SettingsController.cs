@@ -179,8 +179,8 @@ public class SettingsController : ControllerBase
         }
         else if (key == AppSettingKeys.NetworkMode)
         {
-            // The proxy judges the agent's next connection by the new mode,
-            // and re-judges the tunnels already open under the old one.
+            // The proxy judges the agent's next connection by the new mode, and
+            // re-judges the tunnels already open under the old one.
             _egressPolicy.Invalidate();
             await _networkNotifier.PolicyChangedAsync();
         }

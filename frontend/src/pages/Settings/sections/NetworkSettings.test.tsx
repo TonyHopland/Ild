@@ -318,6 +318,18 @@ describe("Network settings", () => {
     expect(add).not.toHaveBeenCalled();
   });
 
+  test("Enter in an empty host field adds nothing", async () => {
+    mockServices();
+    const add = vi.spyOn(services.networkService, "addEntry");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const host = await screen.findByLabelText("Host pattern");
+    fireEvent.change(host, { target: { value: "   " } });
+    fireEvent.keyDown(host, { key: "Enter" });
+
+    expect(add).not.toHaveBeenCalled();
+  });
+
   test("the host loaded from the log can be widened before it is added", async () => {
     mockServices();
     const add = vi.spyOn(services.networkService, "addEntry").mockResolvedValue({
@@ -1181,7 +1193,7 @@ describe("Editing a network forward", () => {
     click("Save the postgres forward");
 
     expect(await (await forwardTable()).findByText("redis")).toBeTruthy();
-    finishRead([postgres]);
+    await act(async () => finishRead([postgres]));
     expect(getForwards).toHaveBeenCalledTimes(reads + 1);
     expect((await forwardTable()).getByText("redis")).toBeTruthy();
     expect((await forwardTable()).getByText("primary")).toBeTruthy();
@@ -1396,6 +1408,20 @@ describe("Editing a network rule", () => {
     expect(await rules().findByText(".github.io")).toBeTruthy();
   });
 
+  test("a rule not in effect is drawn faded, but not while it is being edited", async () => {
+    mockServices(enforced, "blacklist");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByText(".github.com");
+    const row = rules().getByText(".github.com").closest("tr")!;
+    expect(row.className).toContain("net-row-idle");
+
+    await startEditing();
+
+    expect(field("Host pattern of the .github.com rule").closest("tr")!.className).not.toContain(
+      "net-row-idle",
+    );
+  });
+
   test("a live refresh while a rule is being edited does not discard its edits", async () => {
     mockServices();
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
@@ -1433,7 +1459,7 @@ describe("Editing a network rule", () => {
     click("Save the .github.com rule");
 
     expect(await rules().findByText("added.example")).toBeTruthy();
-    finishRead([github, evil]);
+    await act(async () => finishRead([github, evil]));
     expect(getEntries).toHaveBeenCalledTimes(reads + 1);
     expect(rules().getByText(".github.io")).toBeTruthy();
     expect(rules().queryByText(".github.com")).toBeNull();

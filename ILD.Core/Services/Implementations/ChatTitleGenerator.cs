@@ -128,9 +128,9 @@ public sealed class ChatTitleGenerator
         IAgentAdapter adapter, AiProvider provider, string prompt, string scratchPath, CancellationToken ct)
     {
         var runId = Guid.NewGuid();
-        var mode = await _egressPolicy.LaunchModeAsync(ct);
         try
         {
+            var mode = await _egressPolicy.LaunchModeAsync(ct);
             return await adapter.ExecuteAsync(new AgentExecutionContext(
                 provider,
                 prompt,

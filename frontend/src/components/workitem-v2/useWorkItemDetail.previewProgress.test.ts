@@ -86,7 +86,7 @@ async function mountWithStoppedPreview() {
   await flush();
   expect(hook.result.current.preview?.state).toBe("stopped");
   const changed = () => hub.dispatch("PreviewStateChanged", { workItemId: "wi-1" });
-  return { ...hook, getPreview, changed };
+  return { ...hook, getPreview, changed, hub };
 }
 
 describe("useWorkItemDetail preview start progress", () => {
@@ -131,20 +131,22 @@ describe("useWorkItemDetail preview start progress", () => {
     expect(result.current.previewLoading).toBe(false);
     expect(result.current.previewStarting).toBe(true);
 
+    getPreview.mockResolvedValueOnce(preview("starting"));
     await act(async () => {
-      start.resolve(preview("running"));
+      start.resolve(preview("installing"));
       await startCall;
     });
+    await flush();
     expect(result.current.previewStarting).toBe(false);
-    expect(result.current.preview?.state).toBe("running");
+    expect(result.current.preview?.state).toBe("starting");
   });
 
-  test("a re-read that began before the start settled does not overwrite the start's answer", async () => {
+  test("a start that finishes before its first answer arrives ends on the server's final snapshot", async () => {
     const { result, getPreview, changed } = await mountWithStoppedPreview();
     const start = deferred<WorktreePreview>();
     vi.spyOn(workItemService, "startPreview").mockReturnValue(start.promise);
     const lateRead = deferred<WorktreePreview>();
-    getPreview.mockReturnValueOnce(lateRead.promise);
+    getPreview.mockReturnValueOnce(lateRead.promise).mockResolvedValueOnce(preview("failed"));
 
     let startCall!: Promise<unknown>;
     act(() => {
@@ -155,12 +157,44 @@ describe("useWorkItemDetail preview start progress", () => {
     await flush();
 
     await act(async () => {
-      start.resolve(preview("running"));
+      start.resolve(preview("starting"));
       await startCall;
     });
+    await flush();
+    expect(result.current.preview?.state).toBe("failed");
+
     await act(async () => {
       lateRead.resolve(preview("starting"));
     });
+    await flush();
+
+    expect(result.current.preview?.state).toBe("failed");
+  });
+
+  test("a start with no change pushed while it ran is not read again", async () => {
+    const { result, getPreview } = await mountWithStoppedPreview();
+    vi.spyOn(workItemService, "startPreview").mockResolvedValue(preview("installing"));
+    const reads = getPreview.mock.calls.length;
+
+    await act(async () => {
+      await result.current.handleStartPreview();
+    });
+    await flush();
+
+    expect(getPreview.mock.calls.length).toBe(reads);
+  });
+
+  test("a reconnect reads the preview again, so a push missed while disconnected still lands", async () => {
+    const { result, getPreview, hub } = await mountWithStoppedPreview();
+    vi.spyOn(workItemService, "startPreview").mockResolvedValue(preview("installing"));
+    await act(async () => {
+      await result.current.handleStartPreview();
+    });
+    expect(result.current.preview?.state).toBe("installing");
+
+    await hub.changeState("reconnecting");
+    getPreview.mockResolvedValueOnce(preview("running"));
+    await hub.changeState("connected");
     await flush();
 
     expect(result.current.preview?.state).toBe("running");
@@ -187,7 +221,7 @@ describe("useWorkItemDetail preview start progress", () => {
     expect(result.current.preview?.state).toBe("running");
   });
 
-  test("a failed start ends on the server's final snapshot even when the event's re-read finished first", async () => {
+  test("a refused start ends on the server's snapshot even when the event's re-read finished first", async () => {
     const { result, getPreview, changed } = await mountWithStoppedPreview();
     const start = deferred<WorktreePreview>();
     vi.spyOn(workItemService, "startPreview").mockReturnValue(start.promise);
@@ -205,7 +239,7 @@ describe("useWorkItemDetail preview start progress", () => {
     await flush();
 
     await act(async () => {
-      start.reject(new Error("web exited with code 1"));
+      start.reject(new Error("Preview profile 'default' not found."));
       await startCall.catch(() => {});
     });
     await act(async () => {

@@ -177,8 +177,18 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     public async Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
     {
         var (pending, running) = await PrepareStartAsync(worktreePath, options, cancellationToken);
-        return running ?? await StartCoreAsync(pending!, cancellationToken);
+        if (running != null)
+            return running;
+
+        if (pending!.Owned)
+            return await RunStartAsync(pending, cancellationToken);
+
+        pending.Progress.Join();
+        return await pending.Progress.Outcome.WaitAsync(cancellationToken);
     }
+
+    internal int JoinedStartCount(string worktreePath)
+        => _starts.TryGetValue(NormalizeWorktreePath(worktreePath), out var start) ? start.Joined : 0;
 
     public async Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -198,13 +208,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     {
         try
         {
-            await StartCoreAsync(pending, _shutdown.Token);
+            await RunStartAsync(pending, _shutdown.Token);
         }
         catch (OperationCanceledException)
         {
             // The service is being disposed; the start has already torn down what it launched.
         }
-        catch (InvalidOperationException) when (pending.Progress.Stopping.IsCancellationRequested)
+        catch (PreviewStartStoppedException)
         {
             // Stopped on purpose; the stop has the start's teardown to report.
         }
@@ -215,11 +225,27 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    private async Task<WorktreePreviewResponse> RunStartAsync(PendingStart pending, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await StartCoreAsync(pending, cancellationToken);
+            pending.Progress.Succeeded(response);
+            return response;
+        }
+        catch (Exception ex)
+        {
+            pending.Progress.Failed(ex);
+            throw;
+        }
+    }
+
     /// <summary>
     /// Loads the config, answers a preview that is already running as-is, and otherwise picks
     /// the profile and registers a progress record for the start — before it waits for
     /// <see cref="_gate"/>, so a queued start already reads as starting. A start already in
-    /// progress for the worktree keeps its record, and this one then does not own the start.
+    /// progress for the worktree keeps its record, and this one then does not own the start:
+    /// it is handed that record to follow instead of running a second start.
     /// </summary>
     private async Task<(PendingStart? Start, WorktreePreviewResponse? Running)> PrepareStartAsync(
         string worktreePath, WorktreePreviewStartOptions? options, CancellationToken cancellationToken)
@@ -245,11 +271,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         ValidateProfile(profileName, profile);
 
         var mine = new StartProgress(BuildPendingResponse(loaded, profileName), options.WorkItemId);
-        var owned = ReferenceEquals(_starts.AddOrUpdate(normalized, mine, (_, cur) => cur.InProgress ? cur : mine), mine);
+        var current = _starts.AddOrUpdate(normalized, mine, (_, cur) => cur.InProgress ? cur : mine);
+        var owned = ReferenceEquals(current, mine);
         if (owned)
             await PublishAsync(mine.WorkItemId);
 
-        return (new PendingStart(normalized, options, loaded, profileName, profile, mine, owned), null);
+        return (new PendingStart(normalized, options, loaded, profileName, profile, current, owned), null);
     }
 
     private WorktreePreviewResponse? RunningResponse(LoadedPreviewConfig loaded, string normalized)
@@ -285,8 +312,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         try
         {
-            _starts[normalized] = progress;
-
             if (RunningResponse(loaded, normalized) is { } running)
             {
                 if (_starts.TryRemove(registered))
@@ -914,6 +939,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
 
         _gate.Dispose();
+        _shutdown.Dispose();
     }
 
     private static string NormalizeWorktreePath(string worktreePath)
@@ -1727,8 +1753,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private static void ThrowIfStopped(StartProgress progress, CancellationToken callerToken)
     {
         if (progress.Stopping.IsCancellationRequested && !callerToken.IsCancellationRequested)
-            throw new InvalidOperationException("The preview was stopped before it finished starting.");
+            throw new PreviewStartStoppedException();
     }
+
+    private sealed class PreviewStartStoppedException()
+        : InvalidOperationException("The preview was stopped before it finished starting.");
 
     private void DropFinishedStart(string normalized)
     {
@@ -1985,7 +2014,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <summary>
     /// The <c>HOME</c> a preview step runs with, and the root the npm global prefix
     /// is derived from. Under uid isolation that is the <em>agent's</em> home:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?)"/>
+    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?, string?)"/>
     /// sets <c>HOME</c> there as part of the crossing, so deriving the prefix from
     /// anything else would point <c>npm install -g</c> at a directory the uid
     /// running it cannot write — the orchestrator's home is <c>0710</c>,
@@ -2208,7 +2237,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// The command text comes from the worktree's <c>ild.config.json</c>, a file the
     /// agent writes and can trigger itself through the ILD MCP tools. It is
     /// therefore agent-authored code, and it runs as the agent:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?)"/>
+    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?, string?)"/>
     /// drops it to the agent uid, clears the inherited and ambient capability sets,
     /// and points <c>HOME</c> at the agent's own home. That gives a preview command
     /// exactly the privileges the agent already has and nothing more — and, because
@@ -2299,7 +2328,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     {
         private readonly object _writers = new();
         private readonly CancellationTokenSource _stop = new();
+        private readonly TaskCompletionSource<WorktreePreviewResponse> _outcome = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private volatile WorktreePreviewResponse _snapshot;
+        private int _joined;
 
         public StartProgress(WorktreePreviewResponse initial, string? workItemId)
         {
@@ -2316,6 +2347,24 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public CancellationToken Stopping => _stop.Token;
 
         public void Stop() => _stop.Cancel();
+
+        /// <summary>How the start ended, for a start that joined it instead of running its own.</summary>
+        public Task<WorktreePreviewResponse> Outcome => _outcome.Task;
+
+        public int Joined => Volatile.Read(ref _joined);
+
+        public void Join() => Interlocked.Increment(ref _joined);
+
+        public void Succeeded(WorktreePreviewResponse response) => _outcome.TrySetResult(response);
+
+        public void Failed(Exception failure)
+        {
+            _outcome.TrySetException(failure is OperationCanceledException
+                ? new InvalidOperationException("The preview start this one joined was cancelled before it finished.")
+                : failure);
+            // A start nobody joined leaves its failure unobserved; that is not an error.
+            _ = _outcome.Task.Exception;
+        }
 
         public void Update(Action<WorktreePreviewResponse> change)
         {

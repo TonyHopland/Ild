@@ -100,7 +100,7 @@ function RuleRow({ entry, providers, mode, onUpdate, onRemove }: RuleRowProps) {
   };
 
   return (
-    <tr className={inEffect ? "" : "net-row-idle"}>
+    <tr className={inEffect || row.editing ? "" : "net-row-idle"}>
       <td>
         {row.editing ? (
           <RuleKindPicker label={`Kind of the ${subject}`} value={kind} onChange={setKind} />
@@ -261,6 +261,7 @@ export function AddRuleRow({ providers, draft, onAdd }: AddRuleRowProps) {
   }, [draft, setError]);
 
   const add = async () => {
+    if (host.trim() === "") return;
     if (await send(() => onAdd(host, kind, scope || null))) setHost("");
   };
 
