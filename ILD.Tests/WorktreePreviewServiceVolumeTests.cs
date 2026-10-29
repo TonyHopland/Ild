@@ -149,12 +149,13 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     private static bool Launched(string worktree) => File.Exists(Path.Combine(worktree, "web.marker"));
     private static string Seen(string worktree) => File.ReadAllText(Path.Combine(worktree, "seen.txt"));
 
-    public enum Op { Start, StartService, Install }
+    public enum Op { Start, BeginStart, StartService, Install }
 
     private static Task Run(WorktreePreviewService service, Op op, string worktree, PreviewVolumeScope scope, CancellationToken? ct = null)
         => op switch
         {
             Op.Start => service.StartAsync(worktree, new WorktreePreviewStartOptions(Volumes: scope), ct ?? Ct),
+            Op.BeginStart => service.BeginStartAsync(worktree, new WorktreePreviewStartOptions(Volumes: scope), ct ?? Ct),
             Op.StartService => service.StartServiceAsync(worktree, "web", new WorktreePreviewStartOptions(Volumes: scope), ct ?? Ct),
             _ => service.InstallAsync(worktree, volumes: scope, cancellationToken: ct ?? Ct),
         };
@@ -365,6 +366,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
 
     [Theory]
     [InlineData(Op.Start)]
+    [InlineData(Op.BeginStart)]
     [InlineData(Op.StartService)]
     [InlineData(Op.Install)]
     public async Task While_one_work_item_holds_a_keep_on_repository_another_starts_nothing_and_is_told_who_holds_it(Op op)

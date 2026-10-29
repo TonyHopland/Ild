@@ -185,7 +185,7 @@ degradation is never silent.
   reach them through loopback or shared files (see ADR-0014), so a later
   `whitelist` agent could drive an earlier `off` one. A preview started in `off`
   is such a process: a dev server that reloads code a `whitelist` agent edits runs
-  it with direct egress, until the preview is restarted.
+  it with direct egress, until that service is started again.
 - **Only what honours a proxy works for the agent under enforcement.** git over
   SSH, raw TCP, QUIC, anything reading neither `HTTP_PROXY` nor `HTTPS_PROXY`
   fails with a dropped connection rather than an error message. The standard
@@ -227,5 +227,5 @@ it was listed a second time, and the modes would no longer say what they do.
   firewall drops non-loopback agent traffic, so a LAN connection cannot skip the
   proxy.
 - **To keep agents off the LAN or cloud metadata (`169.254.169.254`),** use
-  `whitelist`, or blacklist the specific hosts. `monitor` and `blacklist` do not
-  protect them.
+  `whitelist`. `monitor` and `blacklist` do not protect them: a blacklist entry blocks
+  only the names and literals it lists, not other names that resolve to the same address.

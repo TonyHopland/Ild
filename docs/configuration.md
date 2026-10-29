@@ -755,8 +755,8 @@ confirm it and shows a warning while it is active.
   A database restored from a backup taken before the upgrade is migrated the same
   way on the next restart. An unrecognised stored value is treated as `monitor`.
 - **Switching to or from `off` applies to the next agent launch.** Running agents
-  and previews keep the network they started with; restart a preview to move it
-  to the new mode. Changes between `monitor`, `whitelist` and
+  and preview services keep the network they started with; a preview service
+  follows the new mode once it is started again. Changes between `monitor`, `whitelist` and
   `blacklist`, and list edits, apply to the next connection. Previews, Cmd nodes
   and the provider terminal follow the mode when they start; git run for the
   agent, chat repository clones and writes to agent-visible files never use the
@@ -775,8 +775,9 @@ confirm it and shows a warning while it is active.
 LAN and private hosts (self-hosted git, a local model server, cloud metadata at
 `169.254.169.254`) go through the proxy like any other host: the mode and lists
 judge them and the Network Log records them. `monitor` and `blacklist` let
-agents reach them; to keep agents off your LAN and cloud metadata use
-`whitelist`, or blacklist those hosts. The proxy resolves each host once and
+agents reach them; only `whitelist` keeps agents off your LAN and cloud metadata,
+since a blacklist entry blocks only the names and literals it lists, not other
+names that resolve to the same address. The proxy resolves each host once and
 connects to the addresses it resolved.
 
 Everything the agent runs, except in `off`, is pointed at the proxy through `HTTP_PROXY`,

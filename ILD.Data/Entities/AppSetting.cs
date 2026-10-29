@@ -4,8 +4,6 @@ namespace ILD.Data.Entities;
 
 public class AppSetting : IHasUpdatedAt
 {
-    public const int MaxValueLength = 4096;
-
     [Key]
     public Guid Id { get; set; }
 
@@ -14,7 +12,7 @@ public class AppSetting : IHasUpdatedAt
     public string Key { get; set; } = string.Empty;
 
     [Required]
-    [MaxLength(MaxValueLength)]
+    [MaxLength(4096)]
     public string Value { get; set; } = string.Empty;
 
     public DateTime? UpdatedAt { get; set; }

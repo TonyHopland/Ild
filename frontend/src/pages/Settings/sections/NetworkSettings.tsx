@@ -427,10 +427,7 @@ export default function NetworkSettings() {
         <div className="net-banner">
           <strong>Network mode is Off.</strong>{" "}
           {offUnavailable ? (
-            <>
-              Off is unavailable here, so agents launched in it have no network; switch to Monitor
-              to give them the proxy back. {status.reason}
-            </>
+            <>{status.reason} Switch to Monitor to give agents the proxy back.</>
           ) : (
             <>
               Agents launched in it can reach any host, including your LAN and cloud metadata, and
@@ -456,7 +453,7 @@ export default function NetworkSettings() {
               {status && status.enforcement !== "enforced" && (
                 <> Without the firewall, Off and Monitor differ only in logging.</>
               )}
-              {offUnavailable && mode !== "off" && <> Off is unavailable here. {status.reason}</>}
+              {offUnavailable && mode !== "off" && <> {status.reason}</>}
               {filtering && (
                 <>
                   {" "}
@@ -498,7 +495,7 @@ export default function NetworkSettings() {
         </div>
         {mode === "monitor" && (
           <p className="settings-card-note">
-            Filtering is off, so no rule is in effect. Every destination is logged.
+            Monitor blocks nothing, so no rule is in effect. Every destination is logged.
           </p>
         )}
         {mode === "off" && (

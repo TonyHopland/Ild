@@ -263,6 +263,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private async Task<(PendingStart? Start, WorktreePreviewResponse? Running)> PrepareStartAsync(
         string worktreePath, WorktreePreviewStartOptions? options, CancellationToken cancellationToken)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var normalized = NormalizeWorktreePath(worktreePath);
         options ??= new WorktreePreviewStartOptions();
 
@@ -282,6 +283,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
 
         ValidateProfile(profileName, profile);
+        if (options.Volumes is { } scope && _claims.RefusalFor(scope, normalized) is { } refusal)
+            throw new InvalidOperationException(refusal.Message);
 
         var mine = new StartProgress(BuildPendingResponse(loaded, profileName), options.WorkItemId);
         var current = _starts.AddOrUpdate(normalized, mine, (_, cur) => cur.InProgress ? cur : mine);
@@ -941,7 +944,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // Each start tears down what it launched as it observes the cancellation;
         // wait for that before the registry is retired below. How a start ended is
         // its caller's to observe, so a start that ends in an exception is only waited for.
-        Task.WhenAll(_ownedStarts.Keys).ContinueWith(_ => { }, TaskScheduler.Default)
+        Task.WhenAll(_ownedStarts.Keys).ContinueWith(all => _ = all.Exception, TaskScheduler.Default)
             .Wait(TimeSpan.FromSeconds(30));
 
         foreach (var runtime in _runtimes.Values)

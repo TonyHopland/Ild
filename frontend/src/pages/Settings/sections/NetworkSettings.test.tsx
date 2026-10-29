@@ -766,38 +766,38 @@ describe("Network modes", () => {
 
   const pressed = (name: string) => modeButton(name).getAttribute("aria-pressed") === "true";
 
-  test("Off cannot be chosen where it is unavailable, and says why", async () => {
-    mockServices({ ...enforced, offAvailable: false }, "monitor");
+  const offUnavailable: NetworkStatus = {
+    ...enforced,
+    offAvailable: false,
+    reason:
+      "nftables rules drop everything uid 10002 sends except loopback, and its DNS is blocked. Network mode Off is unavailable: the group 'ild-net-open' does not exist; agents launched in it have no network.",
+  };
+  const times = (text: string, part: string) => text.split(part).length - 1;
+
+  test("Off cannot be chosen where it is unavailable, and says why once", async () => {
+    mockServices(offUnavailable, "monitor");
     const put = vi.spyOn(services.settingsService, "put");
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await waitFor(() => expect(pressed("Monitor")).toBe(true));
 
     expect(modeButton("Off").hasAttribute("disabled")).toBe(true);
-    expect(modeCard().textContent).toContain("Off is unavailable here");
+    const card = modeCard().textContent!;
+    expect(card).toContain("the group 'ild-net-open' does not exist");
+    expect(times(card, "Off is unavailable")).toBe(1);
     fireEvent.click(modeButton("Off"));
     expect(confirmation()).toBeNull();
     expect(put).not.toHaveBeenCalled();
   });
 
-  test("a stored Off that is unavailable warns that its agents have no network", async () => {
-    mockServices({ ...enforced, offAvailable: false }, "off");
+  test("a stored Off that is unavailable warns, once, that its agents have no network", async () => {
+    mockServices(offUnavailable, "off");
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     await waitFor(() => expect(pressed("Off")).toBe(true));
 
-    expect(screen.getByText(/agents launched in it have no network/i)).toBeTruthy();
+    expect(times(document.body.textContent!, "have no network")).toBe(1);
+    expect(screen.getByText(/switch to Monitor/i)).toBeTruthy();
     expect(offWarning()).toHaveLength(0);
     expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
-  });
-
-  test("the hint for an unavailable Off gives the server's reason", async () => {
-    mockServices(
-      { ...enforced, offAvailable: false, reason: "The group 'ild-net-open' does not exist." },
-      "monitor",
-    );
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Monitor")).toBe(true));
-
-    expect(modeCard().textContent).toContain("The group 'ild-net-open' does not exist.");
   });
 
   test("offers Off, Monitor, Whitelist and Blacklist", async () => {

@@ -88,7 +88,7 @@ ARG AGENT_UID=10002
 ARG AGENT_GID=10002
 ARG SHARED_GID=10003
 # The group an agent launched in network mode Off runs under, which the egress firewall lets
-# reach the network directly (ADR-0019). It has no members: neither the agent nor ild may be
+# reach the network directly (ADR-0019). It has no members: neither the agent nor ild is
 # one, so only the orchestrator, which chooses the agent's gid at launch, can put a process in it.
 ARG NET_OPEN_GID=10004
 
@@ -326,8 +326,9 @@ ENV AGENT_USER=agent
 ENV AGENT_GROUP=agent
 ENV AGENT_HOME=/home/agent
 ENV SHARED_GROUP=ild-agents
-# Not a group the agent or ild is in (the entrypoint refuses one they are in). Network mode Off
-# stays unavailable unless the container also runs with no-new-privileges.
+# Not a group the agent is in (the entrypoint refuses one it is in, or that is AGENT_GROUP or
+# SHARED_GROUP). Network mode Off stays unavailable unless the container also runs with
+# no-new-privileges.
 ENV NETWORK_OPEN_GROUP=ild-net-open
 # cap_kill is required as well as cap_setuid/cap_setgid: setpriv gives the agent
 # a different real AND saved uid, so kill(2) from the orchestrator returns EPERM

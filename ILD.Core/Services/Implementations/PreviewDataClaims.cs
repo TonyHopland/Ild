@@ -36,14 +36,14 @@ public sealed class PreviewDataClaims
         {
             if (_resetting.Contains(scope.RepositoryId))
             {
-                refusal = new PreviewDataRefusal("The preview data of this repository is being reset. Try again when it finishes.", null);
+                refusal = Resetting;
                 return false;
             }
 
             var leases = _leases.GetValueOrDefault(scope.RepositoryId);
             if (scope.KeepData && leases?.FirstOrDefault(l => l.Holder.WorktreePath != worktreePath) is { } held)
             {
-                refusal = new PreviewDataRefusal($"{held.Holder.Sentence} Stop it before starting this one.", held.Holder);
+                refusal = HeldBy(held.Holder);
                 return false;
             }
 
@@ -56,6 +56,32 @@ public sealed class PreviewDataClaims
             return true;
         }
     }
+
+    /// <summary>
+    /// What <see cref="TryAcquire"/> would refuse now, without acquiring anything, so a start
+    /// that runs on in the background can refuse at once. A holder from the same work item is
+    /// not a refusal: the start takes its preview over.
+    /// </summary>
+    public PreviewDataRefusal? RefusalFor(PreviewVolumeScope scope, string worktreePath)
+    {
+        lock (_lock)
+        {
+            if (_resetting.Contains(scope.RepositoryId))
+                return Resetting;
+
+            var held = scope.KeepData
+                ? _leases.GetValueOrDefault(scope.RepositoryId)?.FirstOrDefault(l =>
+                    l.Holder.WorktreePath != worktreePath && l.Holder.WorkItemId != scope.WorkItemId)
+                : null;
+            return held is null ? null : HeldBy(held.Holder);
+        }
+    }
+
+    private static readonly PreviewDataRefusal Resetting =
+        new("The preview data of this repository is being reset. Try again when it finishes.", null);
+
+    private static PreviewDataRefusal HeldBy(PreviewDataHolder holder)
+        => new($"{holder.Sentence} Stop it before starting this one.", holder);
 
     /// <summary>
     /// Marks the repository's preview data as being reset, so no preview starts until

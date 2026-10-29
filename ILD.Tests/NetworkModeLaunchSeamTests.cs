@@ -188,7 +188,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     {
         var output = await RunTerminalAsync(EgressPolicies.Reporting(NetworkMode.Off));
 
-        Assert.Contains("/bin", output);
+        Assert.Matches(@"/[^\s:]+:/", output);
         Assert.DoesNotContain("127.0.0.1:3128", output);
     }
 
