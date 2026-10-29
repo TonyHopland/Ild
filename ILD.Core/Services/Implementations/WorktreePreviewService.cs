@@ -293,7 +293,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 var existingResponse = BuildResponse(loaded, existing);
                 if (existingResponse.State == "running")
                 {
-                    _starts.TryRemove(registered);
+                    if (_starts.TryRemove(registered))
+                        await PublishAsync(progress.WorkItemId);
                     return existingResponse;
                 }
 

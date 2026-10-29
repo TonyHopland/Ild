@@ -315,9 +315,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const writeGen = useRef(0);
 
   // A quiet read serves PreviewStateChanged and a failed write: it shows no loading
-  // state, and a failure keeps what is on screen.
+  // state, and a failure keeps what is on screen — unless the read follows a failed
+  // write, whose stale snapshot would otherwise stay on screen with its controls locked.
   const readPreview = useCallback(
-    async (quiet: boolean) => {
+    async (quiet: boolean, clearOnFailure = false) => {
       if (!workItem?.id || !workItem.worktreePath) {
         if (!quiet) {
           setPreview(null);
@@ -336,10 +337,12 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         const result = await workItemService.getPreview(workItem.id);
         if (isCurrent()) setPreview(result);
       } catch (error) {
-        if (quiet || !isCurrent()) return;
-        const message =
-          (error as { message?: string })?.message ?? "Failed to load preview status.";
-        setPreviewError(message);
+        if (!isCurrent() || (quiet && !clearOnFailure)) return;
+        if (!quiet) {
+          const message =
+            (error as { message?: string })?.message ?? "Failed to load preview status.";
+          setPreviewError(message);
+        }
         setPreview(null);
       } finally {
         if (!quiet) setPreviewLoading(false);
@@ -371,7 +374,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       } catch (error) {
         writeGen.current++;
         setPreviewError((error as { message?: string })?.message ?? failure);
-        void readPreview(true);
+        void readPreview(true, true);
       } finally {
         setBusy(false);
       }
