@@ -14,6 +14,12 @@ public class AgentIsolationEgressTests
     private static readonly string[] ProxyKeys =
         { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY" };
 
+    [Fact]
+    public void No_proxy_stays_the_loopback_set_so_LAN_traffic_goes_through_the_proxy()
+    {
+        Assert.Equal("localhost,127.0.0.1,::1,[::1]", AgentIsolation.EgressNoProxy);
+    }
+
     private static ProcessStartInfo BuildPsi()
     {
         var psi = new ProcessStartInfo("/data/agents/claude-code/versions/v1/node_modules/.bin/claude")

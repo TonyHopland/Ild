@@ -745,8 +745,7 @@ a host that is newly blacklisted has its open connections reset.
 **`off` is not a filter, it is no proxy.** Agents launched in `off` connect
 directly, to any host and any port, and nothing is logged; that is the mode for
 tools that ignore `HTTP(S)_PROXY` or speak something other than HTTP (SSH, gRPC,
-UDP, QUIC). It is also outside the private-address block below and the DNS
-block: an `off` agent can reach your LAN and cloud metadata. Settings asks you
+UDP, QUIC). It is also outside the DNS block: an `off` agent can reach your LAN and cloud metadata. Settings asks you
 to confirm it and shows a warning while it is active.
 
 - **Upgrading renames the old `off`.** Before `monitor` existed, `off` meant "log
@@ -769,28 +768,12 @@ to confirm it and shows a warning while it is active.
   is unavailable: agents launched in it have no network (enforced) or differ from
   `monitor` only in logging (advisory), and the status `reason` says which.
 
-Whatever the mode and lists say, the proxy resolves each destination and
-refuses any address in `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`,
-`192.168.0.0/16`, `169.254.0.0/16` (cloud metadata services live here),
-`100.64.0.0/10`, `0.0.0.0/8`, `::1`, `::`, `fc00::/7` and `fe80::/10`,
-including their IPv4-mapped IPv6 forms. A host name is checked by the addresses
-it resolves to, and the proxy connects to exactly the addresses it checked. The
-refusal is a `403` (a TLS `access_denied` alert for a redirected flow) and is
-logged as Blocked. A whitelist entry does not lift it.
-
-To let the agent reach something internal (self-hosted git, a local model
-server, an internal registry), list it under **Internal destinations** in
-Settings > Network, or set the `network.internalAllow` app setting: one pattern
-per line, each an exact host, a leading-dot domain (`.lan.example`), an IP
-address or a CIDR range. A host pattern permits every address that name
-resolves to; an address or range permits the addresses it contains. The list
-only lifts this check, never a whitelist or blacklist block. **After upgrading,
-a setup whose runs talk to LAN services needs an entry here before they work
-again.**
-
-ILD's own API needs no entry: the exact host and port of `ILD_API_URL` is
-exempt from the address check, though not from the lists. Another port on that
-host is not.
+LAN and private hosts (self-hosted git, a local model server, cloud metadata at
+`169.254.169.254`) go through the proxy like any other host: the mode and lists
+judge them and the Network Log records them. `monitor` and `blacklist` let
+agents reach them; to keep agents off your LAN and cloud metadata use
+`whitelist`, or blacklist those hosts. The proxy resolves each host once and
+connects to the addresses it resolved.
 
 Everything the agent runs, except in `off`, is pointed at the proxy through `HTTP_PROXY`,
 `HTTPS_PROXY` and `ALL_PROXY` (both spellings), with loopback on `NO_PROXY`
