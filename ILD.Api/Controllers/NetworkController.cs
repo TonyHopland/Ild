@@ -127,17 +127,7 @@ public class NetworkController : ControllerBase
     [HttpPost("forwards")]
     public async Task<IActionResult> AddForward([FromBody] AddForwardRequest request, CancellationToken ct)
     {
-        var name = (request.Name ?? string.Empty).Trim();
-        if (name.Length == 0)
-            return BadRequest(new { error = "Give the forward a name, e.g. postgres" });
-        if (name.Length > MaxForwardNameLength)
-            return BadRequest(new { error = $"Names are at most {MaxForwardNameLength} characters" });
-        if (!EgressRules.TryNormalizeForwardHost(request.Host, out var host, out var error))
-            return BadRequest(new { error });
-        if (request.Port is < 1 or > 65535)
-            return BadRequest(new { error = "The destination port must be between 1 and 65535" });
-        if (request.LocalPort is < 1 or > 65535)
-            return BadRequest(new { error = "The local port must be between 1 and 65535" });
+        if (ValidateForward(request, out var name, out var host) is { } invalid) return invalid;
         if (await _forwards.FindByLocalPortAsync(request.LocalPort, ct) is { } taken)
             return BadRequest(new { error = $"Local port {request.LocalPort} already forwards to {taken.Host}:{taken.Port}" });
 
@@ -161,6 +151,45 @@ public class NetworkController : ControllerBase
         }
         await PolicyChangedAsync();
         return CreatedAtAction(nameof(GetForwards), View(forward, await _policy.GetAsync(ct)));
+    }
+
+    [HttpPut("forwards/{id:guid}")]
+    public async Task<IActionResult> UpdateForward(Guid id, [FromBody] AddForwardRequest request, CancellationToken ct)
+    {
+        if (ValidateForward(request, out var name, out var host) is { } invalid) return invalid;
+        if (await _forwards.FindByLocalPortAsync(request.LocalPort, ct) is { } taken && taken.Id != id)
+            return BadRequest(new { error = $"Local port {request.LocalPort} already forwards to {taken.Host}:{taken.Port}" });
+
+        NetworkForwardEntry? forward;
+        try
+        {
+            forward = await _forwards.UpdateForwardAsync(id, name, host, request.Port, request.LocalPort, ct);
+        }
+        catch (DbUpdateException)
+        {
+            // The unique index caught what the read above could not: two saves racing.
+            return BadRequest(new { error = $"Local port {request.LocalPort} is already forwarded" });
+        }
+        if (forward is null) return NotFound();
+        await PolicyChangedAsync();
+        return Ok(View(forward, await _policy.GetAsync(ct)));
+    }
+
+    private static IActionResult? ValidateForward(AddForwardRequest request, out string name, out string host)
+    {
+        host = string.Empty;
+        name = (request.Name ?? string.Empty).Trim();
+        if (name.Length == 0)
+            return new BadRequestObjectResult(new { error = "Give the forward a name, e.g. postgres" });
+        if (name.Length > MaxForwardNameLength)
+            return new BadRequestObjectResult(new { error = $"Names are at most {MaxForwardNameLength} characters" });
+        if (!EgressRules.TryNormalizeForwardHost(request.Host, out host, out var error))
+            return new BadRequestObjectResult(new { error });
+        if (request.Port is < 1 or > 65535)
+            return new BadRequestObjectResult(new { error = "The destination port must be between 1 and 65535" });
+        if (request.LocalPort is < 1 or > 65535)
+            return new BadRequestObjectResult(new { error = "The local port must be between 1 and 65535" });
+        return null;
     }
 
     [HttpDelete("forwards/{id:guid}")]
