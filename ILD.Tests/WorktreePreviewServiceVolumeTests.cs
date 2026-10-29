@@ -630,6 +630,25 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         await holding;
     }
 
+    [Fact]
+    public async Task A_refused_start_leaves_the_earlier_failure_on_show()
+    {
+        var claims = new PreviewDataClaims();
+        var service = BuildService(claims: claims);
+        var a = Worktree("wt-a", install: ["exit 4"]);
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301")), Ct));
+        Assert.Equal("failed", (await service.GetStatusAsync(a, Ct)).State);
+
+        Assert.True(claims.TryBeginReset(_repository, out _));
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.BeginStartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301")), Ct));
+        claims.EndReset(_repository);
+
+        Assert.Contains("being reset", refused.Message);
+        Assert.Equal("failed", (await service.GetStatusAsync(a, Ct)).State);
+    }
+
     // --- helpers ---
 
     private static async Task WaitForExitAsync(WorktreePreviewService service, string worktree)

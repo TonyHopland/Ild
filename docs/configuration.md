@@ -744,10 +744,9 @@ a host that is newly blacklisted has its open connections reset.
 
 **`off` is not a filter, it is no proxy.** Agents launched in `off` connect
 directly, to any host and any port, and only what they send through a forward is
-logged; that is the mode for
-tools that ignore `HTTP(S)_PROXY` or speak something other than HTTP (SSH, gRPC,
-UDP, QUIC). With no proxy there is no log, no list and no DNS block, so an
-`off` agent can also reach your LAN and cloud metadata. Settings asks you to
+logged; that is the mode for tools that ignore `HTTP(S)_PROXY` or speak something
+other than HTTP (SSH, gRPC, UDP, QUIC). With no proxy there is no list and no DNS
+block, so an `off` agent can also reach your LAN and cloud metadata. Settings asks you to
 confirm it and shows a warning while it is active.
 
 - **Upgrading renames the old `off`.** Before `monitor` existed, `off` meant "log
