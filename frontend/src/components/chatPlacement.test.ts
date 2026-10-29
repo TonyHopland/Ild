@@ -2,6 +2,11 @@
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import {
   clampFabPosition,
+  clampSidebarWidth,
+  loadSidebarWidth,
+  saveSidebarWidth,
+  MIN_SIDEBAR_WIDTH,
+  MIN_CHAT_WIDTH,
   clampPanelSize,
   defaultFabPosition,
   FAB_POSITION_KEY,
@@ -16,7 +21,7 @@ import {
   panelPosition,
   VIEWPORT_MARGIN,
 } from "./chatPlacement";
-import { setPreference } from "../utils/userPreferences";
+import { getPreference, setPreference } from "../utils/userPreferences";
 
 const VP = { width: 1000, height: 800 };
 
@@ -116,5 +121,54 @@ describe("load helpers", () => {
   test("loadPanelPosition ignores a malformed stored value", () => {
     setPreference(PANEL_POSITION_KEY, JSON.stringify({ x: "nope" }));
     expect(loadPanelPosition()).toBeNull();
+  });
+});
+
+describe("clampSidebarWidth", () => {
+  test("leaves an in-range width untouched", () => {
+    expect(clampSidebarWidth(400, 1000)).toBe(400);
+  });
+
+  test("raises a width below the minimum to the minimum", () => {
+    expect(clampSidebarWidth(100, 1000)).toBe(MIN_SIDEBAR_WIDTH);
+  });
+
+  test("holds a width above the maximum at the container minus the minimum chat width", () => {
+    expect(clampSidebarWidth(5000, 1000)).toBe(1000 - MIN_CHAT_WIDTH);
+  });
+
+  test("returns the minimum when the container is too small for both", () => {
+    expect(clampSidebarWidth(500, 400)).toBe(MIN_SIDEBAR_WIDTH);
+  });
+});
+
+describe("the chat list width preference", () => {
+  test("reads as never resized when nothing is stored", () => {
+    expect(loadSidebarWidth("bubble")).toBeNull();
+    expect(loadSidebarWidth("page")).toBeNull();
+  });
+
+  test("round-trips a width under a key of its own for each place", () => {
+    saveSidebarWidth("bubble", 300);
+    expect(getPreference("chat.sidebar-width.bubble")).toBe("300");
+    expect(getPreference("chat.sidebar-width.page")).toBeUndefined();
+    expect(loadSidebarWidth("bubble")).toBe(300);
+    expect(loadSidebarWidth("page")).toBeNull();
+
+    saveSidebarWidth("page", 410);
+    expect(getPreference("chat.sidebar-width.page")).toBe("410");
+    expect(loadSidebarWidth("bubble")).toBe(300);
+  });
+
+  test.each(["not json{", "null", '"wide"', "true", "{}"])("reads %s as never resized", (raw) => {
+    setPreference("chat.sidebar-width.bubble", raw);
+    expect(loadSidebarWidth("bubble")).toBeNull();
+  });
+
+  test("saving null resets to never resized", () => {
+    saveSidebarWidth("page", 410);
+    saveSidebarWidth("page", null);
+    expect(getPreference("chat.sidebar-width.page")).toBe("null");
+    expect(loadSidebarWidth("page")).toBeNull();
   });
 });
