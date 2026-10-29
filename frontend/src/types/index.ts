@@ -289,6 +289,8 @@ export interface WorktreePreviewService {
   logFilePath: string | null;
   processId: number | null;
   exitCode: number | null;
+  /** Why the service failed to start, when its status is failed. */
+  error?: string | null;
 }
 
 /** Tail of a preview service's captured stdout/stderr log. */
@@ -313,6 +315,8 @@ export interface WorktreePreview {
   stateDirectory: string | null;
 
   message: string | null;
+  /** The install step a start is on; null unless the state is installing. */
+  install?: { index: number; total: number; command: string } | null;
   services: WorktreePreviewService[];
 }
 

@@ -108,6 +108,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [progressText, setProgressText] = useState("");
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  // The user's own start request, which can run for minutes: its own flag so the
+  // quiet re-reads that follow its progress never touch previewLoading.
+  const [previewStarting, setPreviewStarting] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [pushBranchLoading, setPushBranchLoading] = useState(false);
   const [pushBranchError, setPushBranchError] = useState<string | null>(null);
@@ -305,51 +308,90 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [movedOn, setMovedOn] = useState<{ text: string } | null>(null);
   const dismissMovedOn = () => setMovedOn(null);
 
-  const refreshPreview = useCallback(async () => {
-    if (!workItem?.id || !workItem.worktreePath) {
-      setPreview(null);
-      setPreviewError(null);
-      return;
-    }
-    setPreviewLoading(true);
-    setPreviewError(null);
-    try {
-      const result = await workItemService.getPreview(workItem.id);
-      setPreview(result);
-    } catch (error) {
-      const message = (error as { message?: string })?.message ?? "Failed to load preview status.";
-      setPreviewError(message);
-      setPreview(null);
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, [workItem?.id, workItem?.worktreePath]);
+  // Reads are tagged when they start: one applies only if it is still the latest read
+  // and no write has settled since, so neither an older read nor one that began before
+  // a start/stop answered can overwrite a newer snapshot.
+  const readGen = useRef(0);
+  const writeGen = useRef(0);
+
+  // A quiet read serves PreviewStateChanged and a failed write: it shows no loading
+  // state, and a failure keeps what is on screen.
+  const readPreview = useCallback(
+    async (quiet: boolean) => {
+      if (!workItem?.id || !workItem.worktreePath) {
+        if (!quiet) {
+          setPreview(null);
+          setPreviewError(null);
+        }
+        return;
+      }
+      const read = ++readGen.current;
+      const write = writeGen.current;
+      const isCurrent = () => read === readGen.current && write === writeGen.current;
+      if (!quiet) {
+        setPreviewLoading(true);
+        setPreviewError(null);
+      }
+      try {
+        const result = await workItemService.getPreview(workItem.id);
+        if (isCurrent()) setPreview(result);
+      } catch (error) {
+        if (quiet || !isCurrent()) return;
+        const message =
+          (error as { message?: string })?.message ?? "Failed to load preview status.";
+        setPreviewError(message);
+        setPreview(null);
+      } finally {
+        if (!quiet) setPreviewLoading(false);
+      }
+    },
+    [workItem?.id, workItem?.worktreePath],
+  );
+
+  const refreshPreview = useCallback(() => readPreview(false), [readPreview]);
 
   useEffect(() => {
     void refreshPreview();
   }, [refreshPreview]);
+
+  // A refused write carries no snapshot, and the preview may have moved on while it
+  // ran (a start that failed), so a failure is followed by a read of what the server holds.
+  const writePreview = useCallback(
+    async (
+      request: () => Promise<WorktreePreview>,
+      failure: string,
+      setBusy: (busy: boolean) => void,
+    ) => {
+      setBusy(true);
+      setPreviewError(null);
+      try {
+        const result = await request();
+        writeGen.current++;
+        setPreview(result);
+      } catch (error) {
+        writeGen.current++;
+        setPreviewError((error as { message?: string })?.message ?? failure);
+        void readPreview(true);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [readPreview],
+  );
 
   // Port overrides are keyed by the service's port alias and map onto the
   // start request's portOverrides; an empty map starts with the suggested ports.
   const handleStartPreview = useCallback(
     async (portOverrides?: Record<string, number>) => {
       if (!workItem) return;
-      setPreviewLoading(true);
-      setPreviewError(null);
-      try {
-        const hasOverrides = portOverrides && Object.keys(portOverrides).length > 0;
-        const result = await workItemService.startPreview(
-          workItem.id,
-          hasOverrides ? { portOverrides } : {},
-        );
-        setPreview(result);
-      } catch (error) {
-        setPreviewError((error as { message?: string })?.message ?? "Failed to start preview.");
-      } finally {
-        setPreviewLoading(false);
-      }
+      const hasOverrides = portOverrides && Object.keys(portOverrides).length > 0;
+      await writePreview(
+        () => workItemService.startPreview(workItem.id, hasOverrides ? { portOverrides } : {}),
+        "Failed to start preview.",
+        setPreviewStarting,
+      );
     },
-    [workItem?.id],
+    [workItem?.id, writePreview],
   );
 
   // Start a single preview service, leaving the others as they are. Any port the
@@ -358,40 +400,31 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleStartService = useCallback(
     async (service: string, portOverrides?: Record<string, number>) => {
       if (!workItem) return;
-      setPreviewLoading(true);
-      setPreviewError(null);
-      try {
-        const hasOverrides = portOverrides && Object.keys(portOverrides).length > 0;
-        const result = await workItemService.startPreviewService(
-          workItem.id,
-          service,
-          hasOverrides ? { portOverrides } : {},
-        );
-        setPreview(result);
-      } catch (error) {
-        setPreviewError((error as { message?: string })?.message ?? "Failed to start service.");
-      } finally {
-        setPreviewLoading(false);
-      }
+      const hasOverrides = portOverrides && Object.keys(portOverrides).length > 0;
+      await writePreview(
+        () =>
+          workItemService.startPreviewService(
+            workItem.id,
+            service,
+            hasOverrides ? { portOverrides } : {},
+          ),
+        "Failed to start service.",
+        setPreviewLoading,
+      );
     },
-    [workItem?.id],
+    [workItem?.id, writePreview],
   );
 
   const handleStopService = useCallback(
     async (service: string) => {
       if (!workItem) return;
-      setPreviewLoading(true);
-      setPreviewError(null);
-      try {
-        const result = await workItemService.stopPreviewService(workItem.id, service);
-        setPreview(result);
-      } catch (error) {
-        setPreviewError((error as { message?: string })?.message ?? "Failed to stop service.");
-      } finally {
-        setPreviewLoading(false);
-      }
+      await writePreview(
+        () => workItemService.stopPreviewService(workItem.id, service),
+        "Failed to stop service.",
+        setPreviewLoading,
+      );
     },
-    [workItem?.id],
+    [workItem?.id, writePreview],
   );
 
   // Load one service's ild.config.json entry for the Config editor row.
@@ -429,17 +462,12 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   const handleStopPreview = useCallback(async () => {
     if (!workItem) return;
-    setPreviewLoading(true);
-    setPreviewError(null);
-    try {
-      const result = await workItemService.stopPreview(workItem.id);
-      setPreview(result);
-    } catch (error) {
-      setPreviewError((error as { message?: string })?.message ?? "Failed to stop preview.");
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, [workItem?.id]);
+    await writePreview(
+      () => workItemService.stopPreview(workItem.id),
+      "Failed to stop preview.",
+      setPreviewLoading,
+    );
+  }, [workItem?.id, writePreview]);
 
   // The branch's forge link is computed only by the single work item read, and
   // the item the dialog shows usually comes from a board list, so the dialog
@@ -575,14 +603,14 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
     const onPreviewStateChanged = (message: TypedSignalRMessage<"PreviewStateChanged">) => {
       if (message.payload.workItemId !== workItem.id) return;
-      void refreshPreview();
+      void readPreview(true);
     };
 
     wiOn("PreviewStateChanged", onPreviewStateChanged);
     return () => {
       wiOff("PreviewStateChanged", onPreviewStateChanged);
     };
-  }, [workItem?.id, wiConnectionState, wiOn, wiOff, refreshPreview]);
+  }, [workItem?.id, wiConnectionState, wiOn, wiOff, readPreview]);
 
   // Backlog→live handoff state. `seeded` flips true once the replayed backlog
   // has been written; until then live chunks are queued. `seededSeq` is the
@@ -974,6 +1002,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     shouldStream,
     preview,
     previewLoading,
+    previewStarting,
     previewError,
     refreshPreview,
     handleStartPreview,
