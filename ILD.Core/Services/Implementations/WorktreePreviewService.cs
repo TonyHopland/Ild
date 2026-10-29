@@ -176,41 +176,29 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     public async Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
     {
-        var normalized = NormalizeWorktreePath(worktreePath);
-        options ??= new WorktreePreviewStartOptions();
-
-        var loaded = await LoadForStartAsync(normalized, cancellationToken);
-        if (RunningResponse(loaded, normalized) is { } running)
-            return running;
-
-        var pending = await RegisterStartAsync(normalized, loaded, options);
-        return await StartCoreAsync(normalized, options, pending, cancellationToken);
+        var (pending, running) = await PrepareStartAsync(worktreePath, options, cancellationToken);
+        return running ?? await StartCoreAsync(pending!, cancellationToken);
     }
 
     public async Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
     {
-        var normalized = NormalizeWorktreePath(worktreePath);
-        options ??= new WorktreePreviewStartOptions();
-
-        var loaded = await LoadForStartAsync(normalized, cancellationToken);
-        if (RunningResponse(loaded, normalized) is { } running)
+        var (pending, running) = await PrepareStartAsync(worktreePath, options, cancellationToken);
+        if (running != null)
             return running;
+        if (!pending!.Owned)
+            return await GetStatusAsync(pending.Normalized, cancellationToken);
 
-        var pending = await RegisterStartAsync(normalized, loaded, options);
-        if (!pending.Owned)
-            return await GetStatusAsync(normalized, cancellationToken);
-
-        var run = Task.Run(() => RunBackgroundStartAsync(normalized, options, pending), CancellationToken.None);
+        var run = Task.Run(() => RunBackgroundStartAsync(pending), CancellationToken.None);
         _backgroundStarts[run] = 0;
         _ = run.ContinueWith(done => _backgroundStarts.TryRemove(done, out _), TaskScheduler.Default);
         return pending.Progress.Snapshot;
     }
 
-    private async Task RunBackgroundStartAsync(string normalized, WorktreePreviewStartOptions options, PendingStart pending)
+    private async Task RunBackgroundStartAsync(PendingStart pending)
     {
         try
         {
-            await StartCoreAsync(normalized, options, pending, _shutdown.Token);
+            await StartCoreAsync(pending, _shutdown.Token);
         }
         catch (OperationCanceledException)
         {
@@ -219,19 +207,45 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         catch (Exception ex)
         {
             // The failure is what get_preview reports; this is for the operator's log.
-            _logger.LogWarning(ex, "Background start of the preview in {Worktree} failed", normalized);
+            _logger.LogWarning(ex, "Background start of the preview in {Worktree} failed", pending.Normalized);
         }
     }
 
-    private async Task<LoadedPreviewConfig> LoadForStartAsync(string normalized, CancellationToken cancellationToken)
+    /// <summary>
+    /// Loads the config, answers a preview that is already running as-is, and otherwise picks
+    /// the profile and registers a progress record for the start — before it waits for
+    /// <see cref="_gate"/>, so a queued start already reads as starting. A start already in
+    /// progress for the worktree keeps its record, and this one then does not own the start.
+    /// </summary>
+    private async Task<(PendingStart? Start, WorktreePreviewResponse? Running)> PrepareStartAsync(
+        string worktreePath, WorktreePreviewStartOptions? options, CancellationToken cancellationToken)
     {
+        var normalized = NormalizeWorktreePath(worktreePath);
+        options ??= new WorktreePreviewStartOptions();
+
         var loaded = await LoadConfigAsync(normalized, cancellationToken);
         if (!loaded.Configured || loaded.Config == null)
         {
             throw new InvalidOperationException(loaded.Message ?? "No ild.config.json preview profile found.");
         }
 
-        return loaded;
+        if (RunningResponse(loaded, normalized) is { } running)
+            return (null, running);
+
+        var profileName = SelectProfileName(loaded.Config, options.ProfileName);
+        if (!loaded.Config.Preview!.Profiles.TryGetValue(profileName, out var profile) || profile == null)
+        {
+            throw new InvalidOperationException($"Preview profile '{profileName}' not found.");
+        }
+
+        ValidateProfile(profileName, profile);
+
+        var mine = new StartProgress(BuildPendingResponse(loaded, profileName), options.WorkItemId);
+        var owned = ReferenceEquals(_starts.AddOrUpdate(normalized, mine, (_, cur) => cur.InProgress ? cur : mine), mine);
+        if (owned)
+            await PublishAsync(mine.WorkItemId);
+
+        return (new PendingStart(normalized, options, loaded, profileName, profile, mine, owned), null);
     }
 
     private WorktreePreviewResponse? RunningResponse(LoadedPreviewConfig loaded, string normalized)
@@ -243,33 +257,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return response.State == "running" ? response : null;
     }
 
-    /// <summary>
-    /// Picks the profile and registers a progress record for the start — before it waits for
-    /// <see cref="_gate"/>, so a queued start already reads as starting. A start already in
-    /// progress for the worktree keeps its record, and this one then does not own the start.
-    /// </summary>
-    private async Task<PendingStart> RegisterStartAsync(string normalized, LoadedPreviewConfig loaded, WorktreePreviewStartOptions options)
+    private async Task<WorktreePreviewResponse> StartCoreAsync(PendingStart pending, CancellationToken cancellationToken)
     {
-        var profileName = SelectProfileName(loaded.Config!, options.ProfileName);
-        if (!loaded.Config!.Preview!.Profiles.TryGetValue(profileName, out var profile) || profile == null)
-        {
-            throw new InvalidOperationException($"Preview profile '{profileName}' not found.");
-        }
-
-        ValidateProfile(profileName, profile);
-
-        var mine = new StartProgress(BuildPendingResponse(loaded, profileName, profile), options.WorkItemId);
-        var owned = ReferenceEquals(_starts.AddOrUpdate(normalized, mine, (_, cur) => cur.InProgress ? cur : mine), mine);
-        if (owned)
-            await PublishAsync(mine.WorkItemId);
-
-        return new PendingStart(loaded, profileName, profile, mine, owned);
-    }
-
-    private async Task<WorktreePreviewResponse> StartCoreAsync(
-        string normalized, WorktreePreviewStartOptions options, PendingStart pending, CancellationToken cancellationToken)
-    {
-        var (loaded, profileName, profile, progress) = (pending.Loaded, pending.ProfileName, pending.Profile, pending.Progress);
+        var (normalized, options, loaded, profileName, profile, progress) =
+            (pending.Normalized, pending.Options, pending.Loaded, pending.ProfileName, pending.Profile, pending.Progress);
         var registered = KeyValuePair.Create(normalized, progress);
 
         PreviewDataClaims.Lease? lease = null;
@@ -288,16 +279,15 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             _starts[normalized] = progress;
 
+            if (RunningResponse(loaded, normalized) is { } running)
+            {
+                if (_starts.TryRemove(registered))
+                    await PublishAsync(progress.WorkItemId);
+                return running;
+            }
+
             if (_runtimes.TryGetValue(normalized, out var existing))
             {
-                var existingResponse = BuildResponse(loaded, existing);
-                if (existingResponse.State == "running")
-                {
-                    if (_starts.TryRemove(registered))
-                        await PublishAsync(progress.WorkItemId);
-                    return existingResponse;
-                }
-
                 await RetireRuntimeAsync(existing, cancellationToken);
                 _runtimes.TryRemove(normalized, out _);
             }
@@ -1692,22 +1682,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         };
     }
 
-    private static WorktreePreviewResponse BuildPendingResponse(LoadedPreviewConfig loaded, string profileName, PreviewProfileConfig profile)
-        => new()
-        {
-            Configured = true,
-            State = "starting",
-            WorktreePath = loaded.WorktreePath,
-            ConfigPath = loaded.ConfigPath,
-            ProfileName = profileName,
-            Services = profile.Services.Select(service => new WorktreePreviewServiceResponse
-            {
-                Name = service.Name,
-                PortAlias = service.Port,
-                Status = "pending",
-                SuggestedPort = service.SuggestedPort,
-            }).ToList(),
-        };
+    private WorktreePreviewResponse BuildPendingResponse(LoadedPreviewConfig loaded, string profileName)
+    {
+        var response = BuildStoppedResponse(loaded, profileName);
+        response.State = "starting";
+        foreach (var row in response.Services)
+            row.Status = "pending";
+        return response;
+    }
 
     /// <summary>
     /// The final snapshot of a start that failed: what is left once everything it launched
@@ -2270,7 +2252,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     private sealed record PendingStart(
-        LoadedPreviewConfig Loaded, string ProfileName, PreviewProfileConfig Profile, StartProgress Progress, bool Owned);
+        string Normalized, WorktreePreviewStartOptions Options, LoadedPreviewConfig Loaded, string ProfileName,
+        PreviewProfileConfig Profile, StartProgress Progress, bool Owned);
 
     /// <summary>
     /// What a full start has reached, readable without a lock: the snapshot is replaced
