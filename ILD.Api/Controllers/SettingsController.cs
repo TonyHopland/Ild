@@ -40,7 +40,6 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SessionIdleDays,
         AppSettingKeys.SessionMaxDays,
         AppSettingKeys.NetworkMode,
-        AppSettingKeys.NetworkInternalAllow,
         AppSettingKeys.NetworkLogRetentionDays,
         AppSettingKeys.ChatSmartTitles,
         AppSettingKeys.ChatTitleProviderTag,
@@ -108,8 +107,6 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.SessionMaxDays] = AppSettingKeys.DefaultSessionMaxDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.NetworkMode))
             map[AppSettingKeys.NetworkMode] = AppSettingKeys.DefaultNetworkMode;
-        if (!map.ContainsKey(AppSettingKeys.NetworkInternalAllow))
-            map[AppSettingKeys.NetworkInternalAllow] = AppSettingKeys.DefaultNetworkInternalAllow;
         if (!map.ContainsKey(AppSettingKeys.NetworkLogRetentionDays))
             map[AppSettingKeys.NetworkLogRetentionDays] = AppSettingKeys.DefaultNetworkLogRetentionDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.ChatSmartTitles))
@@ -174,10 +171,10 @@ public class SettingsController : ControllerBase
             // than after the previous (possibly long) interval elapses.
             _prPoller.Pulse();
         }
-        else if (key == AppSettingKeys.NetworkMode || key == AppSettingKeys.NetworkInternalAllow)
+        else if (key == AppSettingKeys.NetworkMode)
         {
-            // The proxy judges the agent's next connection by the new mode or
-            // override, and re-judges the tunnels already open under the old mode.
+            // The proxy judges the agent's next connection by the new mode,
+            // and re-judges the tunnels already open under the old one.
             _egressPolicy.Invalidate();
             await _networkNotifier.PolicyChangedAsync();
         }
@@ -198,7 +195,6 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SessionIdleDays => AppSettingKeys.DefaultSessionIdleDays.ToString(),
         AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
         AppSettingKeys.NetworkMode => AppSettingKeys.DefaultNetworkMode,
-        AppSettingKeys.NetworkInternalAllow => AppSettingKeys.DefaultNetworkInternalAllow,
         AppSettingKeys.NetworkLogRetentionDays => AppSettingKeys.DefaultNetworkLogRetentionDays.ToString(),
         AppSettingKeys.ChatSmartTitles => AppSettingKeys.DefaultChatSmartTitles.ToString().ToLowerInvariant(),
         AppSettingKeys.ChatTitleProviderTag => AppSettingKeys.DefaultChatTitleProviderTag,
@@ -296,13 +292,6 @@ public class SettingsController : ControllerBase
                 if (!EgressRules.TryParseMode(value, out _))
                 {
                     error = "network.mode must be 'off', 'monitor', 'whitelist' or 'blacklist'";
-                    return false;
-                }
-                break;
-            case AppSettingKeys.NetworkInternalAllow:
-                if (!EgressAddressRules.TryNormalizeInternalAllow(value, out canonical, out var allowError))
-                {
-                    error = "network.internalAllow: " + allowError;
                     return false;
                 }
                 break;

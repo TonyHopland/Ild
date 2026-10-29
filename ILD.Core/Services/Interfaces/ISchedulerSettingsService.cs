@@ -102,14 +102,6 @@ public static class AppSettingKeys
     public const string DefaultNetworkMode = "monitor";
 
     /// <summary>
-    /// Destinations the egress proxy may reach although they resolve to a private,
-    /// loopback or link-local address, which it refuses in every mode: host
-    /// patterns, IP literals and CIDRs, one per line. Empty allows none.
-    /// </summary>
-    public const string NetworkInternalAllow = "network.internalAllow";
-    public const string DefaultNetworkInternalAllow = "";
-
-    /// <summary>
     /// Days a destination stays in the network log before the retention sweeper
     /// deletes it. <c>0</c> keeps the log forever, and
     /// <see cref="MaxNetworkLogRetentionDays"/> is the ceiling both the write

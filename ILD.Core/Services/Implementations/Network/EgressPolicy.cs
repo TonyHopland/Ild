@@ -9,16 +9,10 @@ namespace ILD.Core.Services.Implementations.Network;
 /// <summary>The mode and lists in force at one moment, ready to judge a destination.</summary>
 public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<NetworkPolicyEntry> Entries)
 {
-    /// <summary>The operator's <c>network.internalAllow</c> patterns, lifting <see cref="EgressAddressRules"/>.</summary>
-    public IReadOnlyList<string> InternalAllow { get; init; } = Array.Empty<string>();
-
     public static readonly EgressPolicySnapshot Off = new(NetworkMode.Off, Array.Empty<NetworkPolicyEntry>());
 
     public NetworkDecision Decide(string host, Guid? aiProviderId)
         => EgressRules.Decide(Mode, Entries, host, aiProviderId);
-
-    public bool PermitsAddress(string host, System.Net.IPAddress address)
-        => EgressAddressRules.Permits(InternalAllow, host, address);
 }
 
 /// <summary>
@@ -119,12 +113,7 @@ public sealed class EgressPolicy : IEgressPolicy
         var modeSetting = await settings.GetByKeyAsync(AppSettingKeys.NetworkMode, ct);
         EgressRules.TryParseMode(modeSetting?.Value ?? AppSettingKeys.DefaultNetworkMode, out var mode);
         var entries = await store.GetEntriesAsync(ct);
-        var internalAllow = await settings.GetByKeyAsync(AppSettingKeys.NetworkInternalAllow, ct);
-        return new EgressPolicySnapshot(mode, entries)
-        {
-            InternalAllow = (internalAllow?.Value ?? AppSettingKeys.DefaultNetworkInternalAllow)
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-        };
+        return new EgressPolicySnapshot(mode, entries);
     }
 
     private EgressPolicySnapshot? Fresh()

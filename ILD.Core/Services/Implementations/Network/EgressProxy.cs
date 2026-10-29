@@ -154,7 +154,7 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
 
-                // Resolved once, here: the addresses checked are the addresses dialled.
+                // Resolved once, here: the addresses dialled are the addresses resolved.
                 IPAddress[] addresses;
                 try
                 {
@@ -167,20 +167,8 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
 
-                var permitted = _options.ApiEndpoint is { } api && api.Host == request.Host && api.Port == request.Port
-                    ? addresses
-                    : addresses.Where(a => snapshot.PermitsAddress(request.Host, a)).ToArray();
-                if (permitted.Length == 0)
-                {
-                    _log.Record(request.Host, request.Port, NetworkDecision.Blocked, request.AiProviderId);
-                    await RefuseAsync(stream, request,
-                        $"{request.Host} resolves to a private or internal address, which ILD refuses. An operator can allow it in Settings → Network → Internal destinations.",
-                        stoppingToken).ConfigureAwait(false);
-                    return;
-                }
-
                 _log.Record(request.Host, request.Port, decision, request.AiProviderId);
-                await RelayAsync(stream, request, permitted, head.Value, stoppingToken).ConfigureAwait(false);
+                await RelayAsync(stream, request, addresses, head.Value, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (IOException) { }

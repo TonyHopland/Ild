@@ -266,7 +266,7 @@ public sealed class SettingsControllerTests : IDisposable
     [Fact]
     public async Task The_retired_internal_allow_key_is_an_unknown_setting()
     {
-        Assert.IsType<NotFoundObjectResult>(await Build().Get("network.internalAllow", TestContext.Current.CancellationToken));
+        Assert.IsType<NotFoundResult>(await Build().Get("network.internalAllow", TestContext.Current.CancellationToken));
         Assert.IsType<NotFoundObjectResult>(await Put("network.internalAllow", "10.0.0.0/8"));
         Assert.Null(await Stored("network.internalAllow"));
 

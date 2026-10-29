@@ -48,7 +48,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _upstream = new TcpListener(IPAddress.Loopback, 0);
+        _upstream = TcpListener.Create(0);
         _upstream.Start();
         _upstreamPort = ((IPEndPoint)_upstream.LocalEndpoint).Port;
         _ = ServeUpstreamAsync(_upstream);

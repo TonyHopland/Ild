@@ -219,6 +219,10 @@ try
             if (networkModesRenamed > 0)
                 Log.Information("Renamed the stored network mode off to monitor: it logged every connection, and off now means no proxy");
 
+            var internalAllowRemoved = await ILD.Data.Migrations.NetworkInternalAllowMigrator.MigrateAsync(dbContext);
+            if (internalAllowRemoved > 0)
+                Log.Information("Deleted the retired network.internalAllow setting");
+
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also
             // clears dangling paths whose files a redeploy already wiped.

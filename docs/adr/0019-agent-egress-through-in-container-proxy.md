@@ -101,7 +101,7 @@ install steps and services (a start resolves the mode once). Git as the agent
 only talk to the local mirror. A mode change applies to the _next launch_;
 running processes keep their environment and gid and are not signalled. Proxied
 processes that outlive a switch to `off`, and forwards, are judged as `monitor`
-(allowed, logged, private-address block applied).
+(allowed and logged).
 
 **The agent cannot move itself into the open group.** It holds no capabilities
 (`CAP_SETGID` stays with the orchestrator), is not a member of the group, the
@@ -179,8 +179,8 @@ degradation is never silent.
 
 ## Consequences
 
-- **`off` is unprotected by design.** No proxy means no private-address block and
-  no log, and the DNS block does not apply either. Residual: processes launched
+- **`off` is unprotected by design.** No proxy means no log, and the DNS
+  block does not apply either. Residual: processes launched
   in `off` keep direct egress until they exit, and other agent-uid processes can
   reach them (`ptrace_scope` is not set, see ADR-0014), so a later `whitelist`
   agent could drive an earlier `off` one.
@@ -212,3 +212,11 @@ degradation is never silent.
   hardening (#109) landed first.
 - **Single-uid deployments (`AGENT_USER=`) are advisory by construction.** There
   is no separate uid to key rules on; the proxy still runs and logs.
+
+## Amendment (2026-10): no private-address block
+
+The proxy briefly refused any destination that resolved to a private, loopback or link-local address, and an `internalAllow` setting lifted that for chosen hosts. It is removed. It overrode the lists' plain meaning: a whitelisted LAN host was refused until it was listed a second time, and the modes no longer said what they did.
+
+- **LAN destinations are judged like any other.** The mode and lists decide, and the Network Log records the decision. `NO_PROXY` stays loopback-only and the firewall still drops non-loopback agent traffic, so a LAN connection cannot skip the proxy.
+- **The proxy still resolves a host once and dials the addresses it resolved,** and a host the resolver rejects is logged and refused.
+- **To keep agents off the LAN or cloud metadata (`169.254.169.254`),** use `whitelist`, or blacklist the specific hosts. `monitor` and `blacklist` do not protect them.
