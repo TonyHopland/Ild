@@ -284,44 +284,25 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         ValidateProfile(profileName, profile);
 
-        // A start that is already stopping is not joined: it will not bring the preview up.
+        // Only a start that will own the record is refused up front: one that joins runs under its
+        // owner's options. The claim inside the start still decides; this only answers sooner.
+        if (options.Volumes is { } scope
+            && !(_starts.TryGetValue(normalized, out var inProgress) && Joinable(inProgress))
+            && _claims.RefusalFor(scope, normalized) is { } refusal)
+            throw new InvalidOperationException(refusal.Message);
+
         var mine = new StartProgress(BuildPendingResponse(loaded, profileName), options.WorkItemId);
-        StartProgress? replaced = null;
-        var current = _starts.AddOrUpdate(normalized,
-            _ =>
-            {
-                replaced = null;
-                return mine;
-            },
-            (_, cur) =>
-            {
-                if (cur.InProgress && !cur.Stopping.IsCancellationRequested)
-                    return cur;
-                replaced = cur;
-                return mine;
-            });
+        var current = _starts.AddOrUpdate(normalized, mine, (_, cur) => Joinable(cur) ? cur : mine);
         if (!ReferenceEquals(current, mine))
             return (new PendingStart(normalized, options, loaded, profileName, profile, current, Owned: false), null);
-
-        // Only the start that owns the record is judged: one that joins runs under its owner's
-        // options. A refused start puts back the record it replaced, which still has its own end
-        // (a failure to show, or a stop to finish and announce).
-        if (options.Volumes is { } scope && _claims.RefusalFor(scope, normalized) is { } refusal)
-        {
-            var refused = new InvalidOperationException(refusal.Message);
-            mine.Update(response => MarkFailed(response, refused));
-            mine.Failed(refused);
-            if (replaced is null)
-                _starts.TryRemove(KeyValuePair.Create(normalized, mine));
-            else
-                _starts.TryUpdate(normalized, replaced, mine);
-            throw refused;
-        }
 
         await PublishAsync(mine.WorkItemId);
 
         return (new PendingStart(normalized, options, loaded, profileName, profile, mine, Owned: true), null);
     }
+
+    /// <summary>A start still bringing the preview up; one already stopping will not, so it is not joined.</summary>
+    private static bool Joinable(StartProgress start) => start.InProgress && !start.Stopping.IsCancellationRequested;
 
     private WorktreePreviewResponse? RunningResponse(LoadedPreviewConfig loaded, string normalized)
     {
