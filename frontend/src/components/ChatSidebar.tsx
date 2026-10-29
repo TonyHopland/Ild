@@ -278,10 +278,10 @@ function useSidebarWidth(place: SidebarPlace, resizable: boolean) {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       endDrag.current = null;
+      setDragWidth(null);
     };
     const onUp = () => {
       stop();
-      setDragWidth(null);
       if (width !== current) choose(width);
     };
     window.addEventListener("pointermove", onMove);

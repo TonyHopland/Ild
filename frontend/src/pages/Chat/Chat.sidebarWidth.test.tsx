@@ -252,4 +252,27 @@ describe("the chat list handle on the Chat page", () => {
     expect(screen.queryByRole("separator", { name: "Resize chat list" })).toBeNull();
     expect(drawn()).toBe("");
   });
+
+  test("a drag cut off by the phone layout leaves no dragged width behind", async () => {
+    let onChange: (e: MediaQueryListEvent) => void = () => {};
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: (_: string, cb: typeof onChange) => (onChange = cb),
+      removeEventListener: () => {},
+    }));
+    await renderPage();
+
+    fireEvent.pointerDown(handle(), { clientX: 100, clientY: 0 });
+    fireEvent.pointerMove(window, { clientX: 200, clientY: 0 });
+    expect(drawn()).toBe("388px");
+
+    act(() => onChange({ matches: true } as MediaQueryListEvent));
+    expect(screen.queryByRole("separator", { name: "Resize chat list" })).toBeNull();
+    act(() => onChange({ matches: false } as MediaQueryListEvent));
+
+    expect(drawn()).toBe("");
+    expect(handle().className).not.toContain("is-dragging");
+    expect(getPreference(KEY)).toBeUndefined();
+  });
 });
