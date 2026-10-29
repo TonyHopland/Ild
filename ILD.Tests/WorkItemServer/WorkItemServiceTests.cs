@@ -75,6 +75,63 @@ public class WorkItemServiceTests : IAsyncLifetime
         Assert.Equal(third.Priority, (await _svc.GetAsync(third.Id, ct))!.Priority);
     }
 
+
+    [Fact]
+    public async Task An_item_moved_to_Done_goes_above_every_other_item_and_later_moves_stack_in_reverse_order()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var other = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "other", ForceStatus = WorkItemStatus.Ready }, ct);
+        var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, ct);
+        var b = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "b" }, ct);
+        var c = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "c" }, ct);
+        var oldDone = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "old", ForceStatus = WorkItemStatus.Done }, ct);
+        await _svc.UpdateAsync(oldDone.Id, new UpdateWorkItemRequest { Priority = -500 }, ct);
+
+        foreach (var id in new[] { a.Id, b.Id, c.Id })
+            Assert.True((await _svc.TransitionAsync(id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, ct)).Success);
+
+        var board = (await _svc.ListAsync(null, null, ct)).ToList();
+        var doneOrder = board.Where(w => w.Status == WorkItemStatus.Done).Select(w => w.Id).ToList();
+        Assert.Equal(new[] { c.Id, b.Id, a.Id, oldDone.Id }, doneOrder);
+        Assert.Equal(c.Id, board[0].Id);
+    }
+
+    [Fact]
+    public async Task A_transition_that_is_not_a_move_into_Done_or_is_refused_leaves_priority_alone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, ct);
+        var blocked = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "blocked", Dependencies = new[] { dep.Id } }, ct);
+        var done = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "done", ForceStatus = WorkItemStatus.Done }, ct);
+        await _svc.UpdateAsync(done.Id, new UpdateWorkItemRequest { Priority = 7 }, ct);
+        var mover = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "mover" }, ct);
+        await _svc.UpdateAsync(mover.Id, new UpdateWorkItemRequest { Priority = 3 }, ct);
+
+        await _svc.TransitionAsync(done.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, ct);
+        await _svc.TransitionAsync(mover.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Ready }, ct);
+        var refused = await _svc.TransitionAsync(blocked.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, ct);
+
+        Assert.False(refused.Success);
+        Assert.Equal(7, (await _svc.GetAsync(done.Id, ct))!.Priority);
+        Assert.Equal(3, (await _svc.GetAsync(mover.Id, ct))!.Priority);
+        Assert.Equal(blocked.Priority, (await _svc.GetAsync(blocked.Id, ct))!.Priority);
+    }
+
+    [Fact]
+    public async Task Moving_an_item_to_Done_still_promotes_dependents_and_writes_no_priority_history()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, ct);
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "child", ForceStatus = WorkItemStatus.WorkQueue, Dependencies = new[] { dep.Id } }, ct);
+
+        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, ct);
+
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id, ct))!.Status);
+        Assert.True((await _svc.GetAsync(dep.Id, ct))!.Priority < dep.Priority);
+        var history = (await _svc.GetHistoryAsync(dep.Id, ct))!;
+        Assert.Contains(history, e => e.Field == WorkItemHistoryFields.Status && e.NewValue == "Done");
+        Assert.DoesNotContain(history, e => e.Field.Equals(nameof(WorkItem.Priority), StringComparison.OrdinalIgnoreCase));
+    }
     [Fact]
     public async Task Update_sets_the_priority_when_given_and_leaves_it_alone_otherwise()
     {

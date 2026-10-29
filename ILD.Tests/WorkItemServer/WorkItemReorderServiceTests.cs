@@ -164,6 +164,65 @@ public sealed class WorkItemReorderServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_drop_into_Done_from_another_column_lands_at_the_top_whatever_the_spot()
+    {
+        var top = await SeedAsync(0, WorkItemStatus.Ready);
+        var d1 = await SeedAsync(1, WorkItemStatus.Done);
+        var d2 = await SeedAsync(2, WorkItemStatus.Done);
+        var x = await SeedAsync(5);
+        var y = await SeedAsync(6);
+        _recorder.Reset();
+
+        var viaGap = await _svc.ReorderAsync(x, new ReorderWorkItemRequest { AboveId = d1, BelowId = d2, TargetStatus = WorkItemStatus.Done }, Ct);
+        Assert.Equal((1, 1), (_recorder.Started, _recorder.Committed));
+        var viaEnd = await _svc.ReorderAsync(y, new ReorderWorkItemRequest { AboveId = d2, TargetStatus = WorkItemStatus.Done }, Ct);
+
+        foreach (var resp in new[] { viaGap, viaEnd })
+        {
+            Assert.Equal(ReorderWorkItemOutcome.Moved, resp.Outcome);
+            Assert.False(resp.Renumbered);
+            Assert.Equal(WorkItemStatus.Done, resp.Item!.Status);
+        }
+        var state = await StateAsync();
+        Assert.Equal(state[y].Priority, viaEnd.Item!.Priority);
+        Assert.Equal(state[x].Priority, viaGap.Item!.Priority);
+        Assert.Equal(new[] { y, x, top, d1, d2 }, await BoardAsync());
+    }
+
+    [Fact]
+    public async Task A_drop_into_Done_naming_an_unknown_neighbour_or_the_item_itself_is_refused_and_changes_nothing()
+    {
+        var x = await SeedAsync(5);
+        await SeedAsync(1, WorkItemStatus.Done);
+        var before = await StateAsync();
+
+        var nowhere = await _svc.ReorderAsync(x, new ReorderWorkItemRequest { AboveId = "999", TargetStatus = WorkItemStatus.Done }, Ct);
+        _db.ChangeTracker.Clear();
+        var itself = await _svc.ReorderAsync(x, new ReorderWorkItemRequest { BelowId = x, TargetStatus = WorkItemStatus.Done }, Ct);
+
+        Assert.Equal(ReorderWorkItemOutcome.InvalidNeighbour, nowhere.Outcome);
+        Assert.Equal(ReorderWorkItemOutcome.InvalidNeighbour, itself.Outcome);
+        Assert.Equal(before, await StateAsync());
+    }
+
+    [Fact]
+    public async Task Reordering_an_item_already_in_Done_places_it_exactly_at_the_dropped_spot()
+    {
+        var d1 = await SeedAsync(1, WorkItemStatus.Done);
+        var d2 = await SeedAsync(2, WorkItemStatus.Done);
+        var d3 = await SeedAsync(3, WorkItemStatus.Done);
+
+        var plain = await _svc.ReorderAsync(d1, new ReorderWorkItemRequest { AboveId = d2, BelowId = d3 }, Ct);
+        Assert.Equal(ReorderWorkItemOutcome.Moved, plain.Outcome);
+        Assert.Equal(new[] { d2, d1, d3 }, await BoardAsync());
+        _db.ChangeTracker.Clear();
+
+        var explicitDone = await _svc.ReorderAsync(d3, new ReorderWorkItemRequest { BelowId = d2, TargetStatus = WorkItemStatus.Done }, Ct);
+        Assert.Equal(ReorderWorkItemOutcome.Moved, explicitDone.Outcome);
+        Assert.Equal(new[] { d3, d2, d1 }, await BoardAsync());
+    }
+
+    [Fact]
     public async Task A_drop_the_server_cannot_place_or_move_leaves_the_item_where_it_was()
     {
         var unfinished = await SeedAsync(0);
