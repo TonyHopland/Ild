@@ -57,7 +57,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     private static string Refusal(string holder)
         => $"A preview is already running for work item {holder} ({Title(holder)}). Stop it before starting this one.";
 
-    private WorktreePreviewService BuildService(HttpMessageHandler? health = null, Func<int, bool>? isPortAvailable = null)
+    private WorktreePreviewService BuildService(
+        HttpMessageHandler? health = null, Func<int, bool>? isPortAvailable = null, PreviewDataClaims? claims = null)
     {
         var handler = health ?? new HealthStub();
         var factory = new Mock<IHttpClientFactory>();
@@ -69,7 +70,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         var service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
             agentUser: null, agentGroup: null, agentHome: null,
-            environment: environment, isPortAvailable: isPortAvailable);
+            environment: environment, isPortAvailable: isPortAvailable, claims: claims);
         _services.Add(service);
         return service;
     }
@@ -600,6 +601,33 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
 
         await service.StartAsync(b, new WorktreePreviewStartOptions(Volumes: Scope("306")), Ct);
         Assert.True(service.IsPreviewRunning(b));
+    }
+
+    [Fact]
+    public async Task A_start_that_joins_one_already_queued_is_not_refused_for_data_that_was_free_when_that_one_began()
+    {
+        var claims = new PreviewDataClaims();
+        var service = BuildService(claims: claims);
+        var (started, go) = (Fifo("started"), Fifo("go"));
+        var blocker = Worktree("wt-c", install: [$"printf x > '{started}'; cat '{go}' > /dev/null"],
+            services: [new Service("web", "exec sleep 60")], volumes: []);
+        var holding = service.StartAsync(blocker, new WorktreePreviewStartOptions(), Ct);
+        await WaitUntilOpenedAsync(started);
+        var a = Worktree("wt-a");
+        var b = Worktree("wt-b");
+        Assert.Equal("starting", (await service.BeginStartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301")), Ct)).State);
+
+        Assert.True(claims.TryBeginReset(_repository, out _));
+        var again = await service.BeginStartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301")), Ct);
+
+        Assert.Equal("starting", again.State);
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.BeginStartAsync(b, new WorktreePreviewStartOptions(Volumes: Scope("302")), Ct));
+        Assert.Contains("being reset", refused.Message);
+        Assert.Equal("stopped", (await service.GetStatusAsync(b, Ct)).State);
+        claims.EndReset(_repository);
+        File.WriteAllText(go, "go");
+        await holding;
     }
 
     // --- helpers ---

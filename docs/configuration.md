@@ -743,7 +743,8 @@ blocks nothing. Edits apply to the agent's **next connection** — no restart, a
 a host that is newly blacklisted has its open connections reset.
 
 **`off` is not a filter, it is no proxy.** Agents launched in `off` connect
-directly, to any host and any port, and nothing is logged; that is the mode for
+directly, to any host and any port, and only what they send through a forward is
+logged; that is the mode for
 tools that ignore `HTTP(S)_PROXY` or speak something other than HTTP (SSH, gRPC,
 UDP, QUIC). With no proxy there is no log, no list and no DNS block, so an
 `off` agent can also reach your LAN and cloud metadata. Settings asks you to
@@ -769,7 +770,7 @@ confirm it and shows a warning while it is active.
   or `allowPrivilegeEscalation: false`. Without it an `off` agent would have no
   network, so Settings refuses to switch to `off`. Without `NET_ADMIN` there is no
   firewall (advisory), so `off` is always available and differs from `monitor`
-  only in that nothing is logged. The status `offAvailable` and `reason` say which
+  only in that connections not through a forward go unlogged. The status `offAvailable` and `reason` say which
   applies.
 
 LAN and private hosts (self-hosted git, a local model server, cloud metadata at

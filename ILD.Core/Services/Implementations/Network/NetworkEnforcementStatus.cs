@@ -39,11 +39,15 @@ public sealed record NetworkEnforcementStatus(string Enforcement, string Reason,
                 false, null);
 
         if (string.Equals(reported?.Trim(), Enforced, StringComparison.OrdinalIgnoreCase))
+        {
+            var openGroupEnabled = !string.IsNullOrWhiteSpace(openGroup);
             return new(Enforced,
                 string.IsNullOrWhiteSpace(reportedReason)
                     ? "The container entrypoint installed firewall rules that drop agent-uid traffic bypassing the proxy."
+                        + (openGroupEnabled ? "" : " Network mode Off is unavailable: no open group is enabled; agents launched in it have no network.")
                     : reportedReason.Trim(),
-                true, proxy.Port, !string.IsNullOrWhiteSpace(openGroup));
+                true, proxy.Port, openGroupEnabled);
+        }
 
         return new(Advisory,
             string.IsNullOrWhiteSpace(reportedReason)

@@ -836,7 +836,7 @@ describe("Network modes", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain(
-      "agents can reach any host, including your LAN and cloud metadata, and nothing is logged",
+      "agents can reach any host, including your LAN and cloud metadata, and only connections through a forward are logged",
     );
     expect(put).not.toHaveBeenCalled();
 
@@ -993,7 +993,7 @@ describe("Network modes", () => {
       expect(modeCard().textContent).not.toMatch(/\d+ rules? (is|are) in effect/i);
       const note = screen.getByText("Rules", { selector: "h3" }).closest("section")!.textContent!;
       expect(note).toMatch(/no rule is in effect/i);
-      expect(note).toMatch(mode === "off" ? /nothing is logged/i : /logged/i);
+      expect(note).toMatch(mode === "off" ? /only forwards are logged/i : /logged/i);
     },
   );
 });

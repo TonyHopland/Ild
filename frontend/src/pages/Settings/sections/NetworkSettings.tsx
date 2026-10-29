@@ -26,7 +26,7 @@ const MODES: { value: NetworkMode; label: string; help: string }[] = [
   {
     value: "off",
     label: "Off",
-    help: "Agents connect directly to any host and port, with no proxy. Nothing is logged and neither list is in effect.",
+    help: "Agents connect directly to any host and port, with no proxy. Only connections through a forward are logged, and neither list is in effect.",
   },
   {
     value: "monitor",
@@ -431,7 +431,7 @@ export default function NetworkSettings() {
           ) : (
             <>
               Agents launched in it can reach any host, including your LAN and cloud metadata, and
-              nothing is logged.
+              only their connections through a forward are logged.
               {status?.enforcement === "enforced" && <> {status.reason}</>}
             </>
           )}
@@ -480,7 +480,7 @@ export default function NetworkSettings() {
       <ConfirmModal
         isOpen={confirmingOff}
         title="Turn the network proxy off?"
-        message="Agents launched from now on connect directly: agents can reach any host, including your LAN and cloud metadata, and nothing is logged. Agents already running keep the network they started with."
+        message="Agents launched from now on connect directly: agents can reach any host, including your LAN and cloud metadata, and only connections through a forward are logged. Agents already running keep the network they started with."
         confirmText="Turn off"
         onCancel={() => setConfirmingOff(false)}
         onConfirm={() => {
@@ -500,7 +500,7 @@ export default function NetworkSettings() {
         )}
         {mode === "off" && (
           <p className="settings-card-note">
-            Agents bypass the proxy, so no rule is in effect and nothing is logged.
+            Agents bypass the proxy, so no rule is in effect and only forwards are logged.
           </p>
         )}
         <div className="net-toolbar">

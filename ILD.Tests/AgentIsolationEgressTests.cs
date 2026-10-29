@@ -173,4 +173,16 @@ public class AgentIsolationEgressTests
         Assert.Equal(NetworkEnforcementStatus.Advisory, unreported.Enforcement);
         Assert.NotEmpty(unreported.Reason);
     }
+
+    [Fact]
+    public void An_enforced_status_without_a_reported_reason_still_says_why_Off_is_unavailable()
+    {
+        var closed = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null);
+        Assert.False(closed.OffAvailable);
+        Assert.Contains("Off is unavailable", closed.Reason);
+
+        var open = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "ild-net-open");
+        Assert.True(open.OffAvailable);
+        Assert.DoesNotContain("Off", open.Reason);
+    }
 }
