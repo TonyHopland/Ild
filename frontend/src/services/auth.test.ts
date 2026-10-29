@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { authService, loopRunService, workItemService } from "./auth";
+import { authService, loopRunService, networkService, workItemService } from "./auth";
 import { WorkItemStatus } from "../types";
 
 const okJsonResponse = (body: unknown): Response =>
@@ -320,5 +320,34 @@ describe("authService.onTokenChange", () => {
     authService.clearAuth();
 
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("networkService.updateEntry", () => {
+  test("PUTs the rule to /api/v1/network/entries/:id and resolves to the server's entry", async () => {
+    const entry = {
+      id: "e1",
+      host: ".example.com",
+      listKind: "Blacklist",
+      aiProviderId: null,
+      createdAt: "2026-09-01T10:00:00Z",
+    };
+    fetchSpy.mockResolvedValue(okJsonResponse(entry));
+
+    const result = await networkService.updateEntry("e1", {
+      host: "*.example.com",
+      listKind: "Blacklist",
+      aiProviderId: null,
+    });
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/network/entries/e1");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      host: "*.example.com",
+      listKind: "Blacklist",
+      aiProviderId: null,
+    });
+    expect(result).toEqual(entry);
   });
 });

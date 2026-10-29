@@ -1176,3 +1176,255 @@ describe("Editing a network forward", () => {
     expect((await forwardTable()).getByText("primary")).toBeTruthy();
   });
 });
+
+describe("Editing a network rule", () => {
+  const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+  const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
+  const startEditing = async (name = "Edit .github.com on the whitelist") => {
+    fireEvent.click(await screen.findByRole("button", { name }));
+  };
+  const type = (label: string, value: string) =>
+    fireEvent.change(field(label), { target: { value } });
+  const rules = () => within(screen.getByLabelText("Network rules"));
+  const saveButton = () =>
+    screen.getByRole("button", { name: "Save the .github.com rule" }) as HTMLButtonElement;
+
+  test("shows the saved rule's values and leaves the other rows and the add form alone", async () => {
+    mockServices();
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing("Edit evil.example on the blacklist");
+
+    expect(field("Host pattern of the evil.example rule").value).toBe("evil.example");
+    expect(field("Scope of the evil.example rule").value).toBe("p1");
+    const kind = within(screen.getByRole("group", { name: "Kind of the evil.example rule" }));
+    expect(kind.getByRole("button", { name: "Block" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save the evil.example rule" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Cancel editing the evil.example rule" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/matches evil\.example exactly/)).toBeTruthy();
+    // The other rule is still read-only, and the add form keeps its own inputs.
+    expect(screen.getByRole("button", { name: "Edit .github.com on the whitelist" })).toBeTruthy();
+    expect(screen.queryByLabelText("Host pattern of the .github.com rule")).toBeNull();
+    expect((screen.getByLabelText("Host pattern") as HTMLInputElement).value).toBe("");
+    expect(screen.getByLabelText("Scope for the new rule")).toBeTruthy();
+  });
+
+  test("saves a changed host, kind and scope, and shows the server's row in place", async () => {
+    mockServices();
+    const updated: NetworkPolicyEntry = {
+      ...github,
+      host: ".example.com",
+      listKind: "Blacklist",
+      aiProviderId: "p1",
+    };
+    const update = vi.spyOn(services.networkService, "updateEntry").mockResolvedValue(updated);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Host pattern of the .github.com rule", "*.Example.com");
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Kind of the .github.com rule" })).getByRole(
+        "button",
+        { name: "Block" },
+      ),
+    );
+    type("Scope of the .github.com rule", "p1");
+    click("Save the .github.com rule");
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith("e1", {
+        host: "*.Example.com",
+        listKind: "Blacklist",
+        aiProviderId: "p1",
+      }),
+    );
+    expect(await rules().findByText(".example.com")).toBeTruthy();
+    expect(rules().queryByText(".github.com")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit .example.com on the blacklist" })).toBeTruthy();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  test("sends null for All providers when a scoped rule is widened", async () => {
+    mockServices();
+    const widened: NetworkPolicyEntry = { ...evil, aiProviderId: null };
+    const update = vi.spyOn(services.networkService, "updateEntry").mockResolvedValue(widened);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing("Edit evil.example on the blacklist");
+    type("Scope of the evil.example rule", "");
+    click("Save the evil.example rule");
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith("e2", {
+        host: "evil.example",
+        listKind: "Blacklist",
+        aiProviderId: null,
+      }),
+    );
+  });
+
+  test("a rule saved so that it no longer matches the active kind filter drops out of view", async () => {
+    mockServices();
+    const flipped: NetworkPolicyEntry = { ...github, listKind: "Blacklist" };
+    vi.spyOn(services.networkService, "updateEntry").mockResolvedValue(flipped);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByText("evil.example");
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Rule kind filter" })).getByRole("button", {
+        name: "Allow",
+      }),
+    );
+
+    await startEditing();
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Kind of the .github.com rule" })).getByRole(
+        "button",
+        { name: "Block" },
+      ),
+    );
+    click("Save the .github.com rule");
+
+    await waitFor(() => expect(rules().queryByText(".github.com")).toBeNull());
+  });
+
+  test("keeps the edits and shows the server's reason in the row when a save is refused, then saves the fix", async () => {
+    mockServices();
+    const fixed: NetworkPolicyEntry = { ...github, host: "api.example.com" };
+    const update = vi
+      .spyOn(services.networkService, "updateEntry")
+      .mockRejectedValueOnce({
+        status: 400,
+        message: "A whitelist rule for evil.example already exists for this scope",
+      })
+      .mockResolvedValue(fixed);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Host pattern of the .github.com rule", "evil.example");
+    click("Save the .github.com rule");
+
+    const row = within(saveButton().closest("tr")!);
+    expect(await row.findByText(/rule for evil\.example already exists/)).toBeTruthy();
+    expect(field("Host pattern of the .github.com rule").value).toBe("evil.example");
+    expect(saveButton().disabled).toBe(false);
+
+    type("Host pattern of the .github.com rule", "api.example.com");
+    click("Save the .github.com rule");
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update).toHaveBeenLastCalledWith("e1", {
+      host: "api.example.com",
+      listKind: "Whitelist",
+      aiProviderId: null,
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull());
+    expect(screen.queryByText(/already exists/)).toBeNull();
+    expect(await rules().findByText("api.example.com")).toBeTruthy();
+  });
+
+  test("cancel throws the edits away without sending anything, and they do not come back", async () => {
+    mockServices();
+    const update = vi.spyOn(services.networkService, "updateEntry");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Host pattern of the .github.com rule", "scribble.example");
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Kind of the .github.com rule" })).getByRole(
+        "button",
+        { name: "Block" },
+      ),
+    );
+    type("Scope of the .github.com rule", "p1");
+    click("Cancel editing the .github.com rule");
+
+    expect(rules().getByText(".github.com")).toBeTruthy();
+    expect(rules().queryByText("scribble.example")).toBeNull();
+    expect(screen.queryByLabelText("Host pattern of the .github.com rule")).toBeNull();
+
+    await startEditing();
+    expect(field("Host pattern of the .github.com rule").value).toBe(".github.com");
+    expect(field("Scope of the .github.com rule").value).toBe("");
+    expect(
+      within(screen.getByRole("group", { name: "Kind of the .github.com rule" }))
+        .getByRole("button", { name: "Allow" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test("will not save a blank host, by button or by Enter, and Enter saves a non-blank one once", async () => {
+    mockServices();
+    let finish: (e: NetworkPolicyEntry) => void = () => {};
+    const update = vi
+      .spyOn(services.networkService, "updateEntry")
+      .mockReturnValue(new Promise<NetworkPolicyEntry>((resolve) => (finish = resolve)));
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+
+    type("Host pattern of the .github.com rule", "   ");
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.keyDown(field("Host pattern of the .github.com rule"), { key: "Enter" });
+    expect(update).not.toHaveBeenCalled();
+    expect(within(saveButton().closest("tr")!).queryByText(/matches/)).toBeNull();
+
+    type("Host pattern of the .github.com rule", ".github.io");
+    expect(
+      within(saveButton().closest("tr")!).getByText(/matches github\.io and every subdomain/),
+    ).toBeTruthy();
+    fireEvent.keyDown(field("Host pattern of the .github.com rule"), { key: "Enter" });
+    fireEvent.keyDown(field("Host pattern of the .github.com rule"), { key: "Enter" });
+    fireEvent.click(saveButton());
+
+    expect(update).toHaveBeenCalledTimes(1);
+    finish({ ...github, host: ".github.io" });
+    expect(await rules().findByText(".github.io")).toBeTruthy();
+  });
+
+  test("a live refresh while a rule is being edited does not discard its edits", async () => {
+    mockServices();
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Host pattern of the .github.com rule", "draft.example");
+    const getEntries = vi
+      .spyOn(services.networkService, "getEntries")
+      .mockResolvedValue([github, { ...evil, host: "evil.test" }]);
+    emit("NetworkPolicyChanged", {});
+
+    await waitFor(() => expect(getEntries).toHaveBeenCalled());
+    expect(await rules().findByText("evil.test")).toBeTruthy();
+    expect(field("Host pattern of the .github.com rule").value).toBe("draft.example");
+    expect(screen.queryByLabelText("Host pattern of the evil.test rule")).toBeNull();
+  });
+
+  test("a list read that a save overtakes is read again, so a rule added elsewhere still appears", async () => {
+    mockServices();
+    const updated: NetworkPolicyEntry = { ...github, host: ".github.io" };
+    const added: NetworkPolicyEntry = { ...evil, id: "e3", host: "added.example" };
+    vi.spyOn(services.networkService, "updateEntry").mockResolvedValue(updated);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+
+    let finishRead: (e: NetworkPolicyEntry[]) => void = () => {};
+    const getEntries = vi
+      .spyOn(services.networkService, "getEntries")
+      .mockReturnValueOnce(new Promise<NetworkPolicyEntry[]>((resolve) => (finishRead = resolve)))
+      .mockResolvedValue([updated, evil, added]);
+    emit("NetworkPolicyChanged", {});
+    await waitFor(() => expect(getEntries).toHaveBeenCalled());
+    const reads = getEntries.mock.calls.length;
+    type("Host pattern of the .github.com rule", ".github.io");
+    click("Save the .github.com rule");
+
+    expect(await rules().findByText("added.example")).toBeTruthy();
+    finishRead([github, evil]);
+    expect(getEntries).toHaveBeenCalledTimes(reads + 1);
+    expect(rules().getByText(".github.io")).toBeTruthy();
+    expect(rules().queryByText(".github.com")).toBeNull();
+    expect(rules().getByText("added.example")).toBeTruthy();
+  });
+});

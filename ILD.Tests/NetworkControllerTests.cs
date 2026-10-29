@@ -3,6 +3,7 @@ using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -443,5 +444,232 @@ public sealed class NetworkControllerTests : IDisposable
 
         Assert.Equal("advisory", status["enforcement"].ToString());
         Assert.Equal("NET_ADMIN was not granted", status["reason"].ToString());
+    }
+
+    private sealed record UpdatedEntryView(Guid Id, string Host, NetworkListKind ListKind, Guid? AiProviderId, DateTime CreatedAt);
+
+    private static NetworkController.AddEntryRequest Rule(string host = "api.example.com", NetworkListKind kind = NetworkListKind.Whitelist, Guid? provider = null)
+        => new() { Host = host, ListKind = kind, AiProviderId = provider };
+
+    private async Task<NetworkPolicyEntry> SeedRuleAsync(string host = "api.example.com", NetworkListKind kind = NetworkListKind.Whitelist, Guid? provider = null)
+    {
+        await _db.Network.AddEntryAsync(new NetworkPolicyEntry { Host = host, ListKind = kind, AiProviderId = provider }, TestContext.Current.CancellationToken);
+        return (await _db.Network.FindEntryAsync(kind, host, provider, TestContext.Current.CancellationToken))!;
+    }
+
+    private async Task<Guid> SeedProviderAsync(string name = "claude")
+    {
+        var provider = new AiProvider { Id = Guid.NewGuid(), Name = name, Type = "claude-code", BaseUrl = "", Model = "" };
+        await _db.Providers.CreateAiProviderAsync(provider);
+        return provider.Id;
+    }
+
+    private async Task<NetworkPolicyEntry> StoredRuleAsync(Guid id)
+        => (await _db.Network.GetEntryAsync(id, TestContext.Current.CancellationToken))!;
+
+    private void AssertNothingInvalidated()
+    {
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Never);
+    }
+
+    [Fact]
+    public async Task Updating_a_rules_host_canonicalises_it_keeps_its_identity_and_invalidates_the_policy_once()
+    {
+        var seeded = await SeedRuleAsync("typo.example.com");
+        var before = await StoredRuleAsync(seeded.Id);
+
+        var result = await Build().UpdateEntry(seeded.Id, Rule(" *.Example.COM "), TestContext.Current.CancellationToken);
+
+        Assert.IsType<OkObjectResult>(result);
+        var view = Body<UpdatedEntryView>(result);
+        Assert.Equal((seeded.Id, ".example.com", NetworkListKind.Whitelist, (Guid?)null), (view.Id, view.Host, view.ListKind, view.AiProviderId));
+        Assert.Equal(before.CreatedAt, view.CreatedAt);
+        var stored = await StoredRuleAsync(seeded.Id);
+        Assert.Equal((".example.com", NetworkListKind.Whitelist, (Guid?)null, before.CreatedAt), (stored.Host, stored.ListKind, stored.AiProviderId, stored.CreatedAt));
+        Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
+        _policy.Verify(p => p.Invalidate(), Times.Once);
+        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task Updating_a_rules_kind_changes_only_the_kind()
+    {
+        var seeded = await SeedRuleAsync();
+
+        var result = await Build().UpdateEntry(seeded.Id, Rule(kind: NetworkListKind.Blacklist), TestContext.Current.CancellationToken);
+
+        Assert.Equal(NetworkListKind.Blacklist, Body<UpdatedEntryView>(result).ListKind);
+        var stored = await StoredRuleAsync(seeded.Id);
+        Assert.Equal(("api.example.com", NetworkListKind.Blacklist, (Guid?)null), (stored.Host, stored.ListKind, stored.AiProviderId));
+        Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Updating_a_rules_scope_moves_it_to_a_provider_and_back_to_all_providers()
+    {
+        var provider = await SeedProviderAsync();
+        var seeded = await SeedRuleAsync();
+        var controller = Build();
+
+        var scoped = await controller.UpdateEntry(seeded.Id, Rule(provider: provider), TestContext.Current.CancellationToken);
+
+        Assert.Equal(provider, Body<UpdatedEntryView>(scoped).AiProviderId);
+        Assert.Equal(provider, (await StoredRuleAsync(seeded.Id)).AiProviderId);
+
+        var global = await controller.UpdateEntry(seeded.Id, Rule(provider: null), TestContext.Current.CancellationToken);
+
+        Assert.Null(Body<UpdatedEntryView>(global).AiProviderId);
+        var stored = await StoredRuleAsync(seeded.Id);
+        Assert.Null(stored.AiProviderId);
+        Assert.Equal("api.example.com", stored.Host);
+        Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(".example.com")]
+    [InlineData("*.example.com")]
+    public async Task A_rule_saved_unchanged_or_in_an_equivalent_spelling_stays_as_it_was_and_still_invalidates(string spelling)
+    {
+        var seeded = await SeedRuleAsync(".example.com", NetworkListKind.Blacklist);
+        var before = await StoredRuleAsync(seeded.Id);
+
+        var result = await Build().UpdateEntry(seeded.Id, Rule(spelling, NetworkListKind.Blacklist), TestContext.Current.CancellationToken);
+
+        Assert.IsType<OkObjectResult>(result);
+        var view = Body<UpdatedEntryView>(result);
+        Assert.Equal((seeded.Id, ".example.com", NetworkListKind.Blacklist), (view.Id, view.Host, view.ListKind));
+        var stored = await StoredRuleAsync(seeded.Id);
+        Assert.Equal((".example.com", NetworkListKind.Blacklist, (Guid?)null, before.CreatedAt), (stored.Host, stored.ListKind, stored.AiProviderId, stored.CreatedAt));
+        Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
+        _policy.Verify(p => p.Invalidate(), Times.Once);
+        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task Turning_a_rule_into_a_copy_of_another_is_refused_and_both_stay_as_they_were()
+    {
+        var provider = await SeedProviderAsync();
+        var mine = await SeedRuleAsync("mine.example.com", NetworkListKind.Whitelist, provider);
+        var other = await SeedRuleAsync("other.example.com", NetworkListKind.Whitelist, provider);
+
+        var result = await Build().UpdateEntry(mine.Id, Rule("*.Other.example.com", NetworkListKind.Whitelist, provider), TestContext.Current.CancellationToken);
+
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        var message = Body<Dictionary<string, string>>(bad)["error"];
+        Assert.Contains("already exists", message);
+        Assert.Contains(".other.example.com", message);
+        var rules = await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, rules.Count);
+        Assert.Equal("mine.example.com", (await StoredRuleAsync(mine.Id)).Host);
+        Assert.Equal("other.example.com", (await StoredRuleAsync(other.Id)).Host);
+        AssertNothingInvalidated();
+    }
+
+    [Fact]
+    public async Task The_same_host_on_another_scope_or_kind_is_not_a_duplicate()
+    {
+        var provider = await SeedProviderAsync();
+        await SeedRuleAsync("api.example.com", NetworkListKind.Whitelist, provider);
+        await SeedRuleAsync("api.example.com", NetworkListKind.Blacklist);
+        var mine = await SeedRuleAsync("mine.example.com");
+
+        var result = await Build().UpdateEntry(mine.Id, Rule("api.example.com"), TestContext.Current.CancellationToken);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(3, (await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken)).Count);
+    }
+
+    [Fact]
+    public async Task The_unique_index_refusing_the_save_is_answered_like_a_duplicate()
+    {
+        var store = new Mock<INetworkPolicyStore>();
+        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DbUpdateException("unique"));
+        var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
+            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+
+        var result = await controller.UpdateEntry(Guid.NewGuid(), Rule("api.example.com"), TestContext.Current.CancellationToken);
+
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        var message = Body<Dictionary<string, string>>(bad)["error"];
+        Assert.Contains("already exists", message);
+        Assert.Contains("api.example.com", message);
+        AssertNothingInvalidated();
+    }
+
+    [Fact]
+    public async Task A_rule_deleted_between_the_load_and_the_save_is_not_found()
+    {
+        var store = new Mock<INetworkPolicyStore>();
+        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
+        var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
+            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+
+        var result = await controller.UpdateEntry(Guid.NewGuid(), Rule(), TestContext.Current.CancellationToken);
+
+        Assert.IsType<NotFoundResult>(result);
+        AssertNothingInvalidated();
+    }
+
+    [Fact]
+    public async Task Updating_an_unknown_rule_is_not_found_and_creates_nothing()
+    {
+        var result = await Build().UpdateEntry(Guid.NewGuid(), Rule(), TestContext.Current.CancellationToken);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
+        AssertNothingInvalidated();
+    }
+
+    [Fact]
+    public async Task An_unusable_rule_update_is_refused_and_the_rule_stays_as_it_was()
+    {
+        var seeded = await SeedRuleAsync();
+        var controller = Build();
+        var ct = TestContext.Current.CancellationToken;
+
+        var results = new[]
+        {
+            await controller.UpdateEntry(seeded.Id, Rule(kind: (NetworkListKind)7), ct),
+            await controller.UpdateEntry(seeded.Id, Rule("https://github.com"), ct),
+            await controller.UpdateEntry(seeded.Id, Rule(provider: Guid.NewGuid()), ct),
+        };
+
+        foreach (var result in results)
+        {
+            var bad = Assert.IsType<BadRequestObjectResult>(result);
+            Assert.False(string.IsNullOrWhiteSpace(Body<Dictionary<string, string>>(bad)["error"]));
+        }
+        var stored = await StoredRuleAsync(seeded.Id);
+        Assert.Equal(("api.example.com", NetworkListKind.Whitelist, (Guid?)null), (stored.Host, stored.ListKind, stored.AiProviderId));
+        AssertNothingInvalidated();
+    }
+
+    [Fact]
+    public async Task The_unique_index_refuses_moving_a_rule_onto_another_rules_kind_host_and_scope()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedRuleAsync("a.example.com");
+        var b = await SeedRuleAsync("b.example.com");
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => _db.Network.UpdateEntryAsync(b.Id, "a.example.com", NetworkListKind.Whitelist, null, ct));
+    }
+
+    [Fact]
+    public async Task The_store_replaces_host_kind_and_scope_keeps_id_and_created_at_and_knows_no_unknown_id()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var provider = await SeedProviderAsync();
+        var seeded = await SeedRuleAsync();
+        var before = await StoredRuleAsync(seeded.Id);
+
+        var updated = await _db.Network.UpdateEntryAsync(seeded.Id, "new.example.com", NetworkListKind.Blacklist, provider, ct);
+
+        Assert.NotNull(updated);
+        var stored = await StoredRuleAsync(seeded.Id);
+        Assert.Equal(("new.example.com", NetworkListKind.Blacklist, (Guid?)provider, before.CreatedAt), (stored.Host, stored.ListKind, stored.AiProviderId, stored.CreatedAt));
+        Assert.Null(await _db.Network.UpdateEntryAsync(Guid.NewGuid(), "x.example.com", NetworkListKind.Whitelist, null, ct));
     }
 }
