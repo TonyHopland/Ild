@@ -11,7 +11,7 @@ import {
   aiProviderService,
 } from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
-import { fakeHub, routeEveryHub } from "../../test-support";
+import { fakeHub, routeEveryHub, type HubConnectionState } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -68,14 +68,14 @@ const flush = () =>
     for (let i = 0; i < 5; i++) await Promise.resolve();
   });
 
-async function mountWithStoppedPreview() {
+async function mountWithStoppedPreview(hubState: HubConnectionState = "connected") {
   vi.spyOn(repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(loopTemplateService, "getAll").mockResolvedValue([]);
   vi.spyOn(aiProviderService, "getAll").mockResolvedValue([]);
   vi.spyOn(workItemService, "getRuns").mockResolvedValue([]);
   vi.spyOn(workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(workItemService, "getAll").mockResolvedValue([]);
-  const hub = fakeHub();
+  const hub = fakeHub(hubState);
   hub.invoke.mockImplementation(() => Promise.resolve({ text: "", lastSeq: 0 } as unknown as void));
   routeEveryHub(signalRHook, hub);
   const getPreview = vi.spyOn(workItemService, "getPreview");
@@ -182,6 +182,16 @@ describe("useWorkItemDetail preview start progress", () => {
     await flush();
 
     expect(getPreview.mock.calls.length).toBe(reads);
+  });
+
+  test("a hub that connects after the dialog opened reads the preview, so a push sent before still lands", async () => {
+    const { result, getPreview, hub } = await mountWithStoppedPreview("connecting");
+    getPreview.mockResolvedValueOnce(preview("running"));
+
+    await hub.changeState("connected");
+    await flush();
+
+    expect(result.current.preview?.state).toBe("running");
   });
 
   test("a reconnect reads the preview again, so a push missed while disconnected still lands", async () => {

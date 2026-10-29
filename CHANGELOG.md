@@ -12,15 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A starting preview shows each service come online live, the install step it is on, and any failing service right away.**
 - **Edit a network rule in place instead of removing and re-adding it.**
 - **Edit a network forward in place instead of removing and re-adding it.**
-- **A new Off network mode lets agents connect directly to any host and port, with nothing logged, for tools that cannot use the proxy.**
+- **A new Off network mode lets agents connect directly to any host and port, with nothing logged.**
 
 ### Changed
 
-- **The network mode that logged every connection and blocked nothing is now called Monitor.** An existing Off setting becomes Monitor on upgrade, so your log keeps working.
+- **The network mode that logged every connection and blocked nothing is now called Monitor.** An existing Off setting becomes Monitor on upgrade.
 
 ### Security
 
-- **Coding agents can no longer make DNS lookups, so data cannot leave that way.**
+- **Coding agents can no longer look up host names themselves; only connections through the proxy resolve.**
 
 ### Fixed
 

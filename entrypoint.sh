@@ -472,6 +472,8 @@ resolve_network_open_gid() {
     problem="the group '$NETWORK_OPEN_GROUP' does not exist"
   elif [ "$open_gid" = "$(id -g "$AGENT_USER" 2>/dev/null)" ]; then
     problem="the group '$NETWORK_OPEN_GROUP' is the agent's primary group"
+  elif [ "$open_gid" = "$(getent group "$AGENT_GROUP" 2>/dev/null | cut -d: -f3)" ]; then
+    problem="the group '$NETWORK_OPEN_GROUP' is AGENT_GROUP, the group every other agent launch runs under"
   elif [ -n "$SHARED_GROUP" ] && [ "$open_gid" = "$(getent group "$SHARED_GROUP" 2>/dev/null | cut -d: -f3)" ]; then
     problem="the group '$NETWORK_OPEN_GROUP' is the shared group"
   elif id -G "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$open_gid"; then

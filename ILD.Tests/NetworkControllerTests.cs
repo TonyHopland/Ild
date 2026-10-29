@@ -16,7 +16,7 @@ public sealed class NetworkControllerTests : IDisposable
     private readonly Mock<IEgressPolicy> _policy = new();
     private readonly Mock<INetworkNotifier> _notifier = new();
     private readonly StubForwarderState _forwarder = new();
-    private EgressPolicySnapshot _snapshot = EgressPolicySnapshot.Off;
+    private EgressPolicySnapshot _snapshot = EgressPolicySnapshot.Monitor;
 
     public NetworkControllerTests()
         => _policy.Setup(p => p.GetAsync(It.IsAny<CancellationToken>()))

@@ -425,12 +425,18 @@ export default function NetworkSettings() {
       )}
       {mode === "off" && (
         <div className="net-banner">
-          <strong>Network mode is Off.</strong> Agents launched in it can reach any host, including
-          your LAN and cloud metadata, and nothing is logged.
+          <strong>Network mode is Off.</strong>{" "}
           {offUnavailable ? (
-            <> Off is unavailable here, so agents launched in it have no network. {status.reason}</>
+            <>
+              Off is unavailable here, so agents launched in it have no network; switch to Monitor
+              to give them the proxy back. {status.reason}
+            </>
           ) : (
-            status?.enforcement === "enforced" && <> {status.reason}</>
+            <>
+              Agents launched in it can reach any host, including your LAN and cloud metadata, and
+              nothing is logged.
+              {status?.enforcement === "enforced" && <> {status.reason}</>}
+            </>
           )}
         </div>
       )}
@@ -450,13 +456,7 @@ export default function NetworkSettings() {
               {status && status.enforcement !== "enforced" && (
                 <> Without the firewall, Off and Monitor differ only in logging.</>
               )}
-              {offUnavailable && mode !== "off" && (
-                <>
-                  {" "}
-                  Off is unavailable here: under the firewall it needs the container started with
-                  no-new-privileges.
-                </>
-              )}
+              {offUnavailable && mode !== "off" && <> Off is unavailable here. {status.reason}</>}
               {filtering && (
                 <>
                   {" "}

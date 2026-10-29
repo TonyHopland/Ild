@@ -52,12 +52,16 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <summary>
     /// What each worktree's current or last full start has reached, by normalized path.
     /// A start registers here before it waits for <see cref="_gate"/>, so a queued start
-    /// already reads as starting; the entry is removed when the start succeeds or is
-    /// cancelled, and a failed one stays until the worktree's next start or stop.
+    /// already reads as starting; the entry is removed when the start succeeds, finds the
+    /// preview already running or is cancelled, and a failed one stays until the worktree's
+    /// next start, stop, or start or stop of a single service.
     /// </summary>
     private readonly ConcurrentDictionary<string, StartProgress> _starts = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<Task, byte> _backgroundStarts = new();
+
+    /// <summary>Every start this service runs, so <see cref="Dispose"/> can wait for each to tear down what it launched.</summary>
+    private readonly ConcurrentDictionary<Task, byte> _ownedStarts = new();
     private readonly CancellationTokenSource _shutdown = new();
+    private int _disposed;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -181,12 +185,17 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             return running;
 
         if (pending!.Owned)
-            return await RunStartAsync(pending, cancellationToken);
+        {
+            var run = RunStartAsync(pending, cancellationToken);
+            Track(run);
+            return await run;
+        }
 
         pending.Progress.Join();
         return await pending.Progress.Outcome.WaitAsync(cancellationToken);
     }
 
+    /// <summary>How many starts wait on the worktree's start in progress; lets a test order a stop after a join.</summary>
     internal int JoinedStartCount(string worktreePath)
         => _starts.TryGetValue(NormalizeWorktreePath(worktreePath), out var start) ? start.Joined : 0;
 
@@ -198,17 +207,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         if (!pending!.Owned)
             return await GetStatusAsync(pending.Normalized, cancellationToken);
 
-        var run = Task.Run(() => RunBackgroundStartAsync(pending), CancellationToken.None);
-        _backgroundStarts[run] = 0;
-        _ = run.ContinueWith(done => _backgroundStarts.TryRemove(done, out _), TaskScheduler.Default);
+        Track(Task.Run(() => RunBackgroundStartAsync(pending), CancellationToken.None));
         return pending.Progress.Snapshot;
+    }
+
+    private void Track(Task run)
+    {
+        _ownedStarts[run] = 0;
+        _ = run.ContinueWith(done => _ownedStarts.TryRemove(done, out _), TaskScheduler.Default);
     }
 
     private async Task RunBackgroundStartAsync(PendingStart pending)
     {
         try
         {
-            await RunStartAsync(pending, _shutdown.Token);
+            await RunStartAsync(pending, CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -294,7 +307,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             (pending.Normalized, pending.Options, pending.Loaded, pending.ProfileName, pending.Profile, pending.Progress);
         var registered = KeyValuePair.Create(normalized, progress);
         var callerToken = cancellationToken;
-        using var stoppable = CancellationTokenSource.CreateLinkedTokenSource(callerToken, progress.Stopping);
+        using var stoppable = CancellationTokenSource.CreateLinkedTokenSource(callerToken, progress.Stopping, _shutdown.Token);
         cancellationToken = stoppable.Token;
 
         PreviewDataClaims.Lease? lease = null;
@@ -920,11 +933,16 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         _shutdown.Cancel();
 
-        // Each background start tears down what it launched as it observes the
-        // cancellation; wait for that before the registry is retired below.
-        Task.WaitAll([.. _backgroundStarts.Keys], TimeSpan.FromSeconds(30));
+        // Each start tears down what it launched as it observes the cancellation;
+        // wait for that before the registry is retired below. How a start ended is
+        // its caller's to observe, so a start that ends in an exception is only waited for.
+        Task.WhenAll(_ownedStarts.Keys).ContinueWith(_ => { }, TaskScheduler.Default)
+            .Wait(TimeSpan.FromSeconds(30));
 
         foreach (var runtime in _runtimes.Values)
         {
@@ -939,7 +957,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
 
         _gate.Dispose();
-        _shutdown.Dispose();
     }
 
     private static string NormalizeWorktreePath(string worktreePath)

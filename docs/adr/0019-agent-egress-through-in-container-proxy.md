@@ -182,8 +182,10 @@ degradation is never silent.
 - **`off` is unprotected by design.** No proxy means no log, and the DNS
   block does not apply either. Residual: processes launched
   in `off` keep direct egress until they exit, and other agent-uid processes can
-  reach them (`ptrace_scope` is not set, see ADR-0014), so a later `whitelist`
-  agent could drive an earlier `off` one.
+  reach them through loopback or shared files (see ADR-0014), so a later
+  `whitelist` agent could drive an earlier `off` one. A preview started in `off`
+  is such a process: a dev server that reloads code a `whitelist` agent edits runs
+  it with direct egress, until the preview is restarted.
 - **Only what honours a proxy works for the agent under enforcement.** git over
   SSH, raw TCP, QUIC, anything reading neither `HTTP_PROXY` nor `HTTPS_PROXY`
   fails with a dropped connection rather than an error message. The standard

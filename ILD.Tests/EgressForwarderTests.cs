@@ -306,6 +306,26 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_renamed_forward_keeps_its_listener_and_the_connection_open_through_it()
+    {
+        var bound = new ConcurrentDictionary<TcpListener, Socket>();
+        _forwarder!.AcceptClient = (listener, ct) =>
+        {
+            bound.GetOrAdd(listener, l => l.Server);
+            return listener.AcceptTcpClientAsync(ct);
+        };
+        var forward = await DeclareAsync();
+        using var open = await DialAsync(forward.LocalPort);
+        Assert.Equal("before", await EchoAsync(open, "before"));
+
+        await _db.NetworkForwards.UpdateForwardAsync(forward.Id, "renamed", forward.Host, forward.Port, forward.LocalPort, TestContext.Current.CancellationToken);
+        await _forwarder.ReconcileAsync(TestContext.Current.CancellationToken);
+
+        Assert.All(bound.Values, socket => Assert.False(socket.SafeHandle.IsClosed));
+        Assert.Equal("after", await EchoAsync(open, "after"));
+    }
+
+    [Fact]
     public async Task A_local_port_already_in_use_is_reported_on_that_row_while_every_other_forward_keeps_serving()
     {
         var squatter = new TcpListener(IPAddress.Loopback, 0);

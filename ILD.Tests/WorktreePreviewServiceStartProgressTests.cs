@@ -448,6 +448,25 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
         Assert.False(IsAlive(pid));
     }
 
+    [Fact]
+    public async Task Disposing_the_service_cancels_a_blocking_start_and_stops_what_it_launched()
+    {
+        var health = new GatedHealth();
+        var service = BuildService(health);
+        var worktree = Worktree("wt-a", [], [Web with { HealthPath = "/never" }]);
+
+        var start = service.StartAsync(worktree, Options, Ct);
+        var waiting = await Until(service, worktree, s => Row(s, "web").Status == "waitingForHealth");
+        var pid = Row(waiting, "web").ProcessId!.Value;
+
+        service.Dispose();
+
+        Assert.False(IsAlive(pid));
+        await Assert.ThrowsAnyAsync<Exception>(() => start);
+        Assert.False(service.IsPreviewRunning(worktree));
+        service.Dispose();
+    }
+
     private static bool IsAlive(int pid)
     {
         try

@@ -785,7 +785,19 @@ describe("Network modes", () => {
     await waitFor(() => expect(pressed("Off")).toBe(true));
 
     expect(screen.getByText(/agents launched in it have no network/i)).toBeTruthy();
+    expect(offWarning()).toHaveLength(0);
     expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
+  });
+
+  test("the hint for an unavailable Off gives the server's reason", async () => {
+    mockServices(
+      { ...enforced, offAvailable: false, reason: "The group 'ild-net-open' does not exist." },
+      "monitor",
+    );
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    expect(modeCard().textContent).toContain("The group 'ild-net-open' does not exist.");
   });
 
   test("offers Off, Monitor, Whitelist and Blacklist", async () => {

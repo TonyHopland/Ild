@@ -755,7 +755,8 @@ confirm it and shows a warning while it is active.
   A database restored from a backup taken before the upgrade is migrated the same
   way on the next restart. An unrecognised stored value is treated as `monitor`.
 - **Switching to or from `off` applies to the next agent launch.** Running agents
-  keep the network they started with. Changes between `monitor`, `whitelist` and
+  and previews keep the network they started with; restart a preview to move it
+  to the new mode. Changes between `monitor`, `whitelist` and
   `blacklist`, and list edits, apply to the next connection. Previews, Cmd nodes
   and the provider terminal follow the mode when they start; git run for the
   agent, chat repository clones and writes to agent-visible files never use the

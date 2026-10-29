@@ -104,8 +104,10 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   that group can create a setgid `ild-net-open` file outside the setgid shared
   directories; `no_new_privs`, inherited by every descendant and impossible to
   clear, makes the kernel ignore that bit on exec, so the entrypoint enables Off
-  only when it is set. The residual: an Off-launched process keeps direct egress
-  until it exits, and other agent-uid processes can reach it (no `ptrace_scope`).
+  only when it is set. The residual: an Off-launched process, a preview's dev server
+  included, keeps direct egress until it exits, and other agent-uid processes can
+  drive it through loopback or the files they share. `ptrace` is not one of those
+  ways: the kernel refuses it across the differing gids even without `ptrace_scope`.
 
 - **One code seam.** Every CLI agent launch goes through
   `CliAgentAdapterBase.StartAgentProcess`, which applies

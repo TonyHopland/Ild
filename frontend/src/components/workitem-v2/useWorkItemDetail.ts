@@ -615,14 +615,18 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // is started or stopped out-of-band — most importantly by an AI agent driving
   // the preview through the agent API — and by a start from this dialog, which
   // answers with its first progress and reports the rest here. A push missed while
-  // the hub was disconnected is made up for by a read once it reconnects.
+  // the hub was not connected is made up for by a read each time it becomes connected.
   const { on: wiOn, off: wiOff, connectionState: wiConnectionState } = useSharedWorkItemHub();
-  const previewHubConnectedBefore = useRef(false);
+  const previewHubState = useRef(wiConnectionState);
+
+  useEffect(() => {
+    const was = previewHubState.current;
+    previewHubState.current = wiConnectionState;
+    if (wiConnectionState === "connected" && was !== "connected") void readPreview(true);
+  }, [wiConnectionState, readPreview]);
 
   useEffect(() => {
     if (!workItem?.id || wiConnectionState !== "connected") return;
-    if (previewHubConnectedBefore.current) void readPreview(true);
-    previewHubConnectedBefore.current = true;
 
     const onPreviewStateChanged = (message: TypedSignalRMessage<"PreviewStateChanged">) => {
       if (message.payload.workItemId !== workItem.id) return;

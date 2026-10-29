@@ -9,7 +9,7 @@ namespace ILD.Core.Services.Implementations.Network;
 /// <summary>The mode and lists in force at one moment, ready to judge a destination.</summary>
 public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<NetworkPolicyEntry> Entries)
 {
-    public static readonly EgressPolicySnapshot Off = new(NetworkMode.Off, Array.Empty<NetworkPolicyEntry>());
+    public static readonly EgressPolicySnapshot Monitor = new(NetworkMode.Monitor, Array.Empty<NetworkPolicyEntry>());
 
     public NetworkDecision Decide(string host, Guid? aiProviderId)
         => EgressRules.Decide(Mode, Entries, host, aiProviderId);

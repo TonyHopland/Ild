@@ -162,7 +162,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
             Config = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
             {
                 ["binaryPath"] = "/usr/bin/printenv",
-                ["extraArgs"] = "HTTPS_PROXY",
+                ["extraArgs"] = "PATH HTTPS_PROXY",
             }),
         };
 
@@ -185,10 +185,16 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
 
     [Fact]
     public async Task The_provider_terminal_has_no_proxy_when_the_policy_reports_Off()
-        => Assert.DoesNotContain("127.0.0.1:3128", await RunTerminalAsync(EgressPolicies.Reporting(NetworkMode.Off)));
+    {
+        var output = await RunTerminalAsync(EgressPolicies.Reporting(NetworkMode.Off));
+
+        Assert.Contains("/bin", output);
+        Assert.DoesNotContain("127.0.0.1:3128", output);
+    }
 
     [Theory]
     [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
     [InlineData(NetworkMode.Blacklist)]
     public async Task The_provider_terminal_is_proxied_in_every_other_mode(NetworkMode mode)
         => Assert.Contains("127.0.0.1:3128", await RunTerminalAsync(EgressPolicies.Reporting(mode)));

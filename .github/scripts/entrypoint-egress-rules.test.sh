@@ -262,6 +262,11 @@ r="$(resolve)"
 [ -z "${r%%|*}" ] && pass "the agent's primary gid is refused as the open group" || fail "primary gid accepted as open group: $r"
 case "${r#*|}" in *WARNING*) pass "the primary-gid clash is warned about" ;; *) fail "no warning for primary gid clash" ;; esac
 
+reset; with_status "$FULL" 1; NETWORK_OPEN_GROUP=ild-net-open; AGENT_GROUP=ild-net-open
+r="$(resolve)"
+[ -z "${r%%|*}" ] && pass "AGENT_GROUP, the --regid of every proxied launch, is refused as the open group" || fail "AGENT_GROUP accepted as open group: $r"
+case "${r#*|}" in *WARNING*AGENT_GROUP*) pass "the AGENT_GROUP clash is warned about by name" ;; *) fail "no warning naming AGENT_GROUP: ${r#*|}" ;; esac
+
 reset; with_status "$FULL" 1; NETWORK_OPEN_GROUP=ild-net-open; OPEN_GID=10001
 r="$(resolve)"
 [ -z "${r%%|*}" ] && pass "the shared group's gid is refused as the open group" || fail "shared gid accepted as open group: $r"
