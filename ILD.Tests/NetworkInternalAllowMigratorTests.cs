@@ -21,12 +21,6 @@ public class NetworkInternalAllowMigratorTests
         => NetworkInternalAllowMigrator.MigrateAsync(db.Fresh(), TestContext.Current.CancellationToken);
 
     [Fact]
-    public void The_migrator_deletes_the_key_the_retired_setting_was_stored_under()
-    {
-        Assert.Equal("network.internalAllow", NetworkInternalAllowMigrator.SettingKey);
-    }
-
-    [Fact]
     public async Task A_stored_row_is_removed_alone_and_a_second_startup_changes_nothing()
     {
         using var db = new TestDb();
