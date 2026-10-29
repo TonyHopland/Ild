@@ -175,6 +175,17 @@ public interface IWorktreePreviewService
     Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Begins a full start like <see cref="StartAsync"/> but answers at once with the
+    /// in-progress status while the start continues in the background; follow it with
+    /// <see cref="GetStatusAsync"/>. A missing config or unknown profile still throws
+    /// <see cref="InvalidOperationException"/> immediately. A preview that is already
+    /// running, or already starting, is returned as-is and nothing new is started. A
+    /// start that fails later is reported by <see cref="GetStatusAsync"/> as state
+    /// "failed" until the next start or stop.
+    /// </summary>
+    Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Starts a single preview service by its configured name, leaving any other
     /// running services untouched. The first service started for a worktree creates
     /// the shared runtime (allocating every profile service's port up front so
@@ -303,6 +314,8 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewResponse> StartServiceAsync(string worktreePath, string serviceName, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();

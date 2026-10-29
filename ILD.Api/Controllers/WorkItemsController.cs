@@ -404,9 +404,10 @@ public class WorkItemsController : ControllerBase
         if (error != null) return error;
         try
         {
-            var response = await _worktreePreviewService.StartAsync(
-                workItem!.WorktreePath!,
-                await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
+            var options = await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds);
+            var response = request?.Wait == false
+                ? await _worktreePreviewService.BeginStartAsync(workItem!.WorktreePath!, options)
+                : await _worktreePreviewService.StartAsync(workItem!.WorktreePath!, options);
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

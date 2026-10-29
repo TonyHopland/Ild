@@ -457,6 +457,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         public Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<WorktreePreviewResponse> StartServiceAsync(string worktreePath, string serviceName, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<WorktreePreviewResponse> StopServiceAsync(string worktreePath, string serviceName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<string?> GetServiceConfigAsync(string worktreePath, string serviceName, string? profileName = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();

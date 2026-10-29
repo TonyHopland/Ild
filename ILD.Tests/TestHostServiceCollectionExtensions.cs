@@ -88,6 +88,9 @@ internal static class TestHostServiceCollectionExtensions
         public Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IWorktreePreviewService));
 
+        public Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
+            => throw Unexpected(nameof(IWorktreePreviewService));
+
         public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IWorktreePreviewService));
 
