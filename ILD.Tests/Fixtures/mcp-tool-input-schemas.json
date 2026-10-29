@@ -997,6 +997,11 @@
         "description": "Skip the install steps (default false).",
         "type": "boolean",
         "default": false
+      },
+      "wait": {
+        "description": "Wait until every service is up (default true). false returns once the start has begun; follow it with get_preview.",
+        "type": "boolean",
+        "default": true
       }
     },
     "required": [

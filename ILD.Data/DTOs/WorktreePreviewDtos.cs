@@ -6,6 +6,13 @@ public sealed class WorktreePreviewStartRequest
     public bool SkipInstall { get; set; }
     public string? PublicHost { get; set; }
     public Dictionary<string, int>? PortOverrides { get; set; }
+
+    /// <summary>
+    /// Whether a full start answers only once every service has settled (the default).
+    /// False answers at once with the in-progress status and continues in the background.
+    /// Ignored when starting a single service.
+    /// </summary>
+    public bool Wait { get; set; } = true;
 }
 
 public sealed class WorktreePreviewResponse
@@ -18,7 +25,18 @@ public sealed class WorktreePreviewResponse
     public string? PublicHost { get; set; }
     public string? StateDirectory { get; set; }
     public string? Message { get; set; }
+
+    /// <summary>The install step running now; null unless <see cref="State"/> is "installing".</summary>
+    public WorktreePreviewInstallProgress? Install { get; set; }
     public List<WorktreePreviewServiceResponse> Services { get; set; } = new();
+}
+
+/// <summary>The install step a start is on: 1-based <see cref="Index"/> of <see cref="Total"/>, and its command as written in <c>ild.config.json</c>.</summary>
+public sealed class WorktreePreviewInstallProgress
+{
+    public int Index { get; set; }
+    public int Total { get; set; }
+    public string Command { get; set; } = string.Empty;
 }
 
 public sealed class WorktreePreviewLogResponse
@@ -56,4 +74,5 @@ public sealed class WorktreePreviewServiceResponse
     public string? LogFilePath { get; set; }
     public int? ProcessId { get; set; }
     public int? ExitCode { get; set; }
+    public string? Error { get; set; }
 }

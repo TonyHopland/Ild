@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -46,6 +47,17 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly IProcessEnvironment _environment;
     private readonly Func<int, bool> _isPortAvailable;
     private readonly PreviewDataClaims _claims;
+    private readonly IWorkItemNotifier? _notifier;
+
+    /// <summary>
+    /// What each worktree's current or last full start has reached, by normalized path.
+    /// A start registers here before it waits for <see cref="_gate"/>, so a queued start
+    /// already reads as starting; the entry is removed when the start succeeds or is
+    /// cancelled, and a failed one stays until the worktree's next start or stop.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, StartProgress> _starts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<Task, byte> _backgroundStarts = new();
+    private readonly CancellationTokenSource _shutdown = new();
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -59,11 +71,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
         PreviewDataClaims claims,
-        IEgressPolicy? egressPolicy = null)
+        IEgressPolicy? egressPolicy = null,
+        IWorkItemNotifier? notifier = null)
         : this(httpClientFactory, configuration, proxyBase, logger,
             AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
             AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims,
-            networkOpenGroup: AgentIsolation.NetworkOpenGroup, egressPolicy: egressPolicy)
+            networkOpenGroup: AgentIsolation.NetworkOpenGroup, egressPolicy: egressPolicy, notifier: notifier)
     {
     }
 
@@ -99,7 +112,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         Func<int, bool>? isPortAvailable = null,
         PreviewDataClaims? claims = null,
         string? networkOpenGroup = null,
-        IEgressPolicy? egressPolicy = null)
+        IEgressPolicy? egressPolicy = null,
+        IWorkItemNotifier? notifier = null)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
@@ -116,6 +130,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _environment = environment ?? ProcessEnvironment.Current;
         _isPortAvailable = isPortAvailable ?? IsPortAvailable;
         _claims = claims ?? new PreviewDataClaims();
+        _notifier = notifier;
     }
 
     /// <summary>
@@ -145,101 +160,285 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             };
         }
 
-        if (_runtimes.TryGetValue(normalized, out var runtime))
+        _runtimes.TryGetValue(normalized, out var runtime);
+        if (runtime != null && runtime.Processes.Any(p => p.IsRunning))
         {
             return BuildResponse(loaded, runtime);
         }
 
-        return BuildStoppedResponse(loaded);
+        if (_starts.TryGetValue(normalized, out var start))
+        {
+            return start.Snapshot;
+        }
+
+        return runtime != null ? BuildResponse(loaded, runtime) : BuildStoppedResponse(loaded);
     }
 
     public async Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
     {
+        var (pending, running) = await PrepareStartAsync(worktreePath, options, cancellationToken);
+        return running ?? await StartCoreAsync(pending!, cancellationToken);
+    }
+
+    public async Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var (pending, running) = await PrepareStartAsync(worktreePath, options, cancellationToken);
+        if (running != null)
+            return running;
+        if (!pending!.Owned)
+            return await GetStatusAsync(pending.Normalized, cancellationToken);
+
+        var run = Task.Run(() => RunBackgroundStartAsync(pending), CancellationToken.None);
+        _backgroundStarts[run] = 0;
+        _ = run.ContinueWith(done => _backgroundStarts.TryRemove(done, out _), TaskScheduler.Default);
+        return pending.Progress.Snapshot;
+    }
+
+    private async Task RunBackgroundStartAsync(PendingStart pending)
+    {
+        try
+        {
+            await StartCoreAsync(pending, _shutdown.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // The service is being disposed; the start has already torn down what it launched.
+        }
+        catch (Exception ex)
+        {
+            // The failure is what get_preview reports; this is for the operator's log.
+            _logger.LogWarning(ex, "Background start of the preview in {Worktree} failed", pending.Normalized);
+        }
+    }
+
+    /// <summary>
+    /// Loads the config, answers a preview that is already running as-is, and otherwise picks
+    /// the profile and registers a progress record for the start — before it waits for
+    /// <see cref="_gate"/>, so a queued start already reads as starting. A start already in
+    /// progress for the worktree keeps its record, and this one then does not own the start.
+    /// </summary>
+    private async Task<(PendingStart? Start, WorktreePreviewResponse? Running)> PrepareStartAsync(
+        string worktreePath, WorktreePreviewStartOptions? options, CancellationToken cancellationToken)
+    {
         var normalized = NormalizeWorktreePath(worktreePath);
         options ??= new WorktreePreviewStartOptions();
 
+        var loaded = await LoadConfigAsync(normalized, cancellationToken);
+        if (!loaded.Configured || loaded.Config == null)
+        {
+            throw new InvalidOperationException(loaded.Message ?? "No ild.config.json preview profile found.");
+        }
+
+        if (RunningResponse(loaded, normalized) is { } running)
+            return (null, running);
+
+        var profileName = SelectProfileName(loaded.Config, options.ProfileName);
+        if (!loaded.Config.Preview!.Profiles.TryGetValue(profileName, out var profile) || profile == null)
+        {
+            throw new InvalidOperationException($"Preview profile '{profileName}' not found.");
+        }
+
+        ValidateProfile(profileName, profile);
+
+        var mine = new StartProgress(BuildPendingResponse(loaded, profileName), options.WorkItemId);
+        var owned = ReferenceEquals(_starts.AddOrUpdate(normalized, mine, (_, cur) => cur.InProgress ? cur : mine), mine);
+        if (owned)
+            await PublishAsync(mine.WorkItemId);
+
+        return (new PendingStart(normalized, options, loaded, profileName, profile, mine, owned), null);
+    }
+
+    private WorktreePreviewResponse? RunningResponse(LoadedPreviewConfig loaded, string normalized)
+    {
+        if (!_runtimes.TryGetValue(normalized, out var existing))
+            return null;
+
+        var response = BuildResponse(loaded, existing);
+        return response.State == "running" ? response : null;
+    }
+
+    private async Task<WorktreePreviewResponse> StartCoreAsync(PendingStart pending, CancellationToken cancellationToken)
+    {
+        var (normalized, options, loaded, profileName, profile, progress) =
+            (pending.Normalized, pending.Options, pending.Loaded, pending.ProfileName, pending.Profile, pending.Progress);
+        var registered = KeyValuePair.Create(normalized, progress);
+
         PreviewDataClaims.Lease? lease = null;
-        await _gate.WaitAsync(cancellationToken);
         try
         {
-            var loaded = await LoadConfigAsync(normalized, cancellationToken);
-            if (!loaded.Configured || loaded.Config == null)
+            await _gate.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            if (_starts.TryRemove(registered))
+                await PublishAsync(progress.WorkItemId);
+            throw;
+        }
+
+        try
+        {
+            _starts[normalized] = progress;
+
+            if (RunningResponse(loaded, normalized) is { } running)
             {
-                throw new InvalidOperationException(loaded.Message ?? "No ild.config.json preview profile found.");
+                if (_starts.TryRemove(registered))
+                    await PublishAsync(progress.WorkItemId);
+                return running;
             }
 
             if (_runtimes.TryGetValue(normalized, out var existing))
             {
-                var existingResponse = BuildResponse(loaded, existing);
-                if (existingResponse.State == "running")
-                {
-                    return existingResponse;
-                }
-
                 await RetireRuntimeAsync(existing, cancellationToken);
                 _runtimes.TryRemove(normalized, out _);
             }
 
-            var profileName = SelectProfileName(loaded.Config, options.ProfileName);
-            if (!loaded.Config.Preview!.Profiles.TryGetValue(profileName, out var profile) || profile == null)
-            {
-                throw new InvalidOperationException($"Preview profile '{profileName}' not found.");
-            }
-
-            ValidateProfile(profileName, profile);
-
             var mode = await _egressPolicy.LaunchModeAsync(cancellationToken);
             lease = await ClaimPreviewDataAsync(options.Volumes, normalized, holdsGate: true, cancellationToken);
-            var runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, mode, cancellationToken);
+            var runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, mode, cancellationToken, progress);
 
             // The runtime only becomes reachable — to StopAsync, to Dispose, to every
-            // status surface — on the last line of this block. Anything that fails in
-            // between must therefore take the services it already launched down with
+            // status surface — once the start has succeeded. Anything that fails before
+            // then must therefore take the services it already launched down with
             // it: an orphan keeps running with this attempt's ports and ${PORT:alias}
             // values baked in, holds those ports against the next start, and keeps
             // appending to the same per-service log, with no stop path able to reach it.
+            Exception? failure;
             try
             {
-                foreach (var service in profile.Services)
-                {
-                    runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, mode, cancellationToken));
-                }
-
-                foreach (var service in profile.Services)
-                {
-                    var healthUrl = ResolveHealthUrl(service, runtime);
-                    await WaitForHealthAsync(service.Name, healthUrl, cancellationToken);
-                }
+                failure = await LaunchAndAwaitHealthAsync(profile, runtime, mode, progress, cancellationToken);
             }
             catch
             {
-                try
-                {
-                    // Teardown is not the caller's to cancel: the token that just aborted
-                    // the start is typically already cancelled, and stopping is what makes
-                    // the failure clean.
-                    await StopRuntimeAsync(runtime, CancellationToken.None);
-                }
-                catch (Exception teardownEx)
-                {
-                    // Why the start failed is what the caller has to act on; that the
-                    // cleanup after it also failed is a second fact about the same event,
-                    // never a replacement for the first.
-                    _logger.LogError(teardownEx, "Failed to stop preview services after a failed start of profile {Profile} in {Worktree}", profileName, normalized);
-                }
-
+                await TearDownFailedStartAsync(runtime, profileName, normalized);
                 throw;
+            }
+
+            if (failure != null)
+            {
+                await TearDownFailedStartAsync(runtime, profileName, normalized);
+                ExceptionDispatchInfo.Throw(failure);
             }
 
             _runtimes[normalized] = runtime;
             lease = null;
+            _starts.TryRemove(registered);
+            await PublishAsync(progress.WorkItemId);
             return BuildResponse(loaded, runtime);
+        }
+        catch (OperationCanceledException)
+        {
+            if (_starts.TryRemove(registered))
+                await PublishAsync(progress.WorkItemId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await ReportAsync(progress, response => MarkFailed(response, ex));
+            throw;
         }
         finally
         {
             lease?.Dispose();
             _gate.Release();
         }
+    }
+
+    private async Task TearDownFailedStartAsync(PreviewRuntime runtime, string profileName, string normalized)
+    {
+        try
+        {
+            // Teardown is not the caller's to cancel: the token that just aborted
+            // the start is typically already cancelled, and stopping is what makes
+            // the failure clean.
+            await StopRuntimeAsync(runtime, CancellationToken.None);
+        }
+        catch (Exception teardownEx)
+        {
+            // Why the start failed is what the caller has to act on; that the
+            // cleanup after it also failed is a second fact about the same event,
+            // never a replacement for the first.
+            _logger.LogError(teardownEx, "Failed to stop preview services after a failed start of profile {Profile} in {Worktree}", profileName, normalized);
+        }
+    }
+
+    /// <summary>
+    /// Launches every profile service in turn, then waits for all of them to become healthy
+    /// at once, so each turns running as soon as its own probe succeeds. A service that fails
+    /// does not stop the others; the first failure (launch order, then service order) is
+    /// returned once every service has settled. Cancellation throws.
+    /// </summary>
+    private async Task<Exception?> LaunchAndAwaitHealthAsync(
+        PreviewProfileConfig profile, PreviewRuntime runtime, NetworkMode mode, StartProgress progress, CancellationToken cancellationToken)
+    {
+        var singlePublicService = HasSinglePublicService(profile.Services);
+        var failures = new List<Exception?>();
+        var launched = new List<(PreviewServiceConfig Service, ManagedPreviewProcess Process, string HealthUrl)>();
+        foreach (var service in profile.Services)
+        {
+            try
+            {
+                var process = await LaunchServiceProcessAsync(service, runtime, mode, cancellationToken);
+                runtime.AddProcess(process);
+                var healthUrl = ResolveHealthUrl(service, runtime);
+                var port = runtime.Ports.TryGetValue(service.Port, out var allocated) ? allocated : (int?)null;
+                var publicUrl = service.Public ? BuildPublicUrl(service, runtime, port, singlePublicService) : null;
+                await ReportServiceAsync(progress, service.Name, row =>
+                {
+                    row.Status = "starting";
+                    row.HealthUrl = healthUrl;
+                    row.PublicUrl = publicUrl;
+                    row.LogFilePath = process.LogFilePath;
+                    row.ProcessId = process.Process.Id;
+                });
+                launched.Add((service, process, healthUrl));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                failures.Add(ex);
+                await ReportServiceAsync(progress, service.Name, row =>
+                {
+                    row.Status = "failed";
+                    row.Error = ex.Message;
+                });
+            }
+        }
+
+        failures.AddRange(await Task.WhenAll(launched.Select(l => AwaitHealthAsync(l.Service, l.Process, l.HealthUrl, progress, cancellationToken))));
+        return failures.FirstOrDefault(failure => failure != null);
+    }
+
+    private async Task<Exception?> AwaitHealthAsync(
+        PreviewServiceConfig service, ManagedPreviewProcess process, string healthUrl, StartProgress progress, CancellationToken cancellationToken)
+    {
+        await ReportServiceAsync(progress, service.Name, row => row.Status = "waitingForHealth");
+
+        Exception? failure = null;
+        try
+        {
+            await WaitForHealthAsync(service.Name, healthUrl, cancellationToken, process);
+        }
+        catch (InvalidOperationException ex)
+        {
+            failure = ex;
+        }
+
+        await ReportServiceAsync(progress, service.Name, row =>
+        {
+            if (failure == null)
+            {
+                row.Status = "running";
+                return;
+            }
+
+            row.Status = "failed";
+            row.Error = failure.Message;
+            row.ExitCode = process.Process.HasExited ? process.Process.ExitCode : null;
+        });
+        return failure;
     }
 
     public async Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
@@ -249,6 +448,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            DropFinishedStart(normalized);
             var loaded = await LoadConfigAsync(normalized, cancellationToken);
             if (_runtimes.TryRemove(normalized, out var runtime))
             {
@@ -273,6 +473,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            DropFinishedStart(normalized);
             var loaded = await LoadConfigAsync(normalized, cancellationToken);
             if (!loaded.Configured || loaded.Config == null)
             {
@@ -354,6 +555,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            DropFinishedStart(normalized);
             var loaded = await LoadConfigAsync(normalized, cancellationToken);
             if (!_runtimes.TryGetValue(normalized, out var runtime))
                 return BuildStoppedResponse(loaded);
@@ -681,6 +883,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     public void Dispose()
     {
+        _shutdown.Cancel();
+
+        // Each background start tears down what it launched as it observes the
+        // cancellation; wait for that before the registry is retired below.
+        Task.WaitAll([.. _backgroundStarts.Keys], TimeSpan.FromSeconds(30));
+
         foreach (var runtime in _runtimes.Values)
         {
             try
@@ -912,7 +1120,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// state directory, allocates every profile service's port up front (so per-service
     /// starts resolve cross-service <c>${PORT:&lt;alias&gt;}</c> references), and runs the
     /// install steps unless skipped. Does not launch any service or store the runtime —
-    /// the caller owns process startup and dictionary insertion.
+    /// the caller owns process startup and dictionary insertion. With a
+    /// <paramref name="progress"/> record, the ports and the install step reached are
+    /// published to it as they become known.
     /// </summary>
     private async Task<PreviewRuntime> CreateRuntimeAsync(
         string normalized,
@@ -922,7 +1132,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         WorktreePreviewStartOptions options,
         PreviewDataClaims.Lease? lease,
         NetworkMode mode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        StartProgress? progress = null)
     {
         var publicHost = ResolvePublicHost(options.PublicHost);
         var stateDirectory = BuildStateDirectory(normalized);
@@ -944,9 +1155,25 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             lease,
             options.WorkItemId);
 
+        if (progress != null)
+        {
+            await ReportAsync(progress, response =>
+            {
+                response.PublicHost = publicHost;
+                response.StateDirectory = stateDirectory;
+                foreach (var service in profile.Services)
+                    response.Services.Single(row => row.Name == service.Name).Port = ports.TryGetValue(service.Port, out var port) ? port : null;
+            });
+        }
+
         if (!options.SkipInstall)
         {
-            await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken);
+            await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken,
+                progress == null ? null : install => ReportAsync(progress, response =>
+                {
+                    response.State = install == null ? "starting" : "installing";
+                    response.Install = install;
+                }));
         }
 
         return runtime;
@@ -1110,18 +1337,31 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             .Where(alias => !string.Equals(alias, service.Port, StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase);
 
+    /// <param name="onProgress">
+    /// Told which step is about to run (1-based index, total, the command as written in the
+    /// config), and with null once the steps are done.
+    /// </param>
     private async Task RunInstallStepsAsync(
-        IReadOnlyList<PreviewCommandConfig> installSteps, PreviewRuntime runtime, NetworkMode mode, CancellationToken cancellationToken)
+        IReadOnlyList<PreviewCommandConfig> installSteps, PreviewRuntime runtime, NetworkMode mode, CancellationToken cancellationToken,
+        Func<WorktreePreviewInstallProgress?, Task>? onProgress = null)
     {
         if (installSteps.Count == 0)
             return;
 
         var installLogPath = Path.Combine(runtime.LogDirectory, "install.log");
         using var feeds = runtime.Feeds.Acquire();
-        foreach (var step in installSteps)
+        var reported = false;
+        for (var index = 0; index < installSteps.Count; index++)
         {
+            var step = installSteps[index];
             if (string.IsNullOrWhiteSpace(step.Command))
                 continue;
+
+            if (onProgress != null)
+            {
+                reported = true;
+                await onProgress(new WorktreePreviewInstallProgress { Index = index + 1, Total = installSteps.Count, Command = step.Command });
+            }
 
             var resolved = await BuildResolvedStepAsync(step, runtime, null, feeds.Environment, mode, cancellationToken);
             var result = await RunCommandAsync(resolved, cancellationToken);
@@ -1137,6 +1377,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 throw new InvalidOperationException($"Preview install command failed: {resolved.Command}\n{result.StdErr}".Trim());
             }
         }
+
+        if (reported)
+            await onProgress!(null);
 
         // The install steps above ran with their own augmented PATH, but the
         // agents (Cmd nodes and AI CLI adapters) launch later with the inherited
@@ -1276,7 +1519,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // when the profile has exactly one public service. With more than one, each
         // is advertised under its own wi-{id}-{name} instead — otherwise both would
         // be handed the same URL and one of them would reach the wrong application.
-        var singlePublicService = profileServices.Count(service => service.Public) == 1;
+        var singlePublicService = HasSinglePublicService(profileServices);
 
         var serviceResponses = profileServices.Select(service =>
         {
@@ -1298,6 +1541,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             Services = serviceResponses,
         };
     }
+
+    private static bool HasSinglePublicService(IEnumerable<PreviewServiceConfig> services)
+        => services.Count(service => service.Public) == 1;
 
     private WorktreePreviewServiceResponse BuildServiceResponse(ManagedPreviewProcess process, PreviewRuntime runtime, bool singlePublicService)
     {
@@ -1436,6 +1682,70 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         };
     }
 
+    private WorktreePreviewResponse BuildPendingResponse(LoadedPreviewConfig loaded, string profileName)
+    {
+        var response = BuildStoppedResponse(loaded, profileName);
+        response.State = "starting";
+        foreach (var row in response.Services)
+            row.Status = "pending";
+        return response;
+    }
+
+    /// <summary>
+    /// The final snapshot of a start that failed: what is left once everything it launched
+    /// is down. A service that failed keeps its exit code and error; the rest read stopped.
+    /// </summary>
+    private static void MarkFailed(WorktreePreviewResponse response, Exception failure)
+    {
+        response.State = "failed";
+        response.Message = failure.Message;
+        response.Install = null;
+        foreach (var row in response.Services)
+        {
+            row.ProcessId = null;
+            if (row.Status == "failed")
+                continue;
+
+            row.Status = "stopped";
+            row.HealthUrl = null;
+            row.PublicUrl = null;
+        }
+    }
+
+    private void DropFinishedStart(string normalized)
+    {
+        if (_starts.TryGetValue(normalized, out var start) && !start.InProgress)
+            _starts.TryRemove(KeyValuePair.Create(normalized, start));
+    }
+
+    private Task ReportServiceAsync(StartProgress progress, string serviceName, Action<WorktreePreviewServiceResponse> change)
+        => ReportAsync(progress, response => change(response.Services.Single(row => row.Name == serviceName)));
+
+    private async Task ReportAsync(StartProgress progress, Action<WorktreePreviewResponse> change)
+    {
+        progress.Update(change);
+        await PublishAsync(progress.WorkItemId);
+    }
+
+    /// <summary>
+    /// Tells the work item's open Preview tabs to re-read. A hint only: a failed push is
+    /// logged and never fails the start it describes.
+    /// </summary>
+    private async Task PublishAsync(string? workItemId)
+    {
+        if (_notifier == null || workItemId == null)
+            return;
+
+        try
+        {
+            await _notifier.PreviewStateChangedAsync(workItemId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to publish a preview state change for work item {WorkItemId}", workItemId);
+        }
+    }
+
     private static async Task PumpStreamAsync(StreamReader reader, StreamWriter writer, SemaphoreSlim writeGate, CancellationToken cancellationToken)
     {
         try
@@ -1465,7 +1775,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
-    private async Task WaitForHealthAsync(string serviceName, string healthUrl, CancellationToken cancellationToken)
+    /// <param name="watched">
+    /// A process that must stay up while it is probed: once it has exited and a probe has
+    /// still failed, the wait ends at once rather than at the timeout.
+    /// </param>
+    private async Task WaitForHealthAsync(string serviceName, string healthUrl, CancellationToken cancellationToken, ManagedPreviewProcess? watched = null)
     {
         using var client = _httpClientFactory.CreateClient();
         for (var attempt = 0; attempt < 60; attempt++)
@@ -1480,6 +1794,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             catch
             {
                 // Retry until timeout.
+            }
+
+            if (watched is { Process.HasExited: true })
+            {
+                throw new InvalidOperationException($"Preview service '{serviceName}' exited with code {watched.Process.ExitCode} before it became healthy.");
             }
 
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
@@ -1930,6 +2249,71 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         await process.WaitForExitAsync(cancellationToken);
 
         return new CommandResult(process.ExitCode, await stdoutTask, await stderrTask);
+    }
+
+    private sealed record PendingStart(
+        string Normalized, WorktreePreviewStartOptions Options, LoadedPreviewConfig Loaded, string ProfileName,
+        PreviewProfileConfig Profile, StartProgress Progress, bool Owned);
+
+    /// <summary>
+    /// What a full start has reached, readable without a lock: the snapshot is replaced
+    /// wholesale on every change (as <see cref="PreviewRuntime"/> does its process list)
+    /// and never mutated once published, so the status endpoints and a start's concurrent
+    /// health waits never see a half-applied update.
+    /// </summary>
+    private sealed class StartProgress
+    {
+        private readonly object _writers = new();
+        private volatile WorktreePreviewResponse _snapshot;
+
+        public StartProgress(WorktreePreviewResponse initial, string? workItemId)
+        {
+            _snapshot = initial;
+            WorkItemId = workItemId;
+        }
+
+        public string? WorkItemId { get; }
+
+        public WorktreePreviewResponse Snapshot => _snapshot;
+
+        public bool InProgress => _snapshot.State is "installing" or "starting";
+
+        public void Update(Action<WorktreePreviewResponse> change)
+        {
+            lock (_writers)
+            {
+                var next = Copy(_snapshot);
+                change(next);
+                _snapshot = next;
+            }
+        }
+
+        private static WorktreePreviewResponse Copy(WorktreePreviewResponse source) => new()
+        {
+            Configured = source.Configured,
+            State = source.State,
+            WorktreePath = source.WorktreePath,
+            ConfigPath = source.ConfigPath,
+            ProfileName = source.ProfileName,
+            PublicHost = source.PublicHost,
+            StateDirectory = source.StateDirectory,
+            Message = source.Message,
+            Install = source.Install,
+            Services = source.Services.Select(row => new WorktreePreviewServiceResponse
+            {
+                Name = row.Name,
+                PortAlias = row.PortAlias,
+                Status = row.Status,
+                Port = row.Port,
+                SuggestedPort = row.SuggestedPort,
+                HealthUrl = row.HealthUrl,
+                PublicUrl = row.PublicUrl,
+                LogFilePath = row.LogFilePath,
+                ProcessId = row.ProcessId,
+                ExitCode = row.ExitCode,
+                Error = row.Error,
+            }).ToList(),
+        };
     }
 
     private sealed record LoadedPreviewConfig(bool Configured, string WorktreePath, string ConfigPath, IldWorkspaceConfig? Config, string? Message);

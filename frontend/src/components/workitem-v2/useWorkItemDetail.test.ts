@@ -224,6 +224,33 @@ describe("useWorkItemDetail preview live update", () => {
     // No extra fetch — the event was for another item.
     expect(getPreview).toHaveBeenCalledTimes(1);
   });
+
+  test("a failed start whose follow-up read also fails leaves no stale in-progress preview", async () => {
+    stubServices();
+    mockSignalR({ text: "", lastSeq: 0 });
+    vi.spyOn(workItemService, "getPreview")
+      .mockResolvedValueOnce(makePreview("starting"))
+      .mockRejectedValue(new Error("offline"));
+    vi.spyOn(workItemService, "startPreview").mockRejectedValue(new Error("refused"));
+
+    const wi = makeWorkItem({ worktreePath: "/tmp/wt" });
+    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
+      wrapper: WorkItemHubProvider,
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.preview?.state).toBe("starting");
+
+    await act(async () => {
+      await result.current.handleStartPreview();
+    });
+
+    expect(result.current.previewError).toBe("refused");
+    expect(result.current.preview).toBeNull();
+    expect(result.current.previewStarting).toBe(false);
+  });
 });
 
 describe("useWorkItemDetail run cleanup", () => {

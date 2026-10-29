@@ -27,18 +27,19 @@ public sealed class PreviewTools
     private static string Svc(string service) => Uri.EscapeDataString(service);
 
     [McpServerTool(Name = "get_preview")]
-    [Description("Get the worktree preview status for a work item: whether it is configured, the resolved profile, and each service's state (port, health URL, public URL, process/exit info).")]
+    [Description("Get the worktree preview status for a work item: whether it is configured, the resolved profile, and each service's state (port, health URL, public URL, process/exit info). While a start is running the state is \"installing\" (with the install step) or \"starting\", and each service reads pending, starting, waitingForHealth, running or failed (with its exit code and error); a failed start keeps that failure until the next start or stop.")]
     public Task<string> GetPreview([Description("Work item GUID (from the Chat Context).")] string workItemId)
         => _ild.GetRawAsync($"api/v1/agent/workitems/{Wi(workItemId)}/preview");
 
     [McpServerTool(Name = "start_preview")]
-    [Description("Start the worktree preview for a work item — runs the profile's install steps (unless skipInstall) and starts every service. Returns the updated preview status.")]
+    [Description("Start the worktree preview for a work item — runs the profile's install steps (unless skipInstall) and starts every service. By default it waits until every service has settled and returns the updated preview status; with wait=false it returns once the start has begun, and the start is followed with get_preview.")]
     public Task<string> StartPreview(
         [Description("Work item GUID (from the Chat Context).")] string workItemId,
         [Description("Optional profile name; defaults to the config's default profile.")] string? profileName = null,
-        [Description("Skip the install steps (default false).")] bool skipInstall = false)
+        [Description("Skip the install steps (default false).")] bool skipInstall = false,
+        [Description("Wait until every service is up (default true). false returns once the start has begun; follow it with get_preview.")] bool wait = true)
         => _ild.PostJsonAsync($"api/v1/agent/workitems/{Wi(workItemId)}/preview/start",
-            new { profileName, skipInstall });
+            new { profileName, skipInstall, wait });
 
     [McpServerTool(Name = "stop_preview")]
     [Description("Stop the worktree preview for a work item — tears down all running services. Returns the updated preview status.")]
