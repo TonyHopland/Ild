@@ -39,6 +39,17 @@ public interface IEgressPolicy
     event Action? Changed;
 }
 
+public static class EgressPolicyExtensions
+{
+    /// <summary>
+    /// The mode a process launched now follows (ADR-0019). Without a policy (a host that runs no
+    /// proxy, a test) it is <see cref="NetworkMode.Monitor"/>: the proxied launch every deployment
+    /// had before Off existed, so a launch that cannot ask never drops its funnel.
+    /// </summary>
+    public static async ValueTask<NetworkMode> LaunchModeAsync(this IEgressPolicy? policy, CancellationToken ct = default)
+        => policy is null ? NetworkMode.Monitor : (await policy.GetAsync(ct)).Mode;
+}
+
 public sealed class EgressPolicy : IEgressPolicy
 {
     public static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(1);

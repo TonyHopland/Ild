@@ -224,7 +224,11 @@ that is one knob:
 | Kubernetes / k3s | `securityContext.capabilities.add: ["NET_ADMIN"]` on the `ild` container      |
 
 `security_opt: no-new-privileges` stays on; the rules persist in the network
-namespace after the capability is gone. The Kubernetes manifests on
+namespace after the capability is gone. Network mode `off` also depends on it: the
+entrypoint only lets the agent out directly when `no-new-privileges` is set (podman
+and docker: `--security-opt=no-new-privileges`; Kubernetes:
+`allowPrivilegeEscalation: false`), see
+[Agent network limits](configuration.md#agent-network-limits). The Kubernetes manifests on
 `feature/flux-example-setup` need the `securityContext` addition; nothing in this
 repository can make it for you. Behaviour is the same on every runtime because
 nothing outside the container is involved.

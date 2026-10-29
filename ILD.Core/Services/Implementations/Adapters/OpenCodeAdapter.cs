@@ -118,7 +118,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     opencodeModel,
                     opencodeConfigJson,
                     sessionIdToUse,
-                    extraArgs: extraArgs), ctx.Provider.Id, ctx.Environment);
+                    extraArgs: extraArgs), ctx);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -134,7 +134,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                             opencodeConfigJson,
                             sessionIdToUse,
                             useWorktreeAsWorkingDirectory: false,
-                            extraArgs: extraArgs), ctx.Provider.Id, ctx.Environment);
+                            extraArgs: extraArgs), ctx);
                     }
                     catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
                     {
@@ -365,7 +365,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
             // Session export/import must run as the same agent user as the run
             // itself, or it would look for the session under the wrong home.
-            proc = StartAgentProcess(psi, ctx.Provider.Id, ctx.Environment);
+            proc = StartAgentProcess(psi, ctx);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
@@ -374,7 +374,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 var retryPsi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory: false);
                 foreach (var argument in arguments)
                     retryPsi.ArgumentList.Add(argument);
-                proc = StartAgentProcess(retryPsi, ctx.Provider.Id, ctx.Environment);
+                proc = StartAgentProcess(retryPsi, ctx);
             }
             else
             {

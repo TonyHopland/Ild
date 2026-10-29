@@ -1524,7 +1524,7 @@ export interface AppSetting {
 
 // ---- Network egress filter (ADR-0019) ----
 
-export type NetworkMode = "off" | "whitelist" | "blacklist";
+export type NetworkMode = "off" | "monitor" | "whitelist" | "blacklist";
 export type NetworkListKind = "Whitelist" | "Blacklist";
 export type NetworkDecision = "Allowed" | "Blocked" | "Advisory";
 

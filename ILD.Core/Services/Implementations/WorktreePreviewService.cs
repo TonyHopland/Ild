@@ -6,9 +6,11 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using ILD.Data.Enums;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -39,6 +41,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly string? _agentGroup;
     private readonly string? _agentHome;
     private readonly string? _egressProxy;
+    private readonly string? _networkOpenGroup;
+    private readonly IEgressPolicy? _egressPolicy;
     private readonly IProcessEnvironment _environment;
     private readonly Func<int, bool> _isPortAvailable;
     private readonly PreviewDataClaims _claims;
@@ -54,10 +58,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         IConfiguration configuration,
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
-        PreviewDataClaims claims)
+        PreviewDataClaims claims,
+        IEgressPolicy? egressPolicy = null)
         : this(httpClientFactory, configuration, proxyBase, logger,
             AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
-            AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims)
+            AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims,
+            networkOpenGroup: AgentIsolation.NetworkOpenGroup, egressPolicy: egressPolicy)
     {
     }
 
@@ -76,6 +82,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// handed out: binding it on loopback unless a test supplies its own.
     /// <paramref name="claims"/> records which previews hold each repository's preview
     /// data: the host's, which its reset consults too, or a private one.
+    /// <paramref name="networkOpenGroup"/> and <paramref name="egressPolicy"/> decide what a launch gets
+    /// in network mode Off (<see cref="AgentIsolation.ResolveLaunchNetwork(NetworkMode, string?, string?)"/>);
+    /// with no policy every launch is proxied, as <paramref name="egressProxy"/> says.
     /// </summary>
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
@@ -88,7 +97,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         string? egressProxy = null,
         IProcessEnvironment? environment = null,
         Func<int, bool>? isPortAvailable = null,
-        PreviewDataClaims? claims = null)
+        PreviewDataClaims? claims = null,
+        string? networkOpenGroup = null,
+        IEgressPolicy? egressPolicy = null)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
@@ -100,6 +111,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _agentGroup = NonEmpty(agentGroup);
         _agentHome = NonEmpty(agentHome);
         _egressProxy = NonEmpty(egressProxy);
+        _networkOpenGroup = NonEmpty(networkOpenGroup);
+        _egressPolicy = egressPolicy;
         _environment = environment ?? ProcessEnvironment.Current;
         _isPortAvailable = isPortAvailable ?? IsPortAvailable;
         _claims = claims ?? new PreviewDataClaims();
@@ -175,8 +188,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
             ValidateProfile(profileName, profile);
 
+            var mode = await _egressPolicy.LaunchModeAsync(cancellationToken);
             lease = await ClaimPreviewDataAsync(options.Volumes, normalized, holdsGate: true, cancellationToken);
-            var runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, cancellationToken);
+            var runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, mode, cancellationToken);
 
             // The runtime only becomes reachable — to StopAsync, to Dispose, to every
             // status surface — on the last line of this block. Anything that fails in
@@ -188,7 +202,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             {
                 foreach (var service in profile.Services)
                 {
-                    runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
+                    runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, mode, cancellationToken));
                 }
 
                 foreach (var service in profile.Services)
@@ -276,6 +290,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             var service = profile.Services.FirstOrDefault(s => string.Equals(s.Name, serviceName, StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidOperationException($"Preview service '{serviceName}' not found in profile '{profileName}'.");
 
+            var mode = await _egressPolicy.LaunchModeAsync(cancellationToken);
             var runtime = _runtimes.TryGetValue(normalized, out var live) ? live : null;
             var existing = runtime?.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, service.Name, StringComparison.OrdinalIgnoreCase));
             if (existing != null && !existing.Process.HasExited)
@@ -302,14 +317,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             else
             {
                 lease = await ClaimPreviewDataAsync(options.Volumes, normalized, holdsGate: true, cancellationToken);
-                runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, cancellationToken);
+                runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, mode, cancellationToken);
                 _runtimes[normalized] = runtime;
                 lease = null;
             }
 
             try
             {
-                runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
+                runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, mode, cancellationToken));
             }
             catch
             {
@@ -486,6 +501,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         ValidateVolumes(resolvedProfileName, profile);
 
+        var mode = await _egressPolicy.LaunchModeAsync(cancellationToken);
+
         // The install runs outside the gate, holding the preview data through its own lease.
         using (var lease = await ClaimPreviewDataAsync(volumes, normalized, holdsGate: false, cancellationToken))
         {
@@ -508,7 +525,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 new PackageFeedFileShare(packageFeeds ?? [], "install", _logger),
                 await PreviewVolumes.CreateFoldersAsync(_configuration, profile.Volumes, volumes, stateDirectory, cancellationToken));
 
-            await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
+            await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken);
             return new WorktreeInstallResult(true);
         }
     }
@@ -904,6 +921,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewProfileConfig profile,
         WorktreePreviewStartOptions options,
         PreviewDataClaims.Lease? lease,
+        NetworkMode mode,
         CancellationToken cancellationToken)
     {
         var publicHost = ResolvePublicHost(options.PublicHost);
@@ -928,7 +946,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         if (!options.SkipInstall)
         {
-            await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
+            await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken);
         }
 
         return runtime;
@@ -1092,7 +1110,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             .Where(alias => !string.Equals(alias, service.Port, StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase);
 
-    private async Task RunInstallStepsAsync(IReadOnlyList<PreviewCommandConfig> installSteps, PreviewRuntime runtime, CancellationToken cancellationToken)
+    private async Task RunInstallStepsAsync(
+        IReadOnlyList<PreviewCommandConfig> installSteps, PreviewRuntime runtime, NetworkMode mode, CancellationToken cancellationToken)
     {
         if (installSteps.Count == 0)
             return;
@@ -1104,7 +1123,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             if (string.IsNullOrWhiteSpace(step.Command))
                 continue;
 
-            var resolved = await BuildResolvedStepAsync(step, runtime, null, feeds.Environment, cancellationToken);
+            var resolved = await BuildResolvedStepAsync(step, runtime, null, feeds.Environment, mode, cancellationToken);
             var result = await RunCommandAsync(resolved, cancellationToken);
 
             var builder = new StringBuilder();
@@ -1126,7 +1145,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         EnsureInstalledToolsOnProcessPath();
     }
 
-    private async Task<ManagedPreviewProcess> LaunchServiceProcessAsync(PreviewServiceConfig service, PreviewRuntime runtime, CancellationToken cancellationToken)
+    private async Task<ManagedPreviewProcess> LaunchServiceProcessAsync(
+        PreviewServiceConfig service, PreviewRuntime runtime, NetworkMode mode, CancellationToken cancellationToken)
     {
         // The service holds the runtime's feed credentials only while it runs: its
         // exit, however it comes, lets go, so a preview with nothing running keeps
@@ -1137,7 +1157,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         try
         {
-            var resolved = await BuildResolvedStepAsync(service, runtime, service.Port, feeds.Environment, cancellationToken);
+            var resolved = await BuildResolvedStepAsync(service, runtime, service.Port, feeds.Environment, mode, cancellationToken);
             var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
             writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
             {
@@ -1531,7 +1551,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task<ResolvedStep> BuildResolvedStepAsync(
         PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias,
-        IReadOnlyDictionary<string, string> feedEnvironment, CancellationToken cancellationToken)
+        IReadOnlyDictionary<string, string> feedEnvironment, NetworkMode mode, CancellationToken cancellationToken)
     {
         var workingDirectory = await ResolveWorkingDirectoryAsync(step.Cwd, runtime, currentPortAlias, cancellationToken);
         var environment = MergePreviewEnvironment(
@@ -1544,7 +1564,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return new ResolvedStep(
             ResolveTemplate(step.Command, runtime, currentPortAlias),
             workingDirectory,
-            environment);
+            environment,
+            mode);
     }
 
     /// <summary>
@@ -1887,7 +1908,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         psi.ArgumentList.Add(resolved.Command);
 
         AgentIsolation.StripOrchestratorEnvironment(psi);
-        AgentIsolation.Route(psi, _agentUser, _agentGroup, _agentHome, _egressProxy);
+        var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(resolved.NetworkMode, _egressProxy, _networkOpenGroup);
+        AgentIsolation.Route(psi, _agentUser, _agentGroup, _agentHome, proxy, regid);
 
         foreach (var entry in resolved.Environment)
         {
@@ -1912,7 +1934,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private sealed record LoadedPreviewConfig(bool Configured, string WorktreePath, string ConfigPath, IldWorkspaceConfig? Config, string? Message);
 
-    internal sealed record ResolvedStep(string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment);
+    internal sealed record ResolvedStep(
+        string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment,
+        NetworkMode NetworkMode = NetworkMode.Monitor);
     private sealed record CommandResult(int ExitCode, string StdOut, string StdErr);
 
     private sealed class PreviewRuntime

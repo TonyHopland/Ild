@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A new Off network mode lets agents connect directly to any host and port, with nothing logged, for tools that cannot use the proxy.** It applies from the next agent launch and needs `no-new-privileges` on the container.
+
+### Changed
+
+- **The network mode that logged every connection and blocked nothing is now called Monitor.** An existing Off setting becomes Monitor on upgrade, so your log keeps working.
+
 ### Security
 
 - **Coding agents can no longer reach private or internal addresses through the proxy unless you allow them in Settings > Network.** Self-hosted git, local model servers and internal registries need an entry there after upgrading.

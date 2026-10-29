@@ -94,6 +94,19 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   it can only be set on the Docker host's kernel, which is outside anything this
   repo provisions. No `sysctls` entry belongs here.
 
+- **The group is the one thing a launch chooses, and Off uses it.** `--regid` is the
+  agent's primary group, except for a launch in network mode Off
+  ([ADR-0019](./0019-agent-egress-through-in-container-proxy.md)), which gets the
+  open group `ild-net-open` that the egress firewall accepts. The agent cannot
+  escalate into it: it has no capabilities (no `CAP_SETGID`), is not a member of
+  the group, the group has no password, and `setpriv` is not setuid. Only the
+  orchestrator, which holds the ambient capability, picks `--regid`. A process in
+  that group can create a setgid `ild-net-open` file outside the setgid shared
+  directories; `no_new_privs`, inherited by every descendant and impossible to
+  clear, makes the kernel ignore that bit on exec, so the entrypoint enables Off
+  only when it is set. The residual: an Off-launched process keeps direct egress
+  until it exits, and other agent-uid processes can reach it (no `ptrace_scope`).
+
 - **One code seam.** Every CLI agent launch goes through
   `CliAgentAdapterBase.StartAgentProcess`, which applies
   `AgentIsolation.Route(ProcessStartInfo)` and starts the process — so "a CLI

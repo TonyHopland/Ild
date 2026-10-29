@@ -959,6 +959,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
     [Theory]
     [InlineData(NetworkMode.Off, false)]
+    [InlineData(NetworkMode.Monitor, false)]
     [InlineData(NetworkMode.Whitelist, true)]
     [InlineData(NetworkMode.Blacklist, false)]
     public async Task A_name_that_resolves_to_a_private_address_is_refused_in_every_mode_even_when_listed(NetworkMode mode, bool whitelisted)
@@ -1234,6 +1235,24 @@ public sealed class EgressPolicyInvalidationTests
         Assert.Equal(NetworkDecision.Blocked, snapshot.Decide("new.example", null));
         Assert.Equal("new.example", Assert.Single((await policy.GetAsync(TestContext.Current.CancellationToken)).Entries).Host);
         Assert.Equal(2, store.Reads);
+    }
+
+    [Theory]
+    [InlineData("allow")]
+    [InlineData("")]
+    public async Task A_stored_mode_nobody_can_parse_is_judged_as_monitor_not_as_the_open_off(string stored)
+    {
+        var store = new GatedStore();
+        store.Release();
+        var services = new ServiceCollection();
+        services.AddSingleton<INetworkPolicyStore>(store);
+        services.AddSingleton<IAppSettingStore>(new FixedSettings(stored));
+        using var provider = services.BuildServiceProvider();
+        var policy = new EgressPolicy(provider.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
+
+        var snapshot = await policy.GetAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(NetworkMode.Monitor, snapshot.Mode);
     }
 
     private static NetworkPolicyEntry Entry(string host)

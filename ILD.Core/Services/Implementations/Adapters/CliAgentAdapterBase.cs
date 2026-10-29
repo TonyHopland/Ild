@@ -114,21 +114,23 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// would silently run the agent as the orchestrator again.
     /// </summary>
     /// <param name="psi">The launch.</param>
-    /// <param name="aiProviderId">
-    /// The provider the launch is made for; the egress proxy applies that provider's
-    /// scoped whitelist/blacklist entries to the child's connections.
+    /// <param name="ctx">
+    /// The execution the launch belongs to, so no launch of it can leave out what it
+    /// carries: the provider (the egress proxy applies that provider's scoped
+    /// whitelist/blacklist entries to the child's connections), the
+    /// <see cref="AgentExecutionContext.Environment"/> set over what <paramref name="psi"/>
+    /// already carries, and the <see cref="AgentExecutionContext.NetworkMode"/> that
+    /// decides whether the child is proxied (ADR-0019).
     /// </param>
-    /// <param name="environment">
-    /// The execution's <see cref="AgentExecutionContext.Environment"/>, set over what
-    /// <paramref name="psi"/> already carries; null for none. Required so no launch
-    /// of an execution can leave it out.
-    /// </param>
-    protected static Process? StartAgentProcess(
-        ProcessStartInfo psi, Guid aiProviderId, IReadOnlyDictionary<string, string>? environment)
+    protected static Process? StartAgentProcess(ProcessStartInfo psi, AgentExecutionContext ctx)
+        => Process.Start(RouteForExecution(psi, ctx));
+
+    /// <summary>The launch <see cref="StartAgentProcess"/> starts: <paramref name="psi"/> with the execution's environment, crossed to the agent uid.</summary>
+    internal static ProcessStartInfo RouteForExecution(ProcessStartInfo psi, AgentExecutionContext ctx)
     {
-        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+        foreach (var (name, value) in ctx.Environment ?? new Dictionary<string, string>())
             psi.Environment[name] = value;
-        return Process.Start(AgentIsolation.Route(psi, aiProviderId));
+        return AgentIsolation.Route(psi, ctx.Provider.Id, ctx.NetworkMode);
     }
 
     /// <summary>
