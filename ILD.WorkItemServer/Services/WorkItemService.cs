@@ -98,8 +98,7 @@ public sealed class WorkItemService : IWorkItemService
         WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<string>());
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-        var topmost = await _db.WorkItems.MinAsync(x => (double?)x.Priority, ct);
-        w.Priority = (topmost ?? 1) - 1;
+        w.Priority = await PriorityAboveEveryItemAsync(ct);
         _db.WorkItems.Add(w);
         await _db.SaveChangesAsync(ct);
         w.Id = w.InternalId.ToString(CultureInfo.InvariantCulture);
@@ -163,6 +162,9 @@ public sealed class WorkItemService : IWorkItemService
     /// </summary>
     private static IQueryable<WorkItem> InBoardOrder(IQueryable<WorkItem> items)
         => items.OrderBy(w => w.Priority).ThenBy(w => w.InternalId);
+
+    private async Task<double> PriorityAboveEveryItemAsync(CancellationToken ct)
+        => (await _db.WorkItems.MinAsync(x => (double?)x.Priority, ct) ?? 1) - 1;
 
     private static IQueryable<WorkItem> InReverseBoardOrder(IQueryable<WorkItem> items)
         => items.OrderByDescending(w => w.Priority).ThenByDescending(w => w.InternalId);
@@ -253,8 +255,10 @@ public sealed class WorkItemService : IWorkItemService
             return await ClaimRunningAsync(w, req.Reason, ct);
 
         var now = _clock.GetUtcNow().UtcDateTime;
+        var entersDone = req.TargetStatus == WorkItemStatus.Done && w.Status != WorkItemStatus.Done;
         w.Status = req.TargetStatus;
         w.UpdatedAt = now;
+        if (entersDone) w.Priority = await PriorityAboveEveryItemAsync(ct);
 
         if (req.TargetStatus == WorkItemStatus.HumanFeedback && req.Actions != null)
             w.HumanFeedbackActions = req.Actions;
@@ -430,6 +434,7 @@ public sealed class WorkItemService : IWorkItemService
 
         if (req.TargetStatus is { } target && target != w.Status)
         {
+            var entersDone = target == WorkItemStatus.Done;
             var moved = await ApplyTransitionAsync(w, new TransitionRequest
             {
                 TargetStatus = target,
@@ -438,6 +443,16 @@ public sealed class WorkItemService : IWorkItemService
             }, ct);
             if (!moved.Success)
                 return new ReorderWorkItemResponse { Outcome = ReorderWorkItemOutcome.TransitionRefused, Reason = moved.Reason };
+            if (entersDone)
+            {
+                await transaction.CommitAsync(ct);
+                return new ReorderWorkItemResponse
+                {
+                    Outcome = ReorderWorkItemOutcome.Moved,
+                    Item = (await WithDetailsAsync(new[] { w }, ct))[0],
+                    Renumbered = false,
+                };
+            }
         }
 
         var others = _db.WorkItems.Where(x => x.InternalId != w.InternalId);

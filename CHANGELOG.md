@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **The network mode that logged every connection and blocked nothing is now called Monitor.** An existing Off setting becomes Monitor on upgrade.
+- **A work item moved to Done goes to the top of the Done column.**
 
 ### Security
 
