@@ -32,6 +32,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     private TcpListener? _upstream;
     private int _upstreamPort;
     private readonly List<ScriptedUpstream> _scripted = new();
+    private readonly List<EgressProxy> _extraProxies = new();
 
     public EgressProxyTests()
     {
@@ -47,7 +48,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _upstream = new TcpListener(IPAddress.Loopback, 0);
+        _upstream = TcpListener.Create(0);
         _upstream.Start();
         _upstreamPort = ((IPEndPoint)_upstream.LocalEndpoint).Port;
         _ = ServeUpstreamAsync(_upstream);
@@ -60,6 +61,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         if (_proxy is not null) await _proxy.StopAsync(CancellationToken.None);
+        foreach (var extra in _extraProxies) await extra.StopAsync(CancellationToken.None);
         _upstream?.Stop();
         foreach (var scripted in _scripted) scripted.Dispose();
         await _services.DisposeAsync();
@@ -902,6 +904,141 @@ public sealed class EgressProxyTests : IAsyncLifetime
         }
     }
 
+    private sealed class CountingResolver
+    {
+        private readonly Func<string, IPAddress[]> _map;
+        private int _calls;
+        private readonly List<string> _hosts = new();
+
+        public CountingResolver(Func<string, IPAddress[]> map) => _map = map;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public IReadOnlyList<string> Hosts { get { lock (_hosts) return _hosts.ToList(); } }
+
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _calls);
+            lock (_hosts) _hosts.Add(host);
+            return Task.FromResult(_map(host));
+        }
+    }
+
+    private async Task<int> StartProxyAsync(CountingResolver? resolver, EgressProxyOptions? options = null)
+    {
+        var proxy = new EgressProxy(options ?? new EgressProxyOptions(true, 0), _policy, _log, NullLogger<EgressProxy>.Instance,
+            resolver is null ? null : resolver.ResolveAsync);
+        await proxy.StartAsync(CancellationToken.None);
+        _extraProxies.Add(proxy);
+        return await proxy.BoundPort.WaitAsync(Timeout);
+    }
+
+
+    private async Task<(TcpClient Client, string StatusLine)> ConnectViaAsync(int proxyPort, string host, int port)
+    {
+        var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, proxyPort);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"));
+        var status = await ReadLineAsync(stream);
+        while ((await ReadLineAsync(stream)).Length > 0) { }
+        return (client, status);
+    }
+
+    private static readonly IPAddress[] Private10 = { IPAddress.Parse("10.1.2.3") };
+
+    [Theory]
+    [InlineData(NetworkMode.Monitor, false, false, NetworkDecision.Advisory)]
+    [InlineData(NetworkMode.Blacklist, false, false, NetworkDecision.Allowed)]
+    [InlineData(NetworkMode.Whitelist, true, true, NetworkDecision.Allowed)]
+    public async Task A_name_that_resolves_to_a_private_address_connects_when_the_mode_and_lists_allow_it(
+        NetworkMode mode, bool listed, bool whitelist, NetworkDecision expected)
+    {
+        await SetModeAsync(mode);
+        if (listed) await ListAsync("status.lan.example", whitelist ? NetworkListKind.Whitelist : NetworkListKind.Blacklist);
+        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
+        var port = await StartProxyAsync(resolver);
+
+        var (client, status) = await ConnectViaAsync(port, "status.lan.example", _upstreamPort);
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            Assert.Equal("through the seam", await EchoAsync(client, "through the seam"));
+        }
+
+        Assert.Equal(("status.lan.example", _upstreamPort, expected, (Guid?)null), Assert.Single(_log.Entries));
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Blacklist, NetworkListKind.Blacklist, true)]
+    [InlineData(NetworkMode.Whitelist, NetworkListKind.Whitelist, false)]
+    public async Task A_host_the_lists_refuse_is_never_resolved(
+        NetworkMode mode, NetworkListKind kind, bool listed)
+    {
+        await SetModeAsync(mode);
+        if (listed) await ListAsync("status.lan.example", kind);
+        else await ListAsync("other.example", kind);
+        var resolver = new CountingResolver(_ => Private10);
+        var port = await StartProxyAsync(resolver);
+
+        var (client, status) = await ConnectViaAsync(port, "status.lan.example", _upstreamPort);
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 403", status);
+            var body = await ReadToEndAsync(client.GetStream());
+            Assert.Contains("blocks status.lan.example", body);
+        }
+
+        Assert.Equal(0, resolver.Calls);
+        Assert.Equal(("status.lan.example", _upstreamPort, NetworkDecision.Blocked, (Guid?)null), Assert.Single(_log.Entries));
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("[::1]")]
+    public async Task A_private_address_literal_is_judged_only_by_the_mode(string literal)
+    {
+        var port = await StartProxyAsync(null);
+
+        var (client, status) = await ConnectViaAsync(port, literal, _upstreamPort);
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            Assert.Equal("through the seam", await EchoAsync(client, "through the seam"));
+        }
+
+        Assert.Equal(NetworkDecision.Advisory, Assert.Single(_log.Entries).Decision);
+    }
+
+    [Fact]
+    public async Task A_name_is_resolved_once_and_the_resolved_address_is_dialled()
+    {
+        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
+        var port = await StartProxyAsync(resolver);
+
+        var (client, status) = await ConnectViaAsync(port, "no-such-host.invalid", _upstreamPort);
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            Assert.Equal("through the seam", await EchoAsync(client, "through the seam"));
+        }
+
+        Assert.Equal(1, resolver.Calls);
+        Assert.Equal(("no-such-host.invalid", _upstreamPort, NetworkDecision.Advisory, (Guid?)null), Assert.Single(_log.Entries));
+    }
+
+    [Fact]
+    public async Task A_name_that_does_not_resolve_is_a_502_and_the_list_decision_is_still_recorded()
+    {
+        var port = await StartProxyAsync(new CountingResolver(_ => throw new SocketException((int)SocketError.HostNotFound)));
+
+        var (client, status) = await ConnectViaAsync(port, "gone.example", 443);
+        client.Dispose();
+
+        Assert.StartsWith("HTTP/1.1 502", status);
+        Assert.Equal(("gone.example", 443, NetworkDecision.Advisory, (Guid?)null), Assert.Single(_log.Entries));
+    }
+
     private sealed class RecordingLog : INetworkLogRecorder
     {
         private readonly List<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> _entries = new();
@@ -1021,6 +1158,24 @@ public sealed class EgressPolicyInvalidationTests
         Assert.Equal(2, store.Reads);
     }
 
+    [Theory]
+    [InlineData("allow")]
+    [InlineData("")]
+    public async Task A_stored_mode_nobody_can_parse_is_judged_as_monitor_not_as_the_open_off(string stored)
+    {
+        var store = new GatedStore();
+        store.Release();
+        var services = new ServiceCollection();
+        services.AddSingleton<INetworkPolicyStore>(store);
+        services.AddSingleton<IAppSettingStore>(new FixedSettings(stored));
+        using var provider = services.BuildServiceProvider();
+        var policy = new EgressPolicy(provider.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
+
+        var snapshot = await policy.GetAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(NetworkMode.Monitor, snapshot.Mode);
+    }
+
     private static NetworkPolicyEntry Entry(string host)
         => new() { Id = Guid.NewGuid(), Host = host, ListKind = NetworkListKind.Blacklist };
 
@@ -1035,6 +1190,9 @@ public sealed class EgressPolicyInvalidationTests
         public int Reads => Volatile.Read(ref _reads);
 
         public void Release() => _gate.TrySetResult();
+
+        public Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default)
+            => throw new NotSupportedException();
 
         public async Task<IReadOnlyList<NetworkPolicyEntry>> GetEntriesAsync(CancellationToken ct = default)
         {

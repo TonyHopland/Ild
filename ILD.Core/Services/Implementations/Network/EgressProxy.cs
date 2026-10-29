@@ -48,10 +48,13 @@ public sealed class EgressProxy : BackgroundService
     private readonly INetworkLogRecorder _log;
     private readonly ILogger<EgressProxy> _logger;
     private readonly EgressRelay _relay;
+    private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
     private readonly TaskCompletionSource<int> _bound = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public EgressProxy(EgressProxyOptions options, IEgressPolicy policy, INetworkLogRecorder log, ILogger<EgressProxy> logger)
+    public EgressProxy(EgressProxyOptions options, IEgressPolicy policy, INetworkLogRecorder log, ILogger<EgressProxy> logger,
+        Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null)
     {
+        _resolve = resolve ?? ResolveAsync;
         _options = options;
         _policy = policy;
         _log = log;
@@ -116,6 +119,13 @@ public sealed class EgressProxy : BackgroundService
 
     private void OnPolicyChanged() => _ = _relay.ResetNewlyBlockedAsync();
 
+    /// <summary>
+    /// <see cref="Dns.GetHostAddressesAsync(string, CancellationToken)"/> refuses the
+    /// unspecified addresses as input, so an IP literal is taken as it stands.
+    /// </summary>
+    private static Task<IPAddress[]> ResolveAsync(string host, CancellationToken ct)
+        => IPAddress.TryParse(host, out var literal) ? Task.FromResult(new[] { literal }) : Dns.GetHostAddressesAsync(host, ct);
+
     private async Task HandleConnectionAsync(TcpClient client, CancellationToken stoppingToken)
     {
         using (client)
@@ -136,15 +146,29 @@ public sealed class EgressProxy : BackgroundService
 
                 var snapshot = await _policy.GetAsync(stoppingToken).ConfigureAwait(false);
                 var decision = snapshot.Decide(request.Host, request.AiProviderId);
-                _log.Record(request.Host, request.Port, decision, request.AiProviderId);
 
                 if (decision == NetworkDecision.Blocked)
                 {
-                    await RefuseAsync(stream, request, stoppingToken).ConfigureAwait(false);
+                    _log.Record(request.Host, request.Port, decision, request.AiProviderId);
+                    await RefuseAsync(stream, request, "ILD network policy blocks " + request.Host + ".", stoppingToken).ConfigureAwait(false);
                     return;
                 }
 
-                await RelayAsync(stream, request, head.Value, stoppingToken).ConfigureAwait(false);
+                // Resolved once, here: the addresses dialled are the addresses resolved.
+                IPAddress[] addresses;
+                try
+                {
+                    addresses = await _resolve(request.Host, stoppingToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is SocketException or ArgumentException)
+                {
+                    _log.Record(request.Host, request.Port, decision, request.AiProviderId);
+                    await WriteUnreachableAsync(stream, request, (ex as SocketException)?.SocketErrorCode.ToString() ?? "invalid host name", stoppingToken).ConfigureAwait(false);
+                    return;
+                }
+
+                _log.Record(request.Host, request.Port, decision, request.AiProviderId);
+                await RelayAsync(stream, request, addresses, head.Value, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (IOException) { }
@@ -156,17 +180,16 @@ public sealed class EgressProxy : BackgroundService
         }
     }
 
-    private async Task RelayAsync(NetworkStream client, ProxyRequest request, ArraySegment<byte> head, CancellationToken stoppingToken)
+    private async Task RelayAsync(NetworkStream client, ProxyRequest request, IPAddress[] addresses, ArraySegment<byte> head, CancellationToken stoppingToken)
     {
         using var upstream = new TcpClient { NoDelay = true };
         try
         {
-            await upstream.ConnectAsync(request.Host, request.Port, stoppingToken).ConfigureAwait(false);
+            await upstream.ConnectAsync(addresses, request.Port, stoppingToken).ConfigureAwait(false);
         }
         catch (SocketException ex)
         {
-            if (request.Kind != RequestKind.Tls)
-                await WriteResponseAsync(client, "502 Bad Gateway", $"The egress proxy could not reach {request.Host}:{request.Port} ({ex.SocketErrorCode}).", stoppingToken).ConfigureAwait(false);
+            await WriteUnreachableAsync(client, request, ex.SocketErrorCode.ToString(), stoppingToken).ConfigureAwait(false);
             return;
         }
 
@@ -209,7 +232,13 @@ public sealed class EgressProxy : BackgroundService
         }
     }
 
-    private static async Task RefuseAsync(NetworkStream client, ProxyRequest request, CancellationToken ct)
+    private static async Task WriteUnreachableAsync(NetworkStream client, ProxyRequest request, string reason, CancellationToken ct)
+    {
+        if (request.Kind != RequestKind.Tls)
+            await WriteResponseAsync(client, "502 Bad Gateway", $"The egress proxy could not reach {request.Host}:{request.Port} ({reason}).", ct).ConfigureAwait(false);
+    }
+
+    private static async Task RefuseAsync(NetworkStream client, ProxyRequest request, string reason, CancellationToken ct)
     {
         if (request.Kind == RequestKind.Tls)
         {
@@ -217,7 +246,7 @@ public sealed class EgressProxy : BackgroundService
             await client.WriteAsync(new byte[] { 0x15, 0x03, 0x01, 0x00, 0x02, 0x02, 0x31 }, ct).ConfigureAwait(false);
             return;
         }
-        await WriteResponseAsync(client, "403 Forbidden", $"ILD network policy blocks {request.Host}.", ct).ConfigureAwait(false);
+        await WriteResponseAsync(client, "403 Forbidden", reason, ct).ConfigureAwait(false);
     }
 
     internal static async Task WriteResponseAsync(NetworkStream client, string status, string body, CancellationToken ct)

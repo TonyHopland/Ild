@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data;
@@ -21,6 +22,7 @@ public sealed class ChatTitleGenerator
     private readonly IChatNotifier _notifier;
     private readonly IWorkItemManager _workItems;
     private readonly ILogger<ChatTitleGenerator> _log;
+    private readonly IEgressPolicy? _egressPolicy;
 
     public ChatTitleGenerator(
         AppDbContext db,
@@ -29,7 +31,8 @@ public sealed class ChatTitleGenerator
         IAppSettingStore settings,
         IChatNotifier notifier,
         IWorkItemManager workItems,
-        ILogger<ChatTitleGenerator> log)
+        ILogger<ChatTitleGenerator> log,
+        IEgressPolicy? egressPolicy = null)
     {
         _db = db;
         _providers = providers;
@@ -38,6 +41,7 @@ public sealed class ChatTitleGenerator
         _notifier = notifier;
         _workItems = workItems;
         _log = log;
+        _egressPolicy = egressPolicy;
     }
 
     public async Task GenerateAsync(Guid chatSessionId, string? openWorkItemId, int replySequence, CancellationToken ct)
@@ -126,6 +130,7 @@ public sealed class ChatTitleGenerator
         var runId = Guid.NewGuid();
         try
         {
+            var mode = await _egressPolicy.LaunchModeAsync(ct);
             return await adapter.ExecuteAsync(new AgentExecutionContext(
                 provider,
                 prompt,
@@ -143,7 +148,8 @@ public sealed class ChatTitleGenerator
                 // The adapters ignore this under NoTools: the call gets no tools at all.
                 ToolAllowlist: AiToolCatalog.NormalizeSelectedToolKeys(_registry.GetTraits(provider.Type), [AiToolCatalog.Read]),
                 ManageSession: false,
-                NoTools: true));
+                NoTools: true,
+                NetworkMode: mode));
         }
         finally
         {

@@ -289,6 +289,8 @@ export interface WorktreePreviewService {
   logFilePath: string | null;
   processId: number | null;
   exitCode: number | null;
+  /** Why the service failed to start, when its status is failed. */
+  error?: string | null;
 }
 
 /** Tail of a preview service's captured stdout/stderr log. */
@@ -313,6 +315,8 @@ export interface WorktreePreview {
   stateDirectory: string | null;
 
   message: string | null;
+  /** The install step a start is on; null unless the state is installing. */
+  install?: { index: number; total: number; command: string } | null;
   services: WorktreePreviewService[];
 }
 
@@ -1524,7 +1528,7 @@ export interface AppSetting {
 
 // ---- Network egress filter (ADR-0019) ----
 
-export type NetworkMode = "off" | "whitelist" | "blacklist";
+export type NetworkMode = "off" | "monitor" | "whitelist" | "blacklist";
 export type NetworkListKind = "Whitelist" | "Blacklist";
 export type NetworkDecision = "Allowed" | "Blocked" | "Advisory";
 
@@ -1572,6 +1576,8 @@ export interface NetworkStatus {
   reason: string;
   proxyEnabled: boolean;
   proxyPort: number | null;
+  /** Whether an agent launched in network mode Off can reach the network here. */
+  offAvailable: boolean;
 }
 
 export type NetworkPolicyChangedPayload = Record<string, never>;

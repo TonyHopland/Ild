@@ -158,7 +158,11 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
             {
                 foreach (var (id, listener) in _listeners.ToList())
                 {
-                    if (declared.Any(f => f.Id == id && listener.Serves(f))) continue;
+                    if (declared.FirstOrDefault(f => f.Id == id) is { } current && listener.Serves(current))
+                    {
+                        listener.Forward = current;
+                        continue;
+                    }
                     listener.Dispose();
                     _listeners.Remove(id);
                 }
@@ -373,7 +377,7 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
 
         public Listener(NetworkForwardEntry forward, TcpListener socket, CancellationToken stopping)
         {
-            Forward = forward;
+            _forward = forward;
             Socket = socket;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(stopping);
             // Taken here, while the source is certainly alive. The accept loop
@@ -385,7 +389,15 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
             Token = _cts.Token;
         }
 
-        public NetworkForwardEntry Forward { get; }
+        private volatile NetworkForwardEntry _forward;
+
+        /// <summary>The row as last read; a rename takes effect for the next connection without a rebind.</summary>
+        public NetworkForwardEntry Forward
+        {
+            get => _forward;
+            set => _forward = value;
+        }
+
         public TcpListener Socket { get; }
         public int Port => Forward.LocalPort;
         public CancellationToken Token { get; }

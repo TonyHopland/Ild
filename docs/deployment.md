@@ -224,7 +224,11 @@ that is one knob:
 | Kubernetes / k3s | `securityContext.capabilities.add: ["NET_ADMIN"]` on the `ild` container      |
 
 `security_opt: no-new-privileges` stays on; the rules persist in the network
-namespace after the capability is gone. The Kubernetes manifests on
+namespace after the capability is gone. Network mode `off` also depends on it: the
+entrypoint only lets the agent out directly when `no-new-privileges` is set (podman
+and docker: `--security-opt=no-new-privileges`; Kubernetes:
+`allowPrivilegeEscalation: false`), see
+[Agent network limits](configuration.md#agent-network-limits). The Kubernetes manifests on
 `feature/flux-example-setup` need the `securityContext` addition; nothing in this
 repository can make it for you. Behaviour is the same on every runtime because
 nothing outside the container is involved.
@@ -238,9 +242,10 @@ also what you get with uid isolation off (`AGENT_USER=`), since there is then no
 separate uid to key rules on.
 
 The rules open only loopback (the proxy, ILD's own API for the agent's MCP
-callback, and previews) and DNS for the agent uid; everything else it sends is
-dropped, IP literal or not. The orchestrator is not subject to them. The image
-ships `nftables` and falls back to `iptables` where nf_tables is unavailable.
+callback, and previews, but not DNS) for the agent uid; everything else it
+sends is dropped, IP literal or not. The orchestrator is not subject to them.
+The image ships `nftables` and falls back to `iptables` where nf_tables is
+unavailable.
 
 ## Volumes
 

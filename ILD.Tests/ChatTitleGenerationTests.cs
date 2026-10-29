@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Analytics;
@@ -38,6 +39,7 @@ public sealed class ChatTitleGenerationTests : IDisposable
         _ => Task.FromResult(NodeExecutionResult.Ok("Login page fix"));
     private readonly List<AgentExecutionContext> _modelCalls = new();
     private bool _noAdapter;
+    private IEgressPolicy? _egressPolicy;
 
     public ChatTitleGenerationTests()
     {
@@ -131,6 +133,7 @@ public sealed class ChatTitleGenerationTests : IDisposable
         services.AddSingleton<IAgentAdapterRegistry>(new ScriptedRegistry(this));
         services.AddSingleton<IChatNotifier>(_notifier);
         services.AddSingleton(_workItems.Object);
+        if (_egressPolicy is not null) services.AddSingleton(_egressPolicy);
         services.AddScoped<ChatTitleGenerator>();
         return services.BuildServiceProvider();
     }
@@ -227,6 +230,37 @@ public sealed class ChatTitleGenerationTests : IDisposable
         => new(ctx, new ProviderStore(ctx), new ScriptedRegistry(this), _notifier,
             new ChatOptions { ScratchRoot = _scratchRoot }, new LoopRunStore(ctx), new ChatLoopScratchpad(),
             new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
+
+    [Theory]
+    [InlineData(NetworkMode.Off)]
+    [InlineData(NetworkMode.Whitelist)]
+    public async Task The_title_call_launches_in_the_mode_the_policy_reports(NetworkMode mode)
+    {
+        await SeedProviderAsync("Main", isDefault: true);
+        await SmartTitlesAsync(on: true);
+        var id = await SeedChatAsync();
+        _egressPolicy = EgressPolicies.Reporting(mode);
+        using var services = BuildServices();
+        using var scheduler = NewScheduler(services);
+
+        await RunAsync(scheduler, id);
+
+        Assert.Equal(mode, Assert.Single(_modelCalls).NetworkMode);
+    }
+
+    [Fact]
+    public async Task The_title_call_without_a_policy_launches_proxied_as_Monitor()
+    {
+        await SeedProviderAsync("Main", isDefault: true);
+        await SmartTitlesAsync(on: true);
+        var id = await SeedChatAsync();
+        using var services = BuildServices();
+        using var scheduler = NewScheduler(services);
+
+        await RunAsync(scheduler, id);
+
+        Assert.Equal(NetworkMode.Monitor, Assert.Single(_modelCalls).NetworkMode);
+    }
 
     [Fact]
     public async Task The_first_exchange_is_summarised_on_the_tagged_provider_and_saved_as_an_auto_title()

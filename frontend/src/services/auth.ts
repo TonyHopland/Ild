@@ -436,6 +436,8 @@ export const workItemService = {
       skipInstall?: boolean;
       publicHost?: string;
       portOverrides?: Record<string, number>;
+      /** False answers with the start's first progress and lets it run on; true waits until it settles. */
+      wait?: boolean;
     },
   ): Promise<WorktreePreview> => {
     return api.post<WorktreePreview>(`/workitems/${id}/preview/start`, request ?? {});
@@ -1225,6 +1227,12 @@ export const networkService = {
   }): Promise<NetworkPolicyEntry> => {
     return api.post<NetworkPolicyEntry>("/network/entries", data);
   },
+  updateEntry: async (
+    id: string,
+    data: { host: string; listKind: NetworkListKind; aiProviderId?: string | null },
+  ): Promise<NetworkPolicyEntry> => {
+    return api.put<NetworkPolicyEntry>(`/network/entries/${id}`, data);
+  },
   deleteEntry: async (id: string): Promise<void> => {
     return api.delete<void>(`/network/entries/${id}`);
   },
@@ -1238,6 +1246,12 @@ export const networkService = {
     localPort: number;
   }): Promise<NetworkForward> => {
     return api.post<NetworkForward>("/network/forwards", data);
+  },
+  updateForward: async (
+    id: string,
+    data: { name: string; host: string; port: number; localPort: number },
+  ): Promise<NetworkForward> => {
+    return api.put<NetworkForward>(`/network/forwards/${id}`, data);
   },
   deleteForward: async (id: string): Promise<void> => {
     return api.delete<void>(`/network/forwards/${id}`);

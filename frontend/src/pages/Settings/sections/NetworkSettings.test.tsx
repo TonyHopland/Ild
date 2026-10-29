@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import NetworkSettings, { groupConsecutive } from "./NetworkSettings";
 import * as signalRHook from "../../../hooks/useSignalR";
 import * as services from "../../../services/auth";
@@ -20,12 +20,14 @@ const enforced: NetworkStatus = {
   reason: "nftables rules drop everything uid 10002 sends except loopback and DNS.",
   proxyEnabled: true,
   proxyPort: 3128,
+  offAvailable: true,
 };
 const advisory: NetworkStatus = {
   enforcement: "advisory",
   reason: "NET_ADMIN is not granted to the container.",
   proxyEnabled: true,
   proxyPort: 3128,
+  offAvailable: true,
 };
 
 const github: NetworkPolicyEntry = {
@@ -64,7 +66,7 @@ const postgres: NetworkForward = {
 
 function mockServices(
   status: NetworkStatus = enforced,
-  mode = "off",
+  mode = "monitor",
   forwards: NetworkForward[] = [postgres],
 ) {
   routeHubs(signalRHook, { "/hubs/work-item": hub });
@@ -136,17 +138,17 @@ describe("Network settings", () => {
   });
 
   test("saves the mode and reverts when the save fails", async () => {
-    mockServices(enforced, "off");
+    mockServices(enforced, "monitor");
     const put = vi
       .spyOn(services.settingsService, "put")
       .mockResolvedValueOnce({ key: services.NetworkSettingKeys.Mode, value: "whitelist" })
       .mockRejectedValueOnce({
         status: 400,
-        message: "network.mode must be off, whitelist or blacklist",
+        message: "network.mode must be off, monitor, whitelist or blacklist",
       });
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
-    await waitFor(() => expect(modeButton("Off").getAttribute("aria-pressed")).toBe("true"));
+    await waitFor(() => expect(modeButton("Monitor").getAttribute("aria-pressed")).toBe("true"));
 
     fireEvent.click(modeButton("Whitelist"));
     await waitFor(() =>
@@ -155,7 +157,7 @@ describe("Network settings", () => {
     expect(modeButton("Whitelist").getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(modeButton("Blacklist"));
-    await screen.findByText(/must be off, whitelist or blacklist/i);
+    await screen.findByText(/must be off, monitor, whitelist or blacklist/i);
     expect(modeButton("Whitelist").getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -316,6 +318,18 @@ describe("Network settings", () => {
     expect(add).not.toHaveBeenCalled();
   });
 
+  test("Enter in an empty host field adds nothing", async () => {
+    mockServices();
+    const add = vi.spyOn(services.networkService, "addEntry");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const host = await screen.findByLabelText("Host pattern");
+    fireEvent.change(host, { target: { value: "   " } });
+    fireEvent.keyDown(host, { key: "Enter" });
+
+    expect(add).not.toHaveBeenCalled();
+  });
+
   test("the host loaded from the log can be widened before it is added", async () => {
     mockServices();
     const add = vi.spyOn(services.networkService, "addEntry").mockResolvedValue({
@@ -354,7 +368,7 @@ describe("Network settings", () => {
   });
 
   test("a forward whose local port will not bind says so on its own row", async () => {
-    mockServices(enforced, "off", [
+    mockServices(enforced, "monitor", [
       { ...postgres, listenError: "Local port 15432 is already in use by something else" },
     ]);
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
@@ -738,5 +752,752 @@ describe("Network settings", () => {
     emit("NetworkPolicyChanged", {});
     await waitFor(() => expect(getEntries).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText("evil.example")).toBeNull());
+  });
+});
+
+describe("Network modes", () => {
+  const modeCard = () => screen.getByText("Filter mode", { selector: "h3" }).closest("section")!;
+  const offWarning = () => screen.queryAllByText(/reach any host/i);
+  const confirmation = () => screen.queryByRole("dialog");
+  const confirmButton = (dialog: HTMLElement) =>
+    within(dialog)
+      .getAllByRole("button")
+      .find((b) => b.textContent !== "Cancel")!;
+
+  const pressed = (name: string) => modeButton(name).getAttribute("aria-pressed") === "true";
+
+  const offUnavailable: NetworkStatus = {
+    ...enforced,
+    offAvailable: false,
+    reason:
+      "nftables rules drop everything uid 10002 sends except loopback, and its DNS is blocked. Network mode Off is unavailable: the group 'ild-net-open' does not exist; agents launched in it have no network.",
+  };
+  const times = (text: string, part: string) => text.split(part).length - 1;
+
+  test("Off cannot be chosen where it is unavailable, and says why once", async () => {
+    mockServices(offUnavailable, "monitor");
+    const put = vi.spyOn(services.settingsService, "put");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    expect(modeButton("Off").hasAttribute("disabled")).toBe(true);
+    const card = modeCard().textContent!;
+    expect(card).toContain("the group 'ild-net-open' does not exist");
+    expect(times(card, "Off is unavailable")).toBe(1);
+    fireEvent.click(modeButton("Off"));
+    expect(confirmation()).toBeNull();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  test("a stored Off that is unavailable warns, once, that its agents have no network", async () => {
+    mockServices(offUnavailable, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Off")).toBe(true));
+
+    expect(times(document.body.textContent!, "have no network")).toBe(1);
+    expect(screen.getByText(/switch to Monitor/i)).toBeTruthy();
+    expect(offWarning()).toHaveLength(0);
+    expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
+  });
+
+  test("offers Off, Monitor, Whitelist and Blacklist", async () => {
+    mockServices();
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    const names = within(screen.getByRole("group", { name: "Filter mode" }))
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(names).toEqual(["Off", "Monitor", "Whitelist", "Blacklist"]);
+  });
+
+  test("each mode explains itself in its own words", async () => {
+    const texts: string[] = [];
+    for (const mode of ["off", "monitor", "whitelist", "blacklist"]) {
+      mockServices(enforced, mode);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+      await waitFor(() => expect(pressed(mode[0].toUpperCase() + mode.slice(1))).toBe(true));
+      texts.push(modeCard().textContent!);
+      cleanup();
+      vi.restoreAllMocks();
+    }
+    expect(new Set(texts).size).toBe(4);
+  });
+
+  test("choosing Off asks first; cancelling saves nothing and keeps the previous mode", async () => {
+    mockServices(enforced, "monitor");
+    const put = vi
+      .spyOn(services.settingsService, "put")
+      .mockResolvedValue({ key: services.NetworkSettingKeys.Mode, value: "off" });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    fireEvent.click(modeButton("Off"));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain(
+      "agents can reach any host, including your LAN and cloud metadata, and only connections through a forward are logged",
+    );
+    expect(put).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(confirmation()).toBeNull());
+    expect(put).not.toHaveBeenCalled();
+    expect(pressed("Monitor")).toBe(true);
+    expect(pressed("Off")).toBe(false);
+  });
+
+  test("confirming Off saves it", async () => {
+    mockServices(enforced, "monitor");
+    const put = vi
+      .spyOn(services.settingsService, "put")
+      .mockResolvedValue({ key: services.NetworkSettingKeys.Mode, value: "off" });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    fireEvent.click(modeButton("Off"));
+    fireEvent.click(confirmButton(await screen.findByRole("dialog")));
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith(services.NetworkSettingKeys.Mode, "off"));
+    expect(put).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(pressed("Off")).toBe(true));
+    expect(confirmation()).toBeNull();
+  });
+
+  test("a refused save of Off reverts to the previous mode and shows the server message", async () => {
+    mockServices(enforced, "whitelist");
+    vi.spyOn(services.settingsService, "put").mockRejectedValue({
+      status: 400,
+      message: "network.mode could not be saved right now",
+    });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Whitelist")).toBe(true));
+
+    fireEvent.click(modeButton("Off"));
+    fireEvent.click(confirmButton(await screen.findByRole("dialog")));
+
+    await screen.findByText(/could not be saved right now/i);
+    expect(pressed("Whitelist")).toBe(true);
+    expect(pressed("Off")).toBe(false);
+  });
+
+  test("the other modes save without a question", async () => {
+    mockServices(enforced, "off");
+    const put = vi
+      .spyOn(services.settingsService, "put")
+      .mockResolvedValue({ key: services.NetworkSettingKeys.Mode, value: "monitor" });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Off")).toBe(true));
+
+    for (const [button, value] of [
+      ["Monitor", "monitor"],
+      ["Whitelist", "whitelist"],
+      ["Blacklist", "blacklist"],
+    ]) {
+      fireEvent.click(modeButton(button));
+      await waitFor(() =>
+        expect(put).toHaveBeenLastCalledWith(services.NetworkSettingKeys.Mode, value),
+      );
+      expect(confirmation()).toBeNull();
+    }
+  });
+
+  test("a warning stays up while Off is the loaded mode, and not before the mode has loaded", async () => {
+    mockServices(enforced, "off");
+    let release: (v: { key: string; value: string }) => void = () => {};
+    const real = vi.mocked(services.settingsService.get).getMockImplementation()!;
+    vi.mocked(services.settingsService.get).mockImplementation((key: string) =>
+      key === services.NetworkSettingKeys.Mode
+        ? new Promise((resolve) => (release = resolve))
+        : real(key),
+    );
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByLabelText("Network rules");
+    expect(offWarning()).toHaveLength(0);
+
+    release({ key: services.NetworkSettingKeys.Mode, value: "off" });
+
+    await waitFor(() => expect(offWarning().length).toBeGreaterThan(0));
+    // It is not the advisory banner's live region.
+    expect(offWarning().every((el) => el.closest("[role=status]") === null)).toBe(true);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  test("the Off warning carries the firewall's own word on whether Off can reach the network", async () => {
+    const offUnavailable = {
+      ...enforced,
+      reason:
+        "Network mode Off is unavailable: it needs no-new-privileges; agents launched in it have no network.",
+    };
+    mockServices(offUnavailable, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const banner = (await screen.findByText(/Network mode is Off/)).closest("div")!;
+    expect(banner.textContent).toMatch(/Off is unavailable/);
+  });
+
+  test.each(["OFF", " Off "])(
+    "a mode stored as %j is read as Off, as the backend reads it",
+    async (stored) => {
+      mockServices(enforced, stored);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+      await waitFor(() => expect(pressed("Off")).toBe(true));
+      expect(offWarning().length).toBeGreaterThan(0);
+    },
+  );
+
+  test("no Off warning in a mode that has a proxy", async () => {
+    mockServices(enforced, "monitor");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    expect(offWarning()).toHaveLength(0);
+  });
+
+  test("says which changes apply to the next agent launch and which to the next connection", async () => {
+    mockServices(enforced, "whitelist");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Whitelist")).toBe(true));
+
+    const card = modeCard().textContent!;
+    expect(card).toMatch(/next agent launch/i);
+    expect(card).toMatch(/running agents keep/i);
+    expect(card).toMatch(/next connection/i);
+  });
+
+  test("without the firewall it says Off and Monitor differ only in logging", async () => {
+    mockServices(advisory, "monitor");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+    expect(modeCard().textContent).toMatch(/differ only in logging/i);
+    cleanup();
+
+    mockServices(enforced, "monitor");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+    expect(modeCard().textContent).not.toMatch(/differ only in logging/i);
+  });
+
+  test.each(["monitor", "off"])(
+    "%s shows no rule in effect and no rule marked as ignored",
+    async (mode) => {
+      mockServices(enforced, mode);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+      await waitFor(() => expect(pressed(mode === "off" ? "Off" : "Monitor")).toBe(true));
+
+      const rules = within(await screen.findByLabelText("Network rules"));
+      expect(rules.getByText(".github.com")).toBeTruthy();
+      expect(screen.queryAllByText("not in effect")).toHaveLength(0);
+      expect(modeCard().textContent).not.toMatch(/\d+ rules? (is|are) in effect/i);
+      const note = screen.getByText("Rules", { selector: "h3" }).closest("section")!.textContent!;
+      expect(note).toMatch(/no rule is in effect/i);
+      expect(note).toMatch(mode === "off" ? /only forwards are logged/i : /logged/i);
+    },
+  );
+});
+
+describe("Editing a network forward", () => {
+  const redis: NetworkForward = {
+    ...postgres,
+    id: "f2",
+    name: "redis",
+    host: "cache",
+    port: 6379,
+    localPort: 16379,
+  };
+  const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+  const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
+  const startEditing = async (name = "postgres") => {
+    fireEvent.click(await screen.findByRole("button", { name: `Edit the ${name} forward` }));
+  };
+  const type = (label: string, value: string) =>
+    fireEvent.change(field(label), { target: { value } });
+
+  test("saves changed values, trimmed and numeric, and shows the server's row in place", async () => {
+    mockServices(enforced, "monitor", [postgres, redis]);
+    const updated: NetworkForward = {
+      ...postgres,
+      name: "primary",
+      host: "db.example",
+      port: 5433,
+      localPort: 15433,
+    };
+    const update = vi.spyOn(services.networkService, "updateForward").mockResolvedValue(updated);
+    vi.spyOn(services.networkService, "getForwards")
+      .mockResolvedValueOnce([postgres, redis])
+      .mockResolvedValue([updated, redis]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    expect(field("Name of the postgres forward").value).toBe("postgres");
+    expect(field("Destination host of the postgres forward").value).toBe("postgres");
+    expect(field("Destination port of the postgres forward").value).toBe("5432");
+    expect(field("Local port of the postgres forward").value).toBe("15432");
+
+    type("Name of the postgres forward", " primary ");
+    type("Destination host of the postgres forward", " db.example ");
+    type("Destination port of the postgres forward", "5433");
+    type("Local port of the postgres forward", "15433");
+    click("Save the postgres forward");
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith("f1", {
+        name: "primary",
+        host: "db.example",
+        port: 5433,
+        localPort: 15433,
+      }),
+    );
+    const table = await forwardTable();
+    expect(await table.findByText("primary")).toBeTruthy();
+    expect(table.getByText("db.example")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit the primary forward" })).toBeTruthy();
+    // The other row is untouched.
+    expect(table.getByText("redis")).toBeTruthy();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the edits and shows the server's reason in the row when a save is refused, then saves the fix", async () => {
+    mockServices(enforced, "monitor", [postgres, redis]);
+    const fixed: NetworkForward = { ...postgres, localPort: 17000 };
+    const update = vi
+      .spyOn(services.networkService, "updateForward")
+      .mockRejectedValueOnce({
+        status: 400,
+        message: "Local port 16379 already forwards to cache:6379",
+      })
+      .mockResolvedValue(fixed);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Local port of the postgres forward", "16379");
+    click("Save the postgres forward");
+
+    const row = within(
+      screen.getByRole("button", { name: "Save the postgres forward" }).closest("tr")!,
+    );
+    expect(await row.findByText(/already forwards to cache:6379/)).toBeTruthy();
+    expect(field("Local port of the postgres forward").value).toBe("16379");
+    expect(screen.getByRole("button", { name: "Save the postgres forward" })).toBeTruthy();
+
+    type("Local port of the postgres forward", "17000");
+    click("Save the postgres forward");
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update).toHaveBeenLastCalledWith("f1", {
+      name: "postgres",
+      host: "postgres",
+      port: 5432,
+      localPort: 17000,
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull());
+    expect(screen.queryByText(/already forwards to cache/)).toBeNull();
+  });
+
+  test("cancel throws the edits away without sending anything, and they do not come back", async () => {
+    mockServices();
+    const update = vi.spyOn(services.networkService, "updateForward");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Name of the postgres forward", "scribble");
+    type("Local port of the postgres forward", "9");
+    click("Cancel editing the postgres forward");
+
+    const table = await forwardTable();
+    expect(table.getByRole("button", { name: "Edit the postgres forward" })).toBeTruthy();
+    expect(table.queryByText("scribble")).toBeNull();
+    expect(screen.queryByLabelText("Name of the postgres forward")).toBeNull();
+
+    await startEditing();
+    expect(field("Name of the postgres forward").value).toBe("postgres");
+    expect(field("Local port of the postgres forward").value).toBe("15432");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test("will not save an incomplete draft, by button or by Enter, and says why for ports", async () => {
+    mockServices();
+    const update = vi.spyOn(services.networkService, "updateForward");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+    const save = () =>
+      screen.getByRole("button", { name: "Save the postgres forward" }) as HTMLButtonElement;
+
+    type("Name of the postgres forward", "   ");
+    expect(save().disabled).toBe(true);
+    fireEvent.keyDown(field("Name of the postgres forward"), { key: "Enter" });
+    type("Name of the postgres forward", "postgres");
+    type("Destination host of the postgres forward", "");
+    expect(save().disabled).toBe(true);
+    type("Destination host of the postgres forward", "postgres");
+    expect(save().disabled).toBe(false);
+
+    type("Local port of the postgres forward", "1e3");
+    expect(save().disabled).toBe(true);
+    expect(screen.getByText(/whole numbers between 1 and 65535/i)).toBeTruthy();
+    fireEvent.keyDown(field("Local port of the postgres forward"), { key: "Enter" });
+    type("Destination port of the postgres forward", "70000");
+    expect(save().disabled).toBe(true);
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test("Enter saves a complete draft, and a second Save while one is in flight sends nothing", async () => {
+    mockServices();
+    let finish: (f: NetworkForward) => void = () => {};
+    const update = vi
+      .spyOn(services.networkService, "updateForward")
+      .mockReturnValue(new Promise<NetworkForward>((resolve) => (finish = resolve)));
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+
+    type("Name of the postgres forward", "primary");
+    fireEvent.keyDown(field("Name of the postgres forward"), { key: "Enter" });
+    fireEvent.keyDown(field("Name of the postgres forward"), { key: "Enter" });
+    const save = screen.getByRole("button", { name: "Save the postgres forward" });
+    fireEvent.click(save);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    finish({ ...postgres, name: "primary" });
+    expect(await (await forwardTable()).findByText("primary")).toBeTruthy();
+  });
+
+  test("a live refresh while a row is being edited does not discard its edits or touch the add form", async () => {
+    mockServices(enforced, "monitor", [postgres, redis]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "draft-add" } });
+
+    await startEditing("redis");
+    type("Name of the redis forward", "cache-edit");
+    const getForwards = vi
+      .spyOn(services.networkService, "getForwards")
+      .mockResolvedValue([postgres, { ...redis, decision: "Blocked" }]);
+    emit("NetworkPolicyChanged", {});
+
+    await waitFor(() => expect(getForwards).toHaveBeenCalled());
+    await (await forwardTable()).findByText("Host not allowed by current mode");
+    expect(field("Name of the redis forward").value).toBe("cache-edit");
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("draft-add");
+    // Only the edited row is in edit mode.
+    expect(screen.queryByLabelText("Name of the postgres forward")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit the postgres forward" })).toBeTruthy();
+  });
+
+  test("a list read that a save overtakes is read again, so a forward added elsewhere still appears", async () => {
+    mockServices(enforced, "monitor", [postgres]);
+    const updated: NetworkForward = { ...postgres, name: "primary" };
+    vi.spyOn(services.networkService, "updateForward").mockResolvedValue(updated);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+
+    let finishRead: (f: NetworkForward[]) => void = () => {};
+    const getForwards = vi
+      .spyOn(services.networkService, "getForwards")
+      .mockReturnValueOnce(new Promise<NetworkForward[]>((resolve) => (finishRead = resolve)))
+      .mockResolvedValue([updated, redis]);
+    emit("NetworkPolicyChanged", {});
+    await waitFor(() => expect(getForwards).toHaveBeenCalled());
+    const reads = getForwards.mock.calls.length;
+    type("Name of the postgres forward", "primary");
+    click("Save the postgres forward");
+
+    expect(await (await forwardTable()).findByText("redis")).toBeTruthy();
+    await act(async () => finishRead([postgres]));
+    expect(getForwards).toHaveBeenCalledTimes(reads + 1);
+    expect((await forwardTable()).getByText("redis")).toBeTruthy();
+    expect((await forwardTable()).getByText("primary")).toBeTruthy();
+  });
+});
+
+describe("Editing a network rule", () => {
+  const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+  const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
+  const startEditing = async (name = "Edit .github.com on the whitelist") => {
+    fireEvent.click(await screen.findByRole("button", { name }));
+  };
+  const type = (label: string, value: string) =>
+    fireEvent.change(field(label), { target: { value } });
+  const rules = () => within(screen.getByLabelText("Network rules"));
+  const saveButton = () =>
+    screen.getByRole("button", { name: "Save the .github.com rule" }) as HTMLButtonElement;
+
+  test("shows the saved rule's values and leaves the other rows and the add form alone", async () => {
+    mockServices();
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing("Edit evil.example on the blacklist");
+
+    expect(field("Host pattern of the evil.example rule").value).toBe("evil.example");
+    expect(field("Scope of the evil.example rule").value).toBe("p1");
+    const kind = within(screen.getByRole("group", { name: "Kind of the evil.example rule" }));
+    expect(kind.getByRole("button", { name: "Block" }).getAttribute("aria-pressed")).toBe("true");
+    expect(kind.getByRole("button", { name: "Allow" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "Save the evil.example rule" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Cancel editing the evil.example rule" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/matches evil\.example exactly/)).toBeTruthy();
+    // The other rule is still read-only, and the add form keeps its own inputs.
+    expect(screen.getByRole("button", { name: "Edit .github.com on the whitelist" })).toBeTruthy();
+    expect(screen.queryByLabelText("Host pattern of the .github.com rule")).toBeNull();
+    expect((screen.getByLabelText("Host pattern") as HTMLInputElement).value).toBe("");
+    expect(screen.getByLabelText("Scope for the new rule")).toBeTruthy();
+  });
+
+  test("saves a changed host, kind and scope, and shows the server's row in place", async () => {
+    mockServices();
+    const updated: NetworkPolicyEntry = {
+      ...github,
+      host: ".example.com",
+      listKind: "Blacklist",
+      aiProviderId: "p1",
+    };
+    const update = vi.spyOn(services.networkService, "updateEntry").mockResolvedValue(updated);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Host pattern of the .github.com rule", "*.Example.com");
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Kind of the .github.com rule" })).getByRole(
+        "button",
+        { name: "Block" },
+      ),
+    );
+    type("Scope of the .github.com rule", "p1");
+    click("Save the .github.com rule");
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith("e1", {
+        host: "*.Example.com",
+        listKind: "Blacklist",
+        aiProviderId: "p1",
+      }),
+    );
+    expect(await rules().findByText(".example.com")).toBeTruthy();
+    expect(rules().queryByText(".github.com")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit .example.com on the blacklist" })).toBeTruthy();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  test("sends null for All providers when a scoped rule is widened", async () => {
+    mockServices();
+    const widened: NetworkPolicyEntry = { ...evil, aiProviderId: null };
+    const update = vi.spyOn(services.networkService, "updateEntry").mockResolvedValue(widened);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing("Edit evil.example on the blacklist");
+    type("Scope of the evil.example rule", "");
+    click("Save the evil.example rule");
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith("e2", {
+        host: "evil.example",
+        listKind: "Blacklist",
+        aiProviderId: null,
+      }),
+    );
+  });
+
+  test("a rule saved so that it no longer matches the active kind filter drops out of view", async () => {
+    mockServices();
+    const flipped: NetworkPolicyEntry = { ...github, listKind: "Blacklist" };
+    vi.spyOn(services.networkService, "updateEntry").mockResolvedValue(flipped);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByText("evil.example");
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Rule kind filter" })).getByRole("button", {
+        name: "Allow",
+      }),
+    );
+
+    await startEditing();
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Kind of the .github.com rule" })).getByRole(
+        "button",
+        { name: "Block" },
+      ),
+    );
+    click("Save the .github.com rule");
+
+    await waitFor(() => expect(rules().queryByText(".github.com")).toBeNull());
+  });
+
+  test("keeps the edits and shows the server's reason in the row when a save is refused, then saves the fix", async () => {
+    mockServices();
+    const fixed: NetworkPolicyEntry = { ...github, host: "api.example.com" };
+    const update = vi
+      .spyOn(services.networkService, "updateEntry")
+      .mockRejectedValueOnce({
+        status: 400,
+        message: "A whitelist rule for evil.example already exists for this scope",
+      })
+      .mockResolvedValue(fixed);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Host pattern of the .github.com rule", "evil.example");
+    click("Save the .github.com rule");
+
+    const row = within(saveButton().closest("tr")!);
+    expect(await row.findByText(/rule for evil\.example already exists/)).toBeTruthy();
+    expect(field("Host pattern of the .github.com rule").value).toBe("evil.example");
+    expect(saveButton().disabled).toBe(false);
+
+    type("Host pattern of the .github.com rule", "api.example.com");
+    click("Save the .github.com rule");
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update).toHaveBeenLastCalledWith("e1", {
+      host: "api.example.com",
+      listKind: "Whitelist",
+      aiProviderId: null,
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull());
+    expect(screen.queryByText(/already exists/)).toBeNull();
+    expect(await rules().findByText("api.example.com")).toBeTruthy();
+  });
+
+  test("cancel throws the edits away without sending anything, and they do not come back", async () => {
+    mockServices();
+    const update = vi.spyOn(services.networkService, "updateEntry");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Host pattern of the .github.com rule", "scribble.example");
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Kind of the .github.com rule" })).getByRole(
+        "button",
+        { name: "Block" },
+      ),
+    );
+    type("Scope of the .github.com rule", "p1");
+    click("Cancel editing the .github.com rule");
+
+    expect(rules().getByText(".github.com")).toBeTruthy();
+    expect(rules().queryByText("scribble.example")).toBeNull();
+    expect(screen.queryByLabelText("Host pattern of the .github.com rule")).toBeNull();
+
+    await startEditing();
+    expect(field("Host pattern of the .github.com rule").value).toBe(".github.com");
+    expect(field("Scope of the .github.com rule").value).toBe("");
+    expect(
+      within(screen.getByRole("group", { name: "Kind of the .github.com rule" }))
+        .getByRole("button", { name: "Allow" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  test("will not save a blank host, by button or by Enter, and Enter saves a non-blank one once", async () => {
+    mockServices();
+    let finish: (e: NetworkPolicyEntry) => void = () => {};
+    const update = vi
+      .spyOn(services.networkService, "updateEntry")
+      .mockReturnValue(new Promise<NetworkPolicyEntry>((resolve) => (finish = resolve)));
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+
+    type("Host pattern of the .github.com rule", "   ");
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.keyDown(field("Host pattern of the .github.com rule"), { key: "Enter" });
+    expect(update).not.toHaveBeenCalled();
+    expect(within(saveButton().closest("tr")!).queryByText(/matches/)).toBeNull();
+
+    type("Host pattern of the .github.com rule", ".github.io");
+    expect(
+      within(saveButton().closest("tr")!).getByText(/matches github\.io and every subdomain/),
+    ).toBeTruthy();
+    fireEvent.keyDown(field("Host pattern of the .github.com rule"), { key: "Enter" });
+    fireEvent.keyDown(field("Host pattern of the .github.com rule"), { key: "Enter" });
+    fireEvent.click(saveButton());
+
+    expect(update).toHaveBeenCalledTimes(1);
+    finish({ ...github, host: ".github.io" });
+    expect(await rules().findByText(".github.io")).toBeTruthy();
+  });
+
+  test("a rule not in effect is drawn faded, but not while it is being edited", async () => {
+    mockServices(enforced, "blacklist");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByText(".github.com");
+    const row = rules().getByText(".github.com").closest("tr")!;
+    expect(row.className).toContain("net-row-idle");
+
+    await startEditing();
+
+    expect(field("Host pattern of the .github.com rule").closest("tr")!.className).not.toContain(
+      "net-row-idle",
+    );
+  });
+
+  test("a live refresh while a rule is being edited does not discard its edits", async () => {
+    mockServices();
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    await startEditing();
+    type("Host pattern of the .github.com rule", "draft.example");
+    const getEntries = vi
+      .spyOn(services.networkService, "getEntries")
+      .mockResolvedValue([github, { ...evil, host: "evil.test" }]);
+    emit("NetworkPolicyChanged", {});
+
+    await waitFor(() => expect(getEntries).toHaveBeenCalled());
+    expect(await rules().findByText("evil.test")).toBeTruthy();
+    expect(field("Host pattern of the .github.com rule").value).toBe("draft.example");
+    expect(screen.queryByLabelText("Host pattern of the evil.test rule")).toBeNull();
+  });
+
+  test("a list read that a save overtakes is read again, so a rule added elsewhere still appears", async () => {
+    mockServices();
+    const updated: NetworkPolicyEntry = { ...github, host: ".github.io" };
+    const added: NetworkPolicyEntry = { ...evil, id: "e3", host: "added.example" };
+    vi.spyOn(services.networkService, "updateEntry").mockResolvedValue(updated);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+
+    let finishRead: (e: NetworkPolicyEntry[]) => void = () => {};
+    const getEntries = vi
+      .spyOn(services.networkService, "getEntries")
+      .mockReturnValueOnce(new Promise<NetworkPolicyEntry[]>((resolve) => (finishRead = resolve)))
+      .mockResolvedValue([updated, evil, added]);
+    emit("NetworkPolicyChanged", {});
+    await waitFor(() => expect(getEntries).toHaveBeenCalled());
+    const reads = getEntries.mock.calls.length;
+    type("Host pattern of the .github.com rule", ".github.io");
+    click("Save the .github.com rule");
+
+    expect(await rules().findByText("added.example")).toBeTruthy();
+    await act(async () => finishRead([github, evil]));
+    expect(getEntries).toHaveBeenCalledTimes(reads + 1);
+    expect(rules().getByText(".github.io")).toBeTruthy();
+    expect(rules().queryByText(".github.com")).toBeNull();
+    expect(rules().getByText("added.example")).toBeTruthy();
+  });
+
+  test("a list read that a removal overtakes does not bring the removed rule back", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "deleteEntry").mockResolvedValue(undefined);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByText("evil.example");
+
+    let finishRead: (e: NetworkPolicyEntry[]) => void = () => {};
+    const getEntries = vi
+      .spyOn(services.networkService, "getEntries")
+      .mockReturnValueOnce(new Promise<NetworkPolicyEntry[]>((resolve) => (finishRead = resolve)))
+      .mockResolvedValue([github]);
+    emit("NetworkPolicyChanged", {});
+    await waitFor(() => expect(getEntries).toHaveBeenCalled());
+    const reads = getEntries.mock.calls.length;
+    click("Remove evil.example from the blacklist");
+
+    await waitFor(() => expect(rules().queryByText("evil.example")).toBeNull());
+    await act(async () => finishRead([github, evil]));
+    expect(getEntries).toHaveBeenCalledTimes(reads + 1);
+    expect(rules().queryByText("evil.example")).toBeNull();
+    expect(rules().getByText(".github.com")).toBeTruthy();
   });
 });

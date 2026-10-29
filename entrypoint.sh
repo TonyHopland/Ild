@@ -24,6 +24,14 @@ AGENT_SCRATCH_DIR="${AGENT_SCRATCH_DIR:-}"
 ORCHESTRATOR_PRIVATE_DIR="${ORCHESTRATOR_PRIVATE_DIR:-}"
 AGENT_READ_DIR="${AGENT_READ_DIR:-}"
 SHARED_GROUP="${SHARED_GROUP:-}"
+# Network mode Off (docs/adr/0019-agent-egress-through-in-container-proxy.md): the group an
+# Off launch runs under, which the egress rules let reach the network directly. Neither the
+# agent's primary group (AGENT_GROUP) nor SHARED_GROUP, and the agent user is not a member
+# of it. Enabled only under no-new-privileges; see resolve_network_open_gid.
+NETWORK_OPEN_GROUP="${NETWORK_OPEN_GROUP:-}"
+# Only install_agent_egress_rules may export it, once its rule is in place: an inherited value
+# would otherwise send Off launches to a group the firewall has no rule for.
+unset ILD_NETWORK_OPEN_GROUP
 RUNTIME_AMBIENT_CAPS="${RUNTIME_AMBIENT_CAPS:-}"
 # Agent egress funnel (docs/adr/0019-agent-egress-through-in-container-proxy.md).
 # When set, the app runs a filtering proxy on 127.0.0.1:ILD_NETWORK_PROXY_PORT as the
@@ -440,51 +448,121 @@ has_cap_net_admin() {
   [ $(( 0x$caps & 4096 )) -ne 0 ]
 }
 
+# Whether this process runs with no_new_privs. The runtime sets it (compose: no-new-privileges;
+# podman, docker and Kubernetes need it set), every descendant inherits it and none can clear it,
+# so a setgid file an Off agent plants can never lend its group to a later process.
+has_no_new_privs() {
+  nnp="$(awk '/^NoNewPrivs:/ {print $2}' "$CAP_STATUS_FILE" 2>/dev/null)"
+  [ "$nnp" = 1 ]
+}
+
+# The gid of NETWORK_OPEN_GROUP, printed only when network mode Off may be offered: nothing
+# when no group is configured, and nothing plus a WARNING on stderr when it is configured but
+# unusable. Unusable means: no-new-privileges is not in effect (a setgid ild-net-open file planted
+# by an Off process could then pass the group to a Whitelist-mode process), the group is missing,
+# or it is the agent's primary group, the shared group or one the agent is a member of (the
+# firewall would then accept traffic from agents that were not launched in Off).
+resolve_network_open_gid() {
+  [ -n "$NETWORK_OPEN_GROUP" ] || return 0
+  problem=""
+  open_gid="$(getent group "$NETWORK_OPEN_GROUP" 2>/dev/null | cut -d: -f3)"
+  if ! has_no_new_privs; then
+    problem="NETWORK_OPEN_GROUP needs no-new-privileges, which is not in effect for this container"
+  elif [ -z "$open_gid" ]; then
+    problem="the group '$NETWORK_OPEN_GROUP' does not exist"
+  elif [ "$open_gid" = "$(id -g "$AGENT_USER" 2>/dev/null)" ]; then
+    problem="the group '$NETWORK_OPEN_GROUP' is the agent's primary group"
+  elif [ "$open_gid" = "$(getent group "$AGENT_GROUP" 2>/dev/null | cut -d: -f3)" ]; then
+    problem="the group '$NETWORK_OPEN_GROUP' is AGENT_GROUP, the group every other agent launch runs under"
+  elif [ -n "$SHARED_GROUP" ] && [ "$open_gid" = "$(getent group "$SHARED_GROUP" 2>/dev/null | cut -d: -f3)" ]; then
+    problem="the group '$NETWORK_OPEN_GROUP' is the shared group"
+  elif id -G "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$open_gid"; then
+    problem="the agent user is a member of '$NETWORK_OPEN_GROUP'"
+  fi
+  if [ -n "$problem" ]; then
+    echo "WARNING: network mode Off is unavailable: $problem" >&2
+    return 0
+  fi
+  echo "$open_gid"
+}
+
 # The agent uid's egress, as a single uid-keyed rule set that carries no domains:
-# loopback (the proxy, ILD's own API for the MCP callback, previews) and DNS are
-# open, everything else is dropped — so a connection that skips the proxy, IP
-# literal or not, goes nowhere. Every allow/deny decision lives in the proxy, which
-# is why editing a list never touches these rules. Idempotent: the table is
-# replaced wholesale, so a restart never stacks a second copy.
+# loopback (the proxy, ILD's own API for the MCP callback, previews) is open, DNS
+# is dropped even on loopback, everything else is dropped — so a connection that
+# skips the proxy, IP literal or not, goes nowhere and the agent looks up no name.
+# Every allow/deny decision lives in the proxy, which is why editing a list never
+# touches these rules. Idempotent: the table is replaced wholesale, so a restart
+# never stacks a second copy.
 install_egress_rules_nft() {
   uid="$1"
+  open_gid="${2:-}"
   # Tab-indented (<<-) so the table's closing brace is not a column-0 line: the
-  # shell tests slice functions out of this file up to their first one.
-  "$NFT_BIN" -f - <<-EOF || return 1
+  # shell tests slice functions out of this file up to their first one. The
+  # optional accept for the open group (network mode Off) sits right after the
+  # other-uid accept, ahead of the DNS drops, so an Off agent is not filtered at all.
+  {
+    cat <<-EOF
 	table inet ild_agent_egress
 	delete table inet ild_agent_egress
 	table inet ild_agent_egress {
 	  chain output {
 	    type filter hook output priority filter; policy accept;
 	    meta skuid != $uid accept
+	EOF
+    [ -z "$open_gid" ] || echo "    meta skuid $uid meta skgid $open_gid accept"
+    cat <<-EOF
+	    udp dport 53 drop
+	    tcp dport 53 drop
 	    oif "lo" accept
-	    udp dport 53 accept
-	    tcp dport 53 accept
 	    counter drop
 	  }
 	}
 	EOF
+  } | "$NFT_BIN" -f - || return 1
 }
 
-# Same rules through legacy iptables, for a kernel or image without nf_tables.
+# Same rules through legacy iptables, for a kernel or image without nf_tables. The open-group
+# accept matches the effective gid only (no --suppl-groups), as the nft one does. A family that
+# fails takes the families already installed down with it: the report is then advisory, and
+# leftover drops would leave an Off agent, which skips the proxy, with no network.
 install_egress_rules_iptables() {
   uid="$1"
+  open_gid="${2:-}"
   installed=0
   for ipt in "$IPTABLES_BIN" "$IP6TABLES_BIN"; do
     command -v "$ipt" >/dev/null 2>&1 || continue
-    if ! "$ipt" -w -N ILD_AGENT_EGRESS 2>/dev/null; then
-      "$ipt" -w -F ILD_AGENT_EGRESS || return 1
+    if ! install_egress_chain_iptables "$ipt" "$uid" "$open_gid"; then
+      remove_egress_rules_iptables "$uid"
+      return 1
     fi
-    if ! "$ipt" -w -C OUTPUT -m owner --uid-owner "$uid" -j ILD_AGENT_EGRESS 2>/dev/null; then
-      "$ipt" -w -I OUTPUT 1 -m owner --uid-owner "$uid" -j ILD_AGENT_EGRESS || return 1
-    fi
-    "$ipt" -w -A ILD_AGENT_EGRESS -o lo -j ACCEPT || return 1
-    "$ipt" -w -A ILD_AGENT_EGRESS -p udp --dport 53 -j ACCEPT || return 1
-    "$ipt" -w -A ILD_AGENT_EGRESS -p tcp --dport 53 -j ACCEPT || return 1
-    "$ipt" -w -A ILD_AGENT_EGRESS -j DROP || return 1
     installed=1
   done
   [ "$installed" = 1 ]
+}
+
+install_egress_chain_iptables() {
+  if ! "$1" -w -N ILD_AGENT_EGRESS 2>/dev/null; then
+    "$1" -w -F ILD_AGENT_EGRESS || return 1
+  fi
+  if ! "$1" -w -C OUTPUT -m owner --uid-owner "$2" -j ILD_AGENT_EGRESS 2>/dev/null; then
+    "$1" -w -I OUTPUT 1 -m owner --uid-owner "$2" -j ILD_AGENT_EGRESS || return 1
+  fi
+  if [ -n "$3" ]; then
+    "$1" -w -A ILD_AGENT_EGRESS -m owner --uid-owner "$2" --gid-owner "$3" -j ACCEPT || return 1
+  fi
+  "$1" -w -A ILD_AGENT_EGRESS -p udp --dport 53 -j DROP || return 1
+  "$1" -w -A ILD_AGENT_EGRESS -p tcp --dport 53 -j DROP || return 1
+  "$1" -w -A ILD_AGENT_EGRESS -o lo -j ACCEPT || return 1
+  "$1" -w -A ILD_AGENT_EGRESS -j DROP || return 1
+}
+
+remove_egress_rules_iptables() {
+  for ipt in "$IPTABLES_BIN" "$IP6TABLES_BIN"; do
+    command -v "$ipt" >/dev/null 2>&1 || continue
+    "$ipt" -w -D OUTPUT -m owner --uid-owner "$1" -j ILD_AGENT_EGRESS 2>/dev/null || true
+    "$ipt" -w -F ILD_AGENT_EGRESS 2>/dev/null || true
+    "$ipt" -w -X ILD_AGENT_EGRESS 2>/dev/null || true
+  done
 }
 
 # Funnel the agent uid through the egress proxy, or say plainly why not. Runs as
@@ -511,9 +589,23 @@ install_agent_egress_rules() {
     return 0
   fi
 
-  if command -v "$NFT_BIN" >/dev/null 2>&1 && install_egress_rules_nft "$agent_uid"; then
+  # The resolver prints the gid, or its warning on stderr; both are captured so the warning can
+  # also go into the reason.
+  open_gid=""
+  open_problem=""
+  resolved="$(resolve_network_open_gid 2>&1)"
+  case "$resolved" in
+    "") ;;
+    *[!0-9]*)
+      echo "$resolved" >&2
+      open_problem="${resolved#WARNING: network mode Off is unavailable: }"
+      ;;
+    *) open_gid="$resolved" ;;
+  esac
+
+  if command -v "$NFT_BIN" >/dev/null 2>&1 && install_egress_rules_nft "$agent_uid" "$open_gid"; then
     tool="nftables"
-  elif install_egress_rules_iptables "$agent_uid"; then
+  elif install_egress_rules_iptables "$agent_uid" "$open_gid"; then
     tool="iptables"
   else
     export ILD_NETWORK_ENFORCEMENT_REASON="NET_ADMIN is granted but neither nftables nor iptables could install the agent egress rules (see the errors above)."
@@ -522,7 +614,13 @@ install_agent_egress_rules() {
   fi
 
   export ILD_NETWORK_ENFORCEMENT=enforced
-  export ILD_NETWORK_ENFORCEMENT_REASON="$tool rules drop everything uid $agent_uid ($AGENT_USER) sends except loopback and DNS, so only the proxy on 127.0.0.1:$ILD_NETWORK_PROXY_PORT reaches the network."
+  export ILD_NETWORK_ENFORCEMENT_REASON="$tool rules drop everything uid $agent_uid ($AGENT_USER) sends except loopback, and its DNS is blocked, so only the proxy on 127.0.0.1:$ILD_NETWORK_PROXY_PORT reaches the network."
+  if [ -n "$open_gid" ]; then
+    export ILD_NETWORK_OPEN_GROUP="$NETWORK_OPEN_GROUP"
+    ILD_NETWORK_ENFORCEMENT_REASON="$ILD_NETWORK_ENFORCEMENT_REASON Agents launched in network mode Off run under group $NETWORK_OPEN_GROUP (gid $open_gid) and reach the network directly, unfiltered."
+  else
+    ILD_NETWORK_ENFORCEMENT_REASON="$ILD_NETWORK_ENFORCEMENT_REASON Network mode Off is unavailable: ${open_problem:-NETWORK_OPEN_GROUP is not set}; agents launched in it have no network."
+  fi
   echo "Agent egress enforced: $ILD_NETWORK_ENFORCEMENT_REASON"
 }
 

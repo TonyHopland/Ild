@@ -14,6 +14,12 @@ public class AgentIsolationEgressTests
     private static readonly string[] ProxyKeys =
         { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY" };
 
+    [Fact]
+    public void No_proxy_stays_the_loopback_set_so_LAN_traffic_goes_through_the_proxy()
+    {
+        Assert.Equal("localhost,127.0.0.1,::1,[::1]", AgentIsolation.EgressNoProxy);
+    }
+
     private static ProcessStartInfo BuildPsi()
     {
         var psi = new ProcessStartInfo("/data/agents/claude-code/versions/v1/node_modules/.bin/claude")
@@ -166,5 +172,17 @@ public class AgentIsolationEgressTests
         var unreported = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), null, null);
         Assert.Equal(NetworkEnforcementStatus.Advisory, unreported.Enforcement);
         Assert.NotEmpty(unreported.Reason);
+    }
+
+    [Fact]
+    public void An_enforced_status_without_a_reported_reason_still_says_why_Off_is_unavailable()
+    {
+        var closed = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null);
+        Assert.False(closed.OffAvailable);
+        Assert.Contains("Off is unavailable", closed.Reason);
+
+        var open = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "ild-net-open");
+        Assert.True(open.OffAvailable);
+        Assert.DoesNotContain("Off", open.Reason);
     }
 }

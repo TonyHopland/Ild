@@ -1,5 +1,6 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Analytics;
 using ILD.Data.DTOs;
@@ -185,8 +186,8 @@ public sealed class ChatServiceTests : IDisposable
         return provider;
     }
 
-    private ChatService NewService(IAgentAdapter adapter)
-        => new(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+    private ChatService NewService(IAgentAdapter adapter, IEgressPolicy? egressPolicy = null)
+        => new(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, egressPolicy: egressPolicy);
 
     /// <summary>
     /// Seed an active (Running) run for <paramref name="workItemId"/> pointing at a
@@ -260,6 +261,34 @@ public sealed class ChatServiceTests : IDisposable
 
         Assert.Equal(new[] { "ild" }, view.Tools);
         Assert.Equal(new[] { "ild" }, adapter.LastContext!.ToolAllowlist);
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Off)]
+    [InlineData(NetworkMode.Whitelist)]
+    public async Task A_chat_turn_launches_in_the_mode_the_policy_reports(NetworkMode mode)
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok()));
+        var svc = NewService(adapter, EgressPolicies.Reporting(mode));
+
+        var view = await svc.StartAsync("alice", provider.Id, null, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(view.Id, Guid.NewGuid(), "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+
+        Assert.Equal(mode, adapter.LastContext!.NetworkMode);
+    }
+
+    [Fact]
+    public async Task A_chat_turn_without_a_policy_launches_proxied_as_Monitor()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok()));
+        var svc = NewService(adapter);
+
+        var view = await svc.StartAsync("alice", provider.Id, null, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(view.Id, Guid.NewGuid(), "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+
+        Assert.Equal(NetworkMode.Monitor, adapter.LastContext!.NetworkMode);
     }
 
     [Fact]

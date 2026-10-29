@@ -171,8 +171,28 @@ public sealed record WorktreePreviewValidationResult(
 public interface IWorktreePreviewService
 {
     Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs a full start and answers once every service has settled. A preview that is
+    /// already running is returned as-is. A start already in progress for the worktree is
+    /// joined rather than repeated: this call ends with it, under its profile and options
+    /// rather than this call's, and a stop ends both.
+    /// </summary>
     Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default);
     Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Begins a full start like <see cref="StartAsync"/> but answers at once with the
+    /// in-progress status while the start continues in the background; follow it with
+    /// <see cref="GetStatusAsync"/>. A missing config, an unknown profile, or preview data
+    /// another work item holds or that is being reset still throws
+    /// <see cref="InvalidOperationException"/> at once. A preview that is already
+    /// running, or already starting (under that start's options, not this call's), is
+    /// returned as-is and nothing new is started. A start that fails later is reported
+    /// by <see cref="GetStatusAsync"/> as state "failed" until the preview or one of its
+    /// services is next started or stopped.
+    /// </summary>
+    Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Starts a single preview service by its configured name, leaving any other
@@ -303,6 +323,8 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task<WorktreePreviewResponse> BeginStartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewResponse> StartServiceAsync(string worktreePath, string serviceName, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();

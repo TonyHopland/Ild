@@ -9,7 +9,7 @@ namespace ILD.Core.Services.Implementations.Network;
 /// <summary>The mode and lists in force at one moment, ready to judge a destination.</summary>
 public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<NetworkPolicyEntry> Entries)
 {
-    public static readonly EgressPolicySnapshot Off = new(NetworkMode.Off, Array.Empty<NetworkPolicyEntry>());
+    public static readonly EgressPolicySnapshot Monitor = new(NetworkMode.Monitor, Array.Empty<NetworkPolicyEntry>());
 
     public NetworkDecision Decide(string host, Guid? aiProviderId)
         => EgressRules.Decide(Mode, Entries, host, aiProviderId);
@@ -31,6 +31,17 @@ public interface IEgressPolicy
 
     /// <summary>Raised by <see cref="Invalidate"/>; the proxy re-judges its open tunnels on it.</summary>
     event Action? Changed;
+}
+
+public static class EgressPolicyExtensions
+{
+    /// <summary>
+    /// The mode a process launched now follows (ADR-0019). Without a policy (a host that runs no
+    /// proxy, a test) it is <see cref="NetworkMode.Monitor"/>: the proxied launch every deployment
+    /// had before Off existed, so a launch that cannot ask never drops its funnel.
+    /// </summary>
+    public static async ValueTask<NetworkMode> LaunchModeAsync(this IEgressPolicy? policy, CancellationToken ct = default)
+        => policy is null ? NetworkMode.Monitor : (await policy.GetAsync(ct)).Mode;
 }
 
 public sealed class EgressPolicy : IEgressPolicy

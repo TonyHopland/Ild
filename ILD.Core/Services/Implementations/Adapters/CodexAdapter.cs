@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
+using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
 using Microsoft.Extensions.DependencyInjection;
@@ -80,7 +81,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[codex-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
+            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             var sessionsDirectory = SessionsDirectory();
             if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId))
@@ -112,7 +113,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             {
                 proc = StartAgentProcess(
                     BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
-                    ctx.Provider.Id, ctx.Environment);
+                    ctx);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -336,9 +337,10 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     /// Where the ILD MCP server, the agent read root and the egress proxy are
     /// configured; the process environment by default.
     /// </param>
+    /// <param name="mode">The execution's network mode; custom servers are given the proxy only when it is proxied.</param>
     public static IReadOnlyList<CodexMcpServer> WriteMcpServers(
-        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null,
-        ILogger? logger = null, IProcessEnvironment? environment = null)
+        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, NetworkMode mode,
+        Guid? chatSessionId = null, ILogger? logger = null, IProcessEnvironment? environment = null)
     {
         logger ??= NullLogger.Instance;
         environment ??= ProcessEnvironment.Current;
@@ -367,7 +369,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             if (customServers.Count == 0)
                 return servers;
 
-            var proxyUrl = AgentIsolation.ResolveEgressProxyUrl(environment.Get(AgentIsolation.EgressProxyPortEnvVar), provider.Id);
+            var (proxyUrl, _) = AgentIsolation.ResolveLaunchNetwork(mode, environment.Get(AgentIsolation.EgressProxyPortEnvVar), null, provider.Id);
             foreach (var server in customServers)
             {
                 if (!ConfigKeyName.IsMatch(server.Name) || dll is null)

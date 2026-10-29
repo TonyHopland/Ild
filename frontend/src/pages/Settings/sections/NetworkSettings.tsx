@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSharedWorkItemHub } from "../../../hooks/useWorkItemHub";
 import {
   aiProviderService,
@@ -16,12 +16,21 @@ import type {
   NetworkPolicyEntry,
   NetworkStatus,
 } from "../../../types";
+import ConfirmModal from "../../../components/ConfirmModal";
 import { NumericSettingField, Segmented, SettingRow, Switch } from "../controls";
+import { AddForwardRow, ForwardTable } from "./NetworkForwards";
+import { AddRuleRow, RuleTable } from "./NetworkRules";
+import { describeError } from "./networkShared";
 
 const MODES: { value: NetworkMode; label: string; help: string }[] = [
   {
     value: "off",
     label: "Off",
+    help: "Agents connect directly to any host and port, with no proxy. Only connections through a forward are logged, and neither list is in effect.",
+  },
+  {
+    value: "monitor",
+    label: "Monitor",
     help: "Every destination is logged and nothing is blocked. Neither list is in effect.",
   },
   {
@@ -55,24 +64,10 @@ function normalizeLogEntry(entry: NetworkLogEntry): NetworkLogEntry {
   return { ...entry, decision: normalizeDecision(entry.decision) };
 }
 
-function isMode(value: string): value is NetworkMode {
-  return value === "off" || value === "whitelist" || value === "blacklist";
-}
-
-function describeError(err: unknown, fallback: string): string {
-  if (err && typeof err === "object" && "message" in err) {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === "string" && message) return message;
-  }
-  return fallback;
-}
-
-/** What a pattern covers, spelled out so a leading dot is not a thing to know. */
-function describePattern(host: string): string {
-  const trimmed = host.trim();
-  if (!trimmed) return "";
-  if (trimmed.startsWith(".")) return `matches ${trimmed.slice(1)} and every subdomain of it`;
-  return `matches ${trimmed} exactly`;
+/** The stored value is kept as sent, so it is read the way the backend reads it: trimmed, any case. */
+function parseMode(value: string): NetworkMode | null {
+  const name = value.trim().toLowerCase();
+  return MODES.find((m) => m.value === name)?.value ?? null;
 }
 
 function coversHost(pattern: string, host: string): boolean {
@@ -114,403 +109,51 @@ export function groupConsecutive(entries: NetworkLogEntry[]): LogGroup[] {
   return groups;
 }
 
-interface RuleTableProps {
-  entries: NetworkPolicyEntry[];
-  providers: AiProvider[];
-  mode: NetworkMode;
-  /** True when a filter is hiding rules, so "none" reads as "none matching". */
-  filtered: boolean;
-  onRemove: (id: string) => Promise<void>;
-}
-
-function RuleTable({ entries, providers, mode, filtered, onRemove }: RuleTableProps) {
-  if (entries.length === 0) {
-    return (
-      <p className="settings-card-note">
-        {filtered ? "No rule matches that filter." : "No rules yet."}
-      </p>
-    );
-  }
-  return (
-    <table className="net-table" aria-label="Network rules">
-      <thead>
-        <tr>
-          <th>Rule</th>
-          <th>Pattern</th>
-          <th>Scope</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {entries.map((entry) => {
-          const kind = entry.listKind === "Whitelist" ? "whitelist" : "blacklist";
-          // With filtering off nothing is in effect, and saying so on every row
-          // is noise; the card says it once instead.
-          const inEffect = mode === "off" || mode === kind;
-          return (
-            <tr key={entry.id} className={inEffect ? "" : "net-row-idle"}>
-              <td>
-                <span className={`net-pill net-pill-${kind}`}>
-                  {entry.listKind === "Whitelist" ? "Allow" : "Block"}
-                </span>
-                {!inEffect && <span className="net-idle-note">not in effect</span>}
-              </td>
-              <td>
-                <span className="net-host">{entry.host}</span>
-                <span className="net-sub">{describePattern(entry.host)}</span>
-              </td>
-              <td className="net-sub">
-                {entry.aiProviderId
-                  ? (providers.find((p) => p.id === entry.aiProviderId)?.name ?? "one provider")
-                  : "All providers"}
-              </td>
-              <td className="net-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void onRemove(entry.id)}
-                  aria-label={`Remove ${entry.host} from the ${kind}`}
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-interface AddRuleRowProps {
-  providers: AiProvider[];
-  /** A host loaded from the log, to be edited before it becomes a rule. */
-  draft: { host: string; kind: NetworkListKind } | null;
-  onAdd: (host: string, kind: NetworkListKind, aiProviderId: string | null) => Promise<void>;
-}
-
-function AddRuleRow({ providers, draft, onAdd }: AddRuleRowProps) {
-  const [host, setHost] = useState("");
-  const [kind, setKind] = useState<NetworkListKind>("Whitelist");
-  const [scope, setScope] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const hostInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!draft) return;
-    setHost(draft.host);
-    setKind(draft.kind);
-    setError(null);
-    hostInput.current?.focus();
-    hostInput.current?.select();
-  }, [draft]);
-
-  const add = async () => {
-    setBusy(true);
-    setError(null);
+/**
+ * A list that is read from the server and edited row by row. A read that
+ * started before an add, save or removal settled must not undo it, so only the
+ * latest read is applied; a change that dropped a read in flight reads again
+ * rather than leave the list without what the dropped read had found.
+ */
+function useGuardedList<T extends { id: string }>(
+  read: () => Promise<T[]>,
+  setItems: React.Dispatch<React.SetStateAction<T[]>>,
+  setError: (message: string | null) => void,
+  failure: string,
+) {
+  const seq = useRef(0);
+  const readPending = useRef(false);
+  const refresh = useCallback(async () => {
+    const mine = ++seq.current;
+    readPending.current = true;
     try {
-      await onAdd(host, kind, scope || null);
-      setHost("");
+      const loaded = await read();
+      if (mine !== seq.current) return;
+      readPending.current = false;
+      setError(null);
+      setItems(loaded);
     } catch (err) {
-      setError(describeError(err, "Failed to add the rule."));
-    } finally {
-      setBusy(false);
+      if (mine !== seq.current) return;
+      readPending.current = false;
+      setError(describeError(err, failure));
     }
+  }, [read, setItems, setError, failure]);
+
+  const change = (next: (prev: T[]) => T[]) => {
+    const readInFlight = readPending.current;
+    ++seq.current;
+    setItems(next);
+    if (readInFlight) void refresh();
   };
 
-  return (
-    <div className="net-add">
-      <div className="net-add-row">
-        <Segmented
-          label="Rule kind"
-          value={kind}
-          onChange={setKind}
-          options={[
-            { value: "Whitelist", label: "Allow" },
-            { value: "Blacklist", label: "Block" },
-          ]}
-        />
-        <input
-          ref={hostInput}
-          type="text"
-          className="settings-input"
-          value={host}
-          onChange={(e) => setHost(e.target.value)}
-          placeholder="api.example.com or .example.com"
-          aria-label="Host pattern"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void add();
-          }}
-        />
-        <select
-          className="settings-input"
-          value={scope}
-          onChange={(e) => setScope(e.target.value)}
-          aria-label="Scope for the new rule"
-        >
-          <option value="">All providers</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => void add()}
-          disabled={busy || host.trim() === ""}
-        >
-          Add rule
-        </button>
-      </div>
-      <p className="settings-row-help">
-        {host.trim()
-          ? describePattern(host)
-          : "A bare host matches exactly; a leading dot covers the domain and every subdomain."}
-        {error && <span className="settings-error"> {error}</span>}
-      </p>
-    </div>
-  );
-}
-
-/**
- * Where a forward stands right now. The local port not being bound outranks
- * everything — nothing reaches the policy through a port that does not answer.
- */
-function forwardState(forward: NetworkForward): {
-  tone: "ok" | "warn" | "blocked";
-  label: string;
-  detail: string;
-} {
-  if (forward.listenError) {
-    return { tone: "warn", label: "Local port unavailable", detail: forward.listenError };
-  }
-  if (forward.decision === "Blocked") {
-    return {
-      tone: "blocked",
-      label: "Host not allowed by current mode",
-      detail: `Connections are answered and refused at once; ${forward.host} is not reachable until the rules allow it.`,
-    };
-  }
   return {
-    tone: "ok",
-    label: "Listening",
-    detail: `Point a client at 127.0.0.1:${forward.localPort}.`,
+    refresh,
+    add: (created: T) =>
+      change((prev) => [...prev.filter((item) => item.id !== created.id), created]),
+    replace: (updated: T) =>
+      change((prev) => prev.map((item) => (item.id === updated.id ? updated : item))),
+    remove: (id: string) => change((prev) => prev.filter((item) => item.id !== id)),
   };
-}
-
-interface ForwardTableProps {
-  forwards: NetworkForward[];
-  onRemove: (id: string) => Promise<void>;
-  onWhitelist: (host: string) => Promise<void>;
-}
-
-function ForwardTable({ forwards, onRemove, onWhitelist }: ForwardTableProps) {
-  if (forwards.length === 0) {
-    return <p className="settings-card-note">No forwards yet.</p>;
-  }
-  return (
-    <table className="net-table" aria-label="Forwards">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Destination</th>
-          <th>Local address</th>
-          <th>State</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {forwards.map((forward) => {
-          const state = forwardState(forward);
-          return (
-            <tr key={forward.id} className={state.tone === "ok" ? "" : "net-row-idle"}>
-              <td>{forward.name}</td>
-              <td>
-                <span className="net-host">
-                  {forward.host}
-                  <span className="net-port">:{forward.port}</span>
-                </span>
-              </td>
-              <td>
-                <span className="net-host">
-                  127.0.0.1<span className="net-port">:{forward.localPort}</span>
-                </span>
-              </td>
-              <td>
-                <span className={`net-decision net-forward-${state.tone}`}>{state.label}</span>
-                <span className="net-sub">{state.detail}</span>
-              </td>
-              <td className="net-actions">
-                {state.tone === "blocked" && (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => void onWhitelist(forward.host)}
-                    aria-label={`Add ${forward.host} to whitelist`}
-                  >
-                    Allow
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void onRemove(forward.id)}
-                  aria-label={`Remove the ${forward.name} forward`}
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-/**
- * A typed port, or null when it is not one — blank, `5432x` and `0x10` all read
- * as null. Digits only: `Number` would take `1e3` and `0x10` as 1000 and 16,
- * sending a port nobody typed.
- */
-function parsePort(value: string): number | null {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) return null;
-  const port = Number(trimmed);
-  return port >= 1 && port <= 65535 ? port : null;
-}
-
-interface AddForwardRowProps {
-  onAdd: (name: string, host: string, port: number, localPort: number) => Promise<void>;
-}
-
-function AddForwardRow({ onAdd }: AddForwardRowProps) {
-  const field = useId();
-  const [name, setName] = useState("");
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("");
-  const [localPort, setLocalPort] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const destination = parsePort(port);
-  const local = parsePort(localPort);
-  const complete =
-    name.trim() !== "" && host.trim() !== "" && destination !== null && local !== null;
-
-  // Enter reaches here past the disabled button, and twice over reaches it while
-  // the first request is still out, so the guard lives with the request rather
-  // than on the control.
-  const add = async () => {
-    if (busy || !complete || destination === null || local === null) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await onAdd(name, host, destination, local);
-      setName("");
-      setHost("");
-      setPort("");
-      setLocalPort("");
-    } catch (err) {
-      setError(describeError(err, "Failed to add the forward."));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onEnter = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") void add();
-  };
-
-  // Only once something has been typed: an empty form is incomplete, not wrong.
-  const portProblem =
-    (port.trim() !== "" && destination === null) || (localPort.trim() !== "" && local === null)
-      ? "Both ports are whole numbers between 1 and 65535."
-      : null;
-
-  return (
-    <div className="net-add">
-      <div className="net-add-row net-forward-add">
-        <div className="net-field">
-          <label className="net-field-label" htmlFor={`${field}-name`}>
-            Name
-          </label>
-          <input
-            id={`${field}-name`}
-            type="text"
-            className="settings-input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={onEnter}
-            placeholder="postgres"
-          />
-        </div>
-        <div className="net-field net-field-destination">
-          <span className="net-field-label" id={`${field}-destination`}>
-            Destination
-          </span>
-          <div className="net-field-pair" role="group" aria-labelledby={`${field}-destination`}>
-            <input
-              type="text"
-              className="settings-input net-host-input"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              onKeyDown={onEnter}
-              placeholder="db.example.com"
-              aria-label="Destination host"
-            />
-            <span className="net-field-sep">:</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              className="settings-input net-port-input"
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              onKeyDown={onEnter}
-              placeholder="5432"
-              aria-label="Destination port"
-            />
-          </div>
-        </div>
-        <div className="net-field net-field-local">
-          <span className="net-field-label" id={`${field}-local`}>
-            Local address
-          </span>
-          <div className="net-field-pair" role="group" aria-labelledby={`${field}-local`}>
-            <span className="net-fixed-host">127.0.0.1</span>
-            <span className="net-field-sep">:</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              className="settings-input net-port-input"
-              value={localPort}
-              onChange={(e) => setLocalPort(e.target.value)}
-              onKeyDown={onEnter}
-              placeholder="15432"
-              aria-label="Local port"
-            />
-          </div>
-        </div>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => void add()}
-          disabled={busy || !complete}
-        >
-          Add forward
-        </button>
-      </div>
-      <p className="settings-row-help">
-        A destination is one host name or IP address — a pattern like <code>.example.com</code>{" "}
-        covers a set and is not somewhere to connect.
-        {portProblem && <span className="settings-error"> {portProblem}</span>}
-        {error && <span className="settings-error"> {error}</span>}
-      </p>
-    </div>
-  );
 }
 
 /**
@@ -522,7 +165,8 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
 export default function NetworkSettings() {
   const { on, off } = useSharedWorkItemHub();
   const [status, setStatus] = useState<NetworkStatus | null>(null);
-  const [mode, setMode] = useState<NetworkMode>("off");
+  const [mode, setMode] = useState<NetworkMode | null>(null);
+  const [confirmingOff, setConfirmingOff] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
   const [entries, setEntries] = useState<NetworkPolicyEntry[]>([]);
   const [forwards, setForwards] = useState<NetworkForward[]>([]);
@@ -543,25 +187,20 @@ export default function NetworkSettings() {
    */
   const [draftHost, setDraftHost] = useState<{ host: string; kind: NetworkListKind } | null>(null);
 
-  const refreshEntries = useCallback(async () => {
-    try {
-      const loaded = await networkService.getEntries();
-      setListError(null);
-      setEntries(loaded);
-    } catch (err) {
-      setListError(describeError(err, "Failed to load the network lists."));
-    }
-  }, []);
-
-  const refreshForwards = useCallback(async () => {
-    try {
-      const loaded = await networkService.getForwards();
-      setForwardError(null);
-      setForwards(loaded);
-    } catch (err) {
-      setForwardError(describeError(err, "Failed to load the forwards."));
-    }
-  }, []);
+  const entryList = useGuardedList(
+    networkService.getEntries,
+    setEntries,
+    setListError,
+    "Failed to load the network lists.",
+  );
+  const forwardList = useGuardedList(
+    networkService.getForwards,
+    setForwards,
+    setForwardError,
+    "Failed to load the forwards.",
+  );
+  const refreshEntries = entryList.refresh;
+  const refreshForwards = forwardList.refresh;
 
   const refreshLog = useCallback(async () => {
     try {
@@ -581,7 +220,7 @@ export default function NetworkSettings() {
     void settingsService
       .get(NetworkSettingKeys.Mode)
       .then((s) => {
-        if (isMode(s.value)) setMode(s.value);
+        setMode(parseMode(s.value));
       })
       .catch(() => {});
     void aiProviderService
@@ -602,7 +241,7 @@ export default function NetworkSettings() {
       void settingsService
         .get(NetworkSettingKeys.Mode)
         .then((s) => {
-          if (isMode(s.value)) setMode(s.value);
+          setMode(parseMode(s.value));
         })
         .catch(() => {});
     };
@@ -637,15 +276,30 @@ export default function NetworkSettings() {
     }
   };
 
+  const chooseMode = (next: NetworkMode) => {
+    if (next === "off" && mode !== "off") setConfirmingOff(true);
+    else void changeMode(next);
+  };
+
   const addEntry = async (host: string, kind: NetworkListKind, aiProviderId: string | null) => {
     const created = await networkService.addEntry({ host, listKind: kind, aiProviderId });
-    setEntries((prev) => [...prev.filter((e) => e.id !== created.id), created]);
+    entryList.add(created);
+  };
+
+  const updateEntry = async (
+    id: string,
+    host: string,
+    kind: NetworkListKind,
+    aiProviderId: string | null,
+  ) => {
+    const updated = await networkService.updateEntry(id, { host, listKind: kind, aiProviderId });
+    entryList.replace(updated);
   };
 
   const removeEntry = async (id: string) => {
     try {
       await networkService.deleteEntry(id);
-      setEntries((prev) => prev.filter((e) => e.id !== id));
+      entryList.remove(id);
     } catch (err) {
       setListError(describeError(err, "Failed to remove the entry."));
     }
@@ -658,13 +312,29 @@ export default function NetworkSettings() {
       port,
       localPort,
     });
-    setForwards((prev) => [...prev.filter((f) => f.id !== created.id), created]);
+    forwardList.add(created);
+  };
+
+  const updateForward = async (
+    id: string,
+    name: string,
+    host: string,
+    port: number,
+    localPort: number,
+  ) => {
+    const updated = await networkService.updateForward(id, {
+      name: name.trim(),
+      host: host.trim(),
+      port,
+      localPort,
+    });
+    forwardList.replace(updated);
   };
 
   const removeForward = async (id: string) => {
     try {
       await networkService.deleteForward(id);
-      setForwards((prev) => prev.filter((f) => f.id !== id));
+      forwardList.remove(id);
     } catch (err) {
       setForwardError(describeError(err, "Failed to remove the forward."));
     }
@@ -688,7 +358,7 @@ export default function NetworkSettings() {
   const promote = async (entry: NetworkLogEntry, kind: NetworkListKind) => {
     try {
       const created = await networkService.addLogEntryToList(entry.id, kind);
-      setEntries((prev) => [...prev.filter((e) => e.id !== created.id), created]);
+      entryList.add(created);
     } catch (err) {
       setListError(describeError(err, "Failed to add the host to the list."));
     }
@@ -735,6 +405,8 @@ export default function NetworkSettings() {
   const ruleFor = (host: string) => entries.find((e) => coversHost(e.host, host));
 
   const activeMode = MODES.find((m) => m.value === mode);
+  const offUnavailable = status?.offAvailable === false;
+  const filtering = mode === "whitelist" || mode === "blacklist";
   const inEffect = entries.filter(
     (e) => (e.listKind === "Whitelist" ? "whitelist" : "blacklist") === mode,
   ).length;
@@ -751,6 +423,20 @@ export default function NetworkSettings() {
           <strong>Advisory mode — agent network limits are not enforced.</strong> {status.reason}
         </div>
       )}
+      {mode === "off" && (
+        <div className="net-banner">
+          <strong>Network mode is Off.</strong>{" "}
+          {offUnavailable ? (
+            <>{status.reason} Switch to Monitor to give agents the proxy back.</>
+          ) : (
+            <>
+              Agents launched in it can reach any host, including your LAN and cloud metadata, and
+              only their connections through a forward are logged.
+              {status?.enforcement === "enforced" && <> {status.reason}</>}
+            </>
+          )}
+        </div>
+      )}
       {listError && <div className="settings-error">{listError}</div>}
 
       <section className="settings-card">
@@ -761,9 +447,14 @@ export default function NetworkSettings() {
           label="Mode"
           help={
             <>
-              {activeMode?.help} A change applies to the agent&apos;s next connection; nothing needs
-              a restart.
-              {mode !== "off" && (
+              {activeMode?.help} Switching to or from Off applies to the next agent launch; running
+              agents keep the network they started with. A change between Monitor, Whitelist and
+              Blacklist, or to a list, applies to the next connection; nothing needs a restart.
+              {status && status.enforcement !== "enforced" && (
+                <> Without the firewall, Off and Monitor differ only in logging.</>
+              )}
+              {offUnavailable && mode !== "off" && <> {status.reason}</>}
+              {filtering && (
                 <>
                   {" "}
                   <strong>{inEffect}</strong> {inEffect === 1 ? "rule is" : "rules are"} in effect.
@@ -776,19 +467,40 @@ export default function NetworkSettings() {
           <Segmented
             label="Filter mode"
             value={mode}
-            onChange={(v) => void changeMode(v)}
-            options={MODES.map((m) => ({ value: m.value, label: m.label }))}
+            onChange={chooseMode}
+            options={MODES.map((m) => ({
+              value: m.value,
+              label: m.label,
+              disabled: m.value === "off" && offUnavailable && mode !== "off",
+            }))}
           />
         </SettingRow>
       </section>
+
+      <ConfirmModal
+        isOpen={confirmingOff}
+        title="Turn the network proxy off?"
+        message="Agents launched from now on connect directly: agents can reach any host, including your LAN and cloud metadata, and only connections through a forward are logged. Agents already running keep the network they started with."
+        confirmText="Turn off"
+        onCancel={() => setConfirmingOff(false)}
+        onConfirm={() => {
+          setConfirmingOff(false);
+          void changeMode("off");
+        }}
+      />
 
       <section className="settings-card">
         <div className="settings-card-header">
           <h3 className="settings-card-title">Rules</h3>
         </div>
+        {mode === "monitor" && (
+          <p className="settings-card-note">
+            Monitor blocks nothing, so no rule is in effect. Every destination is logged.
+          </p>
+        )}
         {mode === "off" && (
           <p className="settings-card-note">
-            Filtering is off, so no rule is in effect. Every destination is logged.
+            Agents bypass the proxy, so no rule is in effect and only forwards are logged.
           </p>
         )}
         <div className="net-toolbar">
@@ -816,6 +528,7 @@ export default function NetworkSettings() {
           providers={providers}
           mode={mode}
           filtered={kindFilter !== "All" || ruleFilter.trim() !== ""}
+          onUpdate={updateEntry}
           onRemove={removeEntry}
         />
         <AddRuleRow providers={providers} draft={draftHost} onAdd={addEntry} />
@@ -835,6 +548,7 @@ export default function NetworkSettings() {
         {forwardError && <div className="settings-error">{forwardError}</div>}
         <ForwardTable
           forwards={forwards}
+          onUpdate={updateForward}
           onRemove={removeForward}
           onWhitelist={whitelistForwardHost}
         />

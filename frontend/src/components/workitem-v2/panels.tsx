@@ -441,18 +441,29 @@ export function PrView({ snapshot }: { snapshot: RemotePrSnapshot }) {
   );
 }
 
-/** Maps a service's raw status to the State column's Stopped/Running/Error label. */
-function serviceState(status: string): { label: "Stopped" | "Running" | "Error"; tone: Tone } {
+/** Maps a service's raw status to the State column's label. */
+function serviceState(status: string): { label: string; tone: Tone } {
   if (status === "running") return { label: "Running", tone: "success" };
-  if (status === "exited" || status === "failed" || status === "error")
-    return { label: "Error", tone: "danger" };
+  if (status === "pending") return { label: "Pending", tone: "muted" };
+  if (status === "starting") return { label: "Starting", tone: "accent" };
+  if (status === "waitingForHealth") return { label: "Waiting for health", tone: "accent" };
+  if (status === "failed") return { label: "Failed", tone: "danger" };
+  if (status === "exited" || status === "error") return { label: "Error", tone: "danger" };
   return { label: "Stopped", tone: "muted" };
 }
+
+/** Statuses of a service that a start has claimed, whose port can no longer be chosen. */
+const PORT_LOCKED_STATUSES = ["pending", "starting", "waitingForHealth", "running"];
+
+/** Whether a full start is still running on the server. */
+const isStartInProgress = (state: string | undefined) =>
+  state === "installing" || state === "starting";
 
 /** The preview as a whole, as the server names its state, in words and a tone. */
 function previewStatePill(state: string): { label: string; tone: Tone } {
   if (state === "running") return { label: "Running", tone: "success" };
   if (state === "stopped") return { label: "Stopped", tone: "muted" };
+  if (state === "installing") return { label: "Installing", tone: "accent" };
   if (state === "starting") return { label: "Starting", tone: "accent" };
   if (state === "error" || state === "failed") return { label: "Error", tone: "danger" };
   return { label: state.charAt(0).toUpperCase() + state.slice(1), tone: "muted" };
@@ -607,6 +618,8 @@ function PreviewServiceTable({
     void detail.handleStartService(service.name, overrides);
   };
 
+  const startInProgress = isStartInProgress(detail.preview?.state);
+
   return (
     <table className="preview-table">
       <thead>
@@ -622,6 +635,7 @@ function PreviewServiceTable({
         {services.map((service) => {
           const state = serviceState(service.status);
           const running = service.status === "running";
+          const portLocked = PORT_LOCKED_STATUSES.includes(service.status);
           const portValue =
             portInputs[service.portAlias] ?? String(service.port ?? service.suggestedPort ?? "");
           const log = logs[service.name];
@@ -634,6 +648,9 @@ function PreviewServiceTable({
                   {service.exitCode != null && (
                     <span className="preview-exit-code"> (exit {service.exitCode})</span>
                   )}
+                  {service.error && (
+                    <div className="preview-message preview-error">{service.error}</div>
+                  )}
                 </td>
                 <td className="preview-cell-name">{service.name}</td>
                 <td data-label="Port">
@@ -645,6 +662,7 @@ function PreviewServiceTable({
                       className="preview-port-input"
                       value={portValue}
                       min={1}
+                      readOnly={portLocked}
                       aria-label={`Port for ${service.name}`}
                       onChange={(e) => onPortChange(service.portAlias, e.target.value)}
                     />
@@ -674,7 +692,7 @@ function PreviewServiceTable({
                           ? void detail.handleStopService(service.name)
                           : startService(service)
                       }
-                      disabled={detail.previewLoading}
+                      disabled={startInProgress || detail.previewStarting || detail.previewLoading}
                     >
                       {running ? "Stop" : "Start"}
                     </button>
@@ -907,7 +925,7 @@ function RepoEnvEditor({
 
 /** Preview tab: worktree preview state, services and start/stop controls. */
 export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail: WorkItemDetail }) {
-  const { preview, previewLoading, previewError } = detail;
+  const { preview, previewLoading, previewStarting, previewError } = detail;
 
   // User-edited port overrides keyed by port alias. Only touched aliases live
   // here so untouched services keep the backend's automatic port allocation.
@@ -925,6 +943,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
   // A preview whose services have all exited is still up as far as the server is
   // concerned, and holds its repository's kept preview data, so it can be stopped too.
   const anyStarted = preview?.services?.some((service) => service.status !== "stopped") ?? false;
+  const startInProgress = isStartInProgress(preview?.state);
   const primaryPreviewUrl = useMemo(
     () => preview?.services?.find((service) => !!service.publicUrl)?.publicUrl ?? null,
     [preview],
@@ -960,6 +979,12 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
         )}
         {preview?.profileName && <span className="run-time">profile: {preview.profileName}</span>}
       </div>
+      {preview?.install && (
+        <div className="preview-message">
+          Installing step {preview.install.index} of {preview.install.total}:{" "}
+          <code>{preview.install.command}</code>
+        </div>
+      )}
       {previewError && <div className="preview-message preview-error">{previewError}</div>}
       {!previewError && preview?.message && (
         <div className="preview-message">{preview.message}</div>
@@ -991,12 +1016,12 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
             Open App
           </a>
         )}
-        {!anyRunning && preview?.configured !== false && (
+        {!anyRunning && !startInProgress && preview?.configured !== false && (
           <button
             type="button"
             className="btn btn-sm btn-primary"
             onClick={startPreview}
-            disabled={previewLoading}
+            disabled={previewLoading || previewStarting}
           >
             Start Preview
           </button>
@@ -1006,7 +1031,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
             type="button"
             className="btn btn-sm btn-secondary"
             onClick={() => void detail.handleStopPreview()}
-            disabled={previewLoading}
+            disabled={previewLoading || previewStarting}
           >
             Stop Preview
           </button>

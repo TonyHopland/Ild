@@ -16,13 +16,14 @@ public sealed class SettingsControllerTests : IDisposable
     private readonly Mock<IPrStatusPoller> _prPoller = new();
     private readonly Mock<IEgressPolicy> _policy = new();
     private readonly Mock<INetworkNotifier> _networkNotifier = new();
+    private NetworkEnforcementStatus _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "agent-open");
 
     public void Dispose() => _db.Dispose();
 
     private SettingsController Build()
         => new(_db.Settings, _notifier.Object, _scheduler.Object, _schedulerSettings.Object,
             _prPoller.Object, _policy.Object, _networkNotifier.Object,
-            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment());
+            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _enforcement);
 
     private Task<IActionResult> Put(string key, string value)
         => Build().Put(key, new SettingsController.UpdateSettingRequest { Value = value }, default);
@@ -215,5 +216,73 @@ public sealed class SettingsControllerTests : IDisposable
         var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
         var rows = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(all)!;
         Assert.Equal(expected, rows.Single(r => r["key"] == key)["value"]);
+    }
+
+    [Theory]
+    [InlineData("off")]
+    [InlineData("monitor")]
+    [InlineData("whitelist")]
+    [InlineData("blacklist")]
+    [InlineData(" Monitor ")]
+    [InlineData("OFF")]
+    public async Task The_network_mode_accepts_each_of_its_four_values_in_any_case_and_applies_it_to_the_next_connection(string sent)
+    {
+        var result = await Put(AppSettingKeys.NetworkMode, sent);
+
+        Assert.Equal(sent, StatedValue(result));
+        Assert.Equal(sent, await Stored(AppSettingKeys.NetworkMode));
+        _policy.Verify(p => p.Invalidate(), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("allow")]
+    [InlineData("")]
+    [InlineData("on")]
+    public async Task A_network_mode_outside_the_four_is_refused_naming_all_four_and_stores_nothing(string sent)
+    {
+        var result = await Put(AppSettingKeys.NetworkMode, sent);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<BadRequestObjectResult>(result).Value);
+        var error = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json)!["error"];
+        foreach (var mode in new[] { "off", "monitor", "whitelist", "blacklist" })
+            Assert.Contains($"'{mode}'", error);
+        Assert.Null(await Stored(AppSettingKeys.NetworkMode));
+    }
+
+    [Fact]
+    public async Task With_nothing_stored_the_network_mode_reads_monitor_and_the_migration_record_is_hidden_and_read_only()
+    {
+        Assert.Equal("monitor", StatedValue(await Build().Get(AppSettingKeys.NetworkMode, TestContext.Current.CancellationToken)));
+
+        await _db.Settings.UpsertAsync(ILD.Data.Migrations.NetworkModeMonitorMigrator.MarkerKey, "done", TestContext.Current.CancellationToken);
+        var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
+        var rows = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(all)!;
+        Assert.Equal("monitor", rows.Single(r => r["key"] == AppSettingKeys.NetworkMode)["value"]);
+        Assert.DoesNotContain(rows, r => r["key"] == ILD.Data.Migrations.NetworkModeMonitorMigrator.MarkerKey);
+
+        Assert.IsType<NotFoundObjectResult>(await Put(ILD.Data.Migrations.NetworkModeMonitorMigrator.MarkerKey, "x"));
+        Assert.Equal("done", await Stored(ILD.Data.Migrations.NetworkModeMonitorMigrator.MarkerKey));
+    }
+
+    [Fact]
+    public async Task Off_is_refused_and_nothing_stored_when_the_firewall_would_leave_an_off_agent_without_network()
+    {
+        _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", "no open group");
+
+        var result = await Put(AppSettingKeys.NetworkMode, "off");
+
+        var json = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<BadRequestObjectResult>(result).Value);
+        Assert.Contains("no open group", json);
+        Assert.Null(await Stored(AppSettingKeys.NetworkMode));
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+        Assert.Equal("monitor", StatedValue(await Put(AppSettingKeys.NetworkMode, "monitor")));
+    }
+
+    [Fact]
+    public async Task Off_is_accepted_without_an_open_group_when_the_firewall_is_not_enforced()
+    {
+        _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "advisory", null);
+
+        Assert.Equal("off", StatedValue(await Put(AppSettingKeys.NetworkMode, "off")));
     }
 }

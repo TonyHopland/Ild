@@ -446,9 +446,10 @@ Three things follow that are worth knowing when you write a profile:
   environment before your command runs: both of its database connection strings,
   `ILD_SECRET_KEY`, `ILD_SESSION_TOKEN_PEPPER`, `ILD_PASSWORD`, `ILD_USERNAME`,
   the API tokens it uses to reach itself and the WorkItem Server, and anything
-  you have named in `ILD_AGENT_ENV_DENYLIST`. It also removes the six variables
-  describing its own uid topology (`ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
-  `ILD_AGENT_SCRATCH_ROOT`, `ILD_ORCHESTRATOR_PRIVATE_ROOT`, `ILD_AGENT_READ_ROOT`), which describe the
+  you have named in `ILD_AGENT_ENV_DENYLIST`. It also removes the variables
+  describing its own uid topology (`ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_SHARED_GROUP`,
+  `ILD_NETWORK_OPEN_GROUP`, `ILD_AGENT_HOME`, `ILD_AGENT_SCRATCH_ROOT`,
+  `ILD_ORCHESTRATOR_PRIVATE_ROOT`, `ILD_AGENT_READ_ROOT`), which describe the
   ILD process and are wrong for anything else. Everything else is inherited as
   before. This matters even if your app reads none of those names, because your
   _shell command_ still ran with them in `env` — one debug `printenv`, a crash
@@ -636,13 +637,14 @@ Set as build args (e.g. in `.env` consumed by `docker compose build`):
 | `AGENT_UID`       | uid of the lower-trust `agent` user the coding agent runs as (default 10002)  |
 | `AGENT_GID`       | gid of that user (default 10002)                                              |
 | `SHARED_GID`      | gid of the `ild-agents` group shared by both users (default 10003)            |
+| `NET_OPEN_GID`    | gid of the `ild-net-open` group network mode `off` runs under (default 10004)  |
 
 ### Agent uid isolation
 
 The orchestrator and the coding-agent CLI run as **two different users** — `ild`
 and `agent` — so the agent cannot read the orchestrator's memory or its private
 files. See [ADR-0014](adr/0014-agent-uid-isolation.md) for the design. The
-`AGENT_UID`/`AGENT_GID`/`SHARED_GID` build args only matter if those ids collide
+`AGENT_UID`/`AGENT_GID`/`SHARED_GID`/`NET_OPEN_GID` build args only matter if those ids collide
 with something else on your host for a bind-mounted volume.
 
 The split is controlled at runtime by `AGENT_USER`. Setting it to an empty string
@@ -721,8 +723,8 @@ channel. It also carries the Azure Artifacts credential provider, pinned by
 ### Agent network limits
 
 The **Network** section of Settings limits which hosts the coding agent may
-reach: a whitelist, a blacklist, a mode toggle (`off` / `whitelist` /
-`blacklist`, default `off`, stored as the `network.mode` app setting) and a log
+reach: a whitelist, a blacklist, a mode toggle (`off` / `monitor` /
+`whitelist` / `blacklist`, default `monitor`, stored as the `network.mode` app setting) and a log
 of every destination the agent asked for, each line with **Add to whitelist** /
 **Add to blacklist**. The same section declares **forwards**, the way anything
 speaking raw TCP gets out at all — see
@@ -736,11 +738,49 @@ it. Matching ignores case and a trailing dot, and an IP literal matches exactly.
 An entry is either global or scoped to one AI provider, in which case it applies
 only to launches made for that provider. In `whitelist` mode a connection is
 allowed only if a matching whitelist entry applies to it; in `blacklist` mode it
-is blocked only if a matching blacklist entry does; `off` logs everything and
+is blocked only if a matching blacklist entry does; `monitor` logs everything and
 blocks nothing. Edits apply to the agent's **next connection** — no restart, and
 a host that is newly blacklisted has its open connections reset.
 
-Everything the agent runs is pointed at the proxy through `HTTP_PROXY`,
+**`off` is not a filter, it is no proxy.** Agents launched in `off` connect
+directly, to any host and any port, and only what they send through a forward is
+logged; that is the mode for tools that ignore `HTTP(S)_PROXY` or speak something
+other than HTTP (SSH, gRPC, UDP, QUIC). With no proxy there is no list and no DNS
+block, so an `off` agent can also reach your LAN and cloud metadata. Settings asks you to
+confirm it and shows a warning while it is active.
+
+- **Upgrading renames the old `off`.** Before `monitor` existed, `off` meant "log
+  everything and block nothing". On upgrade a stored `off` becomes `monitor`,
+  once, so your log keeps working; an `off` you choose afterwards is the new one.
+  A database restored from a backup taken before the upgrade is migrated the same
+  way on the next restart. An unrecognised stored value is treated as `monitor`.
+- **Switching to or from `off` applies to the next agent launch.** Running agents
+  and preview services keep the network they started with; a preview service
+  follows the new mode once it is started again. Changes between `monitor`, `whitelist` and
+  `blacklist`, and list edits, apply to the next connection. Previews, Cmd nodes
+  and the provider terminal follow the mode when they start; git run for the
+  agent, chat repository clones and writes to agent-visible files never use the
+  proxy.
+- **Under an enforced firewall, `off` needs `no-new-privileges`.** The firewall
+  lets an `off` agent through by its group (`ILD_NETWORK_OPEN_GROUP`, set from
+  `NETWORK_OPEN_GROUP`, `ild-net-open` in the image), and `no-new-privileges`
+  keeps a setgid file in that group from lending it to other processes. Compose
+  sets it; on podman, docker and Kubernetes set `--security-opt=no-new-privileges`
+  or `allowPrivilegeEscalation: false`. Without it an `off` agent would have no
+  network, so Settings refuses to switch to `off`. Without `NET_ADMIN` there is no
+  firewall (advisory), so `off` is always available and differs from `monitor`
+  only in that connections not through a forward go unlogged. The status `offAvailable` and `reason` say which
+  applies.
+
+LAN and private hosts (self-hosted git, a local model server, cloud metadata at
+`169.254.169.254`) go through the proxy like any other host: the mode and lists
+judge them and the Network Log records them. `monitor` and `blacklist` let
+agents reach them; only `whitelist` keeps agents off your LAN and cloud metadata,
+since a blacklist entry blocks only the names and literals it lists, not other
+names that resolve to the same address. The proxy resolves each host once and
+connects to the addresses it resolved.
+
+Everything the agent runs, except in `off`, is pointed at the proxy through `HTTP_PROXY`,
 `HTTPS_PROXY` and `ALL_PROXY` (both spellings), with loopback on `NO_PROXY`
 (`localhost`, `127.0.0.1`, `::1` and `[::1]`, since some clients match IPv6
 loopback only in brackets) so the agent's MCP server still reaches ILD's own

@@ -91,13 +91,15 @@ public static class AppSettingKeys
     public const int DefaultSessionMaxDays = 90;
 
     /// <summary>
-    /// How the egress proxy judges an agent connection: <c>off</c> records every
-    /// destination and allows it, <c>whitelist</c> allows only listed hosts,
+    /// How the egress proxy judges an agent connection: <c>monitor</c> records every
+    /// destination and allows it, <c>off</c> launches agents without the proxy at all (nothing
+    /// is recorded; connections that were proxied before the switch are judged as
+    /// <c>monitor</c>), <c>whitelist</c> allows only listed hosts,
     /// <c>blacklist</c> blocks only listed hosts. The lists themselves live in
     /// <c>NetworkPolicyEntries</c>, not in a setting value.
     /// </summary>
     public const string NetworkMode = "network.mode";
-    public const string DefaultNetworkMode = "off";
+    public const string DefaultNetworkMode = "monitor";
 
     /// <summary>
     /// Days a destination stays in the network log before the retention sweeper

@@ -281,6 +281,51 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_forward_moved_to_another_local_port_stops_answering_on_the_old_one_and_answers_on_the_new_one()
+    {
+        var bound = new ConcurrentDictionary<TcpListener, (Socket Socket, int Port)>();
+        _forwarder!.AcceptClient = (listener, ct) =>
+        {
+            bound.GetOrAdd(listener, l => (l.Server, ((IPEndPoint)l.LocalEndpoint).Port));
+            return listener.AcceptTcpClientAsync(ct);
+        };
+        var forward = await DeclareAsync();
+        var oldPort = forward.LocalPort;
+        using (var first = await DialAsync(oldPort))
+            Assert.Equal("on the old port", await EchoAsync(first, "on the old port"));
+        var newPort = FreePort();
+
+        await _db.NetworkForwards.UpdateForwardAsync(forward.Id, forward.Name, forward.Host, forward.Port, newPort, TestContext.Current.CancellationToken);
+        await _forwarder.ReconcileAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(oldPort, _forwarder.ListeningPorts);
+        Assert.Contains(newPort, _forwarder.ListeningPorts);
+        Assert.Contains(bound.Values, b => b.Port == oldPort && b.Socket.SafeHandle.IsClosed);
+        using var client = await DialAsync(newPort);
+        Assert.Equal("on the new port", await EchoAsync(client, "on the new port"));
+    }
+
+    [Fact]
+    public async Task A_renamed_forward_keeps_its_listener_and_the_connection_open_through_it()
+    {
+        var bound = new ConcurrentDictionary<TcpListener, Socket>();
+        _forwarder!.AcceptClient = (listener, ct) =>
+        {
+            bound.GetOrAdd(listener, l => l.Server);
+            return listener.AcceptTcpClientAsync(ct);
+        };
+        var forward = await DeclareAsync();
+        using var open = await DialAsync(forward.LocalPort);
+        Assert.Equal("before", await EchoAsync(open, "before"));
+
+        await _db.NetworkForwards.UpdateForwardAsync(forward.Id, "renamed", forward.Host, forward.Port, forward.LocalPort, TestContext.Current.CancellationToken);
+        await _forwarder.ReconcileAsync(TestContext.Current.CancellationToken);
+
+        Assert.All(bound.Values, socket => Assert.False(socket.SafeHandle.IsClosed));
+        Assert.Equal("after", await EchoAsync(open, "after"));
+    }
+
+    [Fact]
     public async Task A_local_port_already_in_use_is_reported_on_that_row_while_every_other_forward_keeps_serving()
     {
         var squatter = new TcpListener(IPAddress.Loopback, 0);

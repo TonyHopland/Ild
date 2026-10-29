@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A starting preview shows each service come online live, the install step it is on, and any failing service right away.**
+- **Edit a network rule or forward in place instead of removing and re-adding it.**
+- **A new Off network mode lets agents connect directly to any host and port, without the proxy.**
+
+### Changed
+
+- **The network mode that logged every connection and blocked nothing is now called Monitor.** An existing Off setting becomes Monitor on upgrade.
+
+### Security
+
+- **Under the firewall, coding agents outside Off can no longer look up host names themselves; only connections through the proxy resolve.**
+
 ### Fixed
 
 - **A chat no longer looks finished while its next reply is still running.**

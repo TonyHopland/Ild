@@ -1,3 +1,5 @@
+using ILD.Data.Enums;
+
 namespace ILD.Data.DTOs;
 
 public record AgentExecutionContext(
@@ -37,5 +39,9 @@ public record AgentExecutionContext(
     IReadOnlyDictionary<string, string>? Environment = null,
     // No tools at all and no MCP servers, whatever ToolAllowlist says; check
     // the provider type's AgentAdapterTraits.SupportsNoTools first.
-    bool NoTools = false
+    bool NoTools = false,
+    // The network mode in force when this execution was launched; every process the
+    // adapter starts for it follows it (ADR-0019). A site that forgets it launches
+    // proxied, as before the Off mode existed.
+    NetworkMode NetworkMode = NetworkMode.Monitor
 );
