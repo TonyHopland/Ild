@@ -221,7 +221,7 @@ try
 
             var internalAllowRemoved = await ILD.Data.Migrations.NetworkInternalAllowMigrator.MigrateAsync(dbContext);
             if (internalAllowRemoved > 0)
-                Log.Information("Deleted the retired network.internalAllow setting");
+                Log.Information("Deleted a retired network setting");
 
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also

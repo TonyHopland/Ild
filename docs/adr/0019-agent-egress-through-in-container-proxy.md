@@ -215,7 +215,7 @@ degradation is never silent.
 
 ## Amendment (2026-10): no private-address block
 
-The proxy briefly refused any destination that resolved to a private, loopback or link-local address, and an `internalAllow` setting lifted that for chosen hosts. It is removed. It overrode the lists' plain meaning: a whitelisted LAN host was refused until it was listed a second time, and the modes no longer said what they did.
+The proxy briefly refused any destination that resolved to a private, loopback or link-local address, and an allow setting lifted that for chosen hosts. It is removed. It overrode the lists' plain meaning: a whitelisted LAN host was refused until it was listed a second time, and the modes no longer said what they did.
 
 - **LAN destinations are judged like any other.** The mode and lists decide, and the Network Log records the decision. `NO_PROXY` stays loopback-only and the firewall still drops non-loopback agent traffic, so a LAN connection cannot skip the proxy.
 - **The proxy still resolves a host once and dials the addresses it resolved,** and a host the resolver rejects is logged and refused.
