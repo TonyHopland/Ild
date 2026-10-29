@@ -3,7 +3,7 @@
 // preferences exactly as the user chose them, and clamped to the viewport only
 // when drawn: a bubble dragged to a corner, or a panel sized on a wide monitor,
 // stays on-screen while the window is small and goes back to where it was put
-// when the window grows again. Whether the chat list is open is kept here too.
+// when the window grows again. Whether the chat list is open, and how wide, is kept here too.
 
 import { MOBILE_QUERY } from "../hooks/useIsMobile";
 import { PreferenceKeys, getPreference, setPreference } from "../utils/userPreferences";
@@ -165,4 +165,33 @@ export function loadSidebarOpen(panelWidth: number): boolean {
 
 export function saveSidebarOpen(open: boolean): void {
   setPreference(SIDEBAR_OPEN_KEY, JSON.stringify(open));
+}
+
+/** The two places the chat list sits beside a chat, each with room of its own. */
+export type SidebarPlace = "bubble" | "page";
+
+export const MIN_SIDEBAR_WIDTH = 240; // 15rem
+export const MIN_CHAT_WIDTH = 320; // 20rem — what the open chat keeps beside a widened list
+export const SIDEBAR_WIDTH_STEP = 16; // 1rem — one arrow key press
+/** The widths the stylesheets give the list until the user resizes it. */
+export const DEFAULT_SIDEBAR_WIDTH: Record<SidebarPlace, number> = { bubble: 240, page: 288 }; // 15rem, 18rem
+const SIDEBAR_WIDTH_KEYS: Record<SidebarPlace, string> = {
+  bubble: PreferenceKeys.ChatSidebarWidthBubble,
+  page: PreferenceKeys.ChatSidebarWidthPage,
+};
+
+/** Constrain a requested list width to the minimum and what leaves the chat its width. */
+export function clampSidebarWidth(width: number, containerWidth: number): number {
+  return clamp(width, MIN_SIDEBAR_WIDTH, containerWidth - MIN_CHAT_WIDTH);
+}
+
+/** The list width the user chose, unclamped, or `null` when never resized. Clamp it when drawing. */
+export function loadSidebarWidth(place: SidebarPlace): number | null {
+  const stored = readJson(SIDEBAR_WIDTH_KEYS[place]);
+  return typeof stored === "number" && Number.isFinite(stored) ? stored : null;
+}
+
+/** Keep a width, or with `null` forget it so the list is back at its default. */
+export function saveSidebarWidth(place: SidebarPlace, width: number | null): void {
+  setPreference(SIDEBAR_WIDTH_KEYS[place], JSON.stringify(width));
 }

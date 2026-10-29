@@ -211,6 +211,7 @@ function ChatBubbleFrame() {
       shown={chatEnabled && open}
       covered={chatCovered}
       sidebarShown={sidebarOpen}
+      sidebarPlace="bubble"
       onChatShown={foldNarrowList}
     >
       {({ title, error, sidebar, content }) => {
