@@ -1150,4 +1150,29 @@ describe("Editing a network forward", () => {
     expect(screen.queryByLabelText("Name of the postgres forward")).toBeNull();
     expect(screen.getByRole("button", { name: "Edit the postgres forward" })).toBeTruthy();
   });
+
+  test("a list read that a save overtakes is read again, so a forward added elsewhere still appears", async () => {
+    mockServices(enforced, "monitor", [postgres]);
+    const updated: NetworkForward = { ...postgres, name: "primary" };
+    vi.spyOn(services.networkService, "updateForward").mockResolvedValue(updated);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await startEditing();
+
+    let finishRead: (f: NetworkForward[]) => void = () => {};
+    const getForwards = vi
+      .spyOn(services.networkService, "getForwards")
+      .mockReturnValueOnce(new Promise<NetworkForward[]>((resolve) => (finishRead = resolve)))
+      .mockResolvedValue([updated, redis]);
+    emit("NetworkPolicyChanged", {});
+    await waitFor(() => expect(getForwards).toHaveBeenCalled());
+    const reads = getForwards.mock.calls.length;
+    type("Name of the postgres forward", "primary");
+    click("Save the postgres forward");
+
+    expect(await (await forwardTable()).findByText("redis")).toBeTruthy();
+    finishRead([postgres]);
+    expect(getForwards).toHaveBeenCalledTimes(reads + 1);
+    expect((await forwardTable()).getByText("redis")).toBeTruthy();
+    expect((await forwardTable()).getByText("primary")).toBeTruthy();
+  });
 });

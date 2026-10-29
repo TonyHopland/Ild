@@ -738,17 +738,22 @@ export default function NetworkSettings() {
   }, []);
 
   // A read that started before a save settled must not overwrite the saved row,
-  // so only the latest read is applied.
+  // so only the latest read is applied; `readPending` makes the save read again
+  // rather than leave the list without what the dropped read had found.
   const forwardsSeq = useRef(0);
+  const readPending = useRef(false);
   const refreshForwards = useCallback(async () => {
     const seq = ++forwardsSeq.current;
+    readPending.current = true;
     try {
       const loaded = await networkService.getForwards();
       if (seq !== forwardsSeq.current) return;
+      readPending.current = false;
       setForwardError(null);
       setForwards(loaded);
     } catch (err) {
       if (seq !== forwardsSeq.current) return;
+      readPending.current = false;
       setForwardError(describeError(err, "Failed to load the forwards."));
     }
   }, []);
@@ -869,8 +874,10 @@ export default function NetworkSettings() {
       port,
       localPort,
     });
+    const readInFlight = readPending.current;
     ++forwardsSeq.current;
     setForwards((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
+    if (readInFlight) void refreshForwards();
   };
 
   const removeForward = async (id: string) => {

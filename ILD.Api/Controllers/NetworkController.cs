@@ -165,6 +165,11 @@ public class NetworkController : ControllerBase
         {
             forward = await _forwards.UpdateForwardAsync(id, name, host, request.Port, request.LocalPort, ct);
         }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Deleted between the load and the save.
+            return NotFound();
+        }
         catch (DbUpdateException)
         {
             // The unique index caught what the read above could not: two saves racing.
