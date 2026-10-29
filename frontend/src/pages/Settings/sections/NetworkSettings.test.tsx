@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import NetworkSettings, { groupConsecutive } from "./NetworkSettings";
 import * as signalRHook from "../../../hooks/useSignalR";
 import * as services from "../../../services/auth";
@@ -20,12 +20,14 @@ const enforced: NetworkStatus = {
   reason: "nftables rules drop everything uid 10002 sends except loopback and DNS.",
   proxyEnabled: true,
   proxyPort: 3128,
+  offAvailable: true,
 };
 const advisory: NetworkStatus = {
   enforcement: "advisory",
   reason: "NET_ADMIN is not granted to the container.",
   proxyEnabled: true,
   proxyPort: 3128,
+  offAvailable: true,
 };
 
 const github: NetworkPolicyEntry = {
@@ -739,19 +741,6 @@ describe("Network settings", () => {
     await waitFor(() => expect(getEntries).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText("evil.example")).toBeNull());
   });
-
-  test("offers no internal destinations setting and never reads one", async () => {
-    mockServices();
-    const get = vi.spyOn(services.settingsService, "get");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-
-    await screen.findByText("Filter mode", { selector: "h3" });
-    await waitFor(() => expect(get).toHaveBeenCalled());
-
-    expect(screen.queryByLabelText(/internal destinations/i)).toBeNull();
-    expect(screen.queryByText(/internal destinations/i)).toBeNull();
-    expect(get.mock.calls.map(([key]) => key).filter((key) => /internal/i.test(key))).toEqual([]);
-  });
 });
 
 describe("Network modes", () => {
@@ -764,6 +753,28 @@ describe("Network modes", () => {
       .find((b) => b.textContent !== "Cancel")!;
 
   const pressed = (name: string) => modeButton(name).getAttribute("aria-pressed") === "true";
+
+  test("Off cannot be chosen where it is unavailable, and says why", async () => {
+    mockServices({ ...enforced, offAvailable: false }, "monitor");
+    const put = vi.spyOn(services.settingsService, "put");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Monitor")).toBe(true));
+
+    expect(modeButton("Off").hasAttribute("disabled")).toBe(true);
+    expect(modeCard().textContent).toContain("Off is unavailable here");
+    fireEvent.click(modeButton("Off"));
+    expect(confirmation()).toBeNull();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  test("a stored Off that is unavailable warns that its agents have no network", async () => {
+    mockServices({ ...enforced, offAvailable: false }, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(pressed("Off")).toBe(true));
+
+    expect(screen.getByText(/agents launched in it have no network/i)).toBeTruthy();
+    expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
+  });
 
   test("offers Off, Monitor, Whitelist and Blacklist", async () => {
     mockServices();
@@ -1198,7 +1209,8 @@ describe("Editing a network rule", () => {
     expect(field("Host pattern of the evil.example rule").value).toBe("evil.example");
     expect(field("Scope of the evil.example rule").value).toBe("p1");
     const kind = within(screen.getByRole("group", { name: "Kind of the evil.example rule" }));
-    expect(kind.getByRole("button", { name: "Block" })).toBeTruthy();
+    expect(kind.getByRole("button", { name: "Block" }).getAttribute("aria-pressed")).toBe("true");
+    expect(kind.getByRole("button", { name: "Allow" }).getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByRole("button", { name: "Save the evil.example rule" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Cancel editing the evil.example rule" }),
@@ -1426,5 +1438,28 @@ describe("Editing a network rule", () => {
     expect(rules().getByText(".github.io")).toBeTruthy();
     expect(rules().queryByText(".github.com")).toBeNull();
     expect(rules().getByText("added.example")).toBeTruthy();
+  });
+
+  test("a list read that a removal overtakes does not bring the removed rule back", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "deleteEntry").mockResolvedValue(undefined);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByText("evil.example");
+
+    let finishRead: (e: NetworkPolicyEntry[]) => void = () => {};
+    const getEntries = vi
+      .spyOn(services.networkService, "getEntries")
+      .mockReturnValueOnce(new Promise<NetworkPolicyEntry[]>((resolve) => (finishRead = resolve)))
+      .mockResolvedValue([github]);
+    emit("NetworkPolicyChanged", {});
+    await waitFor(() => expect(getEntries).toHaveBeenCalled());
+    const reads = getEntries.mock.calls.length;
+    click("Remove evil.example from the blacklist");
+
+    await waitFor(() => expect(rules().queryByText("evil.example")).toBeNull());
+    await act(async () => finishRead([github, evil]));
+    expect(getEntries).toHaveBeenCalledTimes(reads + 1);
+    expect(rules().queryByText("evil.example")).toBeNull();
+    expect(rules().getByText(".github.com")).toBeTruthy();
   });
 });

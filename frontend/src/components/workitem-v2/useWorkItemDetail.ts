@@ -384,12 +384,18 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   // Port overrides are keyed by the service's port alias and map onto the
   // start request's portOverrides; an empty map starts with the suggested ports.
+  // The start runs on in the background: its progress, and a failure, arrive as
+  // PreviewStateChanged pushes rather than on a request held open for minutes.
   const handleStartPreview = useCallback(
     async (portOverrides?: Record<string, number>) => {
       if (!workItem) return;
       const hasOverrides = portOverrides && Object.keys(portOverrides).length > 0;
       await writePreview(
-        () => workItemService.startPreview(workItem.id, hasOverrides ? { portOverrides } : {}),
+        () =>
+          workItemService.startPreview(
+            workItem.id,
+            hasOverrides ? { portOverrides, wait: false } : { wait: false },
+          ),
         "Failed to start preview.",
         setPreviewStarting,
       );

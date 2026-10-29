@@ -90,6 +90,21 @@ async function mountWithStoppedPreview() {
 }
 
 describe("useWorkItemDetail preview start progress", () => {
+  test("a start does not wait for the preview to settle; it shows the server's first progress", async () => {
+    const { result } = await mountWithStoppedPreview();
+    const start = vi
+      .spyOn(workItemService, "startPreview")
+      .mockResolvedValue(preview("installing"));
+
+    await act(async () => {
+      await result.current.handleStartPreview();
+    });
+
+    expect(start).toHaveBeenCalledWith("wi-1", { wait: false });
+    expect(result.current.previewStarting).toBe(false);
+    expect(result.current.preview?.state).toBe("installing");
+  });
+
   test("a progress event during a start re-reads quietly and the busy flag stays the start's own", async () => {
     const { result, getPreview, changed } = await mountWithStoppedPreview();
     const start = deferred<WorktreePreview>();

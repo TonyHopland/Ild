@@ -290,7 +290,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(NetworkDecision.Allowed, Assert.Single(Body<List<ForwardView>>(await controller.GetForwards(TestContext.Current.CancellationToken))).Decision);
     }
 
-
     private async Task<ForwardView> SeedForwardAsync(NetworkController controller, string name = "postgres", string host = "postgres", int port = 5432, int localPort = 15432)
     {
         var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(
@@ -421,6 +420,7 @@ public sealed class NetworkControllerTests : IDisposable
 
         await Assert.ThrowsAsync<DbUpdateException>(() => _db.NetworkForwards.UpdateForwardAsync(b.Id, "b", "b.example", 2, 15432, ct));
     }
+
     [Fact]
     public async Task Deleting_a_forward_invalidates_the_policy()
     {
@@ -444,6 +444,17 @@ public sealed class NetworkControllerTests : IDisposable
 
         Assert.Equal("advisory", status["enforcement"].ToString());
         Assert.Equal("NET_ADMIN was not granted", status["reason"].ToString());
+        Assert.Equal("True", status["offAvailable"].ToString());
+    }
+
+    [Fact]
+    public void Status_reports_off_unavailable_under_the_firewall_without_an_open_group()
+    {
+        var enforced = Build(NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null));
+        var open = Build(NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "agent-open"));
+
+        Assert.Equal("False", Body<Dictionary<string, object>>(enforced.GetStatus())["offAvailable"].ToString());
+        Assert.Equal("True", Body<Dictionary<string, object>>(open.GetStatus())["offAvailable"].ToString());
     }
 
     private sealed record UpdatedEntryView(Guid Id, string Host, NetworkListKind ListKind, Guid? AiProviderId, DateTime CreatedAt);
@@ -608,6 +619,37 @@ public sealed class NetworkControllerTests : IDisposable
             NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
 
         var result = await controller.UpdateEntry(Guid.NewGuid(), Rule(), TestContext.Current.CancellationToken);
+
+        Assert.IsType<NotFoundResult>(result);
+        AssertNothingInvalidated();
+    }
+
+    [Fact]
+    public async Task The_unique_index_refusing_a_forward_save_is_answered_like_a_taken_port()
+    {
+        var store = new Mock<INetworkForwardStore>();
+        store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DbUpdateException("unique"));
+        var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
+            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+
+        var result = await controller.UpdateForward(Guid.NewGuid(), Forward(localPort: 15432), TestContext.Current.CancellationToken);
+
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Contains("15432 is already forwarded", Body<Dictionary<string, string>>(bad)["error"]);
+        AssertNothingInvalidated();
+    }
+
+    [Fact]
+    public async Task A_forward_deleted_between_the_load_and_the_save_is_not_found()
+    {
+        var store = new Mock<INetworkForwardStore>();
+        store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
+        var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
+            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+
+        var result = await controller.UpdateForward(Guid.NewGuid(), Forward(), TestContext.Current.CancellationToken);
 
         Assert.IsType<NotFoundResult>(result);
         AssertNothingInvalidated();

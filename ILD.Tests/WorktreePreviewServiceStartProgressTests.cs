@@ -259,6 +259,59 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
         Assert.Equal(1, Lines(worktree, "launches.txt"));
     }
 
+    [Fact]
+    public async Task A_background_start_still_installing_counts_as_a_running_preview()
+    {
+        var service = BuildService();
+        var (started, go) = (Fifo("started"), Fifo("go"));
+        var worktree = Worktree("wt-a", [$"printf x > '{started}'; cat '{go}' > /dev/null"], [Web]);
+
+        await service.BeginStartAsync(worktree, Options, Ct);
+        await WaitUntilOpenedAsync(started);
+
+        Assert.True(service.IsPreviewRunning(worktree));
+        Assert.True(service.AnyPreviewRunning());
+
+        await ReleaseAsync(go);
+        await Until(service, worktree, s => s.State == "running");
+    }
+
+    [Fact]
+    public async Task Stopping_a_background_start_tears_down_what_it_launched_and_leaves_it_stopped()
+    {
+        var health = new GatedHealth();
+        var service = BuildService(health);
+        var worktree = Worktree("wt-a", [], [Web with { HealthPath = "/never" }]);
+
+        await service.BeginStartAsync(worktree, Options, Ct);
+        var waiting = await Until(service, worktree, s => Row(s, "web").Status == "waitingForHealth");
+        var pid = Row(waiting, "web").ProcessId!.Value;
+
+        var stopped = await service.StopAsync(worktree, Ct);
+
+        Assert.Equal("stopped", stopped.State);
+        Assert.False(IsAlive(pid));
+        Assert.False(service.IsPreviewRunning(worktree));
+        Assert.Equal("stopped", (await Until(service, worktree, s => s.State != "starting")).State);
+    }
+
+    [Fact]
+    public async Task Stopping_a_blocking_start_fails_it_with_a_stopped_message()
+    {
+        var service = BuildService();
+        var (started, go) = (Fifo("started"), Fifo("go"));
+        var worktree = Worktree("wt-a", [$"printf x > '{started}'; cat '{go}' > /dev/null"], [Web]);
+
+        var start = service.StartAsync(worktree, Options, Ct);
+        await WaitUntilOpenedAsync(started);
+        await service.StopAsync(worktree, Ct);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => start);
+        Assert.Contains("stopped", failure.Message);
+        Assert.Equal(0, Lines(worktree, "launches.txt"));
+        Assert.False(service.IsPreviewRunning(worktree));
+    }
+
     // --- services ---
 
     [Fact]

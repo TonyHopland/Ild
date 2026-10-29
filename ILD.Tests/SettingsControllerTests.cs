@@ -16,13 +16,14 @@ public sealed class SettingsControllerTests : IDisposable
     private readonly Mock<IPrStatusPoller> _prPoller = new();
     private readonly Mock<IEgressPolicy> _policy = new();
     private readonly Mock<INetworkNotifier> _networkNotifier = new();
+    private NetworkEnforcementStatus _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "agent-open");
 
     public void Dispose() => _db.Dispose();
 
     private SettingsController Build()
         => new(_db.Settings, _notifier.Object, _scheduler.Object, _schedulerSettings.Object,
             _prPoller.Object, _policy.Object, _networkNotifier.Object,
-            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment());
+            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _enforcement);
 
     private Task<IActionResult> Put(string key, string value)
         => Build().Put(key, new SettingsController.UpdateSettingRequest { Value = value }, default);
@@ -264,13 +265,24 @@ public sealed class SettingsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task The_retired_internal_allow_key_is_an_unknown_setting()
+    public async Task Off_is_refused_and_nothing_stored_when_the_firewall_would_leave_an_off_agent_without_network()
     {
-        Assert.IsType<NotFoundResult>(await Build().Get("network.internalAllow", TestContext.Current.CancellationToken));
-        Assert.IsType<NotFoundObjectResult>(await Put("network.internalAllow", "10.0.0.0/8"));
-        Assert.Null(await Stored("network.internalAllow"));
+        _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", "no open group");
 
-        var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
-        Assert.DoesNotContain("network.internalAllow", all);
+        var result = await Put(AppSettingKeys.NetworkMode, "off");
+
+        var json = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<BadRequestObjectResult>(result).Value);
+        Assert.Contains("no open group", json);
+        Assert.Null(await Stored(AppSettingKeys.NetworkMode));
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+        Assert.Equal("monitor", StatedValue(await Put(AppSettingKeys.NetworkMode, "monitor")));
+    }
+
+    [Fact]
+    public async Task Off_is_accepted_without_an_open_group_when_the_firewall_is_not_enforced()
+    {
+        _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "advisory", null);
+
+        Assert.Equal("off", StatedValue(await Put(AppSettingKeys.NetworkMode, "off")));
     }
 }

@@ -745,8 +745,9 @@ a host that is newly blacklisted has its open connections reset.
 **`off` is not a filter, it is no proxy.** Agents launched in `off` connect
 directly, to any host and any port, and nothing is logged; that is the mode for
 tools that ignore `HTTP(S)_PROXY` or speak something other than HTTP (SSH, gRPC,
-UDP, QUIC). It is also outside the DNS block: an `off` agent can reach your LAN and cloud metadata. Settings asks you
-to confirm it and shows a warning while it is active.
+UDP, QUIC). With no proxy there is no log, no list and no DNS block, so an
+`off` agent can also reach your LAN and cloud metadata. Settings asks you to
+confirm it and shows a warning while it is active.
 
 - **Upgrading renames the old `off`.** Before `monitor` existed, `off` meant "log
   everything and block nothing". On upgrade a stored `off` becomes `monitor`,
@@ -765,8 +766,9 @@ to confirm it and shows a warning while it is active.
   keeps a setgid file in that group from lending it to other processes. Compose
   sets it; on podman, docker and Kubernetes set `--security-opt=no-new-privileges`
   or `allowPrivilegeEscalation: false`. Without it, or without `NET_ADMIN`, `off`
-  is unavailable: agents launched in it have no network (enforced) or differ from
-  `monitor` only in logging (advisory), and the status `reason` says which.
+  is unavailable. Under an enforced firewall its agents would have no network, so
+  Settings refuses to switch to it; advisory, it differs from `monitor` only in
+  logging. The status `reason` says which.
 
 LAN and private hosts (self-hosted git, a local model server, cloud metadata at
 `169.254.169.254`) go through the proxy like any other host: the mode and lists

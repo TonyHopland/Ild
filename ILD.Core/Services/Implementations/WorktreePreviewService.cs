@@ -204,6 +204,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             // The service is being disposed; the start has already torn down what it launched.
         }
+        catch (InvalidOperationException) when (pending.Progress.Stopping.IsCancellationRequested)
+        {
+            // Stopped on purpose; the stop has the start's teardown to report.
+        }
         catch (Exception ex)
         {
             // The failure is what get_preview reports; this is for the operator's log.
@@ -262,6 +266,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var (normalized, options, loaded, profileName, profile, progress) =
             (pending.Normalized, pending.Options, pending.Loaded, pending.ProfileName, pending.Profile, pending.Progress);
         var registered = KeyValuePair.Create(normalized, progress);
+        var callerToken = cancellationToken;
+        using var stoppable = CancellationTokenSource.CreateLinkedTokenSource(callerToken, progress.Stopping);
+        cancellationToken = stoppable.Token;
 
         PreviewDataClaims.Lease? lease = null;
         try
@@ -272,6 +279,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             if (_starts.TryRemove(registered))
                 await PublishAsync(progress.WorkItemId);
+            ThrowIfStopped(progress, callerToken);
             throw;
         }
 
@@ -329,6 +337,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             if (_starts.TryRemove(registered))
                 await PublishAsync(progress.WorkItemId);
+            ThrowIfStopped(progress, callerToken);
             throw;
         }
         catch (Exception ex)
@@ -444,6 +453,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     public async Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeWorktreePath(worktreePath);
+        if (_starts.TryGetValue(normalized, out var starting) && starting.InProgress)
+            starting.Stop();
 
         await _gate.WaitAsync(cancellationToken);
         try
@@ -763,10 +774,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             return false;
 
         var normalized = Path.GetFullPath(worktreePath);
-        return _runtimes.ContainsKey(normalized);
+        return _runtimes.ContainsKey(normalized)
+            || (_starts.TryGetValue(normalized, out var start) && start.InProgress);
     }
 
-    public bool AnyPreviewRunning() => !_runtimes.IsEmpty;
+    public bool AnyPreviewRunning() => !_runtimes.IsEmpty || _starts.Values.Any(start => start.InProgress);
 
     /// <summary>
     /// The live process list of the preview running for <paramref name="worktreePath"/>,
@@ -1712,6 +1724,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    private static void ThrowIfStopped(StartProgress progress, CancellationToken callerToken)
+    {
+        if (progress.Stopping.IsCancellationRequested && !callerToken.IsCancellationRequested)
+            throw new InvalidOperationException("The preview was stopped before it finished starting.");
+    }
+
     private void DropFinishedStart(string normalized)
     {
         if (_starts.TryGetValue(normalized, out var start) && !start.InProgress)
@@ -2246,7 +2264,23 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-        await process.WaitForExitAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // Already exited.
+            }
+
+            throw;
+        }
 
         return new CommandResult(process.ExitCode, await stdoutTask, await stderrTask);
     }
@@ -2264,6 +2298,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private sealed class StartProgress
     {
         private readonly object _writers = new();
+        private readonly CancellationTokenSource _stop = new();
         private volatile WorktreePreviewResponse _snapshot;
 
         public StartProgress(WorktreePreviewResponse initial, string? workItemId)
@@ -2277,6 +2312,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public WorktreePreviewResponse Snapshot => _snapshot;
 
         public bool InProgress => _snapshot.State is "installing" or "starting";
+
+        public CancellationToken Stopping => _stop.Token;
+
+        public void Stop() => _stop.Cancel();
 
         public void Update(Action<WorktreePreviewResponse> change)
         {
