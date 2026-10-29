@@ -19,6 +19,8 @@ export const PreferenceKeys = {
   ChatPanelSize: "chat.panel-size",
   ChatPanelPosition: "chat.panel-position",
   ChatSidebarOpen: "chat.sidebar-open",
+  ChatSidebarWidthBubble: "chat.sidebar-width.bubble",
+  ChatSidebarWidthPage: "chat.sidebar-width.page",
 } as const;
 
 /**

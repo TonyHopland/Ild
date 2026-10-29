@@ -107,6 +107,7 @@ export default function Chat({ view = "chat" }: { view?: "chat" | "schedules" })
       shown={!schedules}
       covered={false}
       sidebarShown
+      sidebarPlace="page"
       onActiveChatChange={schedules ? undefined : onActiveChatChange}
       routesStartedChat
       onChatShown={schedules ? showStartForm : undefined}

@@ -1,9 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { chatService } from "../services/auth";
 import type { ChatSessionSummary } from "../types";
 import { formatRelativeTime } from "../utils/relativeTime";
 import Icon from "./Icon";
 import { RenameForm, UnreadDot, useTitleEdit, type RenameChat } from "./ChatRename";
+import {
+  DEFAULT_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  SIDEBAR_WIDTH_STEP,
+  clampSidebarWidth,
+  loadSidebarWidth,
+  saveSidebarWidth,
+  type SidebarPlace,
+} from "./chatPlacement";
 
 const SEARCH_DEBOUNCE_MS = 300;
 const CLOCK_TICK_MS = 60_000;
@@ -220,11 +230,97 @@ function ChatSessionRow({
 }
 
 /**
+ * The width of a list the user can resize, and the handle props that do it. The
+ * chosen width is kept as chosen and clamped to the container only when drawn;
+ * `drawn` is undefined until the user has resized, so the stylesheet's default holds.
+ */
+function useSidebarWidth(place: SidebarPlace, resizable: boolean) {
+  const handleRef = useRef<HTMLDivElement | null>(null);
+  const [chosen, setChosen] = useState(() => loadSidebarWidth(place));
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const endDrag = useRef<(() => void) | null>(null);
+
+  // The container is what the list and the open chat share: the handle's parent.
+  useLayoutEffect(() => {
+    const container = handleRef.current?.parentElement;
+    if (!resizable || !container) return;
+    const measure = () => setContainerWidth(container.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [resizable]);
+
+  // The handle going away mid-drag (unmount, or the list now filling the panel) ends the drag unsaved.
+  useEffect(() => () => endDrag.current?.(), [resizable]);
+
+  const drawn = !resizable
+    ? undefined
+    : (dragWidth ?? (chosen === null ? undefined : clampSidebarWidth(chosen, containerWidth)));
+  const current = drawn ?? DEFAULT_SIDEBAR_WIDTH[place];
+
+  const choose = (width: number | null) => {
+    setChosen(width);
+    saveSidebarWidth(place, width);
+  };
+
+  const startDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    endDrag.current?.();
+    const startX = e.clientX;
+    let width = current;
+    const onMove = (move: PointerEvent) => {
+      width = clampSidebarWidth(current + move.clientX - startX, containerWidth);
+      setDragWidth(width);
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      endDrag.current = null;
+      setDragWidth(null);
+    };
+    const onUp = () => {
+      stop();
+      if (width !== current) choose(width);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    endDrag.current = stop;
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const step =
+      e.key === "ArrowRight" ? SIDEBAR_WIDTH_STEP : e.key === "ArrowLeft" ? -SIDEBAR_WIDTH_STEP : 0;
+    if (!step) return;
+    e.preventDefault();
+    choose(clampSidebarWidth(current + step, containerWidth));
+  };
+
+  const handleProps = {
+    ref: handleRef,
+    className: `chat-sidebar-handle${dragWidth === null ? "" : " is-dragging"}`,
+    role: "separator",
+    "aria-orientation": "vertical" as const,
+    "aria-label": "Resize chat list",
+    "aria-valuenow": current,
+    "aria-valuemin": MIN_SIDEBAR_WIDTH,
+    "aria-valuemax": clampSidebarWidth(Infinity, containerWidth),
+    tabIndex: 0,
+    onPointerDown: startDrag,
+    onDoubleClick: () => choose(null),
+    onKeyDown,
+  };
+  return { drawn, handleProps };
+}
+
+/**
  * The user's chats beside (or, in a narrow panel, instead of) the open chat:
  * starred ones first, each group in the history's last-activity order, filtered
  * by the search box. Its search text goes when it closes.
  */
 export default function ChatSidebar({
+  place,
   history,
   currentChatId,
   full,
@@ -239,6 +335,8 @@ export default function ChatSidebar({
   extras,
   scheduleMarks = false,
 }: {
+  /** Which stored width the list uses when the user resizes it. */
+  place: SidebarPlace;
   history: ChatSessionSummary[];
   currentChatId: string | null;
   /** Fills the panel rather than sitting beside the chat. */
@@ -256,6 +354,9 @@ export default function ChatSidebar({
   /** Whether chats a schedule started carry a mark naming it; the bubble's list has no room for one. */
   scheduleMarks?: boolean;
 }) {
+  const isMobile = useIsMobile();
+  const resizable = !full && !isMobile;
+  const { drawn, handleProps } = useSidebarWidth(place, resizable);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   // The ids the open confirmation asks about, fixed when it opened.
@@ -353,120 +454,127 @@ export default function ChatSidebar({
   }, [selecting, history.length]);
 
   return (
-    <aside className={`chat-sidebar${full ? " chat-sidebar-full" : ""}`} aria-label="Chats">
-      <button type="button" className="btn btn-primary" onClick={onNewChat}>
-        New chat
-      </button>
-      {extras}
-      <input
-        className="chat-input chat-sidebar-search"
-        type="search"
-        placeholder="Search chats…"
-        aria-label="Search chats"
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          setConfirmDelete(null);
-        }}
-      />
-      {history.length > 0 && (
-        <div className="chat-history-head">
-          {!selecting ? (
-            <button
-              type="button"
-              className="chat-link-btn"
-              onClick={() => {
-                setSelecting(true);
-                setMenuFor(null);
-              }}
-            >
-              Select
-            </button>
-          ) : confirmDelete ? (
-            <span
-              className="chat-history-confirm"
-              role="alertdialog"
-              aria-label={`Delete ${confirmDelete.length} ${confirmDelete.length === 1 ? "chat" : "chats"}?`}
-            >
-              Delete {confirmDelete.length} {confirmDelete.length === 1 ? "chat" : "chats"}? This
-              can't be undone.
-              <button
-                type="button"
-                className="chat-link-btn chat-danger"
-                onClick={() => {
-                  exitSelecting();
-                  onDeleteMany(confirmDelete);
-                }}
-              >
-                Delete
-              </button>
+    <>
+      <aside
+        className={`chat-sidebar${full ? " chat-sidebar-full" : ""}`}
+        aria-label="Chats"
+        style={drawn === undefined ? undefined : { width: drawn }}
+      >
+        <button type="button" className="btn btn-primary" onClick={onNewChat}>
+          New chat
+        </button>
+        {extras}
+        <input
+          className="chat-input chat-sidebar-search"
+          type="search"
+          placeholder="Search chats…"
+          aria-label="Search chats"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setConfirmDelete(null);
+          }}
+        />
+        {history.length > 0 && (
+          <div className="chat-history-head">
+            {!selecting ? (
               <button
                 type="button"
                 className="chat-link-btn"
-                onClick={() => setConfirmDelete(null)}
+                onClick={() => {
+                  setSelecting(true);
+                  setMenuFor(null);
+                }}
               >
-                Cancel
+                Select
               </button>
-            </span>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="chat-link-btn chat-danger"
-                disabled={count === 0}
-                onClick={() => setConfirmDelete(checkedIds)}
+            ) : confirmDelete ? (
+              <span
+                className="chat-history-confirm"
+                role="alertdialog"
+                aria-label={`Delete ${confirmDelete.length} ${confirmDelete.length === 1 ? "chat" : "chats"}?`}
               >
-                Delete ({count})
-              </button>
-              <button type="button" className="chat-link-btn" onClick={exitSelecting}>
-                Cancel
-              </button>
-              {/* Last, so it lines up with the rows' checkboxes at their ends. */}
-              <label className="chat-history-select-all">
-                <input
-                  type="checkbox"
-                  ref={(el) => {
-                    if (el) el.indeterminate = someChecked;
+                Delete {confirmDelete.length} {confirmDelete.length === 1 ? "chat" : "chats"}? This
+                can't be undone.
+                <button
+                  type="button"
+                  className="chat-link-btn chat-danger"
+                  onClick={() => {
+                    exitSelecting();
+                    onDeleteMany(confirmDelete);
                   }}
-                  aria-label="Select all"
-                  checked={allChecked}
-                  disabled={rows.length === 0}
-                  onChange={toggleAll}
-                />
-              </label>
-            </>
-          )}
-        </div>
-      )}
-      {term && rows.length === 0 ? (
-        <p className="chat-muted">
-          {!answer ? "Searching…" : answer.ids ? "No chats match" : "Message search failed"}
-        </p>
-      ) : (
-        <ul className="chat-history-list">
-          {rows.map((c) => (
-            <ChatSessionRow
-              key={c.id}
-              chat={c}
-              current={c.id === currentChatId}
-              full={full}
-              now={now}
-              menuOpen={menuFor === c.id}
-              onMenu={onMenu}
-              onOpen={() => onOpen(c.id)}
-              onDelete={() => onDelete(c.id)}
-              renameChat={renameChat}
-              renaming={renamesInFlight.has(c.id)}
-              onFavorite={() => onFavorite(c.id, !c.isFavorite)}
-              starring={favoritesInFlight.has(c.id)}
-              scheduleMark={scheduleMarks}
-              selecting={selecting}
-              checked={selected.has(c.id)}
-              onToggle={() => toggle(c.id)}
-            />
-          ))}
-        </ul>
-      )}
-    </aside>
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  className="chat-link-btn"
+                  onClick={() => setConfirmDelete(null)}
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="chat-link-btn chat-danger"
+                  disabled={count === 0}
+                  onClick={() => setConfirmDelete(checkedIds)}
+                >
+                  Delete ({count})
+                </button>
+                <button type="button" className="chat-link-btn" onClick={exitSelecting}>
+                  Cancel
+                </button>
+                {/* Last, so it lines up with the rows' checkboxes at their ends. */}
+                <label className="chat-history-select-all">
+                  <input
+                    type="checkbox"
+                    ref={(el) => {
+                      if (el) el.indeterminate = someChecked;
+                    }}
+                    aria-label="Select all"
+                    checked={allChecked}
+                    disabled={rows.length === 0}
+                    onChange={toggleAll}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        )}
+        {term && rows.length === 0 ? (
+          <p className="chat-muted">
+            {!answer ? "Searching…" : answer.ids ? "No chats match" : "Message search failed"}
+          </p>
+        ) : (
+          <ul className="chat-history-list">
+            {rows.map((c) => (
+              <ChatSessionRow
+                key={c.id}
+                chat={c}
+                current={c.id === currentChatId}
+                full={full}
+                now={now}
+                menuOpen={menuFor === c.id}
+                onMenu={onMenu}
+                onOpen={() => onOpen(c.id)}
+                onDelete={() => onDelete(c.id)}
+                renameChat={renameChat}
+                renaming={renamesInFlight.has(c.id)}
+                onFavorite={() => onFavorite(c.id, !c.isFavorite)}
+                starring={favoritesInFlight.has(c.id)}
+                scheduleMark={scheduleMarks}
+                selecting={selecting}
+                checked={selected.has(c.id)}
+                onToggle={() => toggle(c.id)}
+              />
+            ))}
+          </ul>
+        )}
+      </aside>
+      {resizable && <div {...handleProps} />}
+    </>
   );
 }

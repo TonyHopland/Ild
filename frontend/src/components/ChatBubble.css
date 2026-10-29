@@ -703,3 +703,22 @@ textarea.chat-input {
     min-height: 40px;
   }
 }
+
+/* Straddles the list's right edge without taking layout width. */
+.chat-sidebar-handle {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  align-self: stretch;
+  width: 6px;
+  margin: 0 -3px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.chat-sidebar-handle:hover,
+.chat-sidebar-handle:focus-visible,
+.chat-sidebar-handle.is-dragging {
+  background: rgba(99, 102, 241, 0.5);
+}

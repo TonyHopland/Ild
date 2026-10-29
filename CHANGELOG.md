@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Drag the edge of the chat list to widen or narrow it, in the chat bubble and on the Chat page.**
 - **A starting preview shows each service come online live, the install step it is on, and any failing service right away.**
 - **Edit a network rule or forward in place instead of removing and re-adding it.**
 - **A new Off network mode lets agents connect directly to any host and port, without the proxy.**

@@ -14,6 +14,7 @@ import type {
 import type { RenameChat } from "./ChatRename";
 import { useChatInbox } from "./ChatInbox";
 import ChatSidebar from "./ChatSidebar";
+import type { SidebarPlace } from "./chatPlacement";
 import ChatTranscript from "./ChatTranscript";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
 import { byTranscriptOrder } from "../utils/transcriptOrder";
@@ -163,6 +164,7 @@ export default function ChatWorkspace({
   shown,
   covered,
   sidebarShown,
+  sidebarPlace,
   onActiveChatChange,
   routesStartedChat = false,
   onChatShown,
@@ -184,6 +186,8 @@ export default function ChatWorkspace({
   /** Whether the chat list fills the frame, so the chat behind it is not on screen. */
   covered: boolean;
   sidebarShown: boolean;
+  /** Which stored width the chat list uses. */
+  sidebarPlace: SidebarPlace;
   /**
    * Told the chat this view has installed, or null when it has left for the start
    * form. Told a chat it started without installing it when routesStartedChat.
@@ -874,6 +878,7 @@ export default function ChatWorkspace({
     <ChatSidebar
       history={history}
       currentChatId={session?.id ?? null}
+      place={sidebarPlace}
       full={covered}
       onOpen={(id) =>
         // The frame routes a pick to another chat; the chat this view was mounted on,
