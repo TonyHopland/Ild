@@ -1225,6 +1225,12 @@ export const networkService = {
   }): Promise<NetworkPolicyEntry> => {
     return api.post<NetworkPolicyEntry>("/network/entries", data);
   },
+  updateEntry: async (
+    id: string,
+    data: { host: string; listKind: NetworkListKind; aiProviderId?: string | null },
+  ): Promise<NetworkPolicyEntry> => {
+    return api.put<NetworkPolicyEntry>(`/network/entries/${id}`, data);
+  },
   deleteEntry: async (id: string): Promise<void> => {
     return api.delete<void>(`/network/entries/${id}`);
   },

@@ -1193,6 +1193,9 @@ public sealed class EgressPolicyInvalidationTests
 
         public void Release() => _gate.TrySetResult();
 
+        public Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
         public async Task<IReadOnlyList<NetworkPolicyEntry>> GetEntriesAsync(CancellationToken ct = default)
         {
             var seen = Entries;

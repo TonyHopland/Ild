@@ -31,6 +31,17 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
         await _db.SaveChangesAsync(ct);
     }
 
+    public async Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default)
+    {
+        var entry = await _db.NetworkPolicyEntries.FirstOrDefaultAsync(e => e.Id == id, ct);
+        if (entry is null) return null;
+        entry.Host = host;
+        entry.ListKind = kind;
+        entry.AiProviderId = aiProviderId;
+        await _db.SaveChangesAsync(ct);
+        return entry;
+    }
+
     public async Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default)
         => await _db.NetworkPolicyEntries.Where(e => e.Id == id).ExecuteDeleteAsync(ct) > 0;
 
