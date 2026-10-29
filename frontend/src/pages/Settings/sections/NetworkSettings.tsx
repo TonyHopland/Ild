@@ -871,6 +871,49 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
  * are usually written from. Everything updates in place from the hub, so a click
  * here is judged by the next connection and shows up as such without a refresh.
  */
+const readEntries = () => networkService.getEntries();
+const readForwards = () => networkService.getForwards();
+
+/**
+ * A list that is read from the server and edited row by row. A read that
+ * started before a save settled must not overwrite the saved row, so only the
+ * latest read is applied; a save that dropped a read in flight reads again
+ * rather than leave the list without what the dropped read had found.
+ */
+function useGuardedList<T extends { id: string }>(
+  read: () => Promise<T[]>,
+  setItems: React.Dispatch<React.SetStateAction<T[]>>,
+  setError: (message: string | null) => void,
+  failure: string,
+) {
+  const seq = useRef(0);
+  const readPending = useRef(false);
+  const refresh = useCallback(async () => {
+    const mine = ++seq.current;
+    readPending.current = true;
+    try {
+      const loaded = await read();
+      if (mine !== seq.current) return;
+      readPending.current = false;
+      setError(null);
+      setItems(loaded);
+    } catch (err) {
+      if (mine !== seq.current) return;
+      readPending.current = false;
+      setError(describeError(err, failure));
+    }
+  }, [read, setItems, setError, failure]);
+
+  const replace = (updated: T) => {
+    const readInFlight = readPending.current;
+    ++seq.current;
+    setItems((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    if (readInFlight) void refresh();
+  };
+
+  return { refresh, replace };
+}
+
 export default function NetworkSettings() {
   const { on, off } = useSharedWorkItemHub();
   const [status, setStatus] = useState<NetworkStatus | null>(null);
@@ -896,46 +939,18 @@ export default function NetworkSettings() {
    */
   const [draftHost, setDraftHost] = useState<{ host: string; kind: NetworkListKind } | null>(null);
 
-  // Same guard as the forwards below: a read overtaken by a rule save is dropped
-  // and, if one was pending, redone.
-  const entriesSeq = useRef(0);
-  const entriesReadPending = useRef(false);
-  const refreshEntries = useCallback(async () => {
-    const seq = ++entriesSeq.current;
-    entriesReadPending.current = true;
-    try {
-      const loaded = await networkService.getEntries();
-      if (seq !== entriesSeq.current) return;
-      entriesReadPending.current = false;
-      setListError(null);
-      setEntries(loaded);
-    } catch (err) {
-      if (seq !== entriesSeq.current) return;
-      entriesReadPending.current = false;
-      setListError(describeError(err, "Failed to load the network lists."));
-    }
-  }, []);
-
-  // A read that started before a save settled must not overwrite the saved row,
-  // so only the latest read is applied; `forwardsReadPending` makes the save read again
-  // rather than leave the list without what the dropped read had found.
-  const forwardsSeq = useRef(0);
-  const forwardsReadPending = useRef(false);
-  const refreshForwards = useCallback(async () => {
-    const seq = ++forwardsSeq.current;
-    forwardsReadPending.current = true;
-    try {
-      const loaded = await networkService.getForwards();
-      if (seq !== forwardsSeq.current) return;
-      forwardsReadPending.current = false;
-      setForwardError(null);
-      setForwards(loaded);
-    } catch (err) {
-      if (seq !== forwardsSeq.current) return;
-      forwardsReadPending.current = false;
-      setForwardError(describeError(err, "Failed to load the forwards."));
-    }
-  }, []);
+  const { refresh: refreshEntries, replace: replaceEntry } = useGuardedList(
+    readEntries,
+    setEntries,
+    setListError,
+    "Failed to load the network lists.",
+  );
+  const { refresh: refreshForwards, replace: replaceForward } = useGuardedList(
+    readForwards,
+    setForwards,
+    setForwardError,
+    "Failed to load the forwards.",
+  );
 
   const refreshLog = useCallback(async () => {
     try {
@@ -1028,10 +1043,7 @@ export default function NetworkSettings() {
     aiProviderId: string | null,
   ) => {
     const updated = await networkService.updateEntry(id, { host, listKind: kind, aiProviderId });
-    const readInFlight = entriesReadPending.current;
-    ++entriesSeq.current;
-    setEntries((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
-    if (readInFlight) void refreshEntries();
+    replaceEntry(updated);
   };
 
   const removeEntry = async (id: string) => {
@@ -1066,10 +1078,7 @@ export default function NetworkSettings() {
       port,
       localPort,
     });
-    const readInFlight = forwardsReadPending.current;
-    ++forwardsSeq.current;
-    setForwards((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
-    if (readInFlight) void refreshForwards();
+    replaceForward(updated);
   };
 
   const removeForward = async (id: string) => {
