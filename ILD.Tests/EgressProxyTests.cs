@@ -1184,9 +1184,6 @@ public sealed class EgressPolicyInvalidationTests
     /// <summary>Returns the entries as they were when the read began; the first read blocks until released.</summary>
     private sealed class GatedStore : INetworkPolicyStore
     {
-        public Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default)
-            => throw new NotSupportedException();
-
         private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _reads;
 
@@ -1195,6 +1192,9 @@ public sealed class EgressPolicyInvalidationTests
         public int Reads => Volatile.Read(ref _reads);
 
         public void Release() => _gate.TrySetResult();
+
+        public Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default)
+            => throw new NotSupportedException();
 
         public async Task<IReadOnlyList<NetworkPolicyEntry>> GetEntriesAsync(CancellationToken ct = default)
         {

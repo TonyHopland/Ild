@@ -866,15 +866,6 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
 }
 
 /**
- * The Network page: the mode, one table of rules for both lists, the forwards
- * that carry traffic no proxy can read, and the live destination log the rules
- * are usually written from. Everything updates in place from the hub, so a click
- * here is judged by the next connection and shows up as such without a refresh.
- */
-const readEntries = () => networkService.getEntries();
-const readForwards = () => networkService.getForwards();
-
-/**
  * A list that is read from the server and edited row by row. A read that
  * started before a save settled must not overwrite the saved row, so only the
  * latest read is applied; a save that dropped a read in flight reads again
@@ -914,6 +905,12 @@ function useGuardedList<T extends { id: string }>(
   return { refresh, replace };
 }
 
+/**
+ * The Network page: the mode, one table of rules for both lists, the forwards
+ * that carry traffic no proxy can read, and the live destination log the rules
+ * are usually written from. Everything updates in place from the hub, so a click
+ * here is judged by the next connection and shows up as such without a refresh.
+ */
 export default function NetworkSettings() {
   const { on, off } = useSharedWorkItemHub();
   const [status, setStatus] = useState<NetworkStatus | null>(null);
@@ -940,13 +937,13 @@ export default function NetworkSettings() {
   const [draftHost, setDraftHost] = useState<{ host: string; kind: NetworkListKind } | null>(null);
 
   const { refresh: refreshEntries, replace: replaceEntry } = useGuardedList(
-    readEntries,
+    networkService.getEntries,
     setEntries,
     setListError,
     "Failed to load the network lists.",
   );
   const { refresh: refreshForwards, replace: replaceForward } = useGuardedList(
-    readForwards,
+    networkService.getForwards,
     setForwards,
     setForwardError,
     "Failed to load the forwards.",
