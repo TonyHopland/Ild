@@ -316,11 +316,18 @@ function forwardState(forward: NetworkForward): {
 
 interface ForwardTableProps {
   forwards: NetworkForward[];
+  onUpdate: (
+    id: string,
+    name: string,
+    host: string,
+    port: number,
+    localPort: number,
+  ) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
   onWhitelist: (host: string) => Promise<void>;
 }
 
-function ForwardTable({ forwards, onRemove, onWhitelist }: ForwardTableProps) {
+function ForwardTable({ forwards, onUpdate, onRemove, onWhitelist }: ForwardTableProps) {
   if (forwards.length === 0) {
     return <p className="settings-card-note">No forwards yet.</p>;
   }
@@ -336,51 +343,204 @@ function ForwardTable({ forwards, onRemove, onWhitelist }: ForwardTableProps) {
         </tr>
       </thead>
       <tbody>
-        {forwards.map((forward) => {
-          const state = forwardState(forward);
-          return (
-            <tr key={forward.id} className={state.tone === "ok" ? "" : "net-row-idle"}>
-              <td>{forward.name}</td>
-              <td>
-                <span className="net-host">
-                  {forward.host}
-                  <span className="net-port">:{forward.port}</span>
-                </span>
-              </td>
-              <td>
-                <span className="net-host">
-                  127.0.0.1<span className="net-port">:{forward.localPort}</span>
-                </span>
-              </td>
-              <td>
-                <span className={`net-decision net-forward-${state.tone}`}>{state.label}</span>
-                <span className="net-sub">{state.detail}</span>
-              </td>
-              <td className="net-actions">
-                {state.tone === "blocked" && (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => void onWhitelist(forward.host)}
-                    aria-label={`Add ${forward.host} to whitelist`}
-                  >
-                    Allow
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void onRemove(forward.id)}
-                  aria-label={`Remove the ${forward.name} forward`}
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          );
-        })}
+        {forwards.map((forward) => (
+          <ForwardRow
+            key={forward.id}
+            forward={forward}
+            onUpdate={onUpdate}
+            onRemove={onRemove}
+            onWhitelist={onWhitelist}
+          />
+        ))}
       </tbody>
     </table>
+  );
+}
+
+interface ForwardRowProps {
+  forward: NetworkForward;
+  onUpdate: ForwardTableProps["onUpdate"];
+  onRemove: ForwardTableProps["onRemove"];
+  onWhitelist: ForwardTableProps["onWhitelist"];
+}
+
+/**
+ * One forward, shown or being edited. The draft lives here, keyed by the
+ * forward, so a refresh of the list changes the saved values without touching
+ * what the user is typing.
+ */
+function ForwardRow({ forward, onUpdate, onRemove, onWhitelist }: ForwardRowProps) {
+  const state = forwardState(forward);
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState("");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("");
+  const [localPort, setLocalPort] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const { destination, local, complete, portProblem } = checkForwardDraft(
+    name,
+    host,
+    port,
+    localPort,
+  );
+
+  const edit = () => {
+    setName(forward.name);
+    setHost(forward.host);
+    setPort(String(forward.port));
+    setLocalPort(String(forward.localPort));
+    setError(null);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    if (busy || !complete || destination === null || local === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onUpdate(forward.id, name, host, destination, local);
+      setEditing(false);
+    } catch (err) {
+      setError(describeError(err, "Failed to save the forward."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onEnter = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") void save();
+  };
+
+  const label = (what: string) => `${what} of the ${forward.name} forward`;
+
+  return (
+    <tr className={state.tone === "ok" ? "" : "net-row-idle"}>
+      <td>
+        {editing ? (
+          <input
+            type="text"
+            className="settings-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={onEnter}
+            aria-label={label("Name")}
+          />
+        ) : (
+          forward.name
+        )}
+      </td>
+      <td>
+        {editing ? (
+          <div className="net-field-pair">
+            <input
+              type="text"
+              className="settings-input net-host-input"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              onKeyDown={onEnter}
+              aria-label={label("Destination host")}
+            />
+            <span className="net-field-sep">:</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              className="settings-input net-port-input"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              onKeyDown={onEnter}
+              aria-label={label("Destination port")}
+            />
+          </div>
+        ) : (
+          <span className="net-host">
+            {forward.host}
+            <span className="net-port">:{forward.port}</span>
+          </span>
+        )}
+      </td>
+      <td>
+        {editing ? (
+          <div className="net-field-pair">
+            <span className="net-fixed-host">127.0.0.1</span>
+            <span className="net-field-sep">:</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              className="settings-input net-port-input"
+              value={localPort}
+              onChange={(e) => setLocalPort(e.target.value)}
+              onKeyDown={onEnter}
+              aria-label={label("Local port")}
+            />
+          </div>
+        ) : (
+          <span className="net-host">
+            127.0.0.1<span className="net-port">:{forward.localPort}</span>
+          </span>
+        )}
+      </td>
+      <td>
+        <span className={`net-decision net-forward-${state.tone}`}>{state.label}</span>
+        <span className="net-sub">{state.detail}</span>
+        {editing && portProblem && <span className="settings-error"> {portProblem}</span>}
+        {editing && error && <span className="settings-error"> {error}</span>}
+      </td>
+      <td className="net-actions">
+        {editing ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void save()}
+              disabled={busy || !complete}
+              aria-label={`Save the ${forward.name} forward`}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setEditing(false)}
+              disabled={busy}
+              aria-label={`Cancel editing the ${forward.name} forward`}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            {state.tone === "blocked" && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void onWhitelist(forward.host)}
+                aria-label={`Add ${forward.host} to whitelist`}
+              >
+                Allow
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn"
+              onClick={edit}
+              aria-label={`Edit the ${forward.name} forward`}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void onRemove(forward.id)}
+              aria-label={`Remove the ${forward.name} forward`}
+            >
+              Remove
+            </button>
+          </>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -396,6 +556,20 @@ function parsePort(value: string): number | null {
   return port >= 1 && port <= 65535 ? port : null;
 }
 
+/** What a forward form has typed so far: the parsed ports, whether it can be sent, and what is wrong with a port. */
+function checkForwardDraft(name: string, host: string, port: string, localPort: string) {
+  const destination = parsePort(port);
+  const local = parsePort(localPort);
+  const complete =
+    name.trim() !== "" && host.trim() !== "" && destination !== null && local !== null;
+  // Only once something has been typed: an empty form is incomplete, not wrong.
+  const portProblem =
+    (port.trim() !== "" && destination === null) || (localPort.trim() !== "" && local === null)
+      ? "Both ports are whole numbers between 1 and 65535."
+      : null;
+  return { destination, local, complete, portProblem };
+}
+
 interface AddForwardRowProps {
   onAdd: (name: string, host: string, port: number, localPort: number) => Promise<void>;
 }
@@ -409,10 +583,12 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const destination = parsePort(port);
-  const local = parsePort(localPort);
-  const complete =
-    name.trim() !== "" && host.trim() !== "" && destination !== null && local !== null;
+  const { destination, local, complete, portProblem } = checkForwardDraft(
+    name,
+    host,
+    port,
+    localPort,
+  );
 
   // Enter reaches here past the disabled button, and twice over reaches it while
   // the first request is still out, so the guard lives with the request rather
@@ -437,12 +613,6 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") void add();
   };
-
-  // Only once something has been typed: an empty form is incomplete, not wrong.
-  const portProblem =
-    (port.trim() !== "" && destination === null) || (localPort.trim() !== "" && local === null)
-      ? "Both ports are whole numbers between 1 and 65535."
-      : null;
 
   return (
     <div className="net-add">
@@ -567,12 +737,23 @@ export default function NetworkSettings() {
     }
   }, []);
 
+  // A read that started before a save settled must not overwrite the saved row,
+  // so only the latest read is applied; `readPending` makes the save read again
+  // rather than leave the list without what the dropped read had found.
+  const forwardsSeq = useRef(0);
+  const readPending = useRef(false);
   const refreshForwards = useCallback(async () => {
+    const seq = ++forwardsSeq.current;
+    readPending.current = true;
     try {
       const loaded = await networkService.getForwards();
+      if (seq !== forwardsSeq.current) return;
+      readPending.current = false;
       setForwardError(null);
       setForwards(loaded);
     } catch (err) {
+      if (seq !== forwardsSeq.current) return;
+      readPending.current = false;
       setForwardError(describeError(err, "Failed to load the forwards."));
     }
   }, []);
@@ -678,6 +859,25 @@ export default function NetworkSettings() {
       localPort,
     });
     setForwards((prev) => [...prev.filter((f) => f.id !== created.id), created]);
+  };
+
+  const updateForward = async (
+    id: string,
+    name: string,
+    host: string,
+    port: number,
+    localPort: number,
+  ) => {
+    const updated = await networkService.updateForward(id, {
+      name: name.trim(),
+      host: host.trim(),
+      port,
+      localPort,
+    });
+    const readInFlight = readPending.current;
+    ++forwardsSeq.current;
+    setForwards((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
+    if (readInFlight) void refreshForwards();
   };
 
   const removeForward = async (id: string) => {
@@ -883,6 +1083,7 @@ export default function NetworkSettings() {
         {forwardError && <div className="settings-error">{forwardError}</div>}
         <ForwardTable
           forwards={forwards}
+          onUpdate={updateForward}
           onRemove={removeForward}
           onWhitelist={whitelistForwardHost}
         />

@@ -1239,6 +1239,12 @@ export const networkService = {
   }): Promise<NetworkForward> => {
     return api.post<NetworkForward>("/network/forwards", data);
   },
+  updateForward: async (
+    id: string,
+    data: { name: string; host: string; port: number; localPort: number },
+  ): Promise<NetworkForward> => {
+    return api.put<NetworkForward>(`/network/forwards/${id}`, data);
+  },
   deleteForward: async (id: string): Promise<void> => {
     return api.delete<void>(`/network/forwards/${id}`);
   },

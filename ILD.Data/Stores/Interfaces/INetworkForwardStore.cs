@@ -16,5 +16,8 @@ public interface INetworkForwardStore
     Task<NetworkForwardEntry?> FindByLocalPortAsync(int localPort, CancellationToken ct = default);
 
     Task AddForwardAsync(NetworkForwardEntry forward, CancellationToken ct = default);
+    /// <summary>Replaces the editable fields, keeping Id and CreatedAt. Null when no forward has this id.</summary>
+    Task<NetworkForwardEntry?> UpdateForwardAsync(Guid id, string name, string host, int port, int localPort, CancellationToken ct = default);
+
     Task<bool> DeleteForwardAsync(Guid id, CancellationToken ct = default);
 }

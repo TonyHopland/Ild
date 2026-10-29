@@ -26,6 +26,18 @@ public sealed class NetworkForwardStore : INetworkForwardStore
         await _db.SaveChangesAsync(ct);
     }
 
+    public async Task<NetworkForwardEntry?> UpdateForwardAsync(Guid id, string name, string host, int port, int localPort, CancellationToken ct = default)
+    {
+        var forward = await _db.NetworkForwardEntries.FirstOrDefaultAsync(f => f.Id == id, ct);
+        if (forward is null) return null;
+        forward.Name = name;
+        forward.Host = host;
+        forward.Port = port;
+        forward.LocalPort = localPort;
+        await _db.SaveChangesAsync(ct);
+        return forward;
+    }
+
     public async Task<bool> DeleteForwardAsync(Guid id, CancellationToken ct = default)
         => await _db.NetworkForwardEntries.Where(f => f.Id == id).ExecuteDeleteAsync(ct) > 0;
 }

@@ -289,6 +289,137 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(NetworkDecision.Allowed, Assert.Single(Body<List<ForwardView>>(await controller.GetForwards(TestContext.Current.CancellationToken))).Decision);
     }
 
+
+    private async Task<ForwardView> SeedForwardAsync(NetworkController controller, string name = "postgres", string host = "postgres", int port = 5432, int localPort = 15432)
+    {
+        var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(
+            await controller.AddForward(Forward(name, host, port, localPort), TestContext.Current.CancellationToken)));
+        _policy.Invocations.Clear();
+        _notifier.Invocations.Clear();
+        return created;
+    }
+
+    private async Task<NetworkForwardEntry> StoredAsync(Guid id)
+        => Assert.Single(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken), f => f.Id == id);
+
+    [Fact]
+    public async Task Updating_a_forward_changes_all_four_fields_keeps_its_identity_and_invalidates_the_policy_once()
+    {
+        var controller = Build();
+        var seeded = await SeedForwardAsync(controller);
+        var before = await StoredAsync(seeded.Id);
+
+        var result = await controller.UpdateForward(
+            seeded.Id, Forward(name: " cache ", host: " REDIS.Example. ", port: 6379, localPort: 16379), TestContext.Current.CancellationToken);
+
+        Assert.IsType<OkObjectResult>(result);
+        var view = Body<ForwardView>(result);
+        Assert.Equal((seeded.Id, "cache", "redis.example", 6379, 16379), (view.Id, view.Name, view.Host, view.Port, view.LocalPort));
+        Assert.Equal(NetworkDecision.Advisory, view.Decision);
+        var stored = await StoredAsync(seeded.Id);
+        Assert.Equal(("cache", "redis.example", 6379, 16379), (stored.Name, stored.Host, stored.Port, stored.LocalPort));
+        Assert.Equal(before.CreatedAt, stored.CreatedAt);
+        _policy.Verify(p => p.Invalidate(), Times.Once);
+        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_forward_keeps_its_own_local_port_when_saved_unchanged_or_with_only_its_name_changed(bool renameOnly)
+    {
+        var controller = Build();
+        var seeded = await SeedForwardAsync(controller);
+
+        var result = await controller.UpdateForward(
+            seeded.Id, Forward(name: renameOnly ? "primary" : "postgres"), TestContext.Current.CancellationToken);
+
+        var view = Body<ForwardView>(Assert.IsType<OkObjectResult>(result));
+        Assert.Equal(15432, view.LocalPort);
+        Assert.Equal(renameOnly ? "primary" : "postgres", (await StoredAsync(seeded.Id)).Name);
+        Assert.Equal(15432, (await StoredAsync(seeded.Id)).LocalPort);
+    }
+
+    [Fact]
+    public async Task Moving_a_forward_onto_another_forwards_local_port_is_refused_and_both_stay_as_they_were()
+    {
+        var controller = Build();
+        var mine = await SeedForwardAsync(controller, name: "redis", host: "cache", port: 6379, localPort: 16379);
+        var other = await SeedForwardAsync(controller);
+
+        var result = await controller.UpdateForward(mine.Id, Forward(name: "renamed", host: "other", port: 1, localPort: 15432), TestContext.Current.CancellationToken);
+
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("Local port 15432 already forwards to postgres:5432", Body<Dictionary<string, string>>(bad)["error"]);
+        var storedMine = await StoredAsync(mine.Id);
+        Assert.Equal(("redis", "cache", 6379, 16379), (storedMine.Name, storedMine.Host, storedMine.Port, storedMine.LocalPort));
+        var storedOther = await StoredAsync(other.Id);
+        Assert.Equal(("postgres", "postgres", 5432, 15432), (storedOther.Name, storedOther.Host, storedOther.Port, storedOther.LocalPort));
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Never);
+    }
+
+    [Fact]
+    public async Task Updating_an_unknown_forward_is_not_found_and_creates_nothing()
+    {
+        var controller = Build();
+
+        var result = await controller.UpdateForward(Guid.NewGuid(), Forward(), TestContext.Current.CancellationToken);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("", "postgres", 5432, 15432)]
+    [InlineData("   ", "postgres", 5432, 15432)]
+    [InlineData("postgres", "https://postgres", 5432, 15432)]
+    [InlineData("postgres", "postgres:5432", 5432, 15432)]
+    [InlineData("postgres", ".example.com", 5432, 15432)]
+    [InlineData("postgres", "*.example.com", 5432, 15432)]
+    [InlineData("postgres", "postgres", 0, 15432)]
+    [InlineData("postgres", "postgres", 70000, 15432)]
+    [InlineData("postgres", "postgres", 5432, 0)]
+    [InlineData("postgres", "postgres", 5432, 65536)]
+    public async Task An_unusable_update_is_refused_and_the_forward_stays_as_it_was(string name, string host, int port, int localPort)
+    {
+        var controller = Build();
+        var seeded = await SeedForwardAsync(controller);
+
+        var result = await controller.UpdateForward(seeded.Id, Forward(name, host, port, localPort), TestContext.Current.CancellationToken);
+
+        Assert.False(string.IsNullOrWhiteSpace(Body<Dictionary<string, string>>(Assert.IsType<BadRequestObjectResult>(result))["error"]));
+        var stored = await StoredAsync(seeded.Id);
+        Assert.Equal(("postgres", "postgres", 5432, 15432), (stored.Name, stored.Host, stored.Port, stored.LocalPort));
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_name_over_the_limit_after_trimming_is_refused_on_update_but_a_padded_one_at_the_limit_is_kept()
+    {
+        var controller = Build();
+        var seeded = await SeedForwardAsync(controller);
+
+        Assert.IsType<BadRequestObjectResult>(await controller.UpdateForward(seeded.Id, Forward(name: new string('n', 129)), TestContext.Current.CancellationToken));
+        Assert.Equal("postgres", (await StoredAsync(seeded.Id)).Name);
+
+        Assert.IsType<OkObjectResult>(await controller.UpdateForward(seeded.Id, Forward(name: " " + new string('n', 128) + " "), TestContext.Current.CancellationToken));
+        Assert.Equal(new string('n', 128), (await StoredAsync(seeded.Id)).Name);
+    }
+
+    [Fact]
+    public async Task The_unique_index_refuses_moving_a_forward_onto_another_local_port_behind_the_controllers_back()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _db.NetworkForwards.AddForwardAsync(new NetworkForwardEntry { Name = "a", Host = "a.example", Port = 1, LocalPort = 15432 }, ct);
+        var b = new NetworkForwardEntry { Name = "b", Host = "b.example", Port = 2, LocalPort = 15433 };
+        await _db.NetworkForwards.AddForwardAsync(b, ct);
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => _db.NetworkForwards.UpdateForwardAsync(b.Id, "b", "b.example", 2, 15432, ct));
+    }
     [Fact]
     public async Task Deleting_a_forward_invalidates_the_policy()
     {
