@@ -133,10 +133,16 @@ interface RuleTableProps {
   mode: NetworkMode | null;
   /** True when a filter is hiding rules, so "none" reads as "none matching". */
   filtered: boolean;
+  onUpdate: (
+    id: string,
+    host: string,
+    kind: NetworkListKind,
+    aiProviderId: string | null,
+  ) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
 }
 
-function RuleTable({ entries, providers, mode, filtered, onRemove }: RuleTableProps) {
+function RuleTable({ entries, providers, mode, filtered, onUpdate, onRemove }: RuleTableProps) {
   if (entries.length === 0) {
     return (
       <p className="settings-card-note">
@@ -155,43 +161,221 @@ function RuleTable({ entries, providers, mode, filtered, onRemove }: RuleTablePr
         </tr>
       </thead>
       <tbody>
-        {entries.map((entry) => {
-          const kind = entry.listKind === "Whitelist" ? "whitelist" : "blacklist";
-          // Without a list mode nothing is in effect, and saying so on every row
-          // is noise; the card says it once instead.
-          const inEffect = listInEffect(mode, kind);
-          return (
-            <tr key={entry.id} className={inEffect ? "" : "net-row-idle"}>
-              <td>
-                <span className={`net-pill net-pill-${kind}`}>
-                  {entry.listKind === "Whitelist" ? "Allow" : "Block"}
-                </span>
-                {!inEffect && <span className="net-idle-note">not in effect</span>}
-              </td>
-              <td>
-                <span className="net-host">{entry.host}</span>
-                <span className="net-sub">{describePattern(entry.host)}</span>
-              </td>
-              <td className="net-sub">
-                {entry.aiProviderId
-                  ? (providers.find((p) => p.id === entry.aiProviderId)?.name ?? "one provider")
-                  : "All providers"}
-              </td>
-              <td className="net-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void onRemove(entry.id)}
-                  aria-label={`Remove ${entry.host} from the ${kind}`}
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          );
-        })}
+        {entries.map((entry) => (
+          <RuleRow
+            key={entry.id}
+            entry={entry}
+            providers={providers}
+            mode={mode}
+            onUpdate={onUpdate}
+            onRemove={onRemove}
+          />
+        ))}
       </tbody>
     </table>
+  );
+}
+
+interface RuleRowProps {
+  entry: NetworkPolicyEntry;
+  providers: AiProvider[];
+  mode: NetworkMode | null;
+  onUpdate: RuleTableProps["onUpdate"];
+  onRemove: RuleTableProps["onRemove"];
+}
+
+/**
+ * One rule, shown or being edited. The draft lives here, keyed by the rule, so
+ * a refresh of the list changes the saved values without touching what the
+ * user is typing.
+ */
+function RuleRow({ entry, providers, mode, onUpdate, onRemove }: RuleRowProps) {
+  const [editing, setEditing] = useState(false);
+  const [host, setHost] = useState("");
+  const [kind, setKind] = useState<NetworkListKind>("Whitelist");
+  const [scope, setScope] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const list = entry.listKind === "Whitelist" ? "whitelist" : "blacklist";
+  // Without a list mode nothing is in effect, and saying so on every row
+  // is noise; the card says it once instead.
+  const inEffect = listInEffect(mode, list);
+
+  const edit = () => {
+    setHost(entry.host);
+    setKind(entry.listKind);
+    setScope(entry.aiProviderId ?? "");
+    setError(null);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    if (busy || host.trim() === "") return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onUpdate(entry.id, host, kind, scope || null);
+      setEditing(false);
+    } catch (err) {
+      setError(describeError(err, "Failed to save the rule."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <tr className={inEffect ? "" : "net-row-idle"}>
+      <td>
+        {editing ? (
+          <RuleKindPicker
+            label={`Kind of the ${entry.host} rule`}
+            value={kind}
+            onChange={setKind}
+          />
+        ) : (
+          <>
+            <span className={`net-pill net-pill-${list}`}>
+              {entry.listKind === "Whitelist" ? "Allow" : "Block"}
+            </span>
+            {!inEffect && <span className="net-idle-note">not in effect</span>}
+          </>
+        )}
+      </td>
+      <td>
+        {editing ? (
+          <>
+            <input
+              type="text"
+              className="settings-input"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void save();
+              }}
+              aria-label={`Host pattern of the ${entry.host} rule`}
+            />
+            <span className="net-sub">{host.trim() ? describePattern(host) : ""}</span>
+            {error && <span className="settings-error"> {error}</span>}
+          </>
+        ) : (
+          <>
+            <span className="net-host">{entry.host}</span>
+            <span className="net-sub">{describePattern(entry.host)}</span>
+          </>
+        )}
+      </td>
+      <td className={editing ? undefined : "net-sub"}>
+        {editing ? (
+          <ProviderScopeSelect
+            providers={providers}
+            value={scope}
+            onChange={setScope}
+            label={`Scope of the ${entry.host} rule`}
+          />
+        ) : entry.aiProviderId ? (
+          (providers.find((p) => p.id === entry.aiProviderId)?.name ?? "one provider")
+        ) : (
+          "All providers"
+        )}
+      </td>
+      <td className="net-actions">
+        {editing ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void save()}
+              disabled={busy || host.trim() === ""}
+              aria-label={`Save the ${entry.host} rule`}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setEditing(false)}
+              disabled={busy}
+              aria-label={`Cancel editing the ${entry.host} rule`}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn"
+              onClick={edit}
+              aria-label={`Edit ${entry.host} on the ${list}`}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void onRemove(entry.id)}
+              aria-label={`Remove ${entry.host} from the ${list}`}
+            >
+              Remove
+            </button>
+          </>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function RuleKindPicker({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: NetworkListKind;
+  onChange: (kind: NetworkListKind) => void;
+}) {
+  return (
+    <Segmented
+      label={label}
+      value={value}
+      onChange={onChange}
+      options={[
+        { value: "Whitelist", label: "Allow" },
+        { value: "Blacklist", label: "Block" },
+      ]}
+    />
+  );
+}
+
+function ProviderScopeSelect({
+  providers,
+  value,
+  onChange,
+  label,
+}: {
+  providers: AiProvider[];
+  value: string;
+  onChange: (providerId: string) => void;
+  label: string;
+}) {
+  return (
+    <select
+      className="settings-input"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={label}
+    >
+      <option value="">All providers</option>
+      {value !== "" && !providers.some((p) => p.id === value) && (
+        <option value={value}>one provider</option>
+      )}
+      {providers.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -235,15 +419,7 @@ function AddRuleRow({ providers, draft, onAdd }: AddRuleRowProps) {
   return (
     <div className="net-add">
       <div className="net-add-row">
-        <Segmented
-          label="Rule kind"
-          value={kind}
-          onChange={setKind}
-          options={[
-            { value: "Whitelist", label: "Allow" },
-            { value: "Blacklist", label: "Block" },
-          ]}
-        />
+        <RuleKindPicker label="Rule kind" value={kind} onChange={setKind} />
         <input
           ref={hostInput}
           type="text"
@@ -256,19 +432,12 @@ function AddRuleRow({ providers, draft, onAdd }: AddRuleRowProps) {
             if (e.key === "Enter") void add();
           }}
         />
-        <select
-          className="settings-input"
+        <ProviderScopeSelect
+          providers={providers}
           value={scope}
-          onChange={(e) => setScope(e.target.value)}
-          aria-label="Scope for the new rule"
-        >
-          <option value="">All providers</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          onChange={setScope}
+          label="Scope for the new rule"
+        />
         <button
           type="button"
           className="btn btn-primary"
@@ -727,33 +896,43 @@ export default function NetworkSettings() {
    */
   const [draftHost, setDraftHost] = useState<{ host: string; kind: NetworkListKind } | null>(null);
 
+  // Same guard as the forwards below: a read overtaken by a rule save is dropped
+  // and, if one was pending, redone.
+  const entriesSeq = useRef(0);
+  const entriesReadPending = useRef(false);
   const refreshEntries = useCallback(async () => {
+    const seq = ++entriesSeq.current;
+    entriesReadPending.current = true;
     try {
       const loaded = await networkService.getEntries();
+      if (seq !== entriesSeq.current) return;
+      entriesReadPending.current = false;
       setListError(null);
       setEntries(loaded);
     } catch (err) {
+      if (seq !== entriesSeq.current) return;
+      entriesReadPending.current = false;
       setListError(describeError(err, "Failed to load the network lists."));
     }
   }, []);
 
   // A read that started before a save settled must not overwrite the saved row,
-  // so only the latest read is applied; `readPending` makes the save read again
+  // so only the latest read is applied; `forwardsReadPending` makes the save read again
   // rather than leave the list without what the dropped read had found.
   const forwardsSeq = useRef(0);
-  const readPending = useRef(false);
+  const forwardsReadPending = useRef(false);
   const refreshForwards = useCallback(async () => {
     const seq = ++forwardsSeq.current;
-    readPending.current = true;
+    forwardsReadPending.current = true;
     try {
       const loaded = await networkService.getForwards();
       if (seq !== forwardsSeq.current) return;
-      readPending.current = false;
+      forwardsReadPending.current = false;
       setForwardError(null);
       setForwards(loaded);
     } catch (err) {
       if (seq !== forwardsSeq.current) return;
-      readPending.current = false;
+      forwardsReadPending.current = false;
       setForwardError(describeError(err, "Failed to load the forwards."));
     }
   }, []);
@@ -842,6 +1021,19 @@ export default function NetworkSettings() {
     setEntries((prev) => [...prev.filter((e) => e.id !== created.id), created]);
   };
 
+  const updateEntry = async (
+    id: string,
+    host: string,
+    kind: NetworkListKind,
+    aiProviderId: string | null,
+  ) => {
+    const updated = await networkService.updateEntry(id, { host, listKind: kind, aiProviderId });
+    const readInFlight = entriesReadPending.current;
+    ++entriesSeq.current;
+    setEntries((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+    if (readInFlight) void refreshEntries();
+  };
+
   const removeEntry = async (id: string) => {
     try {
       await networkService.deleteEntry(id);
@@ -874,7 +1066,7 @@ export default function NetworkSettings() {
       port,
       localPort,
     });
-    const readInFlight = readPending.current;
+    const readInFlight = forwardsReadPending.current;
     ++forwardsSeq.current;
     setForwards((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
     if (readInFlight) void refreshForwards();
@@ -1064,6 +1256,7 @@ export default function NetworkSettings() {
           providers={providers}
           mode={mode}
           filtered={kindFilter !== "All" || ruleFilter.trim() !== ""}
+          onUpdate={updateEntry}
           onRemove={removeEntry}
         />
         <AddRuleRow providers={providers} draft={draftHost} onAdd={addEntry} />

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Edit a network rule in place instead of removing and re-adding it.**
 - **Edit a network forward in place instead of removing and re-adding it.**
 - **A new Off network mode lets agents connect directly to any host and port, with nothing logged, for tools that cannot use the proxy.** It applies from the next agent launch and needs `no-new-privileges` on the container.
 

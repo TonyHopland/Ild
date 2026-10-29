@@ -551,7 +551,7 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var provider = await SeedProviderAsync();
         var mine = await SeedRuleAsync("mine.example.com", NetworkListKind.Whitelist, provider);
-        var other = await SeedRuleAsync("other.example.com", NetworkListKind.Whitelist, provider);
+        var other = await SeedRuleAsync(".other.example.com", NetworkListKind.Whitelist, provider);
 
         var result = await Build().UpdateEntry(mine.Id, Rule("*.Other.example.com", NetworkListKind.Whitelist, provider), TestContext.Current.CancellationToken);
 
@@ -562,7 +562,7 @@ public sealed class NetworkControllerTests : IDisposable
         var rules = await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, rules.Count);
         Assert.Equal("mine.example.com", (await StoredRuleAsync(mine.Id)).Host);
-        Assert.Equal("other.example.com", (await StoredRuleAsync(other.Id)).Host);
+        Assert.Equal(".other.example.com", (await StoredRuleAsync(other.Id)).Host);
         AssertNothingInvalidated();
     }
 
@@ -651,10 +651,11 @@ public sealed class NetworkControllerTests : IDisposable
     public async Task The_unique_index_refuses_moving_a_rule_onto_another_rules_kind_host_and_scope()
     {
         var ct = TestContext.Current.CancellationToken;
-        await SeedRuleAsync("a.example.com");
-        var b = await SeedRuleAsync("b.example.com");
+        var provider = await SeedProviderAsync();
+        await SeedRuleAsync("a.example.com", NetworkListKind.Whitelist, provider);
+        var b = await SeedRuleAsync("b.example.com", NetworkListKind.Whitelist, provider);
 
-        await Assert.ThrowsAsync<DbUpdateException>(() => _db.Network.UpdateEntryAsync(b.Id, "a.example.com", NetworkListKind.Whitelist, null, ct));
+        await Assert.ThrowsAsync<DbUpdateException>(() => _db.Network.UpdateEntryAsync(b.Id, "a.example.com", NetworkListKind.Whitelist, provider, ct));
     }
 
     [Fact]

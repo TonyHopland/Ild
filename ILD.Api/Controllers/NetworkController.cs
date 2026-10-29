@@ -98,16 +98,54 @@ public class NetworkController : ControllerBase
     [HttpPost("entries")]
     public async Task<IActionResult> AddEntry([FromBody] AddEntryRequest request, CancellationToken ct)
     {
-        if (!Enum.IsDefined(request.ListKind))
-            return BadRequest(new { error = "listKind must be 'Whitelist' or 'Blacklist'" });
-        if (!EgressRules.TryNormalizePattern(request.Host, out var host, out var error))
-            return BadRequest(new { error });
-        if (request.AiProviderId is { } providerId && await _providers.GetAiProviderByIdAsync(providerId) is null)
-            return BadRequest(new { error = "Unknown AI provider" });
+        var (invalid, host) = await ValidateEntryAsync(request);
+        if (invalid is not null) return invalid;
 
         var (entry, created) = await AddOrFindAsync(host, request.ListKind, request.AiProviderId, ct);
         return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
     }
+
+    [HttpPut("entries/{id:guid}")]
+    public async Task<IActionResult> UpdateEntry(Guid id, [FromBody] AddEntryRequest request, CancellationToken ct)
+    {
+        var (invalid, host) = await ValidateEntryAsync(request);
+        if (invalid is not null) return invalid;
+        if (await _store.FindEntryAsync(request.ListKind, host, request.AiProviderId, ct) is { } other && other.Id != id)
+            return RuleExists(request.ListKind, host);
+
+        NetworkPolicyEntry? entry;
+        try
+        {
+            entry = await _store.UpdateEntryAsync(id, host, request.ListKind, request.AiProviderId, ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Deleted between the load and the save.
+            return NotFound();
+        }
+        catch (DbUpdateException)
+        {
+            // The unique index caught what the read above could not: two requests racing.
+            return RuleExists(request.ListKind, host);
+        }
+        if (entry is null) return NotFound();
+        await PolicyChangedAsync();
+        return Ok(View(entry));
+    }
+
+    private async Task<(IActionResult? Invalid, string Host)> ValidateEntryAsync(AddEntryRequest request)
+    {
+        if (!Enum.IsDefined(request.ListKind))
+            return (BadRequest(new { error = "listKind must be 'Whitelist' or 'Blacklist'" }), string.Empty);
+        if (!EgressRules.TryNormalizePattern(request.Host, out var host, out var error))
+            return (BadRequest(new { error }), string.Empty);
+        if (request.AiProviderId is { } providerId && await _providers.GetAiProviderByIdAsync(providerId) is null)
+            return (BadRequest(new { error = "Unknown AI provider" }), string.Empty);
+        return (null, host);
+    }
+
+    private BadRequestObjectResult RuleExists(NetworkListKind kind, string host)
+        => BadRequest(new { error = $"A {kind.ToString().ToLowerInvariant()} rule for {host} already exists for this scope" });
 
     [HttpDelete("entries/{id:guid}")]
     public async Task<IActionResult> DeleteEntry(Guid id, CancellationToken ct)
