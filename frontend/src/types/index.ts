@@ -1576,6 +1576,8 @@ export interface NetworkStatus {
   reason: string;
   proxyEnabled: boolean;
   proxyPort: number | null;
+  /** Whether an agent launched in network mode Off can reach the network here. */
+  offAvailable: boolean;
 }
 
 export type NetworkPolicyChangedPayload = Record<string, never>;

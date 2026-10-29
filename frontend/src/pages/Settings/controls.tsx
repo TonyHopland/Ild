@@ -48,7 +48,7 @@ export function Switch({ checked, onChange, label, disabled = false }: SwitchPro
 interface SegmentedProps<T extends string> {
   /** `null` presses nothing, for a choice that has not been made yet. */
   value: T | null;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; disabled?: boolean }[];
   onChange: (value: T) => void;
   label: string;
 }
@@ -66,6 +66,7 @@ export function Segmented<T extends string>({
           key={option.value}
           type="button"
           aria-pressed={value === option.value}
+          disabled={option.disabled}
           onClick={() => onChange(option.value)}
         >
           {option.label}

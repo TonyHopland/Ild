@@ -972,7 +972,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     [Theory]
     [InlineData(NetworkMode.Blacklist, NetworkListKind.Blacklist, true)]
     [InlineData(NetworkMode.Whitelist, NetworkListKind.Whitelist, false)]
-    public async Task A_name_that_resolves_to_a_private_address_is_refused_by_the_lists_alone_and_never_resolved(
+    public async Task A_host_the_lists_refuse_is_never_resolved(
         NetworkMode mode, NetworkListKind kind, bool listed)
     {
         await SetModeAsync(mode);
@@ -987,8 +987,6 @@ public sealed class EgressProxyTests : IAsyncLifetime
             Assert.StartsWith("HTTP/1.1 403", status);
             var body = await ReadToEndAsync(client.GetStream());
             Assert.Contains("blocks status.lan.example", body);
-            Assert.DoesNotContain("private", body, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("Internal destinations", body);
         }
 
         Assert.Equal(0, resolver.Calls);

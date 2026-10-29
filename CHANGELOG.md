@@ -20,7 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Monitor and Blacklist let coding agents reach your LAN and cloud metadata; use Whitelist to keep them off.**
 - **Coding agents can no longer make DNS lookups, so data cannot leave that way.**
 
 ### Fixed

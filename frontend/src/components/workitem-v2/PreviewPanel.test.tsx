@@ -398,7 +398,7 @@ describe("PreviewPanel against the services", () => {
       await Promise.resolve();
     });
 
-    expect(startSpy).toHaveBeenCalledWith("wi-1", { portOverrides: { web: 4000 } });
+    expect(startSpy).toHaveBeenCalledWith("wi-1", { portOverrides: { web: 4000 }, wait: false });
   });
 
   test("the log toggle fetches and shows a service's captured output", async () => {

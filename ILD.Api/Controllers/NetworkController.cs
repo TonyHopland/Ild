@@ -89,6 +89,7 @@ public class NetworkController : ControllerBase
             reason = _enforcement.Reason,
             proxyEnabled = _enforcement.ProxyEnabled,
             proxyPort = _enforcement.ProxyPort,
+            offAvailable = _enforcement.OffAvailable,
         });
 
     [HttpGet("entries")]

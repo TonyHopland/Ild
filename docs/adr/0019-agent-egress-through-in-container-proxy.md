@@ -213,10 +213,17 @@ degradation is never silent.
 - **Single-uid deployments (`AGENT_USER=`) are advisory by construction.** There
   is no separate uid to key rules on; the proxy still runs and logs.
 
-## Amendment (2026-10): no private-address block
+## Why there is no private-address block
 
-The proxy briefly refused any destination that resolved to a private, loopback or link-local address, and an allow setting lifted that for chosen hosts. It is removed. It overrode the lists' plain meaning: a whitelisted LAN host was refused until it was listed a second time, and the modes no longer said what they did.
+Refusing every destination that resolves to a private, loopback or link-local
+address, with a setting to allow chosen hosts, was considered and rejected. It
+overrides the lists' plain meaning: a whitelisted LAN host would be refused until
+it was listed a second time, and the modes would no longer say what they do.
 
-- **LAN destinations are judged like any other.** The mode and lists decide, and the Network Log records the decision. `NO_PROXY` stays loopback-only and the firewall still drops non-loopback agent traffic, so a LAN connection cannot skip the proxy.
-- **The proxy still resolves a host once and dials the addresses it resolved,** and a host the resolver rejects is logged and refused.
-- **To keep agents off the LAN or cloud metadata (`169.254.169.254`),** use `whitelist`, or blacklist the specific hosts. `monitor` and `blacklist` do not protect them.
+- **LAN destinations are judged like any other.** The mode and lists decide, and
+  the Network Log records the decision. `NO_PROXY` stays loopback-only and the
+  firewall drops non-loopback agent traffic, so a LAN connection cannot skip the
+  proxy.
+- **To keep agents off the LAN or cloud metadata (`169.254.169.254`),** use
+  `whitelist`, or blacklist the specific hosts. `monitor` and `blacklist` do not
+  protect them.

@@ -8,7 +8,7 @@ namespace ILD.Core.Services.Implementations.Network;
 /// it. The entrypoint decides and reports through the environment; the app only
 /// surfaces the answer, with the reason, so the degradation is never silent.
 /// </summary>
-public sealed record NetworkEnforcementStatus(string Enforcement, string Reason, bool ProxyEnabled, int? ProxyPort)
+public sealed record NetworkEnforcementStatus(string Enforcement, string Reason, bool ProxyEnabled, int? ProxyPort, bool OpenGroupEnabled = false)
 {
     public const string EnforcementEnvVar = "ILD_NETWORK_ENFORCEMENT";
     public const string ReasonEnvVar = "ILD_NETWORK_ENFORCEMENT_REASON";
@@ -18,13 +18,20 @@ public sealed record NetworkEnforcementStatus(string Enforcement, string Reason,
 
     public bool IsEnforced => Enforcement == Enforced;
 
+    /// <summary>
+    /// Whether an agent launched in network mode Off can reach the network: always when the firewall is not
+    /// enforced, and under the firewall only when the entrypoint enabled the open group.
+    /// </summary>
+    public bool OffAvailable => !IsEnforced || OpenGroupEnabled;
+
     public static NetworkEnforcementStatus FromEnvironment(EgressProxyOptions proxy)
         => Resolve(
             proxy,
             Environment.GetEnvironmentVariable(EnforcementEnvVar),
-            Environment.GetEnvironmentVariable(ReasonEnvVar));
+            Environment.GetEnvironmentVariable(ReasonEnvVar),
+            AgentIsolation.NetworkOpenGroup);
 
-    public static NetworkEnforcementStatus Resolve(EgressProxyOptions proxy, string? reported, string? reportedReason)
+    public static NetworkEnforcementStatus Resolve(EgressProxyOptions proxy, string? reported, string? reportedReason, string? openGroup = null)
     {
         if (!proxy.Enabled)
             return new(Advisory,
@@ -36,7 +43,7 @@ public sealed record NetworkEnforcementStatus(string Enforcement, string Reason,
                 string.IsNullOrWhiteSpace(reportedReason)
                     ? "The container entrypoint installed firewall rules that drop agent-uid traffic bypassing the proxy."
                     : reportedReason.Trim(),
-                true, proxy.Port);
+                true, proxy.Port, !string.IsNullOrWhiteSpace(openGroup));
 
         return new(Advisory,
             string.IsNullOrWhiteSpace(reportedReason)

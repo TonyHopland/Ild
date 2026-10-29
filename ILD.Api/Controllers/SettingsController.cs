@@ -3,6 +3,7 @@ using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 using ILD.Data.Migrations;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -26,6 +27,7 @@ public class SettingsController : ControllerBase
     private readonly IEgressPolicy _egressPolicy;
     private readonly INetworkNotifier _networkNotifier;
     private readonly AttachmentLimits _attachmentLimits;
+    private readonly NetworkEnforcementStatus _enforcement;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
@@ -57,7 +59,8 @@ public class SettingsController : ControllerBase
         ILD.Core.Services.Remote.IPrStatusPoller prPoller,
         IEgressPolicy egressPolicy,
         INetworkNotifier networkNotifier,
-        AttachmentLimits attachmentLimits)
+        AttachmentLimits attachmentLimits,
+        NetworkEnforcementStatus enforcement)
     {
         _store = store;
         _notifier = notifier;
@@ -67,6 +70,7 @@ public class SettingsController : ControllerBase
         _egressPolicy = egressPolicy;
         _networkNotifier = networkNotifier;
         _attachmentLimits = attachmentLimits;
+        _enforcement = enforcement;
     }
 
     public sealed class UpdateSettingRequest
@@ -153,6 +157,8 @@ public class SettingsController : ControllerBase
         if (!KnownKeys.Contains(key)) return NotFound(new { error = $"Unknown setting key '{key}'" });
         if (request.Value is not { } sent) return BadRequest(new { error = "A value is required." });
         if (!TryCanonicalize(key, sent, out var value, out var error)) return BadRequest(new { error });
+        if (key == AppSettingKeys.NetworkMode && EgressRules.TryParseMode(value, out var mode) && mode == NetworkMode.Off && !_enforcement.OffAvailable)
+            return BadRequest(new { error = $"Network mode Off is unavailable here, so agents launched in it would have no network. {_enforcement.Reason}" });
 
         await _store.UpsertAsync(key, value, ct);
 
