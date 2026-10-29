@@ -360,8 +360,8 @@ function ForwardTable({ forwards, onUpdate, onRemove, onWhitelist }: ForwardTabl
 interface ForwardRowProps {
   forward: NetworkForward;
   onUpdate: ForwardTableProps["onUpdate"];
-  onRemove: (id: string) => Promise<void>;
-  onWhitelist: (host: string) => Promise<void>;
+  onRemove: ForwardTableProps["onRemove"];
+  onWhitelist: ForwardTableProps["onWhitelist"];
 }
 
 /**

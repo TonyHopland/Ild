@@ -129,7 +129,7 @@ public class NetworkController : ControllerBase
     {
         if (ValidateForward(request, out var name, out var host) is { } invalid) return invalid;
         if (await _forwards.FindByLocalPortAsync(request.LocalPort, ct) is { } taken)
-            return BadRequest(new { error = $"Local port {request.LocalPort} already forwards to {taken.Host}:{taken.Port}" });
+            return LocalPortTaken(taken);
 
         var forward = new NetworkForwardEntry
         {
@@ -146,8 +146,8 @@ public class NetworkController : ControllerBase
         }
         catch (DbUpdateException)
         {
-            // The unique index caught what the read above could not: two clicks racing.
-            return BadRequest(new { error = $"Local port {request.LocalPort} is already forwarded" });
+            // The unique index caught what the read above could not: two requests racing.
+            return LocalPortRaced(request.LocalPort);
         }
         await PolicyChangedAsync();
         return CreatedAtAction(nameof(GetForwards), View(forward, await _policy.GetAsync(ct)));
@@ -158,7 +158,7 @@ public class NetworkController : ControllerBase
     {
         if (ValidateForward(request, out var name, out var host) is { } invalid) return invalid;
         if (await _forwards.FindByLocalPortAsync(request.LocalPort, ct) is { } taken && taken.Id != id)
-            return BadRequest(new { error = $"Local port {request.LocalPort} already forwards to {taken.Host}:{taken.Port}" });
+            return LocalPortTaken(taken);
 
         NetworkForwardEntry? forward;
         try
@@ -172,13 +172,19 @@ public class NetworkController : ControllerBase
         }
         catch (DbUpdateException)
         {
-            // The unique index caught what the read above could not: two saves racing.
-            return BadRequest(new { error = $"Local port {request.LocalPort} is already forwarded" });
+            // The unique index caught what the read above could not: two requests racing.
+            return LocalPortRaced(request.LocalPort);
         }
         if (forward is null) return NotFound();
         await PolicyChangedAsync();
         return Ok(View(forward, await _policy.GetAsync(ct)));
     }
+
+    private BadRequestObjectResult LocalPortTaken(NetworkForwardEntry taken)
+        => BadRequest(new { error = $"Local port {taken.LocalPort} already forwards to {taken.Host}:{taken.Port}" });
+
+    private BadRequestObjectResult LocalPortRaced(int localPort)
+        => BadRequest(new { error = $"Local port {localPort} is already forwarded" });
 
     private static IActionResult? ValidateForward(AddForwardRequest request, out string name, out string host)
     {
