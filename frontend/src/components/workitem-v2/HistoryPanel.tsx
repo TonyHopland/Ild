@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import type { WorkItem, WorkItemHistoryEntry } from "../../types";
+import type { WorkItem, WorkItemActorKind, WorkItemHistoryEntry } from "../../types";
 import { workItemService } from "../../services/auth";
+import { ROUTES } from "../../utils/constants";
 import { formatRelativeTime } from "../../utils/relativeTime";
+import { useChatInbox } from "../ChatInbox";
 import { DescriptionDiff, TagsChange } from "../FieldChanges";
 import "./HistoryPanel.css";
 
@@ -22,6 +24,17 @@ const FIELD_LABELS: Record<string, string> = {
   "pullRequest.merged": "Pull request merged",
   deleted: "Title",
 };
+
+const CHAT_REFERENCE = /^chat ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** A chat actor's reference links only to a chat in the signed-in user's own list; anything else stays text. */
+function ActorDetail({ kind, detail }: { kind?: WorkItemActorKind | null; detail: string }) {
+  const { history } = useChatInbox();
+  const id = kind === "Chat" ? CHAT_REFERENCE.exec(detail)?.[1].toLowerCase() : undefined;
+  const chat = id ? history.find((c) => c.id.toLowerCase() === id) : undefined;
+  if (!chat) return <span>{detail}</span>;
+  return <Link to={`${ROUTES.CHAT}/${encodeURIComponent(chat.id)}`}>{detail}</Link>;
+}
 
 /** Events say what happened, not which field changed. */
 const EVENT_PHRASES: Record<string, string> = {
@@ -201,7 +214,7 @@ function SaveEvent({
       {(first.actorKind || first.actorDetail || first.actorWorkItemId) && (
         <div className="wiv2-history-actor">
           {first.actorKind && <span className="wiv2-history-kind">{first.actorKind}</span>}{" "}
-          {first.actorDetail && <span>{first.actorDetail}</span>}{" "}
+          {first.actorDetail && <ActorDetail kind={first.actorKind} detail={first.actorDetail} />}{" "}
           {first.actorWorkItemId && (
             <span>
               working on{" "}
