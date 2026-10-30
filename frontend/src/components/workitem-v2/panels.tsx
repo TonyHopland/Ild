@@ -1098,11 +1098,7 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         <span className="detail-label">Repository</span>
         <span
           className="detail-value"
-          title={
-            detail.repositories.some((r) => r.id === workItem.repositoryId)
-              ? undefined
-              : workItem.repositoryId
-          }
+          title={repository ? undefined : workItem.repositoryId}
         >
           {repoName}
         </span>
