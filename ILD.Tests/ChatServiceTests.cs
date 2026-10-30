@@ -982,6 +982,55 @@ public sealed class ChatServiceTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task A_chat_deleted_as_an_analytics_clear_removes_its_usage_rows_is_still_deleted()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("x"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        _db.Context.ChatUsages.Add(new ChatUsage
+        {
+            Id = Guid.NewGuid(),
+            ChatSessionId = started.Id,
+            Kind = ChatUsageKind.Turn,
+            AiProvider = "Main",
+            InputTokens = 5,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        var clearBeforeSave = new ClearUsageBeforeRemoval();
+        using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(clearBeforeSave).Options);
+        var request = new ChatService(deleting, _db.Providers, Mock.Of<IAgentAdapterRegistry>(), _notifier, Options,
+            _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+
+        Assert.True(await request.DeleteAsync("alice", started.Id, TestContext.Current.CancellationToken));
+
+        Assert.True(clearBeforeSave.Cleared);
+        using var ctx = _db.Fresh();
+        Assert.Empty(ctx.ChatSessions.AsNoTracking());
+        Assert.Empty(ctx.ChatUsages.AsNoTracking());
+    }
+
+    // An analytics clear commits after the delete read the chat's usage rows and before it removes them.
+    private sealed class ClearUsageBeforeRemoval : SaveChangesInterceptor
+    {
+        public bool Cleared { get; private set; }
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!Cleared && eventData.Context!.ChangeTracker.Entries<ChatUsage>().Any(e => e.State == EntityState.Deleted))
+            {
+                Cleared = true;
+                await eventData.Context.Set<ChatUsage>().ExecuteDeleteAsync(cancellationToken);
+            }
+            return result;
+        }
+    }
+
     private static async Task<bool> HasUnreadAsync(ChatService svc, string userId, Guid chatSessionId)
         => (await svc.ListForUserAsync(userId, TestContext.Current.CancellationToken))
             .Single(c => c.Id == chatSessionId).HasUnread;

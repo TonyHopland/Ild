@@ -1,7 +1,9 @@
+using ILD.Data.Analytics;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace ILD.Tests;
 
@@ -89,6 +91,68 @@ public class LoopRunStoreGetByIdTests
         var result = await freshStore.GetRunNodesAsync(run.Id);
 
         Assert.Equal(new[] { n1.Id, n2.Id, n3.Id }, result.Select(n => n.Id));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_succeeds_when_an_analytics_clear_removes_the_rollup_row_it_was_about_to_update()
+    {
+        using var db = new TestDb();
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
+        var startedAt = DateTime.UtcNow.AddMinutes(-1);
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
+            LoopTemplateVersionId = version.Id,
+            Status = LoopRunStatus.Completed,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            StartedAt = startedAt,
+            CompletedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.LoopRuns.Add(run);
+        db.Context.LoopRunAnalyticsBuckets.Add(new LoopRunAnalyticsBucket
+        {
+            Id = Guid.NewGuid(),
+            BucketDate = startedAt.Date,
+            LoopTemplateId = template.Id,
+            TemplateName = "t",
+            AiProvider = RunAnalyticsAggregator.NoProvider,
+            RunCount = 4,
+        });
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        var clearBeforeSave = new ClearBucketsBeforeUpdate();
+        using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(db.Context.Database.GetDbConnection()).AddInterceptors(clearBeforeSave).Options);
+
+        Assert.True(await new LoopRunStore(deleting).DeleteAsync(run.Id));
+
+        Assert.True(clearBeforeSave.Cleared);
+        using var verify = db.Fresh();
+        Assert.Empty(verify.LoopRuns);
+        var bucket = Assert.Single(verify.LoopRunAnalyticsBuckets);
+        Assert.Equal(1, bucket.RunCount);
+    }
+
+    // An analytics clear commits after the delete read the rollup row and before it saves its update.
+    private sealed class ClearBucketsBeforeUpdate : SaveChangesInterceptor
+    {
+        public bool Cleared { get; private set; }
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!Cleared && eventData.Context!.ChangeTracker.Entries<LoopRunAnalyticsBucket>().Any(e => e.State == EntityState.Modified))
+            {
+                Cleared = true;
+                await eventData.Context.Set<LoopRunAnalyticsBucket>().ExecuteDeleteAsync(cancellationToken);
+            }
+            return result;
+        }
     }
 
     [Fact]

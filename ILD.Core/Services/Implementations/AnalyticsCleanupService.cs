@@ -15,9 +15,6 @@ public sealed class AnalyticsCleanupService : IAnalyticsCleanupService
 
     public async Task ClearAsync(int? olderThanDays, CancellationToken cancellationToken = default)
     {
-        if (olderThanDays is < 1)
-            throw new ArgumentOutOfRangeException(nameof(olderThanDays), olderThanDays, "Must be at least 1.");
-
         await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
         if (olderThanDays is { } days)
         {

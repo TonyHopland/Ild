@@ -811,6 +811,20 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task<bool> DeleteAsync(Guid runId)
     {
+        try
+        {
+            return await DeleteOnceAsync(runId);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // An analytics clear removed the rollup row this delete was about to update.
+            _db.ChangeTracker.Clear();
+            return await DeleteOnceAsync(runId);
+        }
+    }
+
+    private async Task<bool> DeleteOnceAsync(Guid runId)
+    {
         var run = await _db.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId);
         if (run == null) return false;
         if (run.Status == LoopRunStatus.Running) return false;
