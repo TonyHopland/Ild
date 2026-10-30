@@ -1103,7 +1103,30 @@ public class WorkItemManager : IWorkItemManager
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var all = await _server.ListAsync(opts, status: null, tags: null);
-        return await RelatedViewsAsync(all.Where(w => w.Dependencies.Contains(workItemId)).ToList());
+        return await RelatedViewsAsync(DependentsIn(all, workItemId));
+    }
+
+    private static List<RemoteWorkItem> DependentsIn(IEnumerable<RemoteWorkItem> all, string workItemId)
+        => all.Where(w => w.Dependencies.Contains(workItemId)).ToList();
+
+    /// <summary>
+    /// Ids of the items a delete changes the dependency lists of. Best effort: a
+    /// failed lookup is logged and yields none, so it can never block the delete.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> TryGetNeighbourIdsAsync(WorkItemServerOptions opts, string workItemId)
+    {
+        try
+        {
+            var ids = (await GetServerDependencyIdsAsync(opts, workItemId)).ToList();
+            var all = await _server.ListAsync(opts, status: null, tags: null);
+            ids.AddRange(DependentsIn(all, workItemId).Select(w => w.Id));
+            return ids.Distinct(StringComparer.Ordinal).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not look up the neighbours of work item {WorkItemId} before deleting it", workItemId);
+            return Array.Empty<string>();
+        }
     }
 
     /// <summary>
@@ -1572,12 +1595,16 @@ public class WorkItemManager : IWorkItemManager
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
+        // Neighbours whose dependency lists change, read before the item is gone.
+        IReadOnlyList<string> affectedIds = Array.Empty<string>();
         try
         {
             var opts = await _options.ResolveForWorkItemAsync(workItemId);
+            affectedIds = await TryGetNeighbourIdsAsync(opts, workItemId);
             await _server.DeleteAsync(opts, workItemId, actor);
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
+        await _notifier.WorkItemDeletedAsync(workItemId, affectedIds);
         await _loopRunStore.ClearWorkItemStatusReasonAsync(workItemId);
 
         // Delete all LoopRuns for this work item. Reclaim each run's local

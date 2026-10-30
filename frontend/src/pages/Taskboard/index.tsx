@@ -142,6 +142,17 @@ export default function Taskboard() {
       });
   };
 
+  // Supersedes any fetch still out for an item, so a late response cannot put it back.
+  const cancelSync = (workItemId: string) => {
+    syncSeqRef.current.set(workItemId, (syncSeqRef.current.get(workItemId) ?? 0) + 1);
+    syncInFlightRef.current.delete(workItemId);
+    itemChangedRef.current.delete(workItemId);
+  };
+
+  // The hub handlers below are bound once, so they read the open item through this.
+  const openWorkItemIdRef = useRef(openWorkItemId);
+  openWorkItemIdRef.current = openWorkItemId;
+
   useEffect(() => {
     const delayedTimers: number[] = [];
 
@@ -203,6 +214,19 @@ export default function Taskboard() {
       reloadAll({ windowed: true });
     };
 
+    // A deleted item's card leaves the board. A fetch still out for it must not
+    // put the card back, so it is superseded; a detail dialog open on it closes;
+    // the neighbours it was linked to are re-read for their new dependency lists.
+    const onWorkItemDeleted = (message: TypedSignalRMessage<"WorkItemDeleted">) => {
+      const { workItemId, affectedIds } = message.payload;
+      cancelSync(workItemId);
+      handleDeleted(workItemId);
+      if (openWorkItemIdRef.current === workItemId) void navigate("/taskboard", { replace: true });
+      for (const id of affectedIds) {
+        if (findItem(id)) syncWorkItem(id, { itemChanged: false });
+      }
+    };
+
     const onEditProposalsChanged = (
       message: TypedSignalRMessage<"WorkItemEditProposalsChanged">,
     ) => {
@@ -215,6 +239,7 @@ export default function Taskboard() {
     on("WorkItemRunProgressed", resyncCard);
     on("WorkItemPrStatusChanged", resyncCard);
     on("WorkItemBoardReordered", onBoardReordered);
+    on("WorkItemDeleted", onWorkItemDeleted);
     on("WorkItemEditProposalsChanged", onEditProposalsChanged);
 
     return () => {
@@ -224,6 +249,7 @@ export default function Taskboard() {
       off("WorkItemRunProgressed", resyncCard);
       off("WorkItemPrStatusChanged", resyncCard);
       off("WorkItemBoardReordered", onBoardReordered);
+      off("WorkItemDeleted", onWorkItemDeleted);
       off("WorkItemEditProposalsChanged", onEditProposalsChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };

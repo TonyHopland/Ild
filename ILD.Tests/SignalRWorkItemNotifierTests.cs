@@ -37,6 +37,23 @@ public class SignalRWorkItemNotifierTests
     }
 
     [Fact]
+    public async Task WorkItemDeletedAsync_sends_the_deleted_id_and_affected_ids_to_the_work_item_group()
+    {
+        var (ctx, proxy) = BuildHubContext();
+        object?[]? capturedArgs = null;
+        proxy.Setup(p => p.SendCoreAsync("WorkItemDeleted", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
+            .Returns(Task.CompletedTask);
+
+        await new SignalRWorkItemNotifier(ctx.Object).WorkItemDeletedAsync("a", new[] { "b", "c" });
+
+        var payload = System.Text.Json.JsonSerializer.SerializeToElement(
+            Assert.Single(capturedArgs!), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        Assert.Equal("a", payload.GetProperty("workItemId").GetString());
+        Assert.Equal(new[] { "b", "c" }, payload.GetProperty("affectedIds").EnumerateArray().Select(e => e.GetString()).ToArray());
+    }
+
+    [Fact]
     public async Task GlobalVariableProposalsChangedAsync_hints_the_work_item_group_with_the_variable_name()
     {
         var (ctx, proxy) = BuildHubContext();

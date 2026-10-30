@@ -1375,6 +1375,12 @@ export interface WorkItemBoardReorderedPayload {
   workItemId: string;
 }
 
+/** `workItemId` was deleted; `affectedIds` had it as a dependency or dependent. */
+export interface WorkItemDeletedPayload {
+  workItemId: string;
+  affectedIds: string[];
+}
+
 export interface SchedulerStateChangedPayload {
   isPaused: boolean;
   maxConcurrent: number;

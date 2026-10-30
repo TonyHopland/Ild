@@ -1209,6 +1209,40 @@ describe("Taskboard live changes keep server order", () => {
     expect(badge("Work queue")).toBe("3");
   });
 
+  test("a work item deleted elsewhere leaves the board and its neighbours are re-read", async () => {
+    const server = mockBoard([
+      boardItem("a", 9, WorkItemStatus.Ready),
+      boardItem("b", 5, WorkItemStatus.Ready),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["a", "b"]));
+
+    server.items.splice(
+      server.items.findIndex((wi) => wi.id === "a"),
+      1,
+    );
+    await signalRHub.emit("WorkItemDeleted", { workItemId: "a", affectedIds: ["b"] });
+
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["b"]));
+    await flushPromises();
+    expect(badge("Work queue")).toBe("1");
+  });
+
+  test("a work item deleted elsewhere closes its open detail dialog", async () => {
+    mockModalServices();
+    const server = mockBoard([boardItem("wi-1", 5, WorkItemStatus.Ready)]);
+
+    renderTaskboard("/taskboard/wi-1");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+
+    server.items.splice(0, 1);
+    await signalRHub.emit("WorkItemDeleted", { workItemId: "wi-1", affectedIds: [] });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("location").textContent).toBe("/taskboard");
+  });
+
   test("a renumber announced once for the whole board re-reads the columns in their new order", async () => {
     const server = mockBoard([
       boardItem("a", 9, WorkItemStatus.Ready),
