@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A work item's Overview shows the branch its runs start from.**
 - **Clear analytics from Settings > Storage**, all of it or only what is older than a number of days.
 - **Open the chat that changed a work item from its History tab.**
 - **Drag the edge of the chat list to widen or narrow it, in the chat bubble and on the Chat page.**

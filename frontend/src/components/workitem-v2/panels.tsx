@@ -1068,6 +1068,13 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
     id,
     title: detail.allWorkItems.find((w) => w.id === id)?.title ?? null,
   }));
+  const baseOverride = workItem.baseBranchOverride?.trim();
+  const repository = detail.repositories.find((r) => r.id === workItem.repositoryId);
+  const baseBranch = baseOverride
+    ? { name: baseOverride, isDefault: false }
+    : repository
+      ? { name: repository.defaultBranch?.trim() || "main", isDefault: true }
+      : null;
   const tagList = parseTags(workItem);
   const isLoopTag = makeLoopTagMatcher(detail.templates.map((t) => t.name));
   const fmt = (d: string | null) => (d ? new Date(d).toLocaleString() : "—");
@@ -1100,6 +1107,15 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
           {repoName}
         </span>
       </div>
+      {baseBranch && (
+        <div className="wiv2-meta-row">
+          <span className="detail-label">Base branch</span>
+          <span className="detail-value wiv2-meta-mono">
+            {baseBranch.name}
+            {baseBranch.isDefault && <span className="wiv2-meta-node"> · repository default</span>}
+          </span>
+        </div>
+      )}
       {isRunning && loopName && (
         <div className="wiv2-meta-row">
           <span className="detail-label">Loop</span>
