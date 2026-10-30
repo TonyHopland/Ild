@@ -1096,10 +1096,7 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
     <div className="wiv2-meta">
       <div className="wiv2-meta-row">
         <span className="detail-label">Repository</span>
-        <span
-          className="detail-value"
-          title={repository ? undefined : workItem.repositoryId}
-        >
+        <span className="detail-value" title={repository ? undefined : workItem.repositoryId}>
           {repoName}
         </span>
       </div>
