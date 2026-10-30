@@ -1209,6 +1209,26 @@ describe("Taskboard live changes keep server order", () => {
     expect(badge("Work queue")).toBe("3");
   });
 
+  test("a work item deleted elsewhere leaves the board and its neighbours are re-read", async () => {
+    const server = mockBoard([
+      boardItem("a", 9, WorkItemStatus.Ready),
+      boardItem("b", 5, WorkItemStatus.Ready),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["a", "b"]));
+
+    server.items.splice(
+      server.items.findIndex((wi) => wi.id === "a"),
+      1,
+    );
+    await signalRHub.emit("WorkItemDeleted", { workItemId: "a", affectedIds: ["b"] });
+
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["b"]));
+    await flushPromises();
+    expect(badge("Work queue")).toBe("1");
+  });
+
   test("a renumber announced once for the whole board re-reads the columns in their new order", async () => {
     const server = mockBoard([
       boardItem("a", 9, WorkItemStatus.Ready),

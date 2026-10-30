@@ -1572,12 +1572,18 @@ public class WorkItemManager : IWorkItemManager
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
+        // Neighbours whose dependency lists change, read before the item is gone.
+        var affectedIds = new List<string>();
         try
         {
             var opts = await _options.ResolveForWorkItemAsync(workItemId);
+            affectedIds.AddRange(await GetServerDependencyIdsAsync(opts, workItemId));
+            var all = await _server.ListAsync(opts, status: null, tags: null);
+            affectedIds.AddRange(all.Where(w => w.Dependencies.Contains(workItemId)).Select(w => w.Id));
             await _server.DeleteAsync(opts, workItemId, actor);
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
+        await _notifier.WorkItemDeletedAsync(workItemId, affectedIds.Distinct(StringComparer.Ordinal).ToList());
         await _loopRunStore.ClearWorkItemStatusReasonAsync(workItemId);
 
         // Delete all LoopRuns for this work item. Reclaim each run's local

@@ -29,6 +29,9 @@ public record WorkItemPrStatusChangedPayload(string WorkItemId);
 /// <summary>Dropping <paramref name="WorkItemId"/> renumbered every item of the board, in the same order.</summary>
 public record WorkItemBoardReorderedPayload(string WorkItemId);
 
+/// <summary>Work item <paramref name="WorkItemId"/> was deleted; <paramref name="AffectedIds"/> had it as a dependency or dependent.</summary>
+public record WorkItemDeletedPayload(string WorkItemId, IReadOnlyList<string> AffectedIds);
+
 public record WorkItemEditProposalsChangedPayload(string WorkItemId);
 
 public record GlobalVariableProposalsChangedPayload(string Name);

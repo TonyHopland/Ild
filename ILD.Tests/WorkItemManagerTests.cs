@@ -1435,6 +1435,45 @@ public class WorkItemManagerTests
         Assert.False((await mgr.DeleteAsync(TestActors.Human, Guid.NewGuid().ToString())));
     }
 
+    [Fact]
+    public async Task DeleteAsync_notifies_the_deleted_id_with_its_dependency_and_dependent_neighbours()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+
+        var dependency = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repo.Id);
+        var middle = await mgr.CreateWorkItemAsync(TestActors.Human, "mid", "", repo.Id);
+        var dependent = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repo.Id);
+        await mgr.AddDependencyAsync(TestActors.Human, middle, dependency);
+        await mgr.AddDependencyAsync(TestActors.Human, dependent, middle);
+        notifier.Invocations.Clear();
+
+        Assert.True(await mgr.DeleteAsync(TestActors.Human, middle));
+
+        notifier.Verify(n => n.WorkItemDeletedAsync(middle,
+            It.Is<IReadOnlyList<string>>(ids => ids.OrderBy(i => i).SequenceEqual(new[] { dependency, dependent }.OrderBy(i => i)))), Times.Once);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_does_not_notify_for_unknown_id()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var notifier = new Mock<IWorkItemNotifier>();
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+
+        Assert.False(await mgr.DeleteAsync(TestActors.Human, Guid.NewGuid().ToString()));
+
+        notifier.Verify(n => n.WorkItemDeletedAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>()), Times.Never);
+    }
+
     // ---- MergePullRequestAsync -------------------------------------------
 
     [Fact]

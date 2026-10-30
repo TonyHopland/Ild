@@ -203,6 +203,20 @@ export default function Taskboard() {
       reloadAll({ windowed: true });
     };
 
+    // A deleted item's card leaves the board. A fetch still out for it must not
+    // put the card back, so it is superseded; the neighbours it was linked to
+    // are re-read for their new dependency lists.
+    const onWorkItemDeleted = (message: TypedSignalRMessage<"WorkItemDeleted">) => {
+      const { workItemId, affectedIds } = message.payload;
+      syncSeqRef.current.set(workItemId, (syncSeqRef.current.get(workItemId) ?? 0) + 1);
+      syncInFlightRef.current.delete(workItemId);
+      itemChangedRef.current.delete(workItemId);
+      handleDeleted(workItemId);
+      for (const id of affectedIds) {
+        if (findItem(id)) syncWorkItem(id, { itemChanged: false });
+      }
+    };
+
     const onEditProposalsChanged = (
       message: TypedSignalRMessage<"WorkItemEditProposalsChanged">,
     ) => {
@@ -215,6 +229,7 @@ export default function Taskboard() {
     on("WorkItemRunProgressed", resyncCard);
     on("WorkItemPrStatusChanged", resyncCard);
     on("WorkItemBoardReordered", onBoardReordered);
+    on("WorkItemDeleted", onWorkItemDeleted);
     on("WorkItemEditProposalsChanged", onEditProposalsChanged);
 
     return () => {
@@ -224,6 +239,7 @@ export default function Taskboard() {
       off("WorkItemRunProgressed", resyncCard);
       off("WorkItemPrStatusChanged", resyncCard);
       off("WorkItemBoardReordered", onBoardReordered);
+      off("WorkItemDeleted", onWorkItemDeleted);
       off("WorkItemEditProposalsChanged", onEditProposalsChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };

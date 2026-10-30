@@ -61,6 +61,13 @@ public interface IWorkItemNotifier
     /// made, decided, or went stale — so its Action tab re-reads them. A hint only: listeners re-fetch.
     /// </summary>
     Task HumanInputProposalsChangedAsync(string workItemId);
+
+    /// <summary>
+    /// Signals that a work item was deleted, so boards drop its card. <paramref name="affectedIds"/>
+    /// are the items that depended on it or that it depended on, whose dependency
+    /// lists changed; listeners re-fetch them.
+    /// </summary>
+    Task WorkItemDeletedAsync(string workItemId, IReadOnlyList<string> affectedIds);
 }
 
 public sealed class NoopWorkItemNotifier : IWorkItemNotifier
@@ -77,4 +84,5 @@ public sealed class NoopWorkItemNotifier : IWorkItemNotifier
     public Task GlobalVariableProposalsChangedAsync(string name) => Task.CompletedTask;
     public Task LoopTemplateProposalsChangedAsync(Guid templateId) => Task.CompletedTask;
     public Task HumanInputProposalsChangedAsync(string workItemId) => Task.CompletedTask;
+    public Task WorkItemDeletedAsync(string workItemId, IReadOnlyList<string> affectedIds) => Task.CompletedTask;
 }

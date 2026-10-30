@@ -24,6 +24,7 @@ import type {
   WorkItemRunProgressedPayload,
   WorkItemPrStatusChangedPayload,
   WorkItemBoardReorderedPayload,
+  WorkItemDeletedPayload,
   SchedulerStateChangedPayload,
   ChatMessageAppendedPayload,
   ChatTurnProgressPayload,
@@ -64,6 +65,7 @@ export interface SignalREventPayloads {
   WorkItemRunProgressed: WorkItemRunProgressedPayload;
   WorkItemPrStatusChanged: WorkItemPrStatusChangedPayload;
   WorkItemBoardReordered: WorkItemBoardReorderedPayload;
+  WorkItemDeleted: WorkItemDeletedPayload;
   SchedulerStateChanged: SchedulerStateChangedPayload;
   ChatMessageAppended: ChatMessageAppendedPayload;
   ChatTurnProgress: ChatTurnProgressPayload;

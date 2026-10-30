@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Deleting a work item removes its card from the board right away, in every open tab.**
 - **A chat no longer looks finished while its next reply is still running.**
 
 ## [0.22.0] - 2026-10-27
