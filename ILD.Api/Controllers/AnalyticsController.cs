@@ -8,11 +8,15 @@ namespace ILD.Api.Controllers;
 [Route("api/v1/[controller]")]
 public class AnalyticsController : ControllerBase
 {
-    private readonly IRunAnalyticsService _analytics;
+    private const int MaxOlderThanDays = 36500;
 
-    public AnalyticsController(IRunAnalyticsService analytics)
+    private readonly IRunAnalyticsService _analytics;
+    private readonly IAnalyticsCleanupService _cleanup;
+
+    public AnalyticsController(IRunAnalyticsService analytics, IAnalyticsCleanupService cleanup)
     {
         _analytics = analytics;
+        _cleanup = cleanup;
     }
 
     /// <summary>
@@ -45,6 +49,20 @@ public class AnalyticsController : ControllerBase
             gran);
         var overview = await _analytics.GetOverviewAsync(query, cancellationToken);
         return Ok(overview);
+    }
+
+    /// <summary>
+    /// Clears the stored analytics: all of it, or with <c>olderThanDays</c> (1-36500)
+    /// only what is dated before UTC midnight that many days ago. Runs and chats
+    /// that still exist are never touched.
+    /// </summary>
+    [HttpDelete]
+    public async Task<IActionResult> Clear([FromQuery] int? olderThanDays, CancellationToken cancellationToken)
+    {
+        if (olderThanDays is < 1 or > MaxOlderThanDays)
+            return BadRequest(new { error = $"Invalid 'olderThanDays'; expected a whole number from 1 to {MaxOlderThanDays}." });
+        await _cleanup.ClearAsync(olderThanDays, cancellationToken);
+        return NoContent();
     }
 
     internal static bool TryParseDate(string? value, out DateOnly? date)
