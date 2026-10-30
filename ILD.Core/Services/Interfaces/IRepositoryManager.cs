@@ -117,6 +117,17 @@ public interface IRepositoryManager
     Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null, WorktreeDiffRange? range = null);
 
     /// <summary>
+    /// Gives the shared group read and write on every regular file under <paramref name="worktreePath"/>,
+    /// and read, write and execute on every directory, as the agent: files an agent tool creates owner-only
+    /// are otherwise unreadable to the orchestrator. Owner and other bits, <c>.git</c>
+    /// entries and symbolic links are left alone. A file already executable by its owner is
+    /// made executable by the group too, as a directory is. Refused, without starting a process, for a directory that
+    /// is not a clone or worktree of ours. Returns false, never throws (but for cancellation), when some
+    /// entry could not be changed.
+    /// </summary>
+    Task<bool> ShareWorktreeWithOrchestratorAsync(string worktreePath, CancellationToken ct = default);
+
+    /// <summary>
     /// The run branch's own first-parent commits after its fork point with
     /// <paramref name="defaultBranch"/>, newest first, together with that fork
     /// point — the same one the file diffs anchor on. When no fork point

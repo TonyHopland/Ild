@@ -557,6 +557,24 @@ public class RepositoryManager : IRepositoryManager
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
+        byte[]? bytes;
+        try
+        {
+            bytes = await ReadFileBytesAsync(full);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            await ShareWorktreeWithOrchestratorAsync(worktreePath);
+            try
+            {
+                bytes = await ReadFileBytesAsync(full);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw new WorktreeFileUnreadableException($"{relativePath} can't be read: permission denied");
+            }
+        }
+
         var baseRef = range?.From ?? await ResolveDiffBaseAsync(worktreePath, defaultBranch);
         var revisions = DiffRevisions(baseRef, range);
 
@@ -572,7 +590,7 @@ public class RepositoryManager : IRepositoryManager
             diff = string.IsNullOrEmpty(patch) ? null : patch;
         }
 
-        var exists = File.Exists(full);
+        var exists = bytes is not null;
         if (status == "none" && exists && range?.To == null)
         {
             // git diff ignores untracked files, so a brand-new file shows no
@@ -596,9 +614,8 @@ public class RepositoryManager : IRepositoryManager
             Diff = diff,
         };
 
-        if (exists)
+        if (bytes is not null)
         {
-            var bytes = await File.ReadAllBytesAsync(full);
             if (IsBinary(bytes))
             {
                 response.IsBinary = true;
@@ -618,6 +635,19 @@ public class RepositoryManager : IRepositoryManager
         }
 
         return response;
+    }
+
+    private static async Task<byte[]?> ReadFileBytesAsync(string full)
+    {
+        if (Directory.Exists(full)) return null;
+        try
+        {
+            return await File.ReadAllBytesAsync(full);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     public FileStream? OpenWorktreeFile(string worktreePath, string relativePath)
@@ -1092,6 +1122,26 @@ public class RepositoryManager : IRepositoryManager
 
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
         => RunAsync(cwd, args, CancellationToken.None);
+
+    public async Task<bool> ShareWorktreeWithOrchestratorAsync(string worktreePath, CancellationToken ct = default)
+    {
+        if (TrustedRepositoryRoot(worktreePath) is null)
+        {
+            _logger?.LogWarning("Refused sharing {Directory}: its .git is not a clone or worktree of ours", worktreePath);
+            return false;
+        }
+
+        string[] args =
+        [
+            Path.GetFullPath(worktreePath), "-name", ".git", "-prune",
+            "-o", "-type", "d", "!", "-perm", "-g=rwx", "-exec", "chmod", "g+rwX", "{}", "+",
+            "-o", "-type", "f", "!", "-perm", "-g=rw", "-exec", "chmod", "g+rwX", "{}", "+",
+        ];
+        var r = await _runner.RunAsync("find", args, "/", ct, null, _agentOptions);
+        if (!r.Success)
+            _logger?.LogWarning("Sharing {Directory} with the orchestrator exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
+        return r.Success;
+    }
 
     /// <summary>
     /// <c>git -C <paramref name="cwd"/></c> as the agent. Refused, without starting git, for a directory

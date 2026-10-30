@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Deleting a work item removes its card from the board right away, in every open tab.**
 - **A chat no longer looks finished while its next reply is still running.**
+- **Files an agent saves into a worktree, such as screenshots, open in the Files tab instead of failing, and a file that still cannot be read says so.**
 
 ## [0.22.0] - 2026-10-27
 

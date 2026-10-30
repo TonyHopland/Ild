@@ -20,6 +20,7 @@ public class WorkItemsController : ControllerBase
 {
     /// <summary>The form field every attachment upload arrives under.</summary>
     private const string AttachmentFieldName = "files";
+    private const string FileUnreadableMessage = "File can't be read: permission denied.";
 
     private readonly IWorkItemManager _workItemManager;
     private readonly ILoopEngine _engine;
@@ -614,10 +615,17 @@ public class WorkItemsController : ControllerBase
         var (range, rangeError) = await ResolveDiffRangeAsync(workItem!.WorktreePath!, diffBase, from, to);
         if (rangeError != null) return rangeError;
 
-        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem.WorktreePath!, path, diffBase, range);
-        if (content == null)
-            return NotFound(new { error = "File not found in worktree." });
-        return Ok(content);
+        try
+        {
+            var content = await _repositoryManager.ReadWorktreeFileAsync(workItem.WorktreePath!, path, diffBase, range);
+            if (content == null)
+                return NotFound(new { error = "File not found in worktree." });
+            return Ok(content);
+        }
+        catch (WorktreeFileUnreadableException)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = FileUnreadableMessage });
+        }
     }
 
     // The file exactly as it is on disk, for the Files tab's Download. Served as
@@ -665,7 +673,15 @@ public class WorkItemsController : ControllerBase
         var (range, rangeError) = await ResolveDiffRangeAsync(workItem.WorktreePath!, diffBase, from, to);
         if (rangeError != null) return rangeError;
 
-        var result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase, range);
+        WorktreeFileWriteResult result;
+        try
+        {
+            result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase, range);
+        }
+        catch (WorktreeFileUnreadableException)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = FileUnreadableMessage });
+        }
         // A save that produced a file answers with it — asking for the file is
         // the same question as asking whether it saved, so there is no arm here
         // that could answer 200 with nothing in it. A file that is not there

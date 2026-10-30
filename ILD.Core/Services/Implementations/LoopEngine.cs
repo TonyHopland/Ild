@@ -1030,6 +1030,10 @@ public sealed class LoopEngine : ILoopEngine
                     outcome = writeFailure;
                 }
 
+                if (node.NodeType is NodeType.AI or NodeType.Cmd
+                    && outcome is NodeOutcome.Success or NodeOutcome.Fail or NodeOutcome.Interrupted or NodeOutcome.WaitingAction or NodeOutcome.Terminal)
+                    await ShareWorktreeAsync(run, sp);
+
                 switch (outcome)
                 {
                     case NodeOutcome.NodeStarting ns:
@@ -1643,6 +1647,20 @@ public sealed class LoopEngine : ILoopEngine
         await ParkForHumanAsync(run, crashed?.LoopNodeId, crashed?.NodeLabel, haltReason: null, HumanFeedbackReasons.RunCrashed,
             shortReason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), crashed?.Id,
             recordedReason: reason);
+    }
+
+    /// <summary>
+    /// Gives the orchestrator group access to what the node's tools wrote owner-only, so the Files tab,
+    /// diffs and commits see it. Best effort: the node's outcome and routing never depend on it.
+    /// </summary>
+    private async Task ShareWorktreeAsync(LoopRun run, IServiceProvider sp)
+    {
+        if (string.IsNullOrEmpty(run.WorktreePath) || sp.GetService<IRepositoryManager>() is not { } repos) return;
+        await TrySafe(run.Id, async () =>
+        {
+            if (!await repos.ShareWorktreeWithOrchestratorAsync(run.WorktreePath, CancellationToken.None))
+                _logger.LogWarning("Run {RunId}: sharing the worktree with the orchestrator did not complete", run.Id);
+        });
     }
 
     /// <summary>
