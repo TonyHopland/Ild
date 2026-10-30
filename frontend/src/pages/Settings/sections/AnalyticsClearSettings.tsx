@@ -103,6 +103,7 @@ export default function AnalyticsClearSettings() {
             min={1}
             max={MAX_DAYS}
             step={1}
+            disabled={pending}
             value={daysText}
             onChange={(event) => setDaysText(event.target.value)}
           />

@@ -59,7 +59,7 @@ public class AnalyticsController : ControllerBase
     [HttpDelete]
     public async Task<IActionResult> Clear([FromQuery] int? olderThanDays, CancellationToken cancellationToken)
     {
-        if (olderThanDays is < 1 or > MaxOlderThanDays)
+        if (olderThanDays is < 1 or > MaxOlderThanDays || (olderThanDays is null && Request.Query.ContainsKey("olderThanDays")))
             return BadRequest(new { error = $"Invalid 'olderThanDays'; expected a whole number from 1 to {MaxOlderThanDays}." });
         await _cleanup.ClearAsync(olderThanDays, cancellationToken);
         return NoContent();
