@@ -1089,6 +1089,13 @@ export const analyticsService = {
     const qs = params.toString();
     return api.get<RunAnalyticsOverview>(`/analytics${qs ? `?${qs}` : ""}`);
   },
+
+  /** Clears all stored analytics, or only what is older than the given number of days. */
+  clear: async (olderThanDays?: number): Promise<void> => {
+    await api.delete<void>(
+      `/analytics${olderThanDays === undefined ? "" : `?olderThanDays=${olderThanDays}`}`,
+    );
+  },
 };
 
 /**

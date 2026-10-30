@@ -3,6 +3,7 @@ import { storageService } from "../../../services/auth";
 import type { ApiError, StorageOverview } from "../../../types";
 import { formatBytes } from "../../../utils/attachments";
 import PreviewDataDelete from "../../../components/PreviewDataDelete";
+import AnalyticsClearSettings from "./AnalyticsClearSettings";
 import BackupRestoreSettings from "./BackupRestoreSettings";
 
 type Overview = { data: StorageOverview | null; loading: boolean; error: string | null };
@@ -181,6 +182,8 @@ export default function StorageSettings() {
           </ul>
         )}
       </section>
+
+      <AnalyticsClearSettings />
 
       <BackupRestoreSettings
         onChanged={() => {

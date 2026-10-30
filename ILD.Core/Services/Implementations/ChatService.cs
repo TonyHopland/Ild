@@ -754,16 +754,18 @@ public sealed class ChatService : IChatService
         // Messages and adapter snapshots cascade-delete and schedule firings unlink
         // via their FKs; the usage moves into the analytics archive in the same
         // commit; the loop scratchpad is in-memory only, so drop its entry explicitly.
-        await using (var transaction = await _db.Database.BeginTransactionAsync(ct))
+        bool removed;
+        try
         {
-            await ChatUsageLedger.ArchiveAsync(_db, session.Id, ct);
-            await _db.SaveChangesAsync(ct);
-            var removed = await _db.ChatSessions
-                .Where(c => c.Id == session.Id && (!unlessStarred || !c.IsFavorite))
-                .ExecuteDeleteAsync(ct);
-            if (removed == 0) return false;
-            await transaction.CommitAsync(ct);
+            removed = await ArchiveAndRemoveAsync(session.Id, unlessStarred, ct);
         }
+        catch (DbUpdateConcurrencyException)
+        {
+            // An analytics clear removed usage rows this delete was about to move.
+            _db.ChangeTracker.Clear();
+            removed = await ArchiveAndRemoveAsync(session.Id, unlessStarred, ct);
+        }
+        if (!removed) return false;
         _loopScratchpad.Clear(session.Id);
 
         // An unread chat takes its dot with it, in every window of the owner's.
@@ -787,6 +789,19 @@ public sealed class ChatService : IChatService
 
         // Claude Code's transcripts of the chat, whose copies went with the row.
         await _claudeProjects.DeleteForAsync(session.ScratchPath, CancellationToken.None);
+        return true;
+    }
+
+    private async Task<bool> ArchiveAndRemoveAsync(Guid sessionId, bool unlessStarred, CancellationToken ct)
+    {
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await ChatUsageLedger.ArchiveAsync(_db, sessionId, ct);
+        await _db.SaveChangesAsync(ct);
+        var removed = await _db.ChatSessions
+            .Where(c => c.Id == sessionId && (!unlessStarred || !c.IsFavorite))
+            .ExecuteDeleteAsync(ct);
+        if (removed == 0) return false;
+        await transaction.CommitAsync(ct);
         return true;
     }
 
