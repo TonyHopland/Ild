@@ -1207,6 +1207,118 @@ describe("WorkItemModalV2", () => {
     await waitFor(() => expect(within(overview).getByText("my-repo")).toBeTruthy());
   });
 
+  describe("base branch row", () => {
+    function overviewOf() {
+      return document.getElementById("wiv2-panel-overview") as HTMLElement;
+    }
+    function baseRow() {
+      return within(overviewOf()).getByText("Base branch").closest(".wiv2-meta-row") as HTMLElement;
+    }
+    function repoWithDefault(defaultBranch: string | null) {
+      vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([
+        {
+          id: "repo-1",
+          name: "my-repo",
+          remoteProviderId: "rp-1",
+          cloneUrl: "",
+          defaultBranch,
+          worktreesPath: null,
+          defaultIntakeStatus: WorkItemStatus.Backlog,
+          createdAt: "2025-01-01T00:00:00Z",
+        },
+      ]);
+    }
+
+    test("an override is shown trimmed and is not marked as the repository default", async () => {
+      mockServices();
+      repoWithDefault("develop");
+      await renderDialog(makeWorkItem({ baseBranchOverride: "  release/1.2  " }));
+
+      await waitFor(() => expect(within(overviewOf()).getByText("my-repo")).toBeTruthy());
+      const row = baseRow();
+      expect(row.querySelector(".detail-value")?.textContent).toBe("release/1.2");
+      expect(row.textContent).not.toContain("develop");
+      expect(row.textContent).not.toContain("repository default");
+    });
+
+    test("an override is shown for a repository that is unknown", async () => {
+      mockServices();
+      await renderDialog(
+        makeWorkItem({ repositoryId: "repo-gone", baseBranchOverride: "release/1.2" }),
+      );
+      await settle();
+
+      expect(baseRow().textContent).toContain("release/1.2");
+      expect(baseRow().textContent).not.toContain("repository default");
+    });
+
+    test("an override is shown before the repository list has loaded", async () => {
+      mockServices();
+      vi.spyOn(authServices.repositoryService, "getAll").mockReturnValue(new Promise(() => {}));
+      await renderDialog(makeWorkItem({ baseBranchOverride: "release/1.2" }));
+
+      expect(baseRow().textContent).toContain("release/1.2");
+    });
+
+    test.each([null, "", "   "])(
+      "a blank override (%j) falls back to the repository default, marked as such",
+      async (override) => {
+        mockServices();
+        repoWithDefault(" develop ");
+        await renderDialog(makeWorkItem({ baseBranchOverride: override }));
+
+        await waitFor(() => expect(within(overviewOf()).getByText("Base branch")).toBeTruthy());
+        expect(baseRow().textContent).toContain("develop");
+        expect(baseRow().textContent).toContain("repository default");
+      },
+    );
+
+    test.each([null, "  "])(
+      "a repository with default branch %j resolves to main, marked as the default",
+      async (defaultBranch) => {
+        mockServices();
+        repoWithDefault(defaultBranch);
+        await renderDialog(makeWorkItem());
+
+        await waitFor(() => expect(within(overviewOf()).getByText("Base branch")).toBeTruthy());
+        expect(baseRow().textContent).toContain("main");
+        expect(baseRow().textContent).toContain("repository default");
+      },
+    );
+
+    test("with no override and an unknown repository no row is shown", async () => {
+      mockServices();
+      await renderDialog(makeWorkItem({ repositoryId: "repo-gone" }));
+      await settle();
+
+      expect(within(overviewOf()).queryByText("Base branch")).toBeNull();
+    });
+
+    test("with no override and the repository list not loaded no row is shown", async () => {
+      mockServices();
+      vi.spyOn(authServices.repositoryService, "getAll").mockReturnValue(new Promise(() => {}));
+      await renderDialog(makeWorkItem());
+      await settle();
+
+      expect(within(overviewOf()).queryByText("Base branch")).toBeNull();
+    });
+
+    test("the row follows the work item when its override changes", async () => {
+      mockServices();
+      repoWithDefault("develop");
+      const { rerender } = await renderDialog(makeWorkItem({ baseBranchOverride: "release/1.2" }));
+      await waitFor(() => expect(baseRow().textContent).toContain("release/1.2"));
+
+      await rerenderDialog(rerender, makeWorkItem({ baseBranchOverride: "release/2.0" }));
+      expect(baseRow().textContent).toContain("release/2.0");
+      expect(baseRow().textContent).not.toContain("release/1.2");
+
+      await rerenderDialog(rerender, makeWorkItem({ baseBranchOverride: null }));
+      expect(baseRow().textContent).toContain("develop");
+      expect(baseRow().textContent).toContain("repository default");
+    });
+  });
+
   test("items waiting on this one are listed under Blocks, by title", async () => {
     mockServices();
     vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
