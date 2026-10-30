@@ -91,4 +91,52 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
         Assert.True(calls.Count >= 3, "each operation runs git");
         Assert.All(calls, call => Assert.True(call.Orchestrator));
     }
+
+    private sealed class RecordingRunner(int exitCode) : IProcessRunner
+    {
+        public List<(string File, IReadOnlyList<string> Args, string? Cwd, ProcessRunOptions? Options)> Calls { get; } = new();
+
+        public Task<ProcessResult> RunAsync(
+            string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default,
+            IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
+        {
+            Calls.Add((fileName, args.ToList(), workingDirectory, options));
+            return Task.FromResult(new ProcessResult(exitCode, string.Empty, exitCode == 0 ? string.Empty : "find: denied"));
+        }
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    public async Task Sharing_a_worktree_runs_as_the_agent_from_the_filesystem_root_and_reports_failure_without_throwing(int exitCode, bool expected)
+    {
+        var inner = new RecordingRunner(exitCode);
+        var runner = new AuditingRunner(isolated: true, inner: inner);
+        runner.Forbid(_clone);
+        var manager = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"), sharedGroup: "agents");
+
+        var ok = await manager.ShareWorktreeWithOrchestratorAsync(_clone, TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, ok);
+        runner.AssertClean();
+        var call = Assert.Single(inner.Calls);
+        Assert.Equal("/", call.Cwd);
+        Assert.True(call.Options?.AgentScoped);
+        Assert.NotEqual("git", call.File);
+    }
+
+    [Fact]
+    public async Task Sharing_a_directory_that_is_not_a_clone_or_worktree_starts_no_process()
+    {
+        var inner = new RecordingRunner(0);
+        var runner = new AuditingRunner(isolated: true, inner: inner);
+        var manager = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"), sharedGroup: "agents");
+        var stray = Path.Combine(_tmp, "stray");
+        Directory.CreateDirectory(stray);
+
+        var ok = await manager.ShareWorktreeWithOrchestratorAsync(stray, TestContext.Current.CancellationToken);
+
+        Assert.False(ok);
+        Assert.Empty(inner.Calls);
+    }
 }

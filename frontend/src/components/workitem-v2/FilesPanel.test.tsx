@@ -1484,6 +1484,17 @@ describe("FilesPanel download", () => {
     expect(downloadButton()).toBeNull();
   });
 
+  test("a file the server cannot read shows the server's permission message in the viewer", async () => {
+    mockFiles(["shot.png"]);
+    vi.spyOn(authServices.workItemService, "getFileContent").mockRejectedValue({
+      status: 403,
+      message: "File can't be read: permission denied.",
+    });
+    await renderView(makeWorkItem());
+    await open("shot.png");
+    expect(screen.getByText("File can't be read: permission denied.")).toBeTruthy();
+  });
+
   test("Download is withdrawn while the editor is open, so a draft is never what gets saved", async () => {
     mockFiles(["a.ts"]);
     const { spy } = holdDownloads();

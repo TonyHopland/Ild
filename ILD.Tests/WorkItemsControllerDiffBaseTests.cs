@@ -286,6 +286,40 @@ public class WorkItemsControllerDiffBaseTests
         repoManager.Verify(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()), Times.Never);
     }
 
+    private static string ErrorOf(IActionResult result)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<ObjectResult>(result).Value);
+        return System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("error").GetString()!;
+    }
+
+    [Fact]
+    public async Task Reading_a_file_ILD_cannot_open_answers_403_with_a_clear_message_never_500()
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+        repoManager.Setup(m => m.ReadWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
+            .ThrowsAsync(new WorktreeFileUnreadableException("docs/shot.png"));
+
+        var result = await controller.GetFileContent(WorkItemId, "docs/shot.png");
+
+        Assert.Equal(403, Assert.IsType<ObjectResult>(result).StatusCode);
+        Assert.Equal("File can't be read: permission denied.", ErrorOf(result));
+    }
+
+    [Fact]
+    public async Task Saving_a_file_whose_read_back_is_denied_answers_the_same_403()
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+        repoManager.Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
+            .ThrowsAsync(new WorktreeFileUnreadableException("src/app.ts"));
+
+        var result = await controller.SaveFileContent(WorkItemId, new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" });
+
+        Assert.Equal(403, Assert.IsType<ObjectResult>(result).StatusCode);
+        Assert.Equal("File can't be read: permission denied.", ErrorOf(result));
+    }
+
     private const string WorkItemId = "1";
     private const string WorktreePath = "/tmp/ild-difftest-worktree";
 
