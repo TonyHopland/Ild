@@ -1462,6 +1462,35 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task DeleteAsync_still_deletes_and_notifies_with_no_neighbours_when_the_neighbour_lookup_fails()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.GetAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns((WorkItemServerOptions o, string id, CancellationToken ct) => db.ServerClient.GetAsync(o, id, ct));
+        client.Setup(c => c.DeleteAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+            .Returns((WorkItemServerOptions o, string id, WorkItemActor a, CancellationToken ct) => db.ServerClient.DeleteAsync(o, id, a, ct));
+        client.Setup(c => c.ListAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<RemoteWorkItemStatus?>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("boom"));
+        var creator = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var id = await creator.CreateWorkItemAsync(TestActors.Human, "a", "", repo.Id);
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, client.Object, db.ServerOptions, TestActors.Instance, notifier.Object);
+        notifier.Invocations.Clear();
+
+        Assert.True(await mgr.DeleteAsync(TestActors.Human, id));
+
+        Assert.Null(await creator.GetWorkItemAsync(id));
+        notifier.Verify(n => n.WorkItemDeletedAsync(id, It.Is<IReadOnlyList<string>>(ids => ids.Count == 0)), Times.Once);
+    }
+
+    [Fact]
     public async Task DeleteAsync_does_not_notify_for_unknown_id()
     {
         var db = new TestDb();
