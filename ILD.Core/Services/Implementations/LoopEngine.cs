@@ -1030,8 +1030,7 @@ public sealed class LoopEngine : ILoopEngine
                     outcome = writeFailure;
                 }
 
-                if (node.NodeType is NodeType.AI or NodeType.Cmd
-                    && outcome is NodeOutcome.Success or NodeOutcome.Fail or NodeOutcome.Interrupted or NodeOutcome.WaitingAction or NodeOutcome.Terminal)
+                if (node.NodeType is NodeType.AI or NodeType.Cmd && outcome.EndsNodeWork)
                     await ShareWorktreeAsync(run, sp);
 
                 switch (outcome)

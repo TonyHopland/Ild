@@ -28,7 +28,9 @@ memory or its private files by virtue of being the same user.
     inherit the group), plus a default POSIX ACL granting `g:ild-agents:rwx` so a
     file created by either uid stays read/write for the other. A file an agent tool
     writes owner-only (mode 0600 clamps that ACL to nothing) is given back to the group,
-    as the agent, after each AI and Cmd node and when a Files-tab read is refused.
+    as the agent, after each AI and Cmd node (files git can see: changed since the fork
+    point or untracked, plus their directories; ignored files are left alone) and, for
+    that one file, when a Files-tab read or download is refused.
   - **read-only** — `/data/agents`, the npm-installed CLIs, and `/data/git-mirrors`,
     the orchestrator's git mirrors (below). The agent execs the CLIs
     but must not rewrite them, because the orchestrator runs those same binaries

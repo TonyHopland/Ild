@@ -320,6 +320,20 @@ public class WorkItemsControllerDiffBaseTests
         Assert.Equal("File can't be read: permission denied.", ErrorOf(result));
     }
 
+    [Fact]
+    public async Task Downloading_a_file_ILD_cannot_open_answers_the_same_403_not_a_404()
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+        repoManager.Setup(m => m.OpenWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .ThrowsAsync(new WorktreeFileUnreadableException("docs/shot.png"));
+
+        var result = await controller.GetFileRaw(WorkItemId, "docs/shot.png");
+
+        Assert.Equal(403, Assert.IsType<ObjectResult>(result).StatusCode);
+        Assert.Equal("File can't be read: permission denied.", ErrorOf(result));
+    }
+
     private const string WorkItemId = "1";
     private const string WorktreePath = "/tmp/ild-difftest-worktree";
 

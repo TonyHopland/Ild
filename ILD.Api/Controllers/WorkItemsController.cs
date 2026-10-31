@@ -601,6 +601,12 @@ public class WorkItemsController : ControllerBase
         });
     }
 
+    private ObjectResult FileUnreadable(WorktreeFileUnreadableException ex)
+    {
+        _logger.LogWarning(ex, "A worktree file could not be read after repairing its group access");
+        return StatusCode(StatusCodes.Status403Forbidden, new { error = FileUnreadableMessage });
+    }
+
     [HttpGet("{id}/files/content")]
     public async Task<IActionResult> GetFileContent(
         string id, [FromQuery] string path, [FromQuery] string? from = null, [FromQuery] string? to = null)
@@ -622,9 +628,9 @@ public class WorkItemsController : ControllerBase
                 return NotFound(new { error = "File not found in worktree." });
             return Ok(content);
         }
-        catch (WorktreeFileUnreadableException)
+        catch (WorktreeFileUnreadableException ex)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = FileUnreadableMessage });
+            return FileUnreadable(ex);
         }
     }
 
@@ -641,7 +647,15 @@ public class WorkItemsController : ControllerBase
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
-        var stream = _repositoryManager.OpenWorktreeFile(workItem!.WorktreePath!, path);
+        FileStream? stream;
+        try
+        {
+            stream = await _repositoryManager.OpenWorktreeFileAsync(workItem!.WorktreePath!, path);
+        }
+        catch (WorktreeFileUnreadableException ex)
+        {
+            return FileUnreadable(ex);
+        }
         if (stream == null)
             return NotFound(new { error = "File not found in worktree." });
         return File(stream, "application/octet-stream", Path.GetFileName(stream.Name));
@@ -678,9 +692,9 @@ public class WorkItemsController : ControllerBase
         {
             result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase, range);
         }
-        catch (WorktreeFileUnreadableException)
+        catch (WorktreeFileUnreadableException ex)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = FileUnreadableMessage });
+            return FileUnreadable(ex);
         }
         // A save that produced a file answers with it — asking for the file is
         // the same question as asking whether it saved, so there is no arm here
