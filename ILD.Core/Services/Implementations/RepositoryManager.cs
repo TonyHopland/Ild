@@ -557,6 +557,8 @@ public class RepositoryManager : IRepositoryManager
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
+        var bytes = await ReadRepairingAsync(worktreePath, relativePath, full, () => ReadFileBytesAsync(full));
+
         var baseRef = range?.From ?? await ResolveDiffBaseAsync(worktreePath, defaultBranch);
         var revisions = DiffRevisions(baseRef, range);
 
@@ -572,7 +574,7 @@ public class RepositoryManager : IRepositoryManager
             diff = string.IsNullOrEmpty(patch) ? null : patch;
         }
 
-        var exists = File.Exists(full);
+        var exists = bytes is not null;
         if (status == "none" && exists && range?.To == null)
         {
             // git diff ignores untracked files, so a brand-new file shows no
@@ -596,9 +598,8 @@ public class RepositoryManager : IRepositoryManager
             Diff = diff,
         };
 
-        if (exists)
+        if (bytes is not null)
         {
-            var bytes = await File.ReadAllBytesAsync(full);
             if (IsBinary(bytes))
             {
                 response.IsBinary = true;
@@ -620,11 +621,30 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
-    public FileStream? OpenWorktreeFile(string worktreePath, string relativePath)
+    private static async Task<byte[]?> ReadFileBytesAsync(string full)
+    {
+        if (Directory.Exists(full)) return null;
+        try
+        {
+            return await File.ReadAllBytesAsync(full);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    public async Task<FileStream?> OpenWorktreeFileAsync(string worktreePath, string relativePath)
     {
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
+        return await ReadRepairingAsync(worktreePath, relativePath, full, () => Task.FromResult(OpenFile(full)));
+    }
+
+    private static FileStream? OpenFile(string full)
+    {
+        if (Directory.Exists(full)) return null;
         try
         {
             // Opened rather than checked for first, as the write is: the handle
@@ -632,10 +652,8 @@ public class RepositoryManager : IRepositoryManager
             // cannot surface as an exception further down.
             return new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            // Not there, or a directory — which is what opening one for reading
-            // raises on Linux. Neither is a file to hand back.
             return null;
         }
     }
@@ -1092,6 +1110,80 @@ public class RepositoryManager : IRepositoryManager
 
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
         => RunAsync(cwd, args, CancellationToken.None);
+
+    // One agent-side process, so what is listed, what is checked and what is changed are the same
+    // moment, and the orchestrator never walks the agent's tree. With no paths after the worktree it
+    // lists what the Files tab can show: changes since the fork point (committed or not; a file made
+    // and committed in one node shows as clean in `git status`), plus untracked files. When the fork
+    // point does not resolve it falls back to the untracked files alone. Ignored files are never shown
+    // or committed, so they are left alone. Each path and every directory above it (never `.git`, never
+    // the worktree itself) is kept only if the agent owns it and it lacks group access, and find does not
+    // follow links, so symlinks are skipped.
+    private const string ShareScript = """
+        cd -- "$1" || exit 1
+        shift
+        {
+            if [ $# -gt 0 ]; then
+                printf '%s\0' "$@"
+            else
+                base=$(git merge-base HEAD origin/HEAD 2>/dev/null)
+                [ -n "$base" ] && git diff --name-only --diff-filter=d -z "$base" --
+                git ls-files --others --exclude-standard -z
+            fi
+        } | while IFS= read -r -d '' p; do
+            p=${p%/}
+            case "/$p/" in */.git/*) continue ;; esac
+            printf '%s\0' "./$p"
+            d=$p
+            while [[ $d == */* ]]; do d=${d%/*}; printf '%s\0' "./$d"; done
+        done | sort -zu | xargs -0 -r sh -c 'find -P "$@" -maxdepth 0 -user "$(id -u)" \( \( -type d ! -perm -g=rwx \) -o \( -type f ! -perm -g=rw \) \) -exec chmod g+rwX {} +' sh
+        """;
+
+    public Task<bool> ShareWorktreeWithOrchestratorAsync(string worktreePath, CancellationToken ct = default)
+        => ShareAsync(worktreePath, [], ct);
+
+    private async Task<bool> ShareAsync(string worktreePath, IReadOnlyList<string> relativePaths, CancellationToken ct)
+    {
+        if (TrustedRepositoryRoot(worktreePath) is null)
+        {
+            _logger?.LogWarning("Refused sharing {Directory}: its .git is not a clone or worktree of ours", worktreePath);
+            return false;
+        }
+
+        var r = await _runner.RunAsync(
+            "/bin/bash", ["-c", ShareScript, "bash", Path.GetFullPath(worktreePath), .. relativePaths], "/", ct, null, _agentOptions);
+        if (!r.Success)
+            _logger?.LogWarning("Sharing {Directory} with the orchestrator exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
+        return r.Success;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="read"/> and, when the orchestrator is denied, gives the group access to
+    /// that one file and the directories above it, as the agent, and reads once more. A second denial
+    /// is the answer: <see cref="WorktreeFileUnreadableException"/>.
+    /// </summary>
+    private async Task<T?> ReadRepairingAsync<T>(string worktreePath, string relativePath, string full, Func<Task<T?>> read)
+        where T : class
+    {
+        try
+        {
+            return await read();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            var root = ResolveLinks(Path.GetFullPath(worktreePath));
+            if (root is not null)
+                await ShareAsync(worktreePath, [Path.GetRelativePath(root, full)], CancellationToken.None);
+            try
+            {
+                return await read();
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw new WorktreeFileUnreadableException($"{relativePath} can't be read: permission denied");
+            }
+        }
+    }
 
     /// <summary>
     /// <c>git -C <paramref name="cwd"/></c> as the agent. Refused, without starting git, for a directory

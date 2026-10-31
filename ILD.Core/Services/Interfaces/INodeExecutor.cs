@@ -54,6 +54,12 @@ public sealed record NodeExecutionResult(bool Success, string? Output = null, st
 public abstract record NodeOutcome
 {
     /// <summary>
+    /// True for the outcomes that end a node's work: nothing the node itself does comes after them.
+    /// A new outcome of that kind must be listed here, or work done before it is treated as unfinished.
+    /// </summary>
+    public bool EndsNodeWork => this is Success or Fail or Interrupted or WaitingAction or Terminal;
+
+    /// <summary>
     /// Node is about to commit to executing. The engine creates a
     /// <c>LoopRunNode</c> row with <paramref name="EffectiveInput"/> as the
     /// recorded input. Must be yielded before any Success/Fail/Terminal.

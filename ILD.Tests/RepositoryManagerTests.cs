@@ -471,6 +471,211 @@ public sealed class RepositoryManagerTests : IDisposable
         Assert.Contains("keep", unchanged.Content);
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    private static UnixFileMode Mode(string path) => File.GetUnixFileMode(path) & (UnixFileMode)0x1FF;
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task ShareWorktree_gives_the_group_read_write_and_leaves_everything_else_alone()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-share");
+
+        var shot = Path.Combine(wt, "shot.png");
+        var script = Path.Combine(wt, "run.sh");
+        var plain = Path.Combine(wt, "plain.txt");
+        var dir = Path.Combine(wt, "private");
+        var inDir = Path.Combine(dir, "inner.txt");
+        var nestedGit = Path.Combine(wt, "vendor", ".git");
+        var nestedGitFile = Path.Combine(nestedGit, "config");
+        var outside = Path.Combine(_tmp, "outside.txt");
+        var link = Path.Combine(wt, "link.txt");
+        Directory.CreateDirectory(dir);
+        Directory.CreateDirectory(nestedGit);
+        File.WriteAllText(shot, "png");
+        File.WriteAllText(script, "#!/bin/sh\n");
+        File.WriteAllText(plain, "x");
+        File.WriteAllText(inDir, "y");
+        File.WriteAllText(nestedGitFile, "z");
+        File.WriteAllText(outside, "o");
+        File.CreateSymbolicLink(link, outside);
+        File.SetUnixFileMode(shot, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(plain, (UnixFileMode)0x1A4);
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(inDir, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetUnixFileMode(nestedGitFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetUnixFileMode(outside, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        var pointer = Path.Combine(wt, ".git");
+        Assert.True(File.Exists(pointer));
+        File.SetUnixFileMode(pointer, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        var ok = await mgr.ShareWorktreeWithOrchestratorAsync(wt, TestContext.Current.CancellationToken);
+
+        Assert.True(ok);
+        Assert.Equal((UnixFileMode)0x1B0, Mode(shot));
+        Assert.Equal((UnixFileMode)0x1F8, Mode(script));
+        Assert.Equal((UnixFileMode)0x1B4, Mode(plain));
+        Assert.Equal((UnixFileMode)0x1F8, Mode(dir));
+        Assert.Equal((UnixFileMode)0x1B0, Mode(inDir));
+        Assert.Equal((UnixFileMode)0x180, Mode(pointer));
+        Assert.Equal((UnixFileMode)0x180, Mode(nestedGitFile));
+        Assert.Equal((UnixFileMode)0x180, Mode(outside));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task ShareWorktree_covers_what_git_can_see_and_leaves_ignored_and_unchanged_files_alone()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-share-scope");
+        File.WriteAllText(Path.Combine(wt, ".gitignore"), "build/\n");
+        Git(wt, "add", ".gitignore");
+        Git(wt, "commit", "-m", "ignore");
+
+        var untracked = Path.Combine(wt, "new.png");
+        var committed = Path.Combine(wt, "committed.png");
+        var newDir = Path.Combine(wt, "fresh");
+        var inNewDir = Path.Combine(newDir, "inner.png");
+        var ignoredDir = Path.Combine(wt, "build");
+        var ignored = Path.Combine(ignoredDir, "out.bin");
+        var untouched = Path.Combine(wt, "mod.txt");
+        Directory.CreateDirectory(newDir);
+        Directory.CreateDirectory(ignoredDir);
+        foreach (var file in new[] { untracked, committed, inNewDir, ignored })
+            File.WriteAllText(file, "x");
+        Git(wt, "add", "committed.png");
+        Git(wt, "commit", "-m", "shot");
+        var owner = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        foreach (var file in new[] { untracked, committed, inNewDir, ignored, untouched })
+            File.SetUnixFileMode(file, owner);
+        File.SetUnixFileMode(newDir, owner | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(ignoredDir, owner | UnixFileMode.UserExecute);
+
+        Assert.True(await mgr.ShareWorktreeWithOrchestratorAsync(wt, TestContext.Current.CancellationToken));
+
+        Assert.Equal((UnixFileMode)0x1B0, Mode(untracked));
+        Assert.Equal((UnixFileMode)0x1B0, Mode(committed));
+        Assert.Equal((UnixFileMode)0x1F8, Mode(newDir));
+        Assert.Equal((UnixFileMode)0x1B0, Mode(inNewDir));
+        Assert.Equal((UnixFileMode)0x1C0, Mode(ignoredDir));
+        Assert.Equal((UnixFileMode)0x180, Mode(ignored));
+        Assert.Equal((UnixFileMode)0x180, Mode(untouched));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task ShareWorktree_skips_files_owned_by_someone_else_without_failing()
+    {
+        if (!Environment.IsPrivilegedProcess) Assert.Skip("giving a file to another user needs root");
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-share-foreign");
+        var foreign = Path.Combine(wt, "foreign.txt");
+        var mine = Path.Combine(wt, "mine.txt");
+        File.WriteAllText(foreign, "x");
+        File.WriteAllText(mine, "x");
+        File.SetUnixFileMode(foreign, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetUnixFileMode(mine, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        Assert.Equal(0, Chown(foreign, 65534, 65534));
+
+        Assert.True(await mgr.ShareWorktreeWithOrchestratorAsync(wt, TestContext.Current.CancellationToken));
+
+        Assert.Equal((UnixFileMode)0x180, Mode(foreign));
+        Assert.Equal((UnixFileMode)0x1B0, Mode(mine));
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "chown", SetLastError = true)]
+    private static extern int Chown(string path, int owner, int group);
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task ReadWorktreeFile_repairs_only_the_requested_file_and_the_directories_above_it()
+    {
+        if (Environment.IsPrivilegedProcess) Assert.Skip("root reads a mode-0000 file");
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-targeted");
+        var dir = Path.Combine(wt, "docs");
+        var shot = Path.Combine(dir, "shot.png");
+        var sibling = Path.Combine(dir, "other.png");
+        var elsewhere = Path.Combine(wt, "elsewhere.png");
+        Directory.CreateDirectory(dir);
+        foreach (var file in new[] { shot, sibling, elsewhere })
+            File.WriteAllText(file, "x");
+        File.SetUnixFileMode(shot, UnixFileMode.None);
+        File.SetUnixFileMode(sibling, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetUnixFileMode(elsewhere, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        await Assert.ThrowsAsync<WorktreeFileUnreadableException>(() => mgr.ReadWorktreeFileAsync(wt, "docs/shot.png"));
+
+        Assert.Equal((UnixFileMode)0x30, Mode(shot));
+        Assert.Equal((UnixFileMode)0x1F8, Mode(dir));
+        Assert.Equal((UnixFileMode)0x180, Mode(sibling));
+        Assert.Equal((UnixFileMode)0x180, Mode(elsewhere));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task OpenWorktreeFile_reports_an_unreadable_file_rather_than_answering_not_found()
+    {
+        if (Environment.IsPrivilegedProcess) Assert.Skip("root reads a mode-0000 file");
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-download");
+        var locked = Path.Combine(wt, "locked.png");
+        File.WriteAllText(locked, "png");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        Directory.CreateDirectory(Path.Combine(wt, "sub"));
+
+        await Assert.ThrowsAsync<WorktreeFileUnreadableException>(() => mgr.OpenWorktreeFileAsync(wt, "locked.png"));
+
+        Assert.Null(await mgr.OpenWorktreeFileAsync(wt, "sub"));
+        Assert.Null(await mgr.OpenWorktreeFileAsync(wt, "nope.png"));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task ShareWorktree_refuses_a_directory_that_is_not_one_of_ours_and_changes_nothing()
+    {
+        var (_, mgr) = CloneWithOrigin();
+        var stray = Path.Combine(_tmp, "stray");
+        Directory.CreateDirectory(stray);
+        var file = Path.Combine(stray, "f.txt");
+        File.WriteAllText(file, "x");
+        File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        var ok = await mgr.ShareWorktreeWithOrchestratorAsync(stray, TestContext.Current.CancellationToken);
+
+        Assert.False(ok);
+        Assert.Equal((UnixFileMode)0x180, Mode(file));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task ReadWorktreeFile_repairs_once_then_reports_a_file_it_still_cannot_read()
+    {
+        if (Environment.IsPrivilegedProcess) Assert.Skip("root reads a mode-0000 file");
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-unreadable");
+        var locked = Path.Combine(wt, "locked.png");
+        File.WriteAllText(locked, "png");
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+
+        await Assert.ThrowsAsync<WorktreeFileUnreadableException>(() => mgr.ReadWorktreeFileAsync(wt, "locked.png"));
+
+        Assert.Equal((UnixFileMode)0x30, Mode(locked));
+    }
+
+    [Fact]
+    public async Task ReadWorktreeFile_answers_not_found_for_a_directory_and_a_missing_file()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-notfile");
+        Directory.CreateDirectory(Path.Combine(wt, "sub"));
+
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "sub"));
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "nope.txt"));
+    }
+
     [Fact]
     public async Task ListWorktreeFiles_diffs_committed_work_against_stored_default_branch_when_origin_head_unset()
     {

@@ -20,6 +20,7 @@ public class WorkItemsController : ControllerBase
 {
     /// <summary>The form field every attachment upload arrives under.</summary>
     private const string AttachmentFieldName = "files";
+    private const string FileUnreadableMessage = "File can't be read: permission denied.";
 
     private readonly IWorkItemManager _workItemManager;
     private readonly ILoopEngine _engine;
@@ -600,6 +601,12 @@ public class WorkItemsController : ControllerBase
         });
     }
 
+    private ObjectResult FileUnreadable(WorktreeFileUnreadableException ex)
+    {
+        _logger.LogWarning(ex, "A worktree file could not be read after repairing its group access");
+        return StatusCode(StatusCodes.Status403Forbidden, new { error = FileUnreadableMessage });
+    }
+
     [HttpGet("{id}/files/content")]
     public async Task<IActionResult> GetFileContent(
         string id, [FromQuery] string path, [FromQuery] string? from = null, [FromQuery] string? to = null)
@@ -614,10 +621,17 @@ public class WorkItemsController : ControllerBase
         var (range, rangeError) = await ResolveDiffRangeAsync(workItem!.WorktreePath!, diffBase, from, to);
         if (rangeError != null) return rangeError;
 
-        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem.WorktreePath!, path, diffBase, range);
-        if (content == null)
-            return NotFound(new { error = "File not found in worktree." });
-        return Ok(content);
+        try
+        {
+            var content = await _repositoryManager.ReadWorktreeFileAsync(workItem.WorktreePath!, path, diffBase, range);
+            if (content == null)
+                return NotFound(new { error = "File not found in worktree." });
+            return Ok(content);
+        }
+        catch (WorktreeFileUnreadableException ex)
+        {
+            return FileUnreadable(ex);
+        }
     }
 
     // The file exactly as it is on disk, for the Files tab's Download. Served as
@@ -633,7 +647,15 @@ public class WorkItemsController : ControllerBase
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
-        var stream = _repositoryManager.OpenWorktreeFile(workItem!.WorktreePath!, path);
+        FileStream? stream;
+        try
+        {
+            stream = await _repositoryManager.OpenWorktreeFileAsync(workItem!.WorktreePath!, path);
+        }
+        catch (WorktreeFileUnreadableException ex)
+        {
+            return FileUnreadable(ex);
+        }
         if (stream == null)
             return NotFound(new { error = "File not found in worktree." });
         return File(stream, "application/octet-stream", Path.GetFileName(stream.Name));
@@ -665,7 +687,15 @@ public class WorkItemsController : ControllerBase
         var (range, rangeError) = await ResolveDiffRangeAsync(workItem.WorktreePath!, diffBase, from, to);
         if (rangeError != null) return rangeError;
 
-        var result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase, range);
+        WorktreeFileWriteResult result;
+        try
+        {
+            result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase, range);
+        }
+        catch (WorktreeFileUnreadableException ex)
+        {
+            return FileUnreadable(ex);
+        }
         // A save that produced a file answers with it — asking for the file is
         // the same question as asking whether it saved, so there is no arm here
         // that could answer 200 with nothing in it. A file that is not there

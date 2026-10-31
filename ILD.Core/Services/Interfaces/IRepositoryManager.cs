@@ -113,8 +113,24 @@ public interface IRepositoryManager
     /// when supplied, falling back to <c>origin/HEAD</c>. A <paramref name="range"/>
     /// narrows the status and diff to the changes it spans; a file it changed
     /// that is no longer on disk still answers, with null content.
+    /// A file the orchestrator is denied is shared with the group once (that file and the
+    /// directories above it) and read again; a second denial throws
+    /// <see cref="ILD.Core.Services.Implementations.WorktreeFileUnreadableException"/>.
     /// </summary>
     Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null, WorktreeDiffRange? range = null);
+
+    /// <summary>
+    /// Gives the shared group read and write on the files an agent tool left owner-only, as the agent,
+    /// so the orchestrator can show and commit them. It covers what the Files tab can show: files
+    /// changed since the fork point (committed or not) and untracked files, plus the directories above
+    /// them (group read, write and execute). Only entries the agent owns that lack group access are
+    /// changed; owner and other bits are kept, and a file its owner can execute becomes executable by
+    /// the group too. Ignored files, <c>.git</c> entries and symbolic links are left alone. With no
+    /// fork point the untracked files alone are covered. Refused, without starting a process, for a
+    /// directory that is not a clone or worktree of ours. Returns false, never throws (but for
+    /// cancellation), when the sweep did not complete.
+    /// </summary>
+    Task<bool> ShareWorktreeWithOrchestratorAsync(string worktreePath, CancellationToken ct = default);
 
     /// <summary>
     /// The run branch's own first-parent commits after its fork point with
@@ -132,8 +148,11 @@ public interface IRepositoryManager
     /// stream's <see cref="FileStream.Name"/> is where the path led, so a caller
     /// naming the file names what was opened, not how the path was spelled. The
     /// caller owns the stream.
+    /// If the orchestrator is denied, that file and the directories above it are
+    /// shared with the group once and the open retried; a second denial throws
+    /// <see cref="ILD.Core.Services.Implementations.WorktreeFileUnreadableException"/>.
     /// </summary>
-    FileStream? OpenWorktreeFile(string worktreePath, string relativePath);
+    Task<FileStream?> OpenWorktreeFileAsync(string worktreePath, string relativePath);
 
     /// <summary>
     /// Replace a single worktree file's contents with <paramref name="content"/>
