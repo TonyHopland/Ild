@@ -73,11 +73,11 @@ Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The ada
 _Avoid_: LLM node, model node
 
 **Human Node**:
-A pause point that awaits human input. The input becomes `{{PreviousNode.Output}}` for downstream nodes. Can form conversational loops with AI nodes (e.g., grill-me planning).
+A pause point that awaits human input. The input becomes `{{Node.Input}}` for downstream nodes. Can form conversational loops with AI nodes (e.g., grill-me planning).
 _Avoid_: approval gate, review step
 
 **Prompt Node**:
-Renders a templated text payload using the prompt placeholder pipeline (`{{WorkItem.*}}`, `{{PreviousNode.Output}}`, `{{EventLog.*}}`, etc.) and emits the result as its Output. Always routes to `on_success`. Used to compose the prompt that a downstream AI node will consume — especially when first-turn vs. follow-up prompts need to differ (see the AI Node entry).
+Renders a templated text payload using the prompt placeholder pipeline (`{{WorkItem.*}}`, `{{Node.Input}}`, `{{EventLog.*}}`, etc.) and emits the result as its Output. Always routes to `on_success`. Used to compose the prompt that a downstream AI node will consume — especially when first-turn vs. follow-up prompts need to differ (see the AI Node entry).
 _Avoid_: template node, text node
 
 **Set Variable Node**:
@@ -226,7 +226,7 @@ _Avoid_: package source, registry, feed gateway
 - New **WorkItem**s land in either Backlog or Work Queue based on a per-**Repository** gating setting (Backlog = requires human approval to proceed, Work Queue = auto-flows)
 - A **WorkItem** is optionally associated with a **Repository** (Plan-type items may not need one)
 - A **Worktree** (and its branch) is created per **LoopRun** by the Start node and removed, with the run's AI session snapshots, when the run ends; the run row — nodes, event log, feedback, PR snapshot — stays. The `WorktreeRetentionSweeper` deletes the run once the work item is Done and the run finished more than `run.retentionDays` days ago (settings-driven; default `14`, so a run lasts from one weekly retro to the next; `0` is the next sweep), and removes what a finished run left behind. A run marked `Retain` keeps everything — worktree, branch, sessions and row — until it is unpinned, and the next sweep then removes its leftovers. The run's metrics fold into the analytics rollup as the row goes; its PR is already on the work item (see **PR History**), which is why nothing about reclaiming a run can lose it. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md)
-- `{{PreviousNode.Output}}` resolves to the source node of the incoming edge, not the chronologically previous execution
+- `{{Node.Input}}` resolves to the source node of the incoming edge, not the chronologically previous execution
 - `{{EventLog.LastN}}` returns the last 10 event-log summary entries (fixed — not parameterizable)
 - `{{Var.<name>}}` resolves a **Loop Variable** — a named, mutable string scoped to the LoopRun, written by a **Set Variable Node** or by an AI node via the agent API (`GET`/`PUT /api/v1/agent/variables`) and the MCP `get_loop_variables`/`set_loop_variable` tools. An unset variable renders empty (the producing node may run after the template is rendered). Names must match `[A-Za-z][A-Za-z0-9_]*` and are matched ignoring case, so writing `Phase` overwrites `phase`. Used for cross-node hand-off (e.g. a Set Variable node keeps a Human answer, or one AI writes a summary the PR node consumes)
 - `{{Global.<name>}}` resolves a **Global Variable**, ignoring the case of the name, at the moment the node renders. Saving a template does not check that it exists; the engine parks the run before a node that uses one that is missing or empty

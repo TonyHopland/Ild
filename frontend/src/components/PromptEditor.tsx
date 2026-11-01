@@ -12,11 +12,6 @@ const PLACEHOLDERS = [
   { key: "EventLog.LastN", label: "EventLog.LastN", desc: "Last 10 event log entries" },
   { key: "Node.Input", label: "Node.Input", desc: "Output from the previous node" },
   {
-    key: "PreviousNode.Output",
-    label: "PreviousNode.Output",
-    desc: "Output from the previous node",
-  },
-  {
     key: "Conversation.Full",
     label: "Conversation.Full",
     desc: "Full run history, author-attributed and chronological",
