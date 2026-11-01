@@ -388,7 +388,7 @@ public class RemotePrReviewLedgerPagingTests
     [Fact]
     public async Task A_comment_too_long_to_keep_whole_is_still_known_to_be_ilds()
     {
-        // The PR node's own answer is a rendered {{PreviousNode.Output}}, easily
+        // The PR node's own answer is a rendered {{Node.Input}}, easily
         // past the body cap, and the marker sits at the end — so the stored body
         // has had it cut off. Deciding from that body alone, the loop would read
         // its own answer as a reviewer's and start another round.

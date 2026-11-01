@@ -9,7 +9,7 @@
       "type": "PR",
       "label": "Pull Request",
       "config": {
-        "prDescriptionTemplate": "{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n----------------------------------------\n\nCode review verdict:\n\n{{PreviousNode.Output}}",
+        "prDescriptionTemplate": "{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n----------------------------------------\n\nCode review verdict:\n\n{{Node.Input}}",
         "__pos": {
           "x": 564.5,
           "y": 256.5
@@ -34,7 +34,7 @@
       "type": "Prompt",
       "label": "Address review findings",
       "config": {
-        "prompt": "Your implementation was rejected in code review. Findings:\n\n{{PreviousNode.Output}}\n\nFix every finding — do not argue with the review and do not skip items. Then re-run the build and the full test suite and make everything pass. Reply with an updated summary of the change and what you fixed.",
+        "prompt": "Your implementation was rejected in code review. Findings:\n\n{{Node.Input}}\n\nFix every finding — do not argue with the review and do not skip items. Then re-run the build and the full test suite and make everything pass. Reply with an updated summary of the change and what you fixed.",
         "__pos": {
           "x": -66.5,
           "y": 386
@@ -50,7 +50,7 @@
       "type": "Prompt",
       "label": "Address PR feedback",
       "config": {
-        "prompt": "The pull request was not merged — a human reviewer responded or requested changes:\n\n{{PreviousNode.Output}}\n\nRead the whole review with get_pr_review first; the rendered review on the forge leaves findings out. Answer each one where it was raised with reply_to_pr_review_comment, or close_pr_review_item for anything you read and are deliberately not answering. Both only QUEUE what you say — the PR node sends it when the loop returns there, so a human can drop any of it first. If you have something general to say that belongs on no single thread, say it once with comment_on_pr; nothing else comments on the pull request now, so a round that calls none of these leaves it silent.\n\nAddress the feedback completely. If it conflicts with something you did earlier, the human feedback wins. Then re-run the build and the full test suite and make everything pass. Reply with an updated summary of the change and how you addressed the feedback.",
+        "prompt": "The pull request was not merged — a human reviewer responded or requested changes:\n\n{{Node.Input}}\n\nRead the whole review with get_pr_review first; the rendered review on the forge leaves findings out. Answer each one where it was raised with reply_to_pr_review_comment, or close_pr_review_item for anything you read and are deliberately not answering. Both only QUEUE what you say — the PR node sends it when the loop returns there, so a human can drop any of it first. If you have something general to say that belongs on no single thread, say it once with comment_on_pr; nothing else comments on the pull request now, so a round that calls none of these leaves it silent.\n\nAddress the feedback completely. If it conflicts with something you did earlier, the human feedback wins. Then re-run the build and the full test suite and make everything pass. Reply with an updated summary of the change and how you addressed the feedback.",
         "__pos": {
           "x": 190.5,
           "y": 123.5
@@ -66,7 +66,7 @@
       "type": "AI",
       "label": "Strict Code Review",
       "config": {
-        "prompt": "You are a strict, independent code reviewer. You did NOT write this change, and your only job is to decide whether it is ready to ship.\n\nWork item:\nTitle: {{WorkItem.Title}}\nDescription: {{WorkItem.Description}}\n\nAcceptance criteria = the work item above, **as amended by these human-approved instructions; where they conflict, the amendment wins:**\n{{Conversation.Human}}\n\nImplementer's summary (do not trust it — verify every claim yourself):\n{{PreviousNode.Output}}\n\nHow to review:\n1. Inspect the actual change yourself in this worktree: use `git log` and `git diff` against the base branch (and `git status` for anything uncommitted). Review every changed line.\n2. Completeness: every requirement and acceptance criterion in the work item description (as amended above) must be implemented. A partial implementation is a rejection.\n3. Correctness: trace the logic for bugs, unhandled edge cases, error handling gaps, and concurrency issues.\n4. Tests: meaningful tests must exist and actually cover the new behavior. Run the build and the full test suite yourself — any failure is a rejection.\n5. Quality: no duplicated code, no dead code, no TODOs, no debug leftovers, no scope creep, no new technical debt; the change must follow the conventions of the surrounding code.\n6. Safety: no secrets in code, no injection risks, no obviously unsafe handling of external input.\n\nBe strict — when in doubt, reject. Do not fix anything yourself; you only review.\n\nVerdict format — the first line of your reply must be exactly one of:\n**Approve** — followed by a short summary of what you verified (this becomes part of the PR description).\n**Reject** — followed by a numbered list of every finding that must be fixed, each with its file/location and what to change.\nUse the bolded word **Reject** only when you are rejecting; do not write it anywhere in an approval.",
+        "prompt": "You are a strict, independent code reviewer. You did NOT write this change, and your only job is to decide whether it is ready to ship.\n\nWork item:\nTitle: {{WorkItem.Title}}\nDescription: {{WorkItem.Description}}\n\nAcceptance criteria = the work item above, **as amended by these human-approved instructions; where they conflict, the amendment wins:**\n{{Conversation.Human}}\n\nImplementer's summary (do not trust it — verify every claim yourself):\n{{Node.Input}}\n\nHow to review:\n1. Inspect the actual change yourself in this worktree: use `git log` and `git diff` against the base branch (and `git status` for anything uncommitted). Review every changed line.\n2. Completeness: every requirement and acceptance criterion in the work item description (as amended above) must be implemented. A partial implementation is a rejection.\n3. Correctness: trace the logic for bugs, unhandled edge cases, error handling gaps, and concurrency issues.\n4. Tests: meaningful tests must exist and actually cover the new behavior. Run the build and the full test suite yourself — any failure is a rejection.\n5. Quality: no duplicated code, no dead code, no TODOs, no debug leftovers, no scope creep, no new technical debt; the change must follow the conventions of the surrounding code.\n6. Safety: no secrets in code, no injection risks, no obviously unsafe handling of external input.\n\nBe strict — when in doubt, reject. Do not fix anything yourself; you only review.\n\nVerdict format — the first line of your reply must be exactly one of:\n**Approve** — followed by a short summary of what you verified (this becomes part of the PR description).\n**Reject** — followed by a numbered list of every finding that must be fixed, each with its file/location and what to change.\nUse the bolded word **Reject** only when you are rejecting; do not write it anywhere in an approval.",
         "useSession": false,
         "aiProviderTag": "",
         "timeout": 1800,
@@ -105,7 +105,7 @@
       "type": "AI",
       "label": "AI Implement",
       "config": {
-        "prompt": "{{PreviousNode.Output}}",
+        "prompt": "{{Node.Input}}",
         "useSession": true,
         "sessionPlaceholder": "implementation",
         "aiProviderTag": "",

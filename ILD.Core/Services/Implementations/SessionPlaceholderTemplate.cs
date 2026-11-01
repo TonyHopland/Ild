@@ -22,7 +22,7 @@ internal readonly record struct SessionPlaceholderResolution(string? Value, stri
 ///
 /// A session field is a template field like a prompt, but with a deliberately
 /// narrower grammar: <c>{{Var.&lt;name&gt;}}</c> only. The other placeholder
-/// families are rejected at save time — <c>{{PreviousNode.Output}}</c> in a
+/// families are rejected at save time — <c>{{Node.Input}}</c> in a
 /// session name would mint a brand-new, unbounded session on every turn, which
 /// is the opposite of what naming a session is for.
 ///

@@ -882,7 +882,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleApprove = (runId: string) =>
     submitAnswer(runId, (id, run, input) => workItemService.humanFeedbackInput(id, run, input));
 
-  // Pass any typed feedback through to the OnFailure successor as {{PreviousNode.Output}}.
+  // Pass any typed feedback through to the OnFailure successor as {{Node.Input}}.
   const handleReject = (runId: string) =>
     submitAnswer(runId, (id, run, input) =>
       workItemService.humanFeedbackReject(id, run, input || undefined),

@@ -26,7 +26,7 @@ public class PrSyncServiceTests
     public async Task HandleWebhookAsync_carries_the_reason_on_the_signal_like_the_heartbeat_does()
     {
         // The webhook and heartbeat resume paths must leave the node in the same
-        // state, including what {{PreviousNode.Output}} says: the review comment
+        // state, including what {{Node.Input}} says: the review comment
         // the webhook brought, plus the failing checks the last poll recorded.
         var run = new LoopRun
         {

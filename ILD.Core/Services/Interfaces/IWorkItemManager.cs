@@ -215,7 +215,7 @@ public interface IWorkItemManager
     /// <summary>
     /// Route the parked node to its named output <paramref name="edgeName"/>
     /// (a Human node button), passing <paramref name="input"/> as the node's
-    /// output for downstream <c>{{PreviousNode.Output}}</c>.
+    /// output for downstream <c>{{Node.Input}}</c>.
     /// </summary>
     Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input);
     Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null);

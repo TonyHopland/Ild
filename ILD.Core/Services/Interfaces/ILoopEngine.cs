@@ -142,7 +142,7 @@ public interface ILoopEngine
     /// <summary>
     /// Re-enter the run at the template node corresponding to
     /// <paramref name="runNodeId"/>, replaying with the same
-    /// <c>{{PreviousNode.Output}}</c> seed that the node saw the last
+    /// <c>{{Node.Input}}</c> seed that the node saw the last
     /// time it started. Fails if the run is currently executing, or has ended —
     /// except a run that ended Failed on a failed node before such a failure
     /// parked the run, which is reopened when it is its work item's latest run,

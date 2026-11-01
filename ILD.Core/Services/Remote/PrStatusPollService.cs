@@ -223,7 +223,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
 
         // Carry why: the signal's output becomes the resumed node's output, so a
         // node wired to on_ci_failed reads the failing checks out of
-        // {{PreviousNode.Output}} instead of guessing at red CI.
+        // {{Node.Input}} instead of guessing at red CI.
         await _engine.SignalNodeResultAsync(run.Id, runNode.Id,
             NodeSignal.Custom(edge, PrNodeEdges.Describe(edge, snapshot, detail, run.WorkItemId)));
     }
