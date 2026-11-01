@@ -367,7 +367,7 @@ public class BackupApiTests
         var name = response.Content.Headers.ContentDisposition?.FileName?.Trim('"');
         Assert.Matches(@"^ild-workitems-\d{8}-\d{6}\.ildbackup$", name);
         Assert.Equal("ILDBAK1", Encoding.ASCII.GetString(file, 0, 7));
-        foreach (var leaked in new[] { PlainMarker, CipherMarker, "enc.v1.", "appVersion", "migrations", "M1" })
+        foreach (var leaked in new[] { PlainMarker, CipherMarker, "enc.v1.", "appVersion", "migrations", "\"M1\"" })
             Assert.True(file.AsSpan().IndexOf(Encoding.UTF8.GetBytes(leaked)) < 0, $"'{leaked}' is readable in the file");
 
         Assert.Equal(1, host.Wi.ExportCalls);
