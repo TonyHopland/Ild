@@ -32,7 +32,6 @@ const BUILT_IN = [
   "{{EventLog.Summary}}",
   "{{EventLog.LastN}}",
   "{{Node.Input}}",
-  "{{PreviousNode.Output}}",
   "{{Conversation.Full}}",
   "{{Conversation.AI}}",
   "{{Conversation.Human}}",
