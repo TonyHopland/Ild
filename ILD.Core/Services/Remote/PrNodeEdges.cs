@@ -52,7 +52,7 @@ public static class PrNodeEdges
     /// <summary>
     /// Longest reason <see cref="Describe"/> produces. The text becomes the
     /// resumed PR node's output, i.e. the next node's
-    /// <c>{{PreviousNode.Output}}</c>, so it is held to the same 8192-character
+    /// <c>{{Node.Input}}</c>, so it is held to the same 8192-character
     /// scale as a loop variable — CI output is otherwise unbounded.
     /// </summary>
     public const int MaxReasonLength = 8192;

@@ -240,7 +240,7 @@ public static class LoopTemplateValidator
                 // Session fields are templated, but on a narrower grammar than a
                 // prompt: {{Var.<name>}} only. They are checked here rather than
                 // in the general placeholder scan below, which accepts every
-                // known name — {{PreviousNode.Output}} as a session name would
+                // known name — {{Node.Input}} as a session name would
                 // mint a new, unbounded session on every turn.
                 foreach (var (field, value) in new[]
                          {

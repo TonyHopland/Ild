@@ -207,7 +207,7 @@ public class LoopRun : IHasUpdatedAt
     public string? HumanFeedbackReason { get; set; }
 
     // Output of the node on the most recently traversed incoming edge.
-    // Source of truth for {{PreviousNode.Output}} in prompt rendering.
+    // Source of truth for {{Node.Input}} in prompt rendering.
     public string? PreviousNodeOutput { get; set; }
 
     // Payload supplied by an external actor (human response, webhook signal)

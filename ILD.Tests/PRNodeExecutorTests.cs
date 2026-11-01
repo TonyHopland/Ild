@@ -299,7 +299,7 @@ public class PRNodeExecutorTests
     public async Task Re_entry_on_a_pr_edge_hands_the_next_node_a_reason(string? signalOutput)
     {
         // Whatever the signal carried is what the next node reads as
-        // {{PreviousNode.Output}} — and a signal that carried nothing (a human
+        // {{Node.Input}} — and a signal that carried nothing (a human
         // firing the edge from the feedback UI) falls back to the last polled
         // snapshot, so it says as much as the heartbeat would have.
         var b = new PrNodeBuilder(strictRemote: true);

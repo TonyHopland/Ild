@@ -227,7 +227,7 @@ public class PrStatusPollServiceTests
     public async Task Ci_failed_signal_carries_the_failing_checks_as_the_node_output()
     {
         // The signal's output becomes the resumed PR node's output — i.e. the
-        // next node's {{PreviousNode.Output}}. Empty, the fix-it agent can only
+        // next node's {{Node.Input}}. Empty, the fix-it agent can only
         // guess why CI went red.
         using var h = new Harness(Snapshot(
             ci: RemotePrCiStatus.Failed,

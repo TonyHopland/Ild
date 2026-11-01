@@ -1233,7 +1233,7 @@ public class HumanFeedbackInputRequest
     /// <summary>
     /// Optional human acknowledgement / additional context. Empty input is
     /// allowed: the human may simply approve the suspended node. When supplied
-    /// the text becomes <c>{{PreviousNode.Output}}</c> for the OnSuccess
+    /// the text becomes <c>{{Node.Input}}</c> for the OnSuccess
     /// successor.
     /// </summary>
     [System.ComponentModel.DataAnnotations.StringLength(8192)]
@@ -1254,7 +1254,7 @@ public class HumanFeedbackEdgeRequest
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// Optional input that becomes <c>{{PreviousNode.Output}}</c> for the
+    /// Optional input that becomes <c>{{Node.Input}}</c> for the
     /// output's successor.
     /// </summary>
     [System.ComponentModel.DataAnnotations.StringLength(8192)]
@@ -1279,7 +1279,7 @@ public class HumanFeedbackRejectRequest
     /// <summary>
     /// Optional rejection rationale. When supplied it is stored on the
     /// suspended run node's <c>Output</c> so the OnFailure successor can
-    /// read it via <c>{{PreviousNode.Output}}</c>.
+    /// read it via <c>{{Node.Input}}</c>.
     /// </summary>
     public string? Input { get; set; }
 }

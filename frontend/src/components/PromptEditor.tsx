@@ -10,7 +10,7 @@ const PLACEHOLDERS = [
   },
   { key: "EventLog.Summary", label: "EventLog.Summary", desc: "All event log entries" },
   { key: "EventLog.LastN", label: "EventLog.LastN", desc: "Last 10 event log entries" },
-  { key: "Node.Input", label: "Node.Input", desc: "Output from the previous node" },
+  { key: "Node.Input", label: "Node.Input", desc: "Input received by this node" },
   {
     key: "Conversation.Full",
     label: "Conversation.Full",
