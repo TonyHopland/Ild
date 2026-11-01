@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Under the firewall, coding agents outside Off can no longer look up host names themselves; only connections through the proxy resolve.**
+- **The .NET libraries are updated to the 10.0.14 security release.**
 
 ### Fixed
 
