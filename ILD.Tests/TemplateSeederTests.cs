@@ -19,61 +19,43 @@ public class TemplateSeederTests
 
         var templates = (await db.LoopTemplates.GetAllAsync()).ToList();
         var names = templates.Select(t => t.Name).OrderBy(n => n).ToArray();
-        Assert.Equal(new[] { "Development", "DevTeam", "Plan", "Q&A" }, names);
+        Assert.Equal(new[] { "Develop", "Prototype" }, names);
         Assert.DoesNotContain("AI-Assisted Feature", names);
     }
 
     [Fact]
-    public async Task SeedAsync_carries_node_config_and_recovery_policy_from_the_json()
+    public async Task SeedAsync_carries_recovery_policy_and_pr_wiring_from_the_json()
     {
         using var db = new TestDb();
         var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
 
-        var development = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == "Development");
-        Assert.Equal(RecoveryPolicy.AutoResume, development.RecoveryPolicy);
+        var develop = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == "Develop");
+        Assert.Equal(RecoveryPolicy.AutoResume, develop.RecoveryPolicy);
 
-        var graph = await mgr.GetVersionGraphAsync(development.Id, 1);
-        Assert.NotNull(graph);
-
-        // The strict reviewer keeps its named Reject custom edge wired to a match rule.
-        var review = graph!.Nodes.Single(n => n.Label == "Strict Code Review");
-        Assert.Equal("AI", review.NodeType);
-        Assert.Contains("strict, independent code reviewer", ReadString(review.Config, "prompt"));
-        Assert.Contains(graph.Edges, e => e.SourceNodeId == review.Id && e.Name == "Reject");
-
-        // The Start node's worktree flags survive the round-trip.
-        var start = graph.Nodes.Single(n => n.NodeType == "Start");
-        Assert.True(ReadBool(start.Config, "createWorktree"));
-    }
-
-    [Fact]
-    public async Task Development_loop_wires_on_merged_to_cleanup_and_does_not_loop_pr_failure_back()
-    {
-        using var db = new TestDb();
-        var mgr = new LoopTemplateManager(db.LoopTemplates);
-
-        await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
-
-        var development = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == "Development");
-        var graph = await mgr.GetVersionGraphAsync(development.Id, 1);
+        var graph = await mgr.GetVersionGraphAsync(develop.Id, 1);
         Assert.NotNull(graph);
 
         var pr = graph!.Nodes.Single(n => n.NodeType == "PR");
-        var cleanup = graph.Nodes.Single(n => n.NodeType == "Cleanup");
+        var sendBackBrief = graph.Nodes.Single(n => n.Label == "Send Back Brief");
+        var retroBrief = graph.Nodes.Single(n => n.Label == "Retro Brief");
 
-        // The heartbeat's on_merged edge must reach Cleanup — without it, a
-        // merged PR would leave the run parked forever (no fallback).
+        // The human's send_back button reaches the developer.
         Assert.Contains(graph.Edges, e =>
             e.SourceNodeId == pr.Id
-            && e.TargetNodeId == cleanup.Id
+            && e.TargetNodeId == sendBackBrief.Id
+            && e.EdgeType == "Custom"
+            && e.Name == "send_back");
+
+        // A merged PR must reach the retro — without it the run would park forever (no fallback).
+        Assert.Contains(graph.Edges, e =>
+            e.SourceNodeId == pr.Id
+            && e.TargetNodeId == retroBrief.Id
             && e.EdgeType == "Custom"
             && e.Name == "on_merged");
 
-        // A PR-node failure (e.g. a 401 the AI cannot fix) must NOT loop back
-        // into the implementation session; the OnFailure edge is removed so the
-        // run simply fails instead of looping endlessly.
+        // A PR-node failure must not loop back into the implementation session.
         Assert.DoesNotContain(graph.Edges, e => e.SourceNodeId == pr.Id && e.EdgeType == "OnFailure");
     }
 
@@ -93,10 +75,8 @@ public class TemplateSeederTests
     }
 
     [Theory]
-    [InlineData("DevTeam.json")]
-    [InlineData("Development.json")]
-    [InlineData("Plan.json")]
-    [InlineData("Q&A.json")]
+    [InlineData("Develop.json")]
+    [InlineData("Prototype.json")]
     public void Example_loop_is_a_v2_document_the_upgrader_has_nothing_left_to_add_to(string file)
     {
         // The example loops are the seed templates: a name they route by but do not
@@ -116,26 +96,5 @@ public class TemplateSeederTests
             Assert.True(JsonNode.DeepEquals(config, again),
                 $"{file}: node '{node["label"]}' is missing outputs: {config.ToJsonString()} vs {again!.ToJsonString()}");
         }
-    }
-
-    private static bool ReadBool(Dictionary<string, object> config, string key)
-    {
-        return config[key] switch
-        {
-            bool value => value,
-            JsonElement { ValueKind: JsonValueKind.True } => true,
-            JsonElement { ValueKind: JsonValueKind.False } => false,
-            _ => throw new InvalidOperationException($"Config key '{key}' is not a boolean.")
-        };
-    }
-
-    private static string? ReadString(Dictionary<string, object> config, string key)
-    {
-        return config[key] switch
-        {
-            string value => value,
-            JsonElement { ValueKind: JsonValueKind.String } value => value.GetString(),
-            _ => throw new InvalidOperationException($"Config key '{key}' is not a string.")
-        };
     }
 }

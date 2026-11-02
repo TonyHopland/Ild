@@ -11,10 +11,8 @@ public class ExampleLoopPrToolsTests
 {
     private static readonly string[] LoopFiles =
     {
-        "DevTeam.json",
-        "Development.json",
-        "Plan.json",
-        "Q&A.json",
+        "Develop.json",
+        "Prototype.json",
     };
 
     private static JsonDocument Loop(string name)
@@ -39,28 +37,40 @@ public class ExampleLoopPrToolsTests
     }
 
     [Fact]
-    public void The_loops_that_answer_pull_request_feedback_say_how_to_read_it()
+    public void The_briefs_that_answer_pull_request_feedback_say_how_to_read_it()
     {
         // A prompt that says "inspect the PR" and stops leaves the agent with
         // the rendered review, which is exactly the thing that omits findings.
-        // The node a PR edge routes back to is the one whose prompt opens by
-        // saying the pull request needs something.
-        var feedbackPrompts = Nodes()
+        // The brief of the PR-handling agent is where its tools are named.
+        var briefs = Nodes()
+            .Where(n => n.Label is "Develop Brief" or "Prototype Brief")
             .Select(n => (n.Loop, n.Label, Prompt: Prompt(n.Config)))
-            .Where(n => n.Prompt.StartsWith("The pull request", StringComparison.Ordinal))
             .ToArray();
 
-        Assert.NotEmpty(feedbackPrompts);
-        foreach (var (file, label, prompt) in feedbackPrompts)
+        Assert.Equal(2, briefs.Length);
+        foreach (var (file, label, prompt) in briefs)
         {
-            Assert.Contains("get_pr_review", prompt, StringComparison.Ordinal);
+            Assert.True(
+                prompt.Contains("get_pr_review", StringComparison.Ordinal),
+                $"{file}: node '{label}' never tells the agent how to read the review.");
             Assert.True(
                 prompt.Contains("reply_to_pr_review_comment", StringComparison.Ordinal),
                 $"{file}: node '{label}' never tells the agent how to answer a finding where it was raised.");
-            Assert.True(
-                prompt.Contains("comment_on_pr", StringComparison.Ordinal),
-                $"{file}: node '{label}' never tells the agent how to say anything general — nothing else does it now.");
         }
+    }
+
+    [Theory]
+    [InlineData("Develop.json")]
+    [InlineData("Prototype.json")]
+    public void Shipped_loops_hold_nothing_specific_to_an_instance(string file)
+    {
+        // The loops go to every install: no email address, host or absolute path.
+        var text = RepositoryFiles.ReadAllText(Path.Combine("example-loops", file));
+
+        Assert.DoesNotMatch(@"[\w.+-]+@[\w-]+\.[\w.-]+", text);
+        Assert.DoesNotMatch(@"https?://", text);
+        Assert.DoesNotMatch(@"(?<![\w.>])/(home|Users|root|tmp|var|etc|mnt|data|worktrees)/", text);
+        Assert.DoesNotMatch(@"\b[A-Za-z]:\\\\", text);
     }
 
     [Fact]
