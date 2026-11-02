@@ -293,6 +293,34 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
 
     await waitFor(() => expect(merge).toHaveBeenCalledWith("wi-1", true));
   });
+
+  test("a refused Merge shows the error and offers the suggested edge instead of firing it", async () => {
+    mockDialogServices();
+    stageParkedNode(pr(STORED_PR_OUTPUTS));
+    vi.spyOn(authServices.workItemService, "mergePr").mockRejectedValue({
+      status: 400,
+      message: "A reviewer requested changes, so the pull request cannot be merged yet.",
+      details: { suggestedEdge: "on_rejected" },
+    });
+    const edge = vi.spyOn(authServices.workItemService, "humanFeedbackEdge").mockResolvedValue();
+    await renderDialog(
+      makeParkedWorkItem({ humanFeedbackReason: PR_REASON, humanFeedbackActions: PR_ACTIONS }),
+    );
+
+    fireEvent.click(within(pane()).getByRole("button", { name: "Merge" }));
+    const confirm = within(pane()).getByRole("dialog", { name: "Confirm merge" });
+    await act(async () => {
+      fireEvent.click(within(confirm).getByRole("button", { name: "Confirm Merge" }));
+    });
+
+    await waitFor(() => expect(pane().textContent).toMatch(/reviewer requested changes/));
+    expect(edge).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(within(pane()).getByRole("button", { name: "Continue along on_rejected" }));
+    });
+    await waitFor(() => expect(edge).toHaveBeenCalled());
+    expect(edge.mock.calls[0][2]).toBe("on_rejected");
+  });
 });
 
 describe("the feedback pane never guesses the parked node's outputs", () => {

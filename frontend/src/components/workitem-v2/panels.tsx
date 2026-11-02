@@ -387,6 +387,15 @@ export function FeedbackBanner({
       {isPr && detail.mergeError && (
         <div className="preview-message preview-error">{detail.mergeError}</div>
       )}
+      {isPr && detail.mergeError && detail.mergeSuggestedEdge && (
+        <button
+          type="button"
+          disabled={reply.loading}
+          onClick={() => detail.handleEdge(answering, detail.mergeSuggestedEdge!)}
+        >
+          Continue along {detail.mergeSuggestedEdge}
+        </button>
+      )}
       {isPr && !detail.mergeError && detail.mergeMessage && (
         <div className="preview-message">{detail.mergeMessage}</div>
       )}
