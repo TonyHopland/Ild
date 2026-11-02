@@ -911,7 +911,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         const result = await workItemService.mergePr(workItem.id, deleteBranch);
         setMergeMessage(
           result.edge
-            ? `The PR was not merged; the run continued along ${result.edge}.`
+            ? result.output && result.output !== result.edge
+              ? `The PR was not merged; ${result.edge} isn't wired, so the run continued along ${result.output}.`
+              : `The PR was not merged; the run continued along ${result.edge}.`
             : (result.warning ?? (deleteBranch ? "PR merged and branch deleted." : "PR merged.")),
         );
         const updated = await workItemService.getById(workItem.id);

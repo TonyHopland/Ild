@@ -1563,10 +1563,13 @@ public class WorkItemManager : IWorkItemManager
         // answer to "what happened to the pull request" is whatever it is now.
         var fresh = await _remoteProvider.GetPullRequestSnapshotAsync(repo.CloneUrl, prNumber);
 
+        var wired = await LoadWiredPrEdgesAsync(runId);
         if (!merged)
         {
-            await _eventLog.TryAppendAsync(runId, EventType.PrMergeFailed, $"Merge of {wi.PrUrl} failed", _logger);
-            return await HandleRefusedMergeAsync(wi.Id, runId, fresh);
+            // A pull request merged elsewhere is not a failed merge.
+            if (fresh is null || !PrNodeEdges.ActiveStates(fresh).Contains(LoopOutputs.OnMerged))
+                await _eventLog.TryAppendAsync(runId, EventType.PrMergeFailed, $"Merge of {wi.PrUrl} failed", _logger);
+            return await HandleRefusedMergeAsync(wi.Id, runId, fresh, wired);
         }
 
         await _eventLog.TryAppendAsync(runId, EventType.PrMerged, $"PR {wi.PrUrl} merged by user", _logger);
@@ -1582,18 +1585,19 @@ public class WorkItemManager : IWorkItemManager
             branchDeleted = branchWarning is null;
         }
 
-        await FireMergeEdgeAsync(wi.Id, runId, LoopOutputs.OnMerged, fresh);
+        await FireMergeEdgeAsync(wi.Id, runId, LoopOutputs.OnMerged, fresh, wired);
         return new MergePullRequestResult(true, null, branchDeleted, branchWarning);
     }
 
     /// <summary>
     /// A merge the forge refused. The fresh snapshot says why: a pull request merged
-    /// elsewhere, a conflict or failed checks fire the edge for that; anything else
-    /// leaves the node waiting with an error, and <c>on_rejected</c> /
-    /// <c>on_abandoned</c> are only proposed, because they send the run somewhere the
-    /// person did not ask to go.
+    /// elsewhere, a conflict or failed checks continue the run along the edge for that
+    /// (or the node's standard output when the template does not wire it); anything else
+    /// leaves the node waiting with an error, and <c>on_rejected</c> / <c>on_abandoned</c>
+    /// are only proposed, because they send the run somewhere the person did not ask to go.
     /// </summary>
-    private async Task<MergePullRequestResult> HandleRefusedMergeAsync(string workItemId, Guid runId, RemotePrSnapshot? fresh)
+    private async Task<MergePullRequestResult> HandleRefusedMergeAsync(
+        string workItemId, Guid runId, RemotePrSnapshot? fresh, PrNodeWiring wired)
     {
         if (fresh is null)
             return new MergePullRequestResult(false,
@@ -1601,19 +1605,17 @@ public class WorkItemManager : IWorkItemManager
 
         var states = PrNodeEdges.ActiveStates(fresh);
         var edge = states.Contains(LoopOutputs.OnMerged) ? LoopOutputs.OnMerged
-            : states.Contains(LoopOutputs.OnMergeConflict) ? LoopOutputs.OnMergeConflict
-            : states.Contains(LoopOutputs.OnCiFailed) ? LoopOutputs.OnCiFailed
-            : null;
+            : PrNodeEdges.HighestPriority(states.Where(x => x is LoopOutputs.OnMergeConflict or LoopOutputs.OnCiFailed));
         if (edge is not null)
         {
-            await FireMergeEdgeAsync(workItemId, runId, edge, fresh);
-            return new MergePullRequestResult(false, null, false, null) { FiredEdge = edge };
+            var output = await FireMergeEdgeAsync(workItemId, runId, edge, fresh, wired);
+            return new MergePullRequestResult(false, null, false, null) { FiredEdge = edge, FiredOutput = output };
         }
 
         var suggested = states.Contains(LoopOutputs.OnRejected) ? LoopOutputs.OnRejected
             : states.Contains(LoopOutputs.OnAbandoned) ? LoopOutputs.OnAbandoned
             : null;
-        if (suggested is not null && !await IsEdgeWiredAsync(runId, suggested))
+        if (suggested is not null && !wired.Names.Contains(suggested))
             suggested = null;
 
         var reason = states.Contains(LoopOutputs.OnAbandoned) ? "The pull request is closed without being merged."
@@ -1624,34 +1626,62 @@ public class WorkItemManager : IWorkItemManager
         return new MergePullRequestResult(false, reason, false, null) { SuggestedEdge = suggested };
     }
 
-    private async Task<bool> IsEdgeWiredAsync(Guid runId, string edge)
+    /// <summary>The run's PR node and the custom edges wired from it, read once per click.</summary>
+    private readonly record struct PrNodeWiring(Guid? NodeId, HashSet<string> Names);
+
+    private async Task<PrNodeWiring> LoadWiredPrEdgesAsync(Guid runId)
     {
         var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run?.CurrentNodeId is not { } nodeId) return false;
+        if (run?.CurrentNodeId is not { } nodeId) return new PrNodeWiring(null, new HashSet<string>(StringComparer.Ordinal));
         var edges = await _loopRunStore.GetEdgesForNodeIdsAsync(new[] { nodeId });
-        return edges.Any(e => e.SourceNodeId == nodeId && e.EdgeType == EdgeType.Custom && e.Name == edge);
+        var names = edges
+            .Where(e => e.SourceNodeId == nodeId && e.EdgeType == EdgeType.Custom && !string.IsNullOrEmpty(e.Name))
+            .Select(e => e.Name!)
+            .ToHashSet(StringComparer.Ordinal);
+        return new PrNodeWiring(nodeId, names);
     }
 
     /// <summary>
-    /// Continue the run along <paramref name="edge"/>, once. The state is first written
-    /// into the poller's baseline, so a later poll that reads the same state sees
-    /// nothing newly true; the engine's WaitingHuman check lets only one of this and a
-    /// concurrent poll complete the node. A run that has ended, or is not waiting at its
-    /// PR node, has nothing to continue.
+    /// Continue the run along <paramref name="edge"/>, once, and return the output that
+    /// carried it. An edge the template does not wire would park the run as a failed
+    /// node, so the node's standard output stands in: OnSuccess for a merge, OnFailure
+    /// for a conflict or failed checks, with the edge's own description as the input.
+    /// The event records both, so the run shows what the state chose and what fired.
+    /// The state is first written into the poller's baseline, so a later poll that
+    /// reads the same state sees nothing newly true; the engine's WaitingHuman check
+    /// lets only one of this and a concurrent poll complete the node. A run that has
+    /// ended, or is not waiting at its PR node, has nothing to continue.
     /// </summary>
-    private async Task FireMergeEdgeAsync(string workItemId, Guid runId, string edge, RemotePrSnapshot? fresh)
+    private async Task<string> FireMergeEdgeAsync(
+        string workItemId, Guid runId, string edge, RemotePrSnapshot? fresh, PrNodeWiring wired)
     {
-        var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run?.CurrentNodeId is { } prNodeId && fresh is not null)
+        if (wired.NodeId is { } prNodeId && fresh is not null)
         {
             var states = PrNodeEdges.ActiveStates(fresh);
             states.Add(edge);
             await _loopRunStore.TryRecordPrPollAsync(runId, prNodeId, PrSnapshotJson.Serialize(fresh), string.Join(",", states));
         }
 
-        try { await DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Edge(edge, PrNodeEdges.Describe(edge, fresh, null, workItemId))); }
+        var reason = PrNodeEdges.Describe(edge, fresh, null, workItemId);
+        string output;
+        HumanAnswer answer;
+        if (wired.Names.Contains(edge))
+        {
+            output = edge;
+            answer = HumanAnswer.Edge(edge, reason);
+        }
+        else
+        {
+            var success = edge == LoopOutputs.OnMerged;
+            output = success ? nameof(EdgeType.OnSuccess) : nameof(EdgeType.OnFailure);
+            answer = (success ? HumanAnswer.Approval(reason) : HumanAnswer.Rejection(reason))
+                with { EdgeName = $"{edge} (not wired) → {output}" };
+        }
+
+        try { await DeliverHumanFeedbackAsync(workItemId, runId, answer); }
         catch (RunClosedException) { }
         catch (HumanFeedbackRefusedException) { }
+        return output;
     }
 
     public async Task<bool> DeleteAsync(WorkItemActor actor, string workItemId)

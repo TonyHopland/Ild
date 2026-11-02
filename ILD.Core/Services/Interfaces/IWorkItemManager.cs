@@ -349,6 +349,9 @@ public sealed record MergePullRequestResult(
     /// <summary>The reserved PR edge the click fired when the merge was refused but the pull request's state still decided the run's next step.</summary>
     public string? FiredEdge { get; init; }
 
+    /// <summary>The output that carried the run on: <see cref="FiredEdge"/>, or OnSuccess / OnFailure when the template does not wire that edge.</summary>
+    public string? FiredOutput { get; init; }
+
     /// <summary>An edge the person may choose instead (nothing was fired), when one clearly fits the refusal.</summary>
     public string? SuggestedEdge { get; init; }
 }

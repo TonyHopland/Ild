@@ -1173,7 +1173,7 @@ public class WorkItemsController : ControllerBase
         if (result == null) return NotFound();
         // Refused, but the pull request's state still decided the run's next step.
         if (!result.Merged && result.FiredEdge is { } edge)
-            return Ok(new { merged = false, edge });
+            return Ok(new { merged = false, edge, output = result.FiredOutput });
         if (!result.Merged)
             return BadRequest(new { error = result.Error, suggestedEdge = result.SuggestedEdge });
 

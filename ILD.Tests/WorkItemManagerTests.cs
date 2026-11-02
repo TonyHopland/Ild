@@ -89,7 +89,7 @@ public class WorkItemManagerTests
 
     private static (string workItemId, Guid runId, Guid runNodeId) SeedPrAwaitingMerge(
         WorkItemManager mgr, TestDb db, Guid repoId, string prUrl, string branchName,
-        LoopRunStatus status = LoopRunStatus.WaitingHuman)
+        LoopRunStatus status = LoopRunStatus.WaitingHuman, params string[] wiredEdges)
     {
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "pr" };
         var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
@@ -126,6 +126,15 @@ public class WorkItemManagerTests
             LoopNodeId = prNodeId,
             Status = LoopRunNodeStatus.WaitingHuman,
         });
+        foreach (var edge in wiredEdges)
+        {
+            var targetId = Guid.NewGuid();
+            db.Context.LoopNodes.Add(new LoopNode { Id = targetId, LoopTemplateVersionId = ltv.Id, NodeType = NodeType.AI, Label = "next" });
+            db.Context.LoopNodeEdges.Add(new LoopNodeEdge
+            {
+                Id = Guid.NewGuid(), SourceNodeId = prNodeId, TargetNodeId = targetId, EdgeType = EdgeType.Custom, Name = edge,
+            });
+        }
         db.Context.SaveChanges();
         mgr.TransitionToHumanFeedbackAsync(TestActors.Human, id, HumanFeedbackReasons.PrAwaitingMerge).GetAwaiter().GetResult();
         return (id, runId, runNodeId);
@@ -1516,7 +1525,7 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var (id, runId, runNodeId) = SeedPrAwaitingMerge(
-            mgr, db, repoId, "https://example/repo/pulls/42", "ild/wi-x-run-1");
+            mgr, db, repoId, "https://example/repo/pulls/42", "ild/wi-x-run-1", wiredEdges: LoopOutputs.OnMerged);
 
         var result = await mgr.MergePullRequestAsync(id, deleteBranch: true);
 
@@ -1538,7 +1547,7 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var (id, runId, runNodeId) = SeedPrAwaitingMerge(
-            mgr, db, repoId, "https://example/repo/pulls/7", "ild/wi-x-run-2");
+            mgr, db, repoId, "https://example/repo/pulls/7", "ild/wi-x-run-2", wiredEdges: LoopOutputs.OnMerged);
 
         var result = await mgr.MergePullRequestAsync(id, deleteBranch: false);
 
@@ -1612,6 +1621,70 @@ public class WorkItemManagerTests
             It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
     }
 
+    private static void VerifyFallback(Mock<ILoopEngine> engine, Guid runId, Guid runNodeId, string edge, string output, string inputContains)
+    {
+        // The node's standard output carries the run; the event names both the edge the state chose and the output that fired.
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId,
+            It.Is<NodeSignal>(s => s.EdgeName == null
+                && (output == "OnSuccess" ? s.Type == ExternalActionResultType.Success : s.Type == ExternalActionResultType.Reject)),
+            It.Is<string>(f => f.Contains(inputContains)), $"{edge} (not wired) → {output}"), Times.Once);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
+            It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(LoopOutputs.OnMerged, "OnSuccess", "was merged")]
+    [InlineData(LoopOutputs.OnMergeConflict, "OnFailure", "conflicts")]
+    [InlineData(LoopOutputs.OnCiFailed, "OnFailure", "tsc: 3 errors")]
+    public async Task MergePullRequest_falls_back_to_the_standard_output_when_the_edge_is_not_wired(string edge, string output, string inputContains)
+    {
+        var snapshot = edge switch
+        {
+            LoopOutputs.OnMergeConflict => MergeSnapshot(mergeable: false),
+            LoopOutputs.OnCiFailed => MergeSnapshot(ci: RemotePrCiStatus.Failed) with
+            {
+                FailedChecks = new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") },
+            },
+            _ => MergeSnapshot(state: "closed", merged: true),
+        };
+        var merged = edge == LoopOutputs.OnMerged;
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "31", It.IsAny<string?>())).ReturnsAsync(merged);
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(MergeRepoCloneUrl, "31")).ReturnsAsync(snapshot);
+        var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
+        using var _ = db;
+        // Another edge is wired, so only the chosen one is missing.
+        var (id, runId, runNodeId) = SeedPrAwaitingMerge(mgr, db, repoId, "https://example/repo/pulls/31", "ild/wi-x-run-31",
+            wiredEdges: LoopOutputs.OnApproved);
+
+        var result = await mgr.MergePullRequestAsync(id, deleteBranch: false);
+
+        Assert.Equal(merged, result!.Merged);
+        if (!merged) Assert.Equal(output, result.FiredOutput);
+        if (!merged) Assert.Equal(edge, result.FiredEdge);
+        VerifyFallback(engine, runId, runNodeId, edge, output, inputContains);
+        // The baseline still holds the chosen edge, so a later poll sees nothing new.
+        var run = await db.Context.LoopRuns.AsNoTracking().SingleAsync(r => r.Id == runId, TestContext.Current.CancellationToken);
+        Assert.Contains(edge, PrNodeEdges.ParseStates(run.PrPolledEdgeStates));
+        Assert.NotNull(PrSnapshotJson.TryParse(run.PrSnapshot));
+    }
+
+    [Fact]
+    public async Task MergePullRequest_already_merged_elsewhere_is_not_logged_as_a_failed_merge()
+    {
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "32", It.IsAny<string?>())).ReturnsAsync(false);
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(MergeRepoCloneUrl, "32")).ReturnsAsync(MergeSnapshot(state: "closed", merged: true));
+        var (mgr, db, repoId, _, eventLog) = SetupCore(out var engine1, remote);
+        using var _ = db;
+        var (id, _, _) = SeedPrAwaitingMerge(mgr, db, repoId, "https://example/repo/pulls/32", "ild/wi-x-run-32", wiredEdges: LoopOutputs.OnMerged);
+
+        await mgr.MergePullRequestAsync(id, deleteBranch: false);
+
+        eventLog.Verify(e => e.AppendAsync(It.IsAny<Guid>(), EventType.PrMergeFailed, It.IsAny<string>(),
+            It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
+    }
+
     private static RemotePrSnapshot MergeSnapshot(
         string state = "open", bool merged = false, bool? mergeable = true, RemotePrCiStatus ci = RemotePrCiStatus.Passed,
         bool approved = false, bool changesRequested = false)
@@ -1635,7 +1708,7 @@ public class WorkItemManagerTests
         remote.Setup(r => r.GetPullRequestSnapshotAsync(MergeRepoCloneUrl, "21")).ReturnsAsync(snapshot);
         var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
         using var _ = db;
-        var (id, runId, runNodeId) = SeedPrAwaitingMerge(mgr, db, repoId, "https://example/repo/pulls/21", "ild/wi-x-run-21");
+        var (id, runId, runNodeId) = SeedPrAwaitingMerge(mgr, db, repoId, "https://example/repo/pulls/21", "ild/wi-x-run-21", wiredEdges: edge);
 
         var result = await mgr.MergePullRequestAsync(id, deleteBranch: true);
 
@@ -1729,7 +1802,7 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var (id, runId, runNodeId) = SeedPrAwaitingMerge(
-            mgr, db, repoId, "https://example/repo/pulls/11", "ild/wi-x-run-4");
+            mgr, db, repoId, "https://example/repo/pulls/11", "ild/wi-x-run-4", wiredEdges: LoopOutputs.OnMerged);
 
         var result = await mgr.MergePullRequestAsync(id, deleteBranch: true);
 

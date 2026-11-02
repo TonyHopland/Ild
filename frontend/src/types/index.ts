@@ -1729,4 +1729,6 @@ export interface MergePrResult {
   warning?: string | null;
   merged?: boolean;
   edge?: string;
+  /** The output that carried the run: `edge`, or OnSuccess / OnFailure when that edge is not wired. */
+  output?: string;
 }
