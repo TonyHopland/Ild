@@ -121,6 +121,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeMessage, setMergeMessage] = useState<string | null>(null);
+  // An edge the refused merge proposes instead; nothing fired until it is chosen.
+  const [mergeSuggestedEdge, setMergeSuggestedEdge] = useState<string | null>(null);
   // A reply belongs to the run it answers: its draft, wait and error are kept
   // with that run's id and shown for no other. A new latest run starts afresh.
   const [reply, setReply] = useState<Reply>(() => idleReply(workItem?.latestLoopRunId ?? null));
@@ -895,23 +897,29 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     );
 
   // Merge the linked PR on the remote (and optionally delete the branch), then
-  // continue the loop along OnSuccess. A merge failure leaves the item parked,
-  // so the error is surfaced rather than swallowed like the other actions.
+  // continue along on_merged. A refusal fires the edge the pull request's state
+  // names (on_merge_conflict, on_ci_failed) or leaves the item parked with the
+  // error, so the error is surfaced rather than swallowed like the other actions.
   const handleMerge = useCallback(
     async (deleteBranch: boolean) => {
       if (!workItem) return;
       setMergeLoading(true);
       setMergeError(null);
       setMergeMessage(null);
+      setMergeSuggestedEdge(null);
       try {
         const result = await workItemService.mergePr(workItem.id, deleteBranch);
         setMergeMessage(
-          result.warning ?? (deleteBranch ? "PR merged and branch deleted." : "PR merged."),
+          result.edge
+            ? `The PR was not merged; the run continued along ${result.edge}.`
+            : (result.warning ?? (deleteBranch ? "PR merged and branch deleted." : "PR merged.")),
         );
         const updated = await workItemService.getById(workItem.id);
         onSave(updated);
       } catch (error) {
         setMergeError((error as { message?: string })?.message ?? "Failed to merge PR.");
+        const details = (error as { details?: { suggestedEdge?: string | null } })?.details;
+        setMergeSuggestedEdge(details?.suggestedEdge ?? null);
       } finally {
         setMergeLoading(false);
       }
@@ -1058,6 +1066,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     mergeLoading,
     mergeError,
     mergeMessage,
+    mergeSuggestedEdge,
     handleMerge,
     handleHalt,
     handleResumeSteer,

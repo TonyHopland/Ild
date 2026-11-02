@@ -1171,11 +1171,14 @@ public class WorkItemsController : ControllerBase
     {
         var result = await _workItemManager.MergePullRequestAsync(id, request?.DeleteBranch ?? true);
         if (result == null) return NotFound();
+        // Refused, but the pull request's state still decided the run's next step.
+        if (!result.Merged && result.FiredEdge is { } edge)
+            return Ok(new { merged = false, edge });
         if (!result.Merged)
-            return BadRequest(new { error = result.Error });
+            return BadRequest(new { error = result.Error, suggestedEdge = result.SuggestedEdge });
 
-        // Branch deletion is best effort: surface a warning but report success
-        // so the UI advances the loop just like Approve.
+        // Branch deletion is best effort: surface a warning but report success;
+        // the run has already continued along on_merged.
         return Ok(new { branchDeleted = result.BranchDeleted, warning = result.BranchWarning });
     }
 

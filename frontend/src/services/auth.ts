@@ -39,6 +39,7 @@ import {
   ManagedAgentStatus,
   LoopNode,
   LoopNodeEdge,
+  MergePrResult,
   PullBranchResult,
   BranchNameCheck,
   WorkItemListFilter,
@@ -354,14 +355,8 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/human-feedback/edge`, { runId, name, input });
   },
 
-  mergePr: async (
-    id: string,
-    deleteBranch: boolean,
-  ): Promise<{ branchDeleted: boolean; warning: string | null }> => {
-    return api.post<{ branchDeleted: boolean; warning: string | null }>(
-      `/workitems/${id}/pr/merge`,
-      { deleteBranch },
-    );
+  mergePr: async (id: string, deleteBranch: boolean): Promise<MergePrResult> => {
+    return api.post<MergePrResult>(`/workitems/${id}/pr/merge`, { deleteBranch });
   },
 
   pushBranch: async (id: string): Promise<{ branch: string }> => {

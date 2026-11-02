@@ -2,6 +2,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Remote;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -1558,13 +1559,14 @@ public class WorkItemManager : IWorkItemManager
 
         var runId = wi.CurrentLoopRunId.Value;
         var merged = await _remoteProvider.MergePullRequestAsync(repo.CloneUrl, prNumber);
+        // Never the run's stored snapshot: it is as old as the last poll, and the
+        // answer to "what happened to the pull request" is whatever it is now.
+        var fresh = await _remoteProvider.GetPullRequestSnapshotAsync(repo.CloneUrl, prNumber);
+
         if (!merged)
         {
             await _eventLog.TryAppendAsync(runId, EventType.PrMergeFailed, $"Merge of {wi.PrUrl} failed", _logger);
-            // Leave the work item parked — do not advance the loop.
-            return new MergePullRequestResult(false,
-                "Failed to merge the pull request. It may have conflicts or be blocked by branch protection.",
-                false, null);
+            return await HandleRefusedMergeAsync(wi.Id, runId, fresh);
         }
 
         await _eventLog.TryAppendAsync(runId, EventType.PrMerged, $"PR {wi.PrUrl} merged by user", _logger);
@@ -1580,14 +1582,76 @@ public class WorkItemManager : IWorkItemManager
             branchDeleted = branchWarning is null;
         }
 
-        // Continue along OnSuccess — identical continuation to the Approve action.
-        // A run that has ended, or is not waiting at its PR node, has nothing to
-        // continue; the merge itself still happened and is reported as such.
-        try { await SubmitHumanFeedbackInputAsync(workItemId, runId, string.Empty); }
+        await FireMergeEdgeAsync(wi.Id, runId, LoopOutputs.OnMerged, fresh);
+        return new MergePullRequestResult(true, null, branchDeleted, branchWarning);
+    }
+
+    /// <summary>
+    /// A merge the forge refused. The fresh snapshot says why: a pull request merged
+    /// elsewhere, a conflict or failed checks fire the edge for that; anything else
+    /// leaves the node waiting with an error, and <c>on_rejected</c> /
+    /// <c>on_abandoned</c> are only proposed, because they send the run somewhere the
+    /// person did not ask to go.
+    /// </summary>
+    private async Task<MergePullRequestResult> HandleRefusedMergeAsync(string workItemId, Guid runId, RemotePrSnapshot? fresh)
+    {
+        if (fresh is null)
+            return new MergePullRequestResult(false,
+                "The pull request was not merged and its state could not be read. Try again.", false, null);
+
+        var states = PrNodeEdges.ActiveStates(fresh);
+        var edge = states.Contains(LoopOutputs.OnMerged) ? LoopOutputs.OnMerged
+            : states.Contains(LoopOutputs.OnMergeConflict) ? LoopOutputs.OnMergeConflict
+            : states.Contains(LoopOutputs.OnCiFailed) ? LoopOutputs.OnCiFailed
+            : null;
+        if (edge is not null)
+        {
+            await FireMergeEdgeAsync(workItemId, runId, edge, fresh);
+            return new MergePullRequestResult(false, null, false, null) { FiredEdge = edge };
+        }
+
+        var suggested = states.Contains(LoopOutputs.OnRejected) ? LoopOutputs.OnRejected
+            : states.Contains(LoopOutputs.OnAbandoned) ? LoopOutputs.OnAbandoned
+            : null;
+        if (suggested is not null && !await IsEdgeWiredAsync(runId, suggested))
+            suggested = null;
+
+        var reason = states.Contains(LoopOutputs.OnAbandoned) ? "The pull request is closed without being merged."
+            : fresh.ChangesRequested ? "A reviewer requested changes, so the pull request cannot be merged yet."
+            : fresh.Ci == RemotePrCiStatus.Pending ? "Required checks are still running, so the pull request cannot be merged yet."
+            : !fresh.Approved ? "The pull request is not approved, or branch protection blocks the merge."
+            : "The forge refused the merge (branch protection or permissions).";
+        return new MergePullRequestResult(false, reason, false, null) { SuggestedEdge = suggested };
+    }
+
+    private async Task<bool> IsEdgeWiredAsync(Guid runId, string edge)
+    {
+        var run = await _loopRunStore.GetByIdAsync(runId);
+        if (run?.CurrentNodeId is not { } nodeId) return false;
+        var edges = await _loopRunStore.GetEdgesForNodeIdsAsync(new[] { nodeId });
+        return edges.Any(e => e.SourceNodeId == nodeId && e.EdgeType == EdgeType.Custom && e.Name == edge);
+    }
+
+    /// <summary>
+    /// Continue the run along <paramref name="edge"/>, once. The state is first written
+    /// into the poller's baseline, so a later poll that reads the same state sees
+    /// nothing newly true; the engine's WaitingHuman check lets only one of this and a
+    /// concurrent poll complete the node. A run that has ended, or is not waiting at its
+    /// PR node, has nothing to continue.
+    /// </summary>
+    private async Task FireMergeEdgeAsync(string workItemId, Guid runId, string edge, RemotePrSnapshot? fresh)
+    {
+        var run = await _loopRunStore.GetByIdAsync(runId);
+        if (run?.CurrentNodeId is { } prNodeId && fresh is not null)
+        {
+            var states = PrNodeEdges.ActiveStates(fresh);
+            states.Add(edge);
+            await _loopRunStore.TryRecordPrPollAsync(runId, prNodeId, PrSnapshotJson.Serialize(fresh), string.Join(",", states));
+        }
+
+        try { await DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Edge(edge, PrNodeEdges.Describe(edge, fresh, null, workItemId))); }
         catch (RunClosedException) { }
         catch (HumanFeedbackRefusedException) { }
-
-        return new MergePullRequestResult(true, null, branchDeleted, branchWarning);
     }
 
     public async Task<bool> DeleteAsync(WorkItemActor actor, string workItemId)

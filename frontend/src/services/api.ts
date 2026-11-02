@@ -26,15 +26,18 @@ async function send(endpoint: string, options: RequestInit = {}): Promise<Respon
     }
     const errorBody = await response.text();
     let message = errorBody || response.statusText;
+    let details: unknown;
     try {
       const parsed = JSON.parse(errorBody);
       message = parsed.error || parsed.message || message;
+      details = parsed;
     } catch {
       // not JSON, use raw body
     }
     const error: ApiError = {
       status: response.status,
       message,
+      details,
     };
     throw error;
   }

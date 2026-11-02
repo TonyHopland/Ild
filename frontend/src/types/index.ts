@@ -1722,3 +1722,11 @@ export interface RunAnalyticsOverview {
   availableProviders: string[];
   granularity: AnalyticsGranularity;
 }
+
+/** What the merge endpoint answers: `edge` is set when a refused merge still moved the run along that edge. */
+export interface MergePrResult {
+  branchDeleted?: boolean;
+  warning?: string | null;
+  merged?: boolean;
+  edge?: string;
+}

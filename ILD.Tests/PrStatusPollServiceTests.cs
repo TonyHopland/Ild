@@ -264,6 +264,20 @@ public class PrStatusPollServiceTests
     }
 
     [Fact]
+    public async Task A_poll_after_the_merge_button_recorded_on_merged_does_not_fire_it_again()
+    {
+        // The merge button fires on_merged and writes the state into the baseline;
+        // the next tick reading the same merged pull request finds nothing new.
+        using var h = new Harness(Snapshot(state: "closed", merged: true), baseline: LoopOutputs.OnMerged);
+        h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnMerged) });
+
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
+
+        h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Does_not_fire_when_edge_unconnected_but_still_persists()
     {
         using var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
