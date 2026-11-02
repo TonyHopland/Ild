@@ -41,6 +41,13 @@ public class TemplateSeederTests
         var sendBackBrief = graph.Nodes.Single(n => n.Label == "Send Back Brief");
         var retroBrief = graph.Nodes.Single(n => n.Label == "Retro Brief");
 
+        // A work item tagged HIL goes through Approve PR before the pull request opens.
+        var hil = graph.Nodes.Single(n => n.Label == "HIL?");
+        var approve = graph.Nodes.Single(n => n.Label == "Approve PR");
+        Assert.Contains(graph.Edges, e => e.SourceNodeId == hil.Id && e.TargetNodeId == approve.Id && e.Name == "hil");
+        Assert.Contains(graph.Edges, e => e.SourceNodeId == hil.Id && e.TargetNodeId == pr.Id && e.Name == "no_hil");
+        Assert.Contains(graph.Edges, e => e.SourceNodeId == approve.Id && e.TargetNodeId == pr.Id && e.Name == "approve");
+
         // The human's send_back button reaches the developer.
         Assert.Contains(graph.Edges, e =>
             e.SourceNodeId == pr.Id
