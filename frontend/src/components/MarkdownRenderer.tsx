@@ -1,6 +1,16 @@
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { opensInNewTab } from "../utils/linkTarget";
 import "./MarkdownRenderer.css";
+
+const components: Components = {
+  a: ({ node: _node, ...props }) =>
+    opensInNewTab(props.href, window.location.href) ? (
+      <a {...props} target="_blank" rel="noopener noreferrer" />
+    ) : (
+      <a {...props} />
+    ),
+};
 
 interface MarkdownRendererProps {
   content: string;
@@ -18,7 +28,9 @@ export default function MarkdownRenderer({ content, className }: MarkdownRendere
 
   return (
     <div className={`markdown-body ${className ?? ""}`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }
