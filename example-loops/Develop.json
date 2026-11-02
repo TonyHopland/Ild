@@ -1,0 +1,924 @@
+{
+  "$schema": "ild-loop-template/v2",
+  "name": "Develop",
+  "description": "Plan -> Develop -> Review -> Summarize -> PR -> Retro -> Done, stopping to ask a human whenever an agent needs clarification.",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "00acb725-35e2-4b25-ad81-7e7c74c72881",
+      "type": "AI",
+      "label": "Retro",
+      "config": {
+        "useSession": true,
+        "sessionPlaceholder": "retro",
+        "__pos": {
+          "x": 3105.9004171100555,
+          "y": -1.2675125220344299
+        },
+        "prompt": "{{Node.Input}}",
+        "toolAllowlist": [
+          "read",
+          "execute",
+          "ild"
+        ],
+        "matchRules": [
+          {
+            "pattern": "(?m)^[*`\\s]*RETRO_ASK([^\\w]|$)",
+            "edgeName": "ask_human"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "ask_human"
+          }
+        ],
+        "aiProviderTag": "Reviewer"
+      }
+    },
+    {
+      "id": "17252f7c-dddb-4799-973d-980b7320f405",
+      "type": "Condition",
+      "label": "HIL?",
+      "config": {
+        "__pos": {
+          "x": 2340,
+          "y": 520
+        },
+        "cases": [
+          {
+            "variant": "HasTag",
+            "tag": "HIL",
+            "edgeName": "hil"
+          }
+        ],
+        "defaultEdge": "no_hil",
+        "outputs": [
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "hil"
+          },
+          {
+            "name": "no_hil"
+          }
+        ]
+      }
+    },
+    {
+      "id": "1a23366b-d138-4f8a-baeb-2d2d8032be88",
+      "type": "Cleanup",
+      "label": "Done",
+      "config": {
+        "__pos": {
+          "x": 3381.427445504977,
+          "y": 0
+        },
+        "outputs": []
+      }
+    },
+    {
+      "id": "2454a018-e872-4b31-ae26-167f2d315853",
+      "type": "SetVariable",
+      "label": "Save Plan",
+      "config": {
+        "__pos": {
+          "x": 780,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "assignments": [
+          {
+            "name": "plan",
+            "value": "{{Node.Input}}"
+          }
+        ]
+      }
+    },
+    {
+      "id": "2a8fc4d6-e002-4cea-9c33-7c530a135c16",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": 0,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "420f0b04-9301-4574-bf00-6f62e454762e",
+      "type": "AI",
+      "label": "Summarize",
+      "config": {
+        "__pos": {
+          "x": 2340,
+          "y": 0
+        },
+        "prompt": "{{Node.Input}}",
+        "toolAllowlist": [
+          "read",
+          "execute"
+        ],
+        "matchRules": [],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "aiProviderTag": "Reviewer"
+      }
+    },
+    {
+      "id": "495ee1bc-45df-409a-82d0-f32619ded984",
+      "type": "AI",
+      "label": "Review",
+      "config": {
+        "__pos": {
+          "x": 1820,
+          "y": 0
+        },
+        "prompt": "{{Node.Input}}",
+        "aiProviderTag": "Reviewer",
+        "useSession": true,
+        "sessionPlaceholder": "reviewer",
+        "toolAllowlist": [
+          "read",
+          "execute",
+          "ild"
+        ],
+        "matchRules": [
+          {
+            "pattern": "(?m)^[*`\\s]*APPROVED([^\\w]|$)",
+            "edgeName": "approved"
+          },
+          {
+            "pattern": "(?m)^[*`\\s]*CHANGES_REQUESTED([^\\w]|$)",
+            "edgeName": "changes_requested"
+          },
+          {
+            "pattern": "(?m)^[*`\\s]*NEEDS_HUMAN([^\\w]|$)",
+            "edgeName": "needs_human"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "approved"
+          },
+          {
+            "name": "changes_requested"
+          },
+          {
+            "name": "needs_human"
+          }
+        ]
+      }
+    },
+    {
+      "id": "4e6867bc-a54b-4b7c-a08d-9ec43f0b8049",
+      "type": "AI",
+      "label": "Plan",
+      "config": {
+        "__pos": {
+          "x": 520,
+          "y": 0
+        },
+        "prompt": "{{Node.Input}}",
+        "aiProviderTag": "Planner",
+        "useSession": true,
+        "sessionPlaceholder": "planner",
+        "toolAllowlist": [
+          "read",
+          "execute",
+          "ild"
+        ],
+        "matchRules": [
+          {
+            "pattern": "(?m)^[*`\\s]*PLAN_READY([^\\w]|$)",
+            "edgeName": "plan_ready"
+          },
+          {
+            "pattern": "(?m)^[*`\\s]*NEEDS_HUMAN([^\\w]|$)",
+            "edgeName": "needs_human"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "plan_ready"
+          },
+          {
+            "name": "needs_human"
+          }
+        ]
+      }
+    },
+    {
+      "id": "4eea8224-0283-4f88-9ede-32157b2a7f9f",
+      "type": "Prompt",
+      "label": "Develop Brief",
+      "config": {
+        "__pos": {
+          "x": 1040,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "You are the DEVELOPER for this work item. You work in a git worktree on the work item's branch, in one session for the whole run.\n\n## Work item\n{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n## Plan\n{{Var.plan}}\n\n## How to work\n- Follow the repository's conventions. Keep to the plan's scope: no drive-by refactors, TODOs, stubs or debug output.\n- Add or update tests for the change and run them, along with the build/lint the repository's CI uses.\n- Commit your work in coherent commits with clear messages. Do not push and do not open a pull request; the loop does that.\n\n## Reply\nEnd with a short summary of what you changed and how you tested it, and exactly one of these alone on the last line:\nREADY_FOR_REVIEW - everything is committed and the tests pass.\nNEEDS_HUMAN - you need a decision only the human can make. Above the verdict, write the question, the options and your recommendation.\n\n## Later messages in this session\n- Reviewer findings: fix them (or explain why not), commit, and reply again.\n- A message from the human: it is a decision and overrides the plan.\n- Pull-request activity: read it with get_pr_review (and get_ci_log for CI failures). Fix what is right and answer each comment with reply_to_pr_review_comment / resolve_pr_review_thread / close_pr_review_item. These only queue; the PR step sends them. Do not use gh or git push. For a merge conflict, merge the default branch in and resolve it.\nAlways end with READY_FOR_REVIEW or NEEDS_HUMAN."
+      }
+    },
+    {
+      "id": "6954de50-6fcb-4ab7-81d8-38dd001b7142",
+      "type": "Prompt",
+      "label": "Review Brief",
+      "config": {
+        "__pos": {
+          "x": 1560,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "You are the REVIEWER: a senior engineer who did not write this change. Change no files and commit nothing.\n\n## Work item\n{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n## Plan\n{{Var.plan}}\n\n## Developer's summary\n{{Node.Input}}\n\nThe change is the commits on this branch that are not on the default branch (use git log and git diff against the merge-base). Run the tests if useful.\n\nCheck that the work item is done, the code is correct (error paths, edge cases), it is tested, and it follows the repository's conventions and that it does not introduce any new technical debt or other sloppy code. If you reviewed earlier rounds in this session, check your previous findings were addressed and do not raise new nits.\n\nEnd with exactly one of these alone on the last line:\nAPPROVED\nCHANGES_REQUESTED - above it, a numbered list of blocking findings, each at file:line with the fix needed.\nNEEDS_HUMAN - above it, a product or risk question neither the work item nor the plan answers, with options and your recommendation."
+      }
+    },
+    {
+      "id": "702d8a3f-afef-4c04-928b-e5c740c53a5a",
+      "type": "Human",
+      "label": "Plan Questions",
+      "config": {
+        "__pos": {
+          "x": 520,
+          "y": 260
+        },
+        "inputLabel": "Your answer to the planner",
+        "prompt": "{{Node.Input}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "Answer",
+            "default": true,
+            "color": "#40006b"
+          }
+        ]
+      }
+    },
+    {
+      "id": "8653b44d-a34f-4d84-aa0e-acafbf2e28a3",
+      "type": "Human",
+      "label": "Retro Decision",
+      "config": {
+        "__pos": {
+          "x": 3105,
+          "y": 260
+        },
+        "inputLabel": "Optional: which proposals to make, or anything to change in them",
+        "prompt": "{{Node.Input}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "propose",
+            "color": "#40006b"
+          },
+          {
+            "name": "finish",
+            "default": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "89eebcdc-007a-4a92-a73b-24aa303642ff",
+      "type": "Prompt",
+      "label": "Retro Brief",
+      "config": {
+        "__pos": {
+          "x": 2834.809682542255,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "You are the RETRO agent. The run for \"{{WorkItem.Title}}\" has ended:\n\n{{Node.Input}}\n\nYour job is to find out whether this loop template itself (its prompts, match rules or wiring) should change so that future runs, in any repository, go better. You are not judging the code or this work item. Change no files and do not touch the pull request.\n\n## Keep it cheap\n- Start from the run record. `git branch --show-current` gives ild/wi-<id>-run-...; call list_loop_runs for that work item (the newest unfinished run is this one), then get_loop_run for its node visits, verdicts, failures, cost and human answers.\n- Open a node's full conversation, or the PR review (get_pr_review), only where the record shows rework or a failure. Do not read the code or the diff.\n- Stop as soon as you know the answer. Most runs go fine and need nothing.\n\n## What counts as a gain\nLook for: review rounds or PR feedback that an earlier step should have caught; human questions an agent could have answered itself, or should have asked earlier; nodes that failed or were retried because of the loop (a verdict no match rule caught, an unclear instruction); nodes that cost far more than they gave.\nA finding counts only if all of these hold:\n- the run record shows it (name the node and what happened);\n- a small, specific template change fixes it (a sentence in a prompt, a match rule, an edge);\n- it would help runs in other repositories too, not just this one;\n- it would likely save at least a review round, a human question, a failed node, or a clearly large share of the run's cost.\nOne-off hiccups do not count: a flaky test, a provider timeout, a work item that was simply unclear.\n\n## Reply\nIf nothing counts: two or three lines on what went well and what cost the most, then RETRO_DONE alone on the last line. Do not ask the human; disturbing them costs more than it gains.\n\nIf something counts: at most three proposals, each with what happened (the evidence), the exact change (node and text) and the expected gain. End with RETRO_ASK alone on the last line. Do not propose anything yet: the human decides first.\n\n## If the human says go ahead\nA later message in this session says which proposals to make. Read the template with get_loop_template and call propose_loop_template_change against its latest version with only those changes, preferring editNodeField edits. Reply with the proposal id in one line, then RETRO_DONE alone on the last line."
+      }
+    },
+    {
+      "id": "8f866ef4-fe0d-4e9f-8499-dfba312a0aaa",
+      "type": "Prompt",
+      "label": "Retro Go-ahead",
+      "config": {
+        "__pos": {
+          "x": 2835,
+          "y": 260
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "The human wants you to propose the changes. Their note, which may be empty:\n\n{{Node.Input}}\n\nIf the note names some of your proposals, or asks for changes to them, follow it; if it is empty, propose all of them. Then reply as your instructions say, ending with RETRO_DONE."
+      }
+    },
+    {
+      "id": "a29d8b27-2249-4a2c-9987-9a729aa83356",
+      "type": "Human",
+      "label": "Ask Human",
+      "config": {
+        "__pos": {
+          "x": 1300,
+          "y": 260
+        },
+        "inputLabel": "Your answer (sent to the developer)",
+        "prompt": "{{Node.Input}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "Answer",
+            "default": true,
+            "color": "#40006b"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a5f4800d-964d-4f91-b364-0cb7b3928184",
+      "type": "SetVariable",
+      "label": "Save Summary",
+      "config": {
+        "__pos": {
+          "x": 2080,
+          "y": 520
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "assignments": [
+          {
+            "name": "pr_description",
+            "value": "{{Node.Input}}"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a7498c50-e6a5-4648-ace5-4e72615f45e4",
+      "type": "Human",
+      "label": "Approve PR",
+      "config": {
+        "__pos": {
+          "x": 2614,
+          "y": 520
+        },
+        "inputLabel": "What to change (only used when you send it back)",
+        "prompt": "Approve to open or update the pull request with this description, or send it back to the developer with what to change.\n\n{{Var.pr_description}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "approve",
+            "default": true,
+            "color": "#16a34a"
+          },
+          {
+            "name": "send_back",
+            "color": "#b45309"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a7bf26e8-b795-4fb8-8cac-ce5e76d053f2",
+      "type": "Prompt",
+      "label": "Summarize Brief",
+      "config": {
+        "__pos": {
+          "x": 2080,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "Write the pull request description for this change. Change no files and commit nothing.\n\n## Work item\n{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\nRead the commits on this branch that are not on the default branch (git log and git diff against the merge-base). Your whole reply is published as the PR description, so reply with only the description in markdown: no preamble, no closing remarks. Keep the prose brief, use the repository's own domain language (its GLOSSARY.md if there is one), and don't overwhelm the reader.\n\n## Summary\nOne or two sentences on what changes and why, next to the smallest visual that makes the key point clear. Pick one, occasionally two, and only if it helps:\n- Pseudocode, for logic or an algorithm.\n- A call tree, for runtime control flow.\n- A component tree, for UI structure, with the state and file paths that matter.\n- A shallow file tree with a comment per file, for a broad refactor or new files.\n- A Mermaid sequence diagram, for how components, the UI and the backend interact.\n- A diff of one of the above (lines added or removed in the tree, stack or pseudocode), when the structure already exists and the point is what changes.\n- A full code block only when most of it is new or the reader needs the exact shape.\nShow only the calls, files, props and states needed to understand the change.\n\n## Evidence\nBefore and after proof that it works. Prefer what you can show from running it: the exact test that failed before and passes now (as pseudocode or the test name), or command and console output. Mention screenshots only if the change is visual and the run produced them. Say plainly what was not tested or could not be run (for example integration tests or a manual check in the UI); never imply it was.\n\n## Merge Danger\n- **Door:** two-way door (cheap to roll back) or one-way door (hard to reverse: data or schema migrations, file or format changes, destructive actions, public API changes), with one line on why.\n- **Blast radius:** one word or a short phrase for what could break (for example consumers of an API, stored data, layout, mobile), then the possible ramifications in a line or two, if any.\n- Anything to do before or after merging.\n\nNo account names, hostnames, credentials or local paths."
+      }
+    },
+    {
+      "id": "db9bd61b-4199-42d6-9e76-891ecc8a2602",
+      "type": "Prompt",
+      "label": "Send Back Brief",
+      "config": {
+        "__pos": {
+          "x": 2291.994457145635,
+          "y": -261.2675125220344
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "The human looked at the change (its pull request, or the description it is about to be opened with) and sent it back to you:\n\n{{Node.Input}}\n\nThis is a decision and overrides the plan. Make the changes they ask for (if a pull request exists, read any comments they left on it with get_pr_review), add or update tests and run them, commit, and end with READY_FOR_REVIEW or NEEDS_HUMAN."
+      }
+    },
+    {
+      "id": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "type": "PR",
+      "label": "Pull Request",
+      "config": {
+        "__pos": {
+          "x": 2614.102570725322,
+          "y": 0
+        },
+        "prDescriptionTemplate": "{{Var.pr_description}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "on_rejected",
+            "reserved": true
+          },
+          {
+            "name": "on_merge_conflict",
+            "reserved": true
+          },
+          {
+            "name": "on_ci_failed",
+            "reserved": true
+          },
+          {
+            "name": "on_comment",
+            "reserved": true
+          },
+          {
+            "name": "on_approved",
+            "reserved": true
+          },
+          {
+            "name": "on_ci_passed",
+            "reserved": true
+          },
+          {
+            "name": "on_merged",
+            "reserved": true
+          },
+          {
+            "name": "on_abandoned",
+            "reserved": true
+          },
+          {
+            "name": "send_back",
+            "color": "#b45309"
+          }
+        ]
+      }
+    },
+    {
+      "id": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "type": "AI",
+      "label": "Develop",
+      "config": {
+        "__pos": {
+          "x": 1300,
+          "y": 0
+        },
+        "prompt": "{{Node.Input}}",
+        "aiProviderTag": "Developer",
+        "useSession": true,
+        "sessionPlaceholder": "developer",
+        "toolAllowlist": [
+          "read",
+          "write",
+          "execute",
+          "ild"
+        ],
+        "matchRules": [
+          {
+            "pattern": "(?m)^[*`\\s]*READY_FOR_REVIEW([^\\w]|$)",
+            "edgeName": "ready"
+          },
+          {
+            "pattern": "(?m)^[*`\\s]*NEEDS_HUMAN([^\\w]|$)",
+            "edgeName": "needs_human"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "ready"
+          },
+          {
+            "name": "needs_human"
+          }
+        ]
+      }
+    },
+    {
+      "id": "efc48589-4b99-496e-9ccb-40bd4a953ccc",
+      "type": "Prompt",
+      "label": "PR Feedback",
+      "config": {
+        "__pos": {
+          "x": 2531.7142567930846,
+          "y": -262.53502504406885
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "New pull request activity:\n\n{{Node.Input}}\n\nHandle it as your instructions describe (get_pr_review for review items, get_ci_log for CI failures), commit your fixes, queue a reply for each comment, and end with READY_FOR_REVIEW or NEEDS_HUMAN."
+      }
+    },
+    {
+      "id": "fedb8857-0022-4d26-a3db-c6e380f17421",
+      "type": "Prompt",
+      "label": "Plan Brief",
+      "config": {
+        "__pos": {
+          "x": 260,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "You are the PLANNER. Read the code and write a plan; change no files and commit nothing.\n\n## Work item\n{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n## How to work\n- Read the README, any agent/contributor docs (AGENTS.md, CLAUDE.md, CONTRIBUTING) and the code this work item touches.\n- Decide what you can from the work item and the code. Ask the human only about things only they can decide (goal, scope, user-visible behaviour) and only when genuinely unclear.\n\n## Reply\nIf you have everything you need, reply with the plan for a developer who has not seen this conversation (under ~400 words): what to change and where, how to test it, what is out of scope, and any decisions the human made. Put PLAN_READY alone on the last line.\n\nIf you need clarification, ask at most three questions, each with the options you see and your recommendation, and put NEEDS_HUMAN alone on the last line.\n\nLater messages in this session are the human's answers. Treat them as decisions and reply again in the same format."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "000b7a58-dc2c-4351-9c9f-5331b5191242",
+      "sourceNodeId": "2454a018-e872-4b31-ae26-167f2d315853",
+      "targetNodeId": "4eea8224-0283-4f88-9ede-32157b2a7f9f",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "035c46cf-3eb8-434e-bdd9-a48abf80ad90",
+      "sourceNodeId": "4e6867bc-a54b-4b7c-a08d-9ec43f0b8049",
+      "targetNodeId": "2454a018-e872-4b31-ae26-167f2d315853",
+      "edgeType": "Custom",
+      "name": "plan_ready"
+    },
+    {
+      "id": "0aa79177-4297-45fa-9c1b-c24c8733fb30",
+      "sourceNodeId": "6954de50-6fcb-4ab7-81d8-38dd001b7142",
+      "targetNodeId": "495ee1bc-45df-409a-82d0-f32619ded984",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "0be3efdf-f40b-4540-a7e5-6512355d2a56",
+      "sourceNodeId": "a7bf26e8-b795-4fb8-8cac-ce5e76d053f2",
+      "targetNodeId": "420f0b04-9301-4574-bf00-6f62e454762e",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "146c1442-85e7-49a9-8c85-2a2f2f557698",
+      "sourceNodeId": "db9bd61b-4199-42d6-9e76-891ecc8a2602",
+      "targetNodeId": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "1894a655-2df0-46ac-be5f-57feffcf75c2",
+      "sourceNodeId": "8f866ef4-fe0d-4e9f-8499-dfba312a0aaa",
+      "targetNodeId": "00acb725-35e2-4b25-ad81-7e7c74c72881",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "18b3ae8c-352d-4fdd-b47e-9867e9943d12",
+      "sourceNodeId": "a5f4800d-964d-4f91-b364-0cb7b3928184",
+      "targetNodeId": "17252f7c-dddb-4799-973d-980b7320f405",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "1bd21b1f-2453-44cc-86b6-1d0872f0bc27",
+      "sourceNodeId": "8653b44d-a34f-4d84-aa0e-acafbf2e28a3",
+      "targetNodeId": "1a23366b-d138-4f8a-baeb-2d2d8032be88",
+      "edgeType": "Custom",
+      "name": "finish"
+    },
+    {
+      "id": "1f563461-d9d0-41c3-8cac-a9a32e66a783",
+      "sourceNodeId": "495ee1bc-45df-409a-82d0-f32619ded984",
+      "targetNodeId": "a29d8b27-2249-4a2c-9987-9a729aa83356",
+      "edgeType": "Custom",
+      "name": "needs_human"
+    },
+    {
+      "id": "43e7a3ea-eaf3-464f-9f95-eb80c92bbdaf",
+      "sourceNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "targetNodeId": "db9bd61b-4199-42d6-9e76-891ecc8a2602",
+      "edgeType": "Custom",
+      "name": "send_back"
+    },
+    {
+      "id": "4a9b6343-38ed-4783-9b05-fb13f763ad7d",
+      "sourceNodeId": "a29d8b27-2249-4a2c-9987-9a729aa83356",
+      "targetNodeId": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "edgeType": "Custom",
+      "name": "Answer"
+    },
+    {
+      "id": "504cbea9-805a-4823-8e69-d3fdfc92a4a9",
+      "sourceNodeId": "702d8a3f-afef-4c04-928b-e5c740c53a5a",
+      "targetNodeId": "4e6867bc-a54b-4b7c-a08d-9ec43f0b8049",
+      "edgeType": "Custom",
+      "name": "Answer"
+    },
+    {
+      "id": "566e191c-921a-4874-b9b7-6e3c3025e7c6",
+      "sourceNodeId": "495ee1bc-45df-409a-82d0-f32619ded984",
+      "targetNodeId": "a29d8b27-2249-4a2c-9987-9a729aa83356",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "6bb1b0ae-3f3e-450e-9f8e-2ad8d950381d",
+      "sourceNodeId": "495ee1bc-45df-409a-82d0-f32619ded984",
+      "targetNodeId": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "edgeType": "Custom",
+      "name": "changes_requested"
+    },
+    {
+      "id": "6eceb5ee-f7e9-41da-8fe3-53fd6c05eb79",
+      "sourceNodeId": "420f0b04-9301-4574-bf00-6f62e454762e",
+      "targetNodeId": "a5f4800d-964d-4f91-b364-0cb7b3928184",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "71af3765-8539-4514-a204-17137547f6e6",
+      "sourceNodeId": "4e6867bc-a54b-4b7c-a08d-9ec43f0b8049",
+      "targetNodeId": "702d8a3f-afef-4c04-928b-e5c740c53a5a",
+      "edgeType": "Custom",
+      "name": "needs_human"
+    },
+    {
+      "id": "898becb7-b6a7-47ba-a0b1-1038da5bf025",
+      "sourceNodeId": "a7498c50-e6a5-4648-ace5-4e72615f45e4",
+      "targetNodeId": "db9bd61b-4199-42d6-9e76-891ecc8a2602",
+      "edgeType": "Custom",
+      "name": "send_back"
+    },
+    {
+      "id": "8a42eb59-90b0-4051-94fd-6e1acce76b93",
+      "sourceNodeId": "495ee1bc-45df-409a-82d0-f32619ded984",
+      "targetNodeId": "a7bf26e8-b795-4fb8-8cac-ce5e76d053f2",
+      "edgeType": "Custom",
+      "name": "approved"
+    },
+    {
+      "id": "8ddea5ec-a09a-4cc6-be61-b4ac7c6dbd4a",
+      "sourceNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "targetNodeId": "efc48589-4b99-496e-9ccb-40bd4a953ccc",
+      "edgeType": "Custom",
+      "name": "on_rejected"
+    },
+    {
+      "id": "98212810-bc63-484b-afc4-ddbaa46a91ea",
+      "sourceNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "targetNodeId": "89eebcdc-007a-4a92-a73b-24aa303642ff",
+      "edgeType": "Custom",
+      "name": "on_abandoned"
+    },
+    {
+      "id": "a3b29c87-d501-4746-9c97-28dbcffdbebf",
+      "sourceNodeId": "17252f7c-dddb-4799-973d-980b7320f405",
+      "targetNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "edgeType": "Custom",
+      "name": "no_hil"
+    },
+    {
+      "id": "a3d0e7df-3329-47c1-ad44-5554aaa938fa",
+      "sourceNodeId": "8653b44d-a34f-4d84-aa0e-acafbf2e28a3",
+      "targetNodeId": "8f866ef4-fe0d-4e9f-8499-dfba312a0aaa",
+      "edgeType": "Custom",
+      "name": "propose"
+    },
+    {
+      "id": "a739ed0c-6485-4e6f-8aa0-205758dd6377",
+      "sourceNodeId": "00acb725-35e2-4b25-ad81-7e7c74c72881",
+      "targetNodeId": "8653b44d-a34f-4d84-aa0e-acafbf2e28a3",
+      "edgeType": "Custom",
+      "name": "ask_human"
+    },
+    {
+      "id": "a8cf0a95-0356-4c73-89b5-f1979aff91ee",
+      "sourceNodeId": "fedb8857-0022-4d26-a3db-c6e380f17421",
+      "targetNodeId": "4e6867bc-a54b-4b7c-a08d-9ec43f0b8049",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "a96a6d8e-5f83-494a-8575-e71ea50f77da",
+      "sourceNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "targetNodeId": "89eebcdc-007a-4a92-a73b-24aa303642ff",
+      "edgeType": "Custom",
+      "name": "on_merged"
+    },
+    {
+      "id": "abdb970d-0d13-4d48-ac58-e0f6df1bfad0",
+      "sourceNodeId": "efc48589-4b99-496e-9ccb-40bd4a953ccc",
+      "targetNodeId": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "b073180e-9834-4f40-bbdb-7adf52e894b1",
+      "sourceNodeId": "17252f7c-dddb-4799-973d-980b7320f405",
+      "targetNodeId": "a7498c50-e6a5-4648-ace5-4e72615f45e4",
+      "edgeType": "Custom",
+      "name": "hil"
+    },
+    {
+      "id": "b4720398-5b5a-456f-b064-6cc79436c0ea",
+      "sourceNodeId": "2a8fc4d6-e002-4cea-9c33-7c530a135c16",
+      "targetNodeId": "fedb8857-0022-4d26-a3db-c6e380f17421",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "b9d3231b-fac6-41e6-9782-cb4fffc37336",
+      "sourceNodeId": "00acb725-35e2-4b25-ad81-7e7c74c72881",
+      "targetNodeId": "1a23366b-d138-4f8a-baeb-2d2d8032be88",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "bf27a58d-b21e-41bb-8e6e-7d5b697eea8c",
+      "sourceNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "targetNodeId": "efc48589-4b99-496e-9ccb-40bd4a953ccc",
+      "edgeType": "Custom",
+      "name": "on_ci_failed"
+    },
+    {
+      "id": "bf33e4e0-546e-4d97-9787-c7acc3d816a1",
+      "sourceNodeId": "4e6867bc-a54b-4b7c-a08d-9ec43f0b8049",
+      "targetNodeId": "702d8a3f-afef-4c04-928b-e5c740c53a5a",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "cbfdf419-59c4-4874-825e-7ce4918a9293",
+      "sourceNodeId": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "targetNodeId": "a29d8b27-2249-4a2c-9987-9a729aa83356",
+      "edgeType": "Custom",
+      "name": "needs_human"
+    },
+    {
+      "id": "cd0fa4fa-e7af-45c1-acf6-7040ab450c09",
+      "sourceNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "targetNodeId": "efc48589-4b99-496e-9ccb-40bd4a953ccc",
+      "edgeType": "Custom",
+      "name": "on_comment"
+    },
+    {
+      "id": "cf0bc230-650c-4985-96a6-23e3b94f73ef",
+      "sourceNodeId": "89eebcdc-007a-4a92-a73b-24aa303642ff",
+      "targetNodeId": "00acb725-35e2-4b25-ad81-7e7c74c72881",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "d222273e-3bd5-421f-b688-8d2fdb2da88d",
+      "sourceNodeId": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "targetNodeId": "6954de50-6fcb-4ab7-81d8-38dd001b7142",
+      "edgeType": "Custom",
+      "name": "ready"
+    },
+    {
+      "id": "d6bef8b1-1ccd-4beb-b7c7-351f629c6444",
+      "sourceNodeId": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "targetNodeId": "a29d8b27-2249-4a2c-9987-9a729aa83356",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "d8c13b50-766e-45cc-9f8d-98f323f3b1c1",
+      "sourceNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "targetNodeId": "efc48589-4b99-496e-9ccb-40bd4a953ccc",
+      "edgeType": "Custom",
+      "name": "on_merge_conflict"
+    },
+    {
+      "id": "e707ff4a-b7bf-4c37-89b4-b6536121eb6a",
+      "sourceNodeId": "a7498c50-e6a5-4648-ace5-4e72615f45e4",
+      "targetNodeId": "df3effdd-ccbe-4923-aed1-279654babc98",
+      "edgeType": "Custom",
+      "name": "approve"
+    },
+    {
+      "id": "e780d40e-b854-48e2-a34c-7d67955c8641",
+      "sourceNodeId": "4eea8224-0283-4f88-9ede-32157b2a7f9f",
+      "targetNodeId": "e3b6f1ec-a0d8-49a4-a79b-ca43dc024a1e",
+      "edgeType": "OnSuccess",
+      "name": null
+    }
+  ]
+}

@@ -1,0 +1,544 @@
+{
+  "$schema": "ild-loop-template/v2",
+  "name": "Prototype",
+  "description": "Plan a prototype -> set up a preview (ild.config.json) if needed -> build it -> refine it with the human in a live preview -> open a PR, or finish once the work is captured in work items.",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "11efb6f1-692f-49b6-9c7b-b97c899fd0c7",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": 0,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "1560a761-a9a2-40a3-b820-2767b5b9620b",
+      "type": "Human",
+      "label": "Try Prototype",
+      "config": {
+        "__pos": {
+          "x": 1300,
+          "y": 260
+        },
+        "inputLabel": "What to change or try next (sent to the prototyper)",
+        "prompt": "{{Node.Input}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "refine",
+            "default": true,
+            "color": "#40006b"
+          },
+          {
+            "name": "open_pr",
+            "confirm": true,
+            "color": "#16a34a"
+          },
+          {
+            "name": "finish",
+            "confirm": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "2569b7e5-1f6d-4170-90ff-179ef3c3b339",
+      "type": "AI",
+      "label": "Summarize",
+      "config": {
+        "__pos": {
+          "x": 1820,
+          "y": 260
+        },
+        "prompt": "{{Node.Input}}",
+        "aiProviderTag": "Reviewer",
+        "toolAllowlist": [
+          "read",
+          "execute"
+        ],
+        "matchRules": [],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "28e01212-bcee-4700-8d2b-dd44d2b6bc95",
+      "type": "Prompt",
+      "label": "PR Feedback",
+      "config": {
+        "__pos": {
+          "x": 1820,
+          "y": 520
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "New pull request activity:\n\n{{Node.Input}}\n\nHandle it as your instructions describe (get_pr_review for review items, get_ci_log for CI failures), commit your fixes, queue a reply for each comment, and reply as usual."
+      }
+    },
+    {
+      "id": "3ed20c04-d8cc-48af-8852-fde7e7fa2e5a",
+      "type": "AI",
+      "label": "Prototype",
+      "config": {
+        "__pos": {
+          "x": 1300,
+          "y": 0
+        },
+        "prompt": "{{Node.Input}}",
+        "aiProviderTag": "Developer",
+        "useSession": true,
+        "sessionPlaceholder": "prototyper",
+        "toolAllowlist": [
+          "read",
+          "write",
+          "execute",
+          "ild"
+        ],
+        "matchRules": [],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "479d0bc0-a192-4152-aff5-e0447225add1",
+      "type": "Prompt",
+      "label": "Summarize Brief",
+      "config": {
+        "__pos": {
+          "x": 1560,
+          "y": 260
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "Write the pull request description for this prototype. Change no files and commit nothing.\n\n## Work item\n{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\nRead the commits on this branch that are not on the default branch (git log and git diff against the merge-base). Your whole reply is published as the PR description, so reply with only the description in markdown: no preamble, brief prose, and the repository's own domain language.\n\n## Summary\nWhat the prototype shows and why, next to the smallest visual that makes it clear (a component tree, file tree, call tree, sequence diagram or pseudocode), only if it helps. Say plainly that it is a prototype and what is faked or stubbed.\n\n## Evidence\nHow it was tried: in the preview, and any tests that were run. Say what was not tested.\n\n## Merge Danger\n- **Door:** two-way door (cheap to roll back) or one-way door (hard to reverse), with one line on why.\n- **Blast radius:** what could break, then the possible ramifications in a line or two, if any. Mention an added or changed ild.config.json and whether it is meant to stay.\n\nNo account names, hostnames, credentials or local paths."
+      }
+    },
+    {
+      "id": "5871965f-0a39-4f86-911b-ca908a8d2a2f",
+      "type": "SetVariable",
+      "label": "Save Plan",
+      "config": {
+        "__pos": {
+          "x": 780,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "assignments": [
+          {
+            "name": "plan",
+            "value": "{{Node.Input}}"
+          }
+        ]
+      }
+    },
+    {
+      "id": "5d6ab1c7-a449-402c-91b7-cca98875fae1",
+      "type": "Prompt",
+      "label": "Prototype Brief",
+      "config": {
+        "__pos": {
+          "x": 1040,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "You are the PROTOTYPER. You work in a git worktree on this work item's branch, in one session for the whole run, together with the human: you build a prototype, they try it in a live preview, and you refine it until they are happy. `git branch --show-current` gives ild/wi-<id>-run-...; that id is the work item id the preview tools take.\n\n## Work item\n{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n## Plan\n{{Var.plan}}\n\n## First round\n- If the plan needs a new ild.config.json, or a new profile in it, write it from get_preview_config_schema and keep it to what the preview needs.\n- Build the prototype. Favour something the human can see soon over completeness: fake data and stubs are fine, as long as you say what is faked.\n- Start the preview with start_preview and check it with get_preview. If a service fails, read get_preview_logs, fix it and start it again. Make sure the prototype actually responds before you hand it over.\n- Commit in small commits. Do not push or open a pull request; the loop does that.\n\n## Every reply\nThe human reads it to test, so keep it short: what changed this round (a few bullets), the preview link and what to try, and anything you need them to decide.\n\n## Later messages in this session\n- Feedback from the human: change the prototype, check the preview still runs (restart it if a service needs it), commit, and reply as above.\n- If the human asks for work items, for example to implement this properly later, create them with create_workitem: one per piece of work, each understandable on its own, saying what the prototype showed and what was decided. List their ids in your reply.\n- Pull-request activity: read it with get_pr_review (and get_ci_log for CI failures), fix what is right, and answer each comment with reply_to_pr_review_comment / resolve_pr_review_thread / close_pr_review_item. These only queue; the pull request is updated when the human opens it again. Do not use gh or git push. Then reply as above."
+      }
+    },
+    {
+      "id": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "type": "PR",
+      "label": "Pull Request",
+      "config": {
+        "__pos": {
+          "x": 2080,
+          "y": 260
+        },
+        "prDescriptionTemplate": "{{Node.Input}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "on_rejected",
+            "reserved": true
+          },
+          {
+            "name": "on_merge_conflict",
+            "reserved": true
+          },
+          {
+            "name": "on_ci_failed",
+            "reserved": true
+          },
+          {
+            "name": "on_comment",
+            "reserved": true
+          },
+          {
+            "name": "on_approved",
+            "reserved": true
+          },
+          {
+            "name": "on_ci_passed",
+            "reserved": true
+          },
+          {
+            "name": "on_merged",
+            "reserved": true
+          },
+          {
+            "name": "on_abandoned",
+            "reserved": true
+          },
+          {
+            "name": "send_back",
+            "color": "#b45309"
+          }
+        ]
+      }
+    },
+    {
+      "id": "8e782dd8-0735-4227-863d-c7c3cbbf4400",
+      "type": "Human",
+      "label": "Plan Questions",
+      "config": {
+        "__pos": {
+          "x": 520,
+          "y": 260
+        },
+        "inputLabel": "Your answer to the planner",
+        "prompt": "{{Node.Input}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "Answer",
+            "default": true,
+            "color": "#40006b"
+          }
+        ]
+      }
+    },
+    {
+      "id": "a2d482d4-fbc6-46f4-9e3b-1acd9584879f",
+      "type": "Prompt",
+      "label": "Plan Brief",
+      "config": {
+        "__pos": {
+          "x": 260,
+          "y": 0
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "You are the PLANNER for a prototype. This run is about showing the human something they can try, discuss and refine, not about shipping production code. Read the code; change no files and commit nothing.\n\n## Work item\n{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n## Decide\n1. What to prototype: the smallest thing the human can look at or click through that answers the work item's open questions. Say what will be real and what will be faked (hard-coded data, stubbed calls).\n2. Where it lives: inside the real app, on this branch, when it needs the app's screens or data; or as a standalone page (for example under prototypes/) when it is about a look or a flow.\n3. How the human sees it. Check whether the repository root has an ild.config.json:\n   - If it has a profile that runs what the prototype needs, use it.\n   - If not, plan one with get_preview_config_schema: a profile for the whole project when the prototype lives in the app, or a minimal profile with a single static web server when it is standalone.\n   - Say whether the config is meant to stay in the repository or is only for this prototype.\n\n## Reply\nIf you have what you need: the plan for the prototyper (under ~300 words), covering the three points and how they will check the preview runs. Put PLAN_READY alone on the last line.\n\nIf not: at most three questions, each with the options you see and your recommendation, and NEEDS_HUMAN alone on the last line. Ask only what the human must decide; they will see and steer the prototype soon anyway.\n\nLater messages in this session are the human's answers. Treat them as decisions and reply again in the same format."
+      }
+    },
+    {
+      "id": "b08a7de7-b063-4ea1-8a73-4ff14aa764fe",
+      "type": "Cleanup",
+      "label": "Done",
+      "config": {
+        "__pos": {
+          "x": 2340,
+          "y": 0
+        },
+        "outputs": []
+      }
+    },
+    {
+      "id": "c7c204d1-356a-4406-b100-a0e49f8256c1",
+      "type": "Prompt",
+      "label": "Send Back Brief",
+      "config": {
+        "__pos": {
+          "x": 1560,
+          "y": 520
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "prompt": "The human looked at the pull request and sent it back to you:\n\n{{Node.Input}}\n\nChange the prototype as they ask (read any comments they left on the pull request with get_pr_review), check the preview still runs, commit, and reply as usual."
+      }
+    },
+    {
+      "id": "e971d7ac-60c9-4507-95cf-bdabf36491bb",
+      "type": "AI",
+      "label": "Plan",
+      "config": {
+        "__pos": {
+          "x": 520,
+          "y": 0
+        },
+        "prompt": "{{Node.Input}}",
+        "aiProviderTag": "Planner",
+        "useSession": true,
+        "sessionPlaceholder": "planner",
+        "toolAllowlist": [
+          "read",
+          "execute",
+          "ild"
+        ],
+        "matchRules": [
+          {
+            "pattern": "(?m)^[*`\\s]*PLAN_READY([^\\w]|$)",
+            "edgeName": "plan_ready"
+          },
+          {
+            "pattern": "(?m)^[*`\\s]*NEEDS_HUMAN([^\\w]|$)",
+            "edgeName": "needs_human"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "plan_ready"
+          },
+          {
+            "name": "needs_human"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "55fd0b8b-7082-4428-97e8-c82fe48d7e4c",
+      "sourceNodeId": "11efb6f1-692f-49b6-9c7b-b97c899fd0c7",
+      "targetNodeId": "a2d482d4-fbc6-46f4-9e3b-1acd9584879f",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "6db66ce6-4746-4049-a251-5022be8a04e6",
+      "sourceNodeId": "1560a761-a9a2-40a3-b820-2767b5b9620b",
+      "targetNodeId": "b08a7de7-b063-4ea1-8a73-4ff14aa764fe",
+      "edgeType": "Custom",
+      "name": "finish"
+    },
+    {
+      "id": "72f0273d-20b9-48c9-9b3e-59c5ae487bcb",
+      "sourceNodeId": "1560a761-a9a2-40a3-b820-2767b5b9620b",
+      "targetNodeId": "3ed20c04-d8cc-48af-8852-fde7e7fa2e5a",
+      "edgeType": "Custom",
+      "name": "refine"
+    },
+    {
+      "id": "d4082c64-48f7-4d14-acd3-45a8250fa18e",
+      "sourceNodeId": "1560a761-a9a2-40a3-b820-2767b5b9620b",
+      "targetNodeId": "479d0bc0-a192-4152-aff5-e0447225add1",
+      "edgeType": "Custom",
+      "name": "open_pr"
+    },
+    {
+      "id": "bd33bab2-bcb7-4bb0-bfb4-d32dea7f10a2",
+      "sourceNodeId": "2569b7e5-1f6d-4170-90ff-179ef3c3b339",
+      "targetNodeId": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "51de1ed5-8504-4fcb-b936-1c88665b5f37",
+      "sourceNodeId": "28e01212-bcee-4700-8d2b-dd44d2b6bc95",
+      "targetNodeId": "3ed20c04-d8cc-48af-8852-fde7e7fa2e5a",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "7a61b584-e84a-4444-aa10-194d8cb84055",
+      "sourceNodeId": "3ed20c04-d8cc-48af-8852-fde7e7fa2e5a",
+      "targetNodeId": "1560a761-a9a2-40a3-b820-2767b5b9620b",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "2781810d-da4c-4d40-89dd-01cc0ea6db6e",
+      "sourceNodeId": "479d0bc0-a192-4152-aff5-e0447225add1",
+      "targetNodeId": "2569b7e5-1f6d-4170-90ff-179ef3c3b339",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "cd797e5c-64b4-433c-8b2a-2040a311b7e7",
+      "sourceNodeId": "5871965f-0a39-4f86-911b-ca908a8d2a2f",
+      "targetNodeId": "5d6ab1c7-a449-402c-91b7-cca98875fae1",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "980bb88d-7ad1-4b4e-913e-5cd4a0864b31",
+      "sourceNodeId": "5d6ab1c7-a449-402c-91b7-cca98875fae1",
+      "targetNodeId": "3ed20c04-d8cc-48af-8852-fde7e7fa2e5a",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "164af55a-bc95-4938-b5b9-750c0969acb3",
+      "sourceNodeId": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "targetNodeId": "28e01212-bcee-4700-8d2b-dd44d2b6bc95",
+      "edgeType": "Custom",
+      "name": "on_ci_failed"
+    },
+    {
+      "id": "3e44ff7d-5e54-4808-8230-b139ebe6322a",
+      "sourceNodeId": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "targetNodeId": "28e01212-bcee-4700-8d2b-dd44d2b6bc95",
+      "edgeType": "Custom",
+      "name": "on_comment"
+    },
+    {
+      "id": "4f0d768c-b6f8-4ffb-b71a-0b4aa4f5e148",
+      "sourceNodeId": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "targetNodeId": "c7c204d1-356a-4406-b100-a0e49f8256c1",
+      "edgeType": "Custom",
+      "name": "send_back"
+    },
+    {
+      "id": "7b4b8f59-1ea4-400c-a623-34e699bb0e68",
+      "sourceNodeId": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "targetNodeId": "b08a7de7-b063-4ea1-8a73-4ff14aa764fe",
+      "edgeType": "Custom",
+      "name": "on_abandoned"
+    },
+    {
+      "id": "de4cb6a4-1dd5-476a-a230-b0ca979fdd07",
+      "sourceNodeId": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "targetNodeId": "28e01212-bcee-4700-8d2b-dd44d2b6bc95",
+      "edgeType": "Custom",
+      "name": "on_rejected"
+    },
+    {
+      "id": "e77c5add-a4c4-4b1d-9b1e-e77809822c30",
+      "sourceNodeId": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "targetNodeId": "b08a7de7-b063-4ea1-8a73-4ff14aa764fe",
+      "edgeType": "Custom",
+      "name": "on_merged"
+    },
+    {
+      "id": "f15cd967-87bb-4529-9021-a4673371a8ba",
+      "sourceNodeId": "759cb841-b1fc-4ca5-bae0-eb71a879fb38",
+      "targetNodeId": "28e01212-bcee-4700-8d2b-dd44d2b6bc95",
+      "edgeType": "Custom",
+      "name": "on_merge_conflict"
+    },
+    {
+      "id": "87e464bf-2f83-47ca-ad1b-8ef25378d80b",
+      "sourceNodeId": "8e782dd8-0735-4227-863d-c7c3cbbf4400",
+      "targetNodeId": "e971d7ac-60c9-4507-95cf-bdabf36491bb",
+      "edgeType": "Custom",
+      "name": "Answer"
+    },
+    {
+      "id": "38543083-542d-43a6-b028-f8c057937b95",
+      "sourceNodeId": "a2d482d4-fbc6-46f4-9e3b-1acd9584879f",
+      "targetNodeId": "e971d7ac-60c9-4507-95cf-bdabf36491bb",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "51008f8a-ae5f-4e05-a7b7-229e745d0047",
+      "sourceNodeId": "c7c204d1-356a-4406-b100-a0e49f8256c1",
+      "targetNodeId": "3ed20c04-d8cc-48af-8852-fde7e7fa2e5a",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "086fe65d-ed82-44a3-90cb-5032171c8d5f",
+      "sourceNodeId": "e971d7ac-60c9-4507-95cf-bdabf36491bb",
+      "targetNodeId": "8e782dd8-0735-4227-863d-c7c3cbbf4400",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "306e858f-0498-49a4-89d8-cc911a3762c7",
+      "sourceNodeId": "e971d7ac-60c9-4507-95cf-bdabf36491bb",
+      "targetNodeId": "5871965f-0a39-4f86-911b-ca908a8d2a2f",
+      "edgeType": "Custom",
+      "name": "plan_ready"
+    },
+    {
+      "id": "37343b90-ebef-4354-af7b-b2fcc98d70a0",
+      "sourceNodeId": "e971d7ac-60c9-4507-95cf-bdabf36491bb",
+      "targetNodeId": "8e782dd8-0735-4227-863d-c7c3cbbf4400",
+      "edgeType": "Custom",
+      "name": "needs_human"
+    }
+  ]
+}
