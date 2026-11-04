@@ -59,6 +59,316 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("the Installed agents menu", () => {
+  const status = (over: Record<string, unknown> = {}) =>
+    piAgent({
+      installedVersion: "0.80.2",
+      updateAvailable: false,
+      previousVersion: null,
+      heldVersion: null,
+      autoInstallVersion: null,
+      autoInstallAfter: null,
+      ...over,
+    });
+
+  test("reads the agents when it opens and not before, and again on every opening", async () => {
+    const { calls } = serveProviders({ agents: [status()] });
+    renderProviders();
+    await screen.findByRole("button", { name: "Installed agents" });
+    expect(
+      calls.filter((c) => c.method === "GET" && c.path.toLowerCase().endsWith("/managedagents")),
+    ).toHaveLength(0);
+
+    await openAgentsPopover();
+    await screen.findByText("v0.80.2");
+    expect(
+      calls.filter((c) => c.method === "GET" && c.path.toLowerCase().endsWith("/managedagents")),
+    ).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Installed agents" }));
+    await openAgentsPopover();
+    await waitFor(() =>
+      expect(
+        calls.filter((c) => c.method === "GET" && c.path.toLowerCase().endsWith("/managedagents")),
+      ).toHaveLength(2),
+    );
+  });
+
+  test("the button carries a chevron that says it opens a menu, and turns over while it is open", async () => {
+    serveProviders({ agents: [piAgent()] });
+    renderProviders();
+
+    const button = await screen.findByRole("button", { name: "Installed agents" });
+    const chevron = button.querySelector(".ap-agents-chevron");
+    expect(chevron).not.toBeNull();
+    expect(chevron?.classList.contains("is-open")).toBe(false);
+    expect(chevron?.getAttribute("aria-hidden")).toBe("true");
+
+    fireEvent.click(button);
+    expect(button.querySelector(".ap-agents-chevron")?.classList.contains("is-open")).toBe(true);
+
+    fireEvent.click(button);
+    expect(button.querySelector(".ap-agents-chevron")?.classList.contains("is-open")).toBe(false);
+  });
+
+  test("the bell, its badge and the count in the title are gone", async () => {
+    serveProviders({ agents: [piAgent()] });
+    renderProviders();
+
+    await screen.findByRole("button", { name: "Installed agents" });
+
+    expect(screen.queryByRole("button", { name: /Coding agents/i })).toBeNull();
+    expect(screen.queryByText("🔔")).toBeNull();
+  });
+
+  test("shows each status: up to date, cooldown pending, held and not installed", async () => {
+    const future = new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString();
+    const past = new Date(Date.now() - 3600 * 1000).toISOString();
+    serveProviders({
+      agents: [
+        status(),
+        status({
+          key: "opencode",
+          displayName: "OpenCode",
+          autoInstallVersion: "1.2.0",
+          autoInstallAfter: future,
+        }),
+        status({
+          key: "codex",
+          displayName: "Codex",
+          autoInstallVersion: "1.3.0",
+          autoInstallAfter: past,
+        }),
+        status({
+          key: "claude-code",
+          displayName: "Claude Code",
+          installedVersion: "1.0.0",
+          heldVersion: "1.1.0",
+        }),
+        status({
+          key: "extra",
+          displayName: "Extra",
+          installedVersion: null,
+          latestVersion: null,
+          updateAvailable: false,
+        }),
+      ],
+    });
+    renderProviders();
+    await openAgentsPopover();
+
+    const row = (name: string) =>
+      within(
+        screen
+          .getByText(name, { selector: ".ap-agent-name" })
+          .closest(".ap-agent-row") as HTMLElement,
+      );
+    expect(row("Pi").getByText("Up to date")).toBeTruthy();
+    expect(
+      row("OpenCode").getByText(
+        `1.2.0 will install automatically after ${new Date(future).toLocaleDateString()}`,
+      ),
+    ).toBeTruthy();
+    expect(
+      row("Codex").getByText("1.3.0 will install automatically at the next check"),
+    ).toBeTruthy();
+    expect(
+      row("Claude Code").getByText(
+        "Held at 1.0.0 after rollback; skipping 1.1.0 until a newer version",
+      ),
+    ).toBeTruthy();
+    expect(row("Extra").getByText("Not installed")).toBeTruthy();
+  });
+
+  test("offers Update only when a newer version exists and Roll back only when there is a previous one", async () => {
+    serveProviders({
+      agents: [
+        status({ updateAvailable: true, latestVersion: "0.90.0", previousVersion: "0.80.1" }),
+        status({ key: "opencode", displayName: "OpenCode", updateAvailable: false }),
+      ],
+    });
+    renderProviders();
+    await openAgentsPopover();
+
+    const row = (name: string) =>
+      within(
+        screen
+          .getByText(name, { selector: ".ap-agent-name" })
+          .closest(".ap-agent-row") as HTMLElement,
+      );
+    expect(row("Pi").getByRole("button", { name: "Update to 0.90.0" })).toBeTruthy();
+    expect(row("Pi").getByRole("button", { name: "Roll back to 0.80.1" })).toBeTruthy();
+    expect(row("OpenCode").queryByRole("button")).toBeNull();
+  });
+
+  test("Roll back asks first, does nothing when cancelled, and rolls back when confirmed", async () => {
+    const { calls } = serveProviders({
+      agents: [status({ previousVersion: "0.80.1" })],
+      rollbackAgent: () =>
+        respond(200, status({ installedVersion: "0.80.1", previousVersion: null })),
+    });
+    renderProviders();
+    await openAgentsPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Roll back to 0.80.1" }));
+    const dialog = await screen.findByRole("dialog", { name: "Roll back Pi?" });
+    expect(dialog.textContent).toMatch(/even while the agent is in use/);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(writesTo(calls, "POST", "/managedagents/pi/rollback")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Roll back to 0.80.1" }));
+    fireEvent.click(
+      within(await screen.findByRole("dialog", { name: "Roll back Pi?" })).getByRole("button", {
+        name: "Roll back",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(writesTo(calls, "POST", "/managedagents/pi/rollback")).toHaveLength(1),
+    );
+    expect(writesTo(calls, "POST", "/managedagents/pi/rollback")[0].body).toEqual({
+      previousVersion: "0.80.1",
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Roll back to/ })).toBeNull());
+  });
+
+  test("a failed rollback shows its reason on the row and keeps the action", async () => {
+    serveProviders({
+      agents: [status({ previousVersion: "0.80.1" })],
+      rollbackAgent: () => respond(409, { error: "Pi has no previous version to roll back to." }),
+    });
+    renderProviders();
+    await openAgentsPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Roll back to 0.80.1" }));
+    fireEvent.click(
+      within(await screen.findByRole("dialog", { name: "Roll back Pi?" })).getByRole("button", {
+        name: "Roll back",
+      }),
+    );
+
+    await screen.findByText("Pi has no previous version to roll back to.");
+    expect(
+      (screen.getByRole("button", { name: "Roll back to 0.80.1" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  test("claims nothing about being up to date when the latest version could not be read", async () => {
+    serveProviders({
+      agents: [status({ latestVersion: null, error: "Could not reach the npm registry." })],
+    });
+    renderProviders();
+    await openAgentsPopover();
+
+    expect(screen.getByText("Could not reach the npm registry.")).toBeTruthy();
+    expect(screen.queryByText("Up to date")).toBeNull();
+  });
+
+  test("a rollback the server refuses reloads the list, so a stale Roll back is not offered again", async () => {
+    const served = serveProviders({
+      agents: [status({ previousVersion: "0.80.1" })],
+      rollbackAgent: () => {
+        served.backend.agents = [status({ previousVersion: null })];
+        return respond(409, {
+          error: "Pi would now roll back to 0.80.0, not 0.80.1; reload and try again.",
+        });
+      },
+    });
+    renderProviders();
+    await openAgentsPopover();
+
+    fireEvent.click(screen.getByRole("button", { name: "Roll back to 0.80.1" }));
+    fireEvent.click(
+      within(await screen.findByRole("dialog", { name: "Roll back Pi?" })).getByRole("button", {
+        name: "Roll back",
+      }),
+    );
+
+    await screen.findByText(/reload and try again/);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Roll back to/ })).toBeNull());
+  });
+
+  test("a read that began before an action finished refreshes the other agents but keeps the acted-on row", async () => {
+    const pi = piAgent();
+    const piDone = piAgent({ installedVersion: "0.80.2", updateAvailable: false });
+    const opencode = {
+      ...piAgent(),
+      key: "opencode",
+      displayName: "OpenCode",
+      latestVersion: "0.80.2",
+    };
+    const opencodeDone = { ...opencode, installedVersion: "0.80.2", updateAvailable: false };
+    let reads = 0;
+    let finishSecondRead: (agents: unknown[]) => void = () => {};
+    let finishUpdate: (status: unknown) => void = () => {};
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && /managedagents\/pi\/update/.test(url))
+        return new Promise((resolve) => {
+          finishUpdate = (json) =>
+            resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(json)) });
+        });
+      if (url.toLowerCase().endsWith("/managedagents")) {
+        reads++;
+        if (reads === 1) return jsonResponse([pi, opencode]);
+        return new Promise((resolve) => {
+          finishSecondRead = (json) =>
+            resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(json)) });
+        });
+      }
+      if (url.includes("AgentAdapters")) return jsonResponse(adapterList(["opencode", "pi"]));
+      return jsonResponse([]);
+    });
+    renderPage(fetchMock as unknown as ReturnType<typeof vi.fn>);
+    await openAgentsPopover();
+
+    fireEvent.click(
+      within(
+        screen
+          .getByText("Pi", { selector: ".ap-agent-name" })
+          .closest(".ap-agent-row") as HTMLElement,
+      ).getByRole("button"),
+    );
+    const menu = screen.getByRole("button", { name: "Installed agents" });
+    fireEvent.click(menu);
+    fireEvent.click(menu);
+    await waitFor(() => expect(reads).toBe(2));
+
+    await act(async () => finishUpdate(piDone));
+    await act(async () => finishSecondRead([pi, opencodeDone]));
+
+    const row = (name: string) =>
+      within(
+        screen
+          .getByText(name, { selector: ".ap-agent-name" })
+          .closest(".ap-agent-row") as HTMLElement,
+      );
+    expect(row("Pi").getByText("Up to date")).toBeTruthy();
+    expect(row("OpenCode").getByText("Up to date")).toBeTruthy();
+  });
+
+  test("Update lifts a hold: the row comes back without it", async () => {
+    serveProviders({
+      agents: [
+        status({
+          installedVersion: "0.80.1",
+          updateAvailable: true,
+          latestVersion: "0.80.2",
+          heldVersion: "0.80.2",
+        }),
+      ],
+      updateAgent: () => respond(200, status({ installedVersion: "0.80.2" })),
+    });
+    renderProviders();
+    await openAgentsPopover();
+    expect(screen.getByText(/Held at 0.80.1 after rollback/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Update to 0.80.2" }));
+
+    await screen.findByText("Up to date");
+    expect(screen.queryByText(/Held at/)).toBeNull();
+  });
+});
+
 // The MCP-capable adapters (opencode, claude-code) advertise a single
 // "Custom MCP servers (JSON)" textarea via /AgentAdapters/{type}/config-schema.
 const customMcpSchema = [
@@ -149,6 +459,7 @@ interface Backend {
   types: string[];
   agents: Record<string, unknown>[];
   updateAgent: (key: string) => Response;
+  rollbackAgent: (key: string) => Response;
 }
 
 /** A backend holding `providers` and `agents`, applying each create, update and set-default to them. */
@@ -158,18 +469,22 @@ function serveProviders(init: Partial<Backend> = {}) {
     types: ["opencode", "pi"],
     agents: [],
     updateAgent: () => respond(404),
+    rollbackAgent: () => respond(404),
     ...init,
   };
   const calls = stubFetch(({ method, path, body }) => {
     const lower = path.toLowerCase();
     const provider = /\/aiproviders\/([^/]+)(\/set-default)?$/.exec(lower);
-    const agent = /\/managedagents\/([^/]+)\/update$/.exec(lower);
+    const agent = /\/managedagents\/([^/]+)\/(update|rollback)$/.exec(lower);
     if (method === "GET" && lower.includes("config-schema")) return respond(200, []);
     if (method === "GET" && lower.endsWith("/agentadapters"))
       return respond(200, adapterList(backend.types));
     if (method === "GET" && lower.endsWith("/managedagents")) return respond(200, backend.agents);
     if (method === "GET" && lower.endsWith("/aiproviders")) return respond(200, backend.providers);
-    if (method === "POST" && agent) return backend.updateAgent(agent[1]);
+    if (method === "POST" && agent)
+      return agent[2] === "rollback"
+        ? backend.rollbackAgent(agent[1])
+        : backend.updateAgent(agent[1]);
     if (method === "POST" && lower.endsWith("/aiproviders")) {
       const created = {
         id: "ai-new-1",
@@ -241,12 +556,12 @@ function renderProviders() {
   );
 }
 
-// Coding agents now live behind a notification bell in the header; their
-// version details and install/update actions are only rendered once the
-// popover is opened.
+// The installed coding agents live behind a menu in the header; the agents are read, and
+// their version details and actions rendered, only once it is opened.
 async function openAgentsPopover() {
-  const bell = await screen.findByRole("button", { name: /Coding agents/i });
-  fireEvent.click(bell);
+  const menu = await screen.findByRole("button", { name: "Installed agents" });
+  fireEvent.click(menu);
+  await waitFor(() => expect(screen.queryByText("Loading…")).toBeNull());
 }
 
 describe("AI Providers page", () => {
@@ -510,8 +825,9 @@ describe("AI Providers page", () => {
 
     await openAgentsPopover();
 
-    expect(screen.getByText("0.80.1 → 0.80.2")).toBeTruthy();
-    const updateBtn = screen.getByText("Update → 0.80.2") as HTMLButtonElement;
+    expect(screen.getByText("v0.80.1")).toBeTruthy();
+    expect(screen.getByText("0.80.2 is available")).toBeTruthy();
+    const updateBtn = screen.getByText("Update to 0.80.2") as HTMLButtonElement;
     expect(updateBtn.disabled).toBe(false);
   });
 
@@ -536,70 +852,7 @@ describe("AI Providers page", () => {
     // A current agent shows a plain status indicator, not an actionable button.
     const upToDate = screen.getByText("Up to date");
     expect(upToDate.tagName).toBe("SPAN");
-    expect(screen.queryByRole("button", { name: /Update|Install/ })).toBeNull();
-  });
-
-  test("a not-installed agent raises no badge but still offers its install", async () => {
-    const agents = [
-      {
-        key: "pi",
-        displayName: "Pi",
-        npmPackage: "@earendil-works/pi-coding-agent",
-        installedVersion: null,
-        latestVersion: "0.80.2",
-        updateAvailable: true,
-        error: null,
-      },
-    ];
-
-    serveProviders({ agents });
-    renderProviders();
-
-    const bell = await screen.findByRole("button", { name: /Coding agents/i });
-    expect(bell.getAttribute("aria-label")).toBe("Coding agents — all up to date");
-    expect(bell.querySelector(".ap-bell-dot")).toBeNull();
-
-    fireEvent.click(bell);
-
-    expect(screen.getByText("All up to date")).toBeTruthy();
-    const installBtn = screen.getByText("Install 0.80.2") as HTMLButtonElement;
-    expect(installBtn.disabled).toBe(false);
-  });
-
-  test("the badge counts installed agents that are behind, not ones awaiting install", async () => {
-    const agents = [
-      {
-        key: "pi",
-        displayName: "Pi",
-        npmPackage: "@earendil-works/pi-coding-agent",
-        installedVersion: "0.80.1",
-        latestVersion: "0.80.2",
-        updateAvailable: true,
-        error: null,
-      },
-      {
-        key: "opencode",
-        displayName: "OpenCode",
-        npmPackage: "opencode-ai",
-        installedVersion: null,
-        latestVersion: "1.17.9",
-        updateAvailable: true,
-        error: null,
-      },
-    ];
-
-    serveProviders({ agents });
-    renderProviders();
-
-    const bell = await screen.findByRole("button", { name: /Coding agents/i });
-    expect(bell.getAttribute("aria-label")).toBe("Coding agents — 1 update available");
-    expect(bell.querySelector(".ap-bell-dot")?.textContent).toBe("1");
-
-    fireEvent.click(bell);
-
-    expect(screen.getByText("1 update available")).toBeTruthy();
-    expect(screen.getByText("Update → 0.80.2")).toBeTruthy();
-    expect(screen.getByText("Install 1.17.9")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^(Update to|Install \d|Roll back)/ })).toBeNull();
   });
 
   test("offers an enabled Install button when the agent is not installed", async () => {
@@ -620,7 +873,7 @@ describe("AI Providers page", () => {
 
     await openAgentsPopover();
 
-    expect(screen.getByText("not installed → 0.80.2")).toBeTruthy();
+    expect(screen.getByText("Not installed")).toBeTruthy();
     const installBtn = screen.getByText("Install 0.80.2") as HTMLButtonElement;
     expect(installBtn.disabled).toBe(false);
   });
@@ -674,7 +927,7 @@ describe("AI Providers page", () => {
     renderProviders();
 
     await openAgentsPopover();
-    fireEvent.click(screen.getByText("Update → 0.80.2"));
+    fireEvent.click(screen.getByText("Update to 0.80.2"));
 
     await waitFor(() => {
       expect(screen.getByText("Up to date")).toBeTruthy();
@@ -691,14 +944,14 @@ describe("AI Providers page", () => {
     renderProviders();
 
     await openAgentsPopover();
-    fireEvent.click(screen.getByText("Update → 0.80.2"));
+    fireEvent.click(screen.getByText("Update to 0.80.2"));
 
     await waitFor(() => {
       expect(screen.getByText("npm install failed")).toBeTruthy();
     });
 
     // The previous version is intact; the button is still offering the same update.
-    expect(screen.getByText("Update → 0.80.2")).toBeTruthy();
+    expect(screen.getByText("Update to 0.80.2")).toBeTruthy();
   });
 
   test("shows default badge for default provider", async () => {
@@ -1600,18 +1853,18 @@ describe("updating several coding agents at once", () => {
     expectBusy("OpenCode", "Updating…");
     expectBusy("Codex", "Installing…");
 
-    // Closing and reopening the popover keeps the updates still in flight.
-    const bell = screen.getByRole("button", { name: /Coding agents/i });
-    fireEvent.click(bell);
+    // Closing and reopening the menu keeps the updates still in flight.
+    const menu = screen.getByRole("button", { name: "Installed agents" });
+    fireEvent.click(menu);
     expect(screen.queryByText("OpenCode", { selector: ".ap-agent-name" })).toBeNull();
-    fireEvent.click(bell);
+    fireEvent.click(menu);
     expectBusy("OpenCode", "Updating…");
     expectBusy("Codex", "Installing…");
 
     await settle("opencode", 502, { error: "npm install failed" });
 
     expect(within(row("OpenCode")).getByText("npm install failed")).toBeTruthy();
-    expect(action("OpenCode").textContent).toBe("Update → 1.17.9");
+    expect(action("OpenCode").textContent).toBe("Update to 1.17.9");
     expect(action("OpenCode").disabled).toBe(false);
     expectBusy("Codex", "Installing…");
     expect(within(row("Pi")).queryByText("npm install failed")).toBeNull();

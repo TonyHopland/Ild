@@ -82,6 +82,20 @@ public static class ManagedAgentInstall
     public static string PointerFile(string dataRoot, ManagedAgent agent)
         => Path.Combine(AgentRoot(dataRoot, agent), "current");
 
+    /// <summary>
+    /// Marker naming the install a rollback would switch back to: the version that was active
+    /// before the last swap. Absent when there is none.
+    /// </summary>
+    public static string PreviousFile(string dataRoot, ManagedAgent agent)
+        => Path.Combine(AgentRoot(dataRoot, agent), "previous");
+
+    /// <summary>
+    /// Marker holding the version a rollback left. While it exists, auto-update installs only
+    /// a version newer than that one.
+    /// </summary>
+    public static string HeldFile(string dataRoot, ManagedAgent agent)
+        => Path.Combine(AgentRoot(dataRoot, agent), "held");
+
     /// <summary>The agent binary inside a given install directory.</summary>
     public static string BinaryIn(string versionDir, ManagedAgent agent)
         => Path.Combine(versionDir, "node_modules", ".bin", agent.BinaryName);

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -25,6 +26,8 @@ public sealed partial class ManagedAgentService : IManagedAgentService
     private readonly ILogger<ManagedAgentService>? _logger;
     private readonly string _dataRoot;
     private readonly string? _agentUser;
+    private readonly IManagedAgentUsage? _usage;
+    private readonly AutoInstallForecast? _forecast;
 
     // One in-flight update per agent, shared across every instance: the typed
     // HttpClient registration makes this service transient, so two racing
@@ -37,8 +40,10 @@ public sealed partial class ManagedAgentService : IManagedAgentService
     public ManagedAgentService(
         HttpClient http,
         IProcessRunner runner,
-        ILogger<ManagedAgentService>? logger = null)
-        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(), logger, AgentIsolation.AgentUser)
+        ILogger<ManagedAgentService>? logger = null,
+        IManagedAgentUsage? usage = null,
+        AutoInstallForecast? forecast = null)
+        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(), logger, AgentIsolation.AgentUser, usage, forecast)
     {
     }
 
@@ -48,7 +53,9 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         IProcessRunner runner,
         string dataRoot,
         ILogger<ManagedAgentService>? logger = null,
-        string? agentUser = null)
+        string? agentUser = null,
+        IManagedAgentUsage? usage = null,
+        AutoInstallForecast? forecast = null)
     {
         _http = http;
         _runner = runner;
@@ -59,6 +66,8 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         // drive either state deterministically instead of depending on a
         // process-global env var it shares with every other test.
         _agentUser = agentUser;
+        _usage = usage;
+        _forecast = forecast;
     }
 
     public IReadOnlyList<ManagedAgent> Agents => ManagedAgentCatalog.All;
@@ -79,6 +88,12 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         // behind (update it). Agents are no longer baked into the image, so the
         // not-installed case is the normal first-boot state and must be installable.
         var updateAvailable = latest is not null && (installed is null || IsNewer(latest, installed));
+
+        // A hold left behind an installed version that has since moved past it no longer holds anything.
+        var held = ReadHeld(agent) is { } h && (installed is null || !IsNewer(installed, h)) ? h : null;
+        var forecast = installed is not null ? _forecast?.Get(agent.Key) : null;
+        // Nothing is promised that the installed version already has or that a hold rules out.
+        if (forecast is { } due && (!IsNewer(due.Version, installed!) || (held is not null && !IsNewer(due.Version, held)))) forecast = null;
         return new ManagedAgentStatus(
             agent.Key,
             agent.DisplayName,
@@ -86,7 +101,11 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             installed,
             latest,
             updateAvailable,
-            error);
+            error,
+            ReadPrevious(agent)?.Version,
+            held,
+            forecast?.Version,
+            forecast?.After);
     }
 
     public async Task<ManagedAgentStatus> UpdateAsync(string agentKey, CancellationToken ct = default)
@@ -98,8 +117,138 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         await gate.WaitAsync(ct);
         try
         {
-            await InstallAsync(agent, ct);
+            await InstallLatestAsync(agent, ct);
+            // The user chose the newest version over whatever a rollback had held back.
+            TryDeleteFile(ManagedAgentInstall.HeldFile(_dataRoot, agent));
             return await GetStatusAsync(agent, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<ManagedAgentStatus> RollbackAsync(string agentKey, string? expectedPreviousVersion = null, CancellationToken ct = default)
+    {
+        var agent = ManagedAgentCatalog.Find(agentKey)
+            ?? throw new KeyNotFoundException($"No managed agent with key '{agentKey}'.");
+
+        var gate = Locks.GetOrAdd(agent.Key, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            var previous = ReadPrevious(agent) is { Version: not null } found
+                ? found
+                : throw new InvalidOperationException($"{agent.DisplayName} has no previous version to roll back to.");
+            if (expectedPreviousVersion is not null && expectedPreviousVersion != previous.Version)
+                throw new InvalidOperationException(
+                    $"{agent.DisplayName} would now roll back to {previous.Version}, not {expectedPreviousVersion}; reload and try again.");
+
+            // Like a manual update, this does not wait for the agent to be idle: a run in
+            // progress keeps the install dir it started in, and the dir rolled back from is
+            // left for the next swap's cleanup rather than deleted under it.
+            var currentId = ManagedAgentInstall.CurrentVersionId(_dataRoot, agent);
+            if (currentId is not null && InstalledVersionIn(agent, currentId) is { } rolledBackFrom)
+                WriteProtectedFile(ManagedAgentInstall.HeldFile(_dataRoot, agent), JsonSerializer.Serialize(new HeldMarker(rolledBackFrom)));
+
+            SwapActiveVersion(agent, previous.VersionId);
+            TryDeleteFile(ManagedAgentInstall.PreviousFile(_dataRoot, agent));
+            _logger?.LogInformation("Rolled managed agent {Agent} back to {Version}", agent.Key, previous.Version);
+            return await GetStatusAsync(agent, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<AutoUpdatePlan?> GetAutoUpdatePlanAsync(
+        string agentKey, TimeSpan cooldown, DateTimeOffset now, CancellationToken ct = default)
+    {
+        var agent = ManagedAgentCatalog.Find(agentKey)
+            ?? throw new KeyNotFoundException($"No managed agent with key '{agentKey}'.");
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(VersionLookupTimeout);
+            using var doc = await _http.GetFromJsonAsync<JsonDocument>($"{RegistryBase}/{agent.NpmPackage}", cts.Token);
+            if (doc is null
+                || !doc.RootElement.TryGetProperty("dist-tags", out var tags)
+                || !tags.TryGetProperty("latest", out var latestElement)
+                || latestElement.GetString() is not { Length: > 0 } latest
+                || !doc.RootElement.TryGetProperty("time", out var time)
+                || time.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("versions", out var versions)
+                || versions.ValueKind != JsonValueKind.Object)
+            {
+                _logger?.LogWarning("npm packument for {Package} has no latest tag, release times or versions", agent.NpmPackage);
+                return null;
+            }
+
+            var cutoff = now - cooldown;
+            var held = ReadHeld(agent);
+            string? target = null;
+            (string Version, DateTimeOffset Published)? upcoming = null;
+            foreach (var release in time.EnumerateObject())
+            {
+                // Exactly MAJOR.MINOR.PATCH: drops prereleases and the "created"/"modified" keys.
+                // `time` also keeps unpublished versions, which can no longer be installed.
+                if (!StableVersionRegex().IsMatch(release.Name)
+                    || !versions.TryGetProperty(release.Name, out _)
+                    || IsNewer(release.Name, latest)
+                    || release.Value.ValueKind != JsonValueKind.String
+                    || (held is not null && !IsNewer(release.Name, held))
+                    || !DateTimeOffset.TryParse(release.Value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var published))
+                {
+                    continue;
+                }
+
+                if (published > cutoff)
+                {
+                    if (upcoming is null || IsNewer(release.Name, upcoming.Value.Version)) upcoming = (release.Name, published);
+                }
+                else if (target is null || IsNewer(release.Name, target))
+                {
+                    target = release.Name;
+                }
+            }
+
+            return upcoming is { } next && (target is null || IsNewer(next.Version, target))
+                ? new AutoUpdatePlan(target, next.Version, next.Published + cooldown)
+                : new AutoUpdatePlan(target, null, null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to read the release history of {Package}", agent.NpmPackage);
+            return null;
+        }
+    }
+
+    public async Task<AutoUpdateResult> AutoUpdateAsync(string agentKey, string version, CancellationToken ct = default)
+    {
+        var agent = ManagedAgentCatalog.Find(agentKey)
+            ?? throw new KeyNotFoundException($"No managed agent with key '{agentKey}'.");
+
+        var gate = Locks.GetOrAdd(agent.Key, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            // Re-read under the gate: the caller's view of the installed version may be
+            // stale by the time its turn comes, and an update must never go backwards.
+            if (await GetInstalledVersionAsync(agent, ct) is { } installed && !IsNewer(version, installed))
+                return AutoUpdateResult.NotNewer;
+
+            // Switched in at once, in use or not: a running process keeps the install it was
+            // launched from, and only new launches follow the pointer.
+            SwapIn(agent, await InstallToVersionDirAsync(agent, $"{agent.NpmPackage}@{version}", ct));
+            if (ReadHeld(agent) is { } held && IsNewer(version, held))
+                TryDeleteFile(ManagedAgentInstall.HeldFile(_dataRoot, agent));
+            return AutoUpdateResult.Installed;
         }
         finally
         {
@@ -125,7 +274,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             // Re-check under the lock: a racing Update/Ensure may have installed
             // it while we waited, so we don't redundantly reinstall.
             if (await GetInstalledVersionAsync(agent, ct) is null)
-                await InstallAsync(agent, ct);
+                await InstallLatestAsync(agent, ct);
             return await GetStatusAsync(agent, ct);
         }
         finally
@@ -134,12 +283,126 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         }
     }
 
-    private async Task InstallAsync(ManagedAgent agent, CancellationToken ct)
+    private async Task InstallLatestAsync(ManagedAgent agent, CancellationToken ct)
     {
-        // The version currently in use (if any). It is kept through this install
-        // so a run already launched against it isn't pulled out from under it.
-        var previousVersionId = ManagedAgentInstall.CurrentVersionId(_dataRoot, agent);
+        var versionId = await InstallToVersionDirAsync(agent, $"{agent.NpmPackage}@latest", ct);
+        SwapIn(agent, versionId);
+    }
 
+    public async Task RemoveOldVersionsWhenIdleAsync(string agentKey, CancellationToken ct = default)
+    {
+        var agent = ManagedAgentCatalog.Find(agentKey)
+            ?? throw new KeyNotFoundException($"No managed agent with key '{agentKey}'.");
+
+        // Not waited for: an install or rollback holding the gate is about to leave its own
+        // new version dir on disk, which a cleanup must not mistake for a leftover.
+        var gate = Locks.GetOrAdd(agent.Key, _ => new SemaphoreSlim(1, 1));
+        if (!await gate.WaitAsync(0, ct)) return;
+        try
+        {
+            PruneOldVersionsWhenIdle(agent);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private sealed record PreviousMarker(string? VersionId);
+
+    private sealed record PreviousInstall(string VersionId, string? Version);
+
+    private sealed record HeldMarker(string? Version);
+
+    /// <summary>A marker's contents, whether or not what it names is still intact.</summary>
+    private static T? ReadMarker<T>(string path) where T : class
+    {
+        try
+        {
+            return File.Exists(path) ? JsonSerializer.Deserialize<T>(File.ReadAllText(path)) : null;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The install a rollback would switch back to, or null when there is none or it is no longer
+    /// intact. The id is checked as a plain version dir name before it becomes a path, the
+    /// install must still have its binary, and it is not the active one. Its version is null when
+    /// the install does not say which it is: it is still kept for runs launched from it, but a
+    /// rollback to it cannot be offered.
+    /// </summary>
+    private PreviousInstall? ReadPrevious(ManagedAgent agent)
+    {
+        if (ReadMarker<PreviousMarker>(ManagedAgentInstall.PreviousFile(_dataRoot, agent)) is not { VersionId: { } versionId }
+            || !Guid.TryParseExact(versionId, "N", out _)
+            || versionId == ManagedAgentInstall.CurrentVersionId(_dataRoot, agent))
+        {
+            return null;
+        }
+
+        var binary = ManagedAgentInstall.BinaryIn(ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId), agent);
+        return File.Exists(binary)
+            ? new PreviousInstall(versionId, InstalledVersionIn(agent, versionId))
+            : null;
+    }
+
+    /// <summary>The version a rollback left, which auto-update must get past; null when nothing is held.</summary>
+    private string? ReadHeld(ManagedAgent agent)
+        => ReadMarker<HeldMarker>(ManagedAgentInstall.HeldFile(_dataRoot, agent)) is { Version: { } version }
+            && StableVersionRegex().IsMatch(version)
+            ? version
+            : null;
+
+    /// <summary>
+    /// The version npm recorded when it installed <paramref name="versionId"/>, read from the
+    /// package's own manifest so it needs no process and works for an install that cannot start.
+    /// </summary>
+    private string? InstalledVersionIn(ManagedAgent agent, string versionId)
+    {
+        try
+        {
+            var manifest = Path.Combine(ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId), "node_modules", agent.NpmPackage, "package.json");
+            if (!File.Exists(manifest)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(manifest));
+            return doc.RootElement.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.String
+                ? ParseVersion(v.GetString())
+                : null;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Names the install that was active before a swap as the one a rollback returns to (and the
+    /// one kept for runs launched from it), or clears the marker when that install is gone or is
+    /// the same version as the new one.
+    /// </summary>
+    private void RecordPrevious(ManagedAgent agent, string? previousVersionId, string versionId)
+    {
+        var markerPath = ManagedAgentInstall.PreviousFile(_dataRoot, agent);
+        if (previousVersionId is null || previousVersionId == versionId
+            || !File.Exists(ManagedAgentInstall.BinaryIn(ManagedAgentInstall.VersionDir(_dataRoot, agent, previousVersionId), agent))
+            || (InstalledVersionIn(agent, previousVersionId) is { } previousVersion && previousVersion == InstalledVersionIn(agent, versionId)))
+        {
+            TryDeleteFile(markerPath);
+            return;
+        }
+
+        WriteProtectedFile(markerPath, JsonSerializer.Serialize(new PreviousMarker(previousVersionId)));
+    }
+
+    /// <summary>
+    /// Installs <paramref name="spec"/> into a fresh version dir, closed to the agent for writes,
+    /// and returns its id. The pointer is not touched; a failed or cancelled install leaves
+    /// nothing behind.
+    /// </summary>
+    private async Task<string> InstallToVersionDirAsync(ManagedAgent agent, string spec, CancellationToken ct)
+    {
         var versionId = Guid.NewGuid().ToString("N");
         var versionDir = ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId);
         Directory.CreateDirectory(versionDir);
@@ -153,8 +416,6 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         // Closed to the agent until the tree is complete and read-only; see
         // AgentIsolation.StageForAgentExec for why the ordering is the point.
         using var staged = AgentIsolation.StageForAgentExec(versionDir, _agentUser);
-
-        var spec = $"{agent.NpmPackage}@latest";
 
         try
         {
@@ -200,8 +461,6 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             // Before the pointer flips, never after: `current` must never name a
             // tree the agent could still be writing.
             staged.Publish();
-
-            SwapActiveVersion(agent, versionId);
             _logger?.LogInformation("Installed managed agent {Agent} version dir {VersionId} from {Spec}", agent.Key, versionId, spec);
         }
         catch
@@ -210,7 +469,37 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             throw;
         }
 
-        PruneOldVersions(agent, versionId, previousVersionId);
+        return versionId;
+    }
+
+    /// <summary>
+    /// Makes <paramref name="versionId"/> the active version, remembers the one it replaced as the
+    /// rollback target, and removes older installs if nothing is using the agent. A swap that
+    /// fails removes the new install.
+    /// </summary>
+    private void SwapIn(ManagedAgent agent, string versionId)
+    {
+        var previousVersionId = ManagedAgentInstall.CurrentVersionId(_dataRoot, agent);
+        try
+        {
+            SwapActiveVersion(agent, versionId);
+        }
+        catch
+        {
+            TryDeleteDirectory(ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId));
+            throw;
+        }
+
+        // The switch has happened; failing to note the rollback target must not report the update as failed.
+        try
+        {
+            RecordPrevious(agent, previousVersionId, versionId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger?.LogWarning(ex, "Could not record the previous version of managed agent {Agent}; it cannot be rolled back to", agent.Key);
+        }
+        PruneOldVersionsWhenIdle(agent);
     }
 
     /// <summary>
@@ -244,38 +533,50 @@ public sealed partial class ManagedAgentService : IManagedAgentService
     /// not at all, so a reader never sees a half-written pointer.
     /// </summary>
     private void SwapActiveVersion(ManagedAgent agent, string versionId)
+        => WriteProtectedFile(ManagedAgentInstall.PointerFile(_dataRoot, agent), versionId);
+
+    /// <summary>
+    /// Replaces <paramref name="path"/> through a temp file and a single rename, so a reader
+    /// never sees a half-written file. The temp file is protected before the rename, not after:
+    /// it is created 0664 under umask 002 and File.Move preserves the mode, so protecting
+    /// afterwards would leave a window where the live file — the pointer decides which binary
+    /// the orchestrator execs — is agent-writable.
+    /// </summary>
+    private void WriteProtectedFile(string path, string contents)
     {
-        var pointer = ManagedAgentInstall.PointerFile(_dataRoot, agent);
-        Directory.CreateDirectory(Path.GetDirectoryName(pointer)!);
-        var tmp = Path.Combine(ManagedAgentInstall.AgentRoot(_dataRoot, agent), $".current.{versionId}.tmp");
-        File.WriteAllText(tmp, versionId);
-        // Protect before the rename, not after: the temp file is created 0664
-        // under umask 002 and File.Move preserves the mode, so protecting
-        // afterwards would leave a window where the live pointer — which decides
-        // which binary the orchestrator execs — is agent-writable.
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var tmp = Path.Combine(Path.GetDirectoryName(path)!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(tmp, contents);
         AgentIsolation.ProtectFromAgentWrites(tmp, _agentUser);
-        File.Move(tmp, pointer, overwrite: true);
+        File.Move(tmp, path, overwrite: true);
     }
 
     /// <summary>
-    /// Delete superseded installs, keeping the given version ids (nulls ignored).
-    /// We keep the active version AND the one it just replaced: these agents are
-    /// Node apps that lazily <c>require()</c> files from their install dir, so a
-    /// run launched before the swap would crash if its version were deleted
-    /// mid-run. Keeping current + previous lets in-flight runs finish while still
-    /// bounding disk to two installs — no long version history.
+    /// Deletes every install but the active one and the one a rollback would return to, while no
+    /// run or terminal is using the agent. A process resolves its binary inside
+    /// <c>versions/&lt;id&gt;</c> when it starts and these agents are Node apps that lazily
+    /// <c>require()</c> files from there, so deleting the folder of a running one would break
+    /// it. The idle check and the delete share the lock that starting a run takes, so none can
+    /// start halfway through; what is kept because the agent was busy goes at a later call.
     /// </summary>
-    private void PruneOldVersions(ManagedAgent agent, params string?[] keep)
+    private void PruneOldVersionsWhenIdle(ManagedAgent agent)
     {
-        var versionsRoot = ManagedAgentInstall.VersionsRoot(_dataRoot, agent);
-        if (!Directory.Exists(versionsRoot)) return;
-
-        var keepSet = keep.Where(k => k is not null).ToHashSet(StringComparer.Ordinal);
-        foreach (var dir in Directory.EnumerateDirectories(versionsRoot))
+        void Prune()
         {
-            if (keepSet.Contains(Path.GetFileName(dir))) continue;
-            TryDeleteDirectory(dir);
+            var versionsRoot = ManagedAgentInstall.VersionsRoot(_dataRoot, agent);
+            // Without a readable pointer there is no telling which install is the live one.
+            if (!Directory.Exists(versionsRoot) || ManagedAgentInstall.CurrentVersionId(_dataRoot, agent) is not { } current) return;
+
+            var keep = new HashSet<string>(StringComparer.Ordinal) { current };
+            if (ReadPrevious(agent) is { } previous) keep.Add(previous.VersionId);
+            foreach (var dir in Directory.EnumerateDirectories(versionsRoot))
+            {
+                if (!keep.Contains(Path.GetFileName(dir))) TryDeleteDirectory(dir);
+            }
         }
+
+        if (_usage is null) Prune();
+        else _usage.TryRunWhenIdle(agent.Key, Prune);
     }
 
     private async Task<string?> GetInstalledVersionAsync(ManagedAgent agent, CancellationToken ct)
@@ -372,6 +673,18 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         return trimmedB.Length > 0 ? trimmedB : "no output";
     }
 
+    private void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to remove managed-agent file {Path}", path);
+        }
+    }
+
     private void TryDeleteDirectory(string path)
     {
         try
@@ -383,6 +696,9 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             _logger?.LogWarning(ex, "Failed to remove managed-agent directory {Path}", path);
         }
     }
+
+    [GeneratedRegex(@"^\d+\.\d+\.\d+$")]
+    private static partial Regex StableVersionRegex();
 
     [GeneratedRegex(@"(\d+)\.(\d+)\.(\d+)")]
     private static partial Regex SemverRegex();

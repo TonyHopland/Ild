@@ -17,6 +17,12 @@ namespace ILD.Data.DTOs;
 /// either nothing is installed yet or the installed version is behind.
 /// </param>
 /// <param name="Error">Human-readable note when version state could not be fully determined.</param>
+/// <param name="PreviousVersion">The version a rollback would switch back to, or null when there is none.</param>
+/// <param name="HeldVersion">
+/// The version rolled back from, which auto-update skips (and anything older); null when nothing is held.
+/// </param>
+/// <param name="AutoInstallVersion">The version auto-update will install once its cooldown has passed, when known.</param>
+/// <param name="AutoInstallAfter">When <paramref name="AutoInstallVersion"/> has passed its cooldown.</param>
 public sealed record ManagedAgentStatus(
     string Key,
     string DisplayName,
@@ -24,4 +30,8 @@ public sealed record ManagedAgentStatus(
     string? InstalledVersion,
     string? LatestVersion,
     bool UpdateAvailable,
-    string? Error);
+    string? Error,
+    string? PreviousVersion = null,
+    string? HeldVersion = null,
+    string? AutoInstallVersion = null,
+    DateTimeOffset? AutoInstallAfter = null);

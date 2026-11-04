@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
+[Collection(ManagedAgentInstallsCollection.Name)]
 public class ManagedAgentServiceTests : IDisposable
 {
     private readonly string _dataRoot;

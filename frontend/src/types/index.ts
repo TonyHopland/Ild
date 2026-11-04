@@ -1195,6 +1195,14 @@ export interface ManagedAgentStatus {
   latestVersion: string | null;
   updateAvailable: boolean;
   error: string | null;
+  /** The version a rollback would switch back to, or null when there is none. */
+  previousVersion: string | null;
+  /** The version rolled back from; automatic updates skip it and anything older. */
+  heldVersion: string | null;
+  /** The version that installs automatically once its cooldown has passed, when known. */
+  autoInstallVersion: string | null;
+  /** When {@link autoInstallVersion} has passed its cooldown (an ISO timestamp). */
+  autoInstallAfter: string | null;
 }
 
 /**

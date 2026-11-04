@@ -77,6 +77,10 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<WorktreeRetentionSweeper>();
         services.AddHostedService<NetworkLogRetentionSweeper>();
         services.AddHostedService<ChatInactivitySweeper>();
+        services.AddSingleton<IManagedAgentUsage, ManagedAgentUsage>();
+        services.AddSingleton<AutoInstallForecast>();
+        services.AddSingleton(sp => AgentUpdateOptions.FromEnvironment(sp.GetRequiredService<ILogger<AgentUpdateOptions>>()));
+        services.AddHostedService<ManagedAgentAutoUpdater>();
         services.AddHostedService<StuckRunWatchdog>();
         services.AddHostedService<ThrottledRunResumeSweeper>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();

@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Network;
+using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using Porta.Pty;
 
@@ -17,11 +18,16 @@ public sealed class InteractiveProviderSessionService
 {
     private readonly ILogger<InteractiveProviderSessionService> _logger;
     private readonly IEgressPolicy? _egressPolicy;
+    private readonly IManagedAgentUsage? _usage;
 
-    public InteractiveProviderSessionService(ILogger<InteractiveProviderSessionService> logger, IEgressPolicy? egressPolicy = null)
+    public InteractiveProviderSessionService(
+        ILogger<InteractiveProviderSessionService> logger,
+        IEgressPolicy? egressPolicy = null,
+        IManagedAgentUsage? usage = null)
     {
         _logger = logger;
         _egressPolicy = egressPolicy;
+        _usage = usage;
     }
 
     public async Task RunAsync(
@@ -31,6 +37,9 @@ public sealed class InteractiveProviderSessionService
         int initialRows,
         CancellationToken cancellationToken)
     {
+        // Taken before the launch command is resolved, so an update cannot swap the
+        // install between resolving the path and starting the process.
+        using var lease = _usage?.Acquire(provider.Type);
         var binaryPath = ResolveBinaryPath(provider);
         if (string.IsNullOrWhiteSpace(binaryPath))
         {
