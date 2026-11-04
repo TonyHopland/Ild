@@ -13,6 +13,7 @@ public class ExampleLoopPrToolsTests
     {
         "Develop.json",
         "Prototype.json",
+        "Q&A.json",
     };
 
     private static JsonDocument Loop(string name)
@@ -62,6 +63,7 @@ public class ExampleLoopPrToolsTests
     [Theory]
     [InlineData("Develop.json")]
     [InlineData("Prototype.json")]
+    [InlineData("Q&A.json")]
     public void Shipped_loops_hold_nothing_specific_to_an_instance(string file)
     {
         // The loops go to every install: no email address, host or absolute path.

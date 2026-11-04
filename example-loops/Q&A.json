@@ -1,0 +1,163 @@
+{
+  "$schema": "ild-loop-template/v2",
+  "name": "Q&A",
+  "description": "A back-and-forth Q&A between an agent and you; press Complete to finish.",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "120b6e99-6b5c-447d-8c3d-607a02509523",
+      "type": "Cleanup",
+      "label": "Cleanup",
+      "config": {
+        "__pos": {
+          "x": 130.5,
+          "y": 129
+        },
+        "outputs": []
+      }
+    },
+    {
+      "id": "15cbbd97-67d0-4796-bbd8-4dccf6726081",
+      "type": "AI",
+      "label": "AI",
+      "config": {
+        "prompt": "{{Node.Input}}",
+        "useSession": true,
+        "toolAllowlist": [
+          "read",
+          "execute",
+          "ild"
+        ],
+        "sessionPlaceholder": "Q&A",
+        "__pos": {
+          "x": -270.5,
+          "y": 128.5
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ],
+        "matchRules": []
+      }
+    },
+    {
+      "id": "8522e0a3-3984-40ac-bf98-20eec70fbae7",
+      "type": "Prompt",
+      "label": "Workitem summary",
+      "config": {
+        "prompt": "{{WorkItem.Title}}\n\n{{WorkItem.Description}}",
+        "__pos": {
+          "x": -468.5,
+          "y": 127
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "d5f2d228-1cae-4258-945e-36ad6abeee29",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": -649.5,
+          "y": 127.5
+        },
+        "createWorktree": true,
+        "runInstall": true,
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "d877992e-9847-4d03-816a-ff4abaaf6c8b",
+      "type": "Human",
+      "label": "Human",
+      "config": {
+        "inputLabel": "",
+        "prompt": "{{Node.Input}}",
+        "__pos": {
+          "x": -70,
+          "y": 128
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess",
+            "visible": false
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "Respond",
+            "default": true
+          },
+          {
+            "name": "Complete",
+            "confirm": true
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "615f4185-6fde-4f6b-b0c5-868462690e9e",
+      "sourceNodeId": "15cbbd97-67d0-4796-bbd8-4dccf6726081",
+      "targetNodeId": "d877992e-9847-4d03-816a-ff4abaaf6c8b",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "7326a5b0-ee25-45bf-8725-8fc8ecb9569d",
+      "sourceNodeId": "8522e0a3-3984-40ac-bf98-20eec70fbae7",
+      "targetNodeId": "15cbbd97-67d0-4796-bbd8-4dccf6726081",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "6105af66-866b-4cf0-a18f-fc55ab9ca2af",
+      "sourceNodeId": "d5f2d228-1cae-4258-945e-36ad6abeee29",
+      "targetNodeId": "8522e0a3-3984-40ac-bf98-20eec70fbae7",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "19332f64-01e9-4089-bef2-95c032b8ba84",
+      "sourceNodeId": "d877992e-9847-4d03-816a-ff4abaaf6c8b",
+      "targetNodeId": "120b6e99-6b5c-447d-8c3d-607a02509523",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "85ef6fb6-7181-40eb-bf90-466cb6bad816",
+      "sourceNodeId": "d877992e-9847-4d03-816a-ff4abaaf6c8b",
+      "targetNodeId": "120b6e99-6b5c-447d-8c3d-607a02509523",
+      "edgeType": "Custom",
+      "name": "Complete"
+    },
+    {
+      "id": "8ba361ce-d58d-4345-bd2d-9879e58726f4",
+      "sourceNodeId": "d877992e-9847-4d03-816a-ff4abaaf6c8b",
+      "targetNodeId": "15cbbd97-67d0-4796-bbd8-4dccf6726081",
+      "edgeType": "Custom",
+      "name": "Respond"
+    }
+  ]
+}

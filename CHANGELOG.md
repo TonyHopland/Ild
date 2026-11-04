@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Coding agents update themselves, a day after a release by default, and an Installed agents menu on AI Providers rolls one back to its previous version or updates it by hand.**
-- **New installs come with two loops, Develop and Prototype.**
+- **New installs come with three loops: Develop, Prototype and Q&A.**
 - **A work item's Overview shows the branch its runs start from.**
 - **Clear analytics from Settings > Storage**, all of it or only what is older than a number of days.
 - **Open the chat that changed a work item from its History tab.**

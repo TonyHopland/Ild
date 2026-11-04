@@ -19,7 +19,7 @@ public class TemplateSeederTests
 
         var templates = (await db.LoopTemplates.GetAllAsync()).ToList();
         var names = templates.Select(t => t.Name).OrderBy(n => n).ToArray();
-        Assert.Equal(new[] { "Develop", "Prototype" }, names);
+        Assert.Equal(new[] { "Develop", "Prototype", "Q&A" }, names);
         Assert.DoesNotContain("AI-Assisted Feature", names);
     }
 
@@ -62,6 +62,11 @@ public class TemplateSeederTests
             && e.EdgeType == "Custom"
             && e.Name == "on_merged");
 
+        Assert.Contains(graph.Edges, e =>
+            e.SourceNodeId == pr.Id
+            && e.TargetNodeId == retroBrief.Id
+            && e.EdgeType == "OnSuccess");
+
         // A PR-node failure must not loop back into the implementation session.
         Assert.DoesNotContain(graph.Edges, e => e.SourceNodeId == pr.Id && e.EdgeType == "OnFailure");
     }
@@ -84,6 +89,7 @@ public class TemplateSeederTests
     [Theory]
     [InlineData("Develop.json")]
     [InlineData("Prototype.json")]
+    [InlineData("Q&A.json")]
     public void Example_loop_is_a_v2_document_the_upgrader_has_nothing_left_to_add_to(string file)
     {
         // The example loops are the seed templates: a name they route by but do not
