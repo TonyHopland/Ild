@@ -27,6 +27,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_SHUTDOWN_DRAIN_SECONDS`                 | Seconds the shutdown drain may spend parking in-flight runs (default `20`; see below)                                      |
 | `ILD_MAX_ATTACHMENT_MB`                      | Largest single work-item attachment, in MB (default `25`; set on both containers — see below)                              |
 | `ILD_MAX_ATTACHMENTS_TOTAL_MB`               | Largest total of attachments one work item may hold, in MB (default `250`; set on both containers)                         |
+| `ILD_AGENT_UPDATE_COOLDOWN_DAYS`             | Days a coding-agent release must have been published before it is installed automatically (default `1`; see below)        |
 | `ILD_NETWORK_PROXY_PORT`                     | Loopback port of the agent egress proxy (image default `3128`). Empty ⇒ no proxy, agent launches are not funnelled         |
 | `ILD_NETWORK_ENFORCEMENT`                    | Set by the container entrypoint, not by you: `enforced` or `advisory`, with the reason in `ILD_NETWORK_ENFORCEMENT_REASON` |
 | `DO_NOT_TRACK`                               | Asks the agent CLIs not to send telemetry; compose defaults it to `1`. Opting back in has caveats (see below)              |
@@ -109,6 +110,22 @@ Chats are kept until someone deletes them, unless inactive chats are set to be d
 | `chat.autoDeleteInactiveDays` | `14`    | Days without a new message after which a chat counts inactive |
 
 The days run from 1 to 3650. A chat's last activity is its newest message, from either side, or its creation if it has none; renaming, starring or reading it does not count. Starred chats are never deleted this way, and an unstarred chat past the window goes on the next sweep. A background sweep runs every hour and reads both settings on every pass, so turning the switch on deletes the chats that are already inactive within the hour. A chat with a turn still running is skipped until it is idle. The deletion is the same as deleting the chat by hand and cannot be undone; a schedule that continues its chat starts a new one on its next firing.
+
+## AI provider updates
+
+The coding-agent CLIs behind the AI providers (Pi, OpenCode, Claude Code, GitHub Copilot, Codex) keep themselves up to date; there is no switch for it. If a release turns out to be a problem, roll back to the version before it, or update by hand, from the **Installed agents** menu on the AI Providers page.
+
+`ILD_AGENT_UPDATE_COOLDOWN_DAYS` is how many days a release must have been published before it is installed automatically: a whole number from 0 to 365, default `1`, `0` installing the newest release at once. It is read once when ILD starts, so changing it needs a restart. A missing or invalid value falls back to `1` with a warning in the log. Compose passes it to the `ild` container from `.env`.
+
+**What gets installed.** For each installed agent, the newest stable version (no prereleases) that is at least that many days old, that the registry still offers and that is not newer than its latest, and only if it is newer than the installed one. An agent that is not installed is never installed this way; use **Install** for that.
+
+**Check schedule.** A background task wakes every hour, starting a minute after ILD does. A check reads every agent's installed version and the registry. It is due every hour at the default cooldown, and with a cooldown above 1 day every cooldown ÷ 7 days, between 1 and 24 hours (7 days → 24 hours, 3 days → about 10 hours), because a new release cannot become eligible sooner than that. A wake that is not due makes no registry call. An update lands at the first check after its cooldown has passed, so "after" a date means at the first check following it.
+
+**Agents in use.** A new version is switched in as soon as it is installed, whether or not the agent is in use. A run that has already started finishes on the version it was launched from; runs started afterwards use the new one, so a multi-step run can continue on the new version in a later step. Old installs are deleted only while nothing is using the agent: every wake, due or not, removes whatever is neither the current version nor the one a rollback would return to, for each agent that is idle and has no install or rollback in progress, and leaves it for a later wake otherwise. Checking that the agent is idle and deleting happen under the same lock that starting a run takes, so a run cannot begin halfway through a cleanup. A failure (registry unreachable, npm error) leaves the current version in place and is retried at the next due check.
+
+**Rollback and the hold.** Every switch to a new version remembers the version it replaced, so an agent normally keeps two installs: the current one and the previous one (more only while it is in use). **Roll back** switches the agent back to the previous one at once, even while it is in use; runs already going keep the install they started in, and the version rolled back from is removed at the first wake that finds the agent idle. After a rollback there is nothing to roll back to until the next update, and the version rolled back from is *held*: automatic updates install only a version newer than it (and past the cooldown), which lifts the hold. **Update** by hand installs the latest version and lifts the hold too. Installs made before this existed have no previous version until their next update.
+
+**Installed agents menu.** The menu on the AI Providers page reads the current state when it opens; nothing is pushed live. Each agent shows its installed version and one of: up to date; "will install automatically after <date>" while its cooldown runs; "held at a version after rollback". The "will install after" date is known after the first check following a start.
 
 ## Graceful shutdown
 

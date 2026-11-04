@@ -1141,6 +1141,10 @@ export const managedAgentService = {
   update: async (key: string): Promise<ManagedAgentStatus> => {
     return api.post<ManagedAgentStatus>(`/managedagents/${key}/update`, {});
   },
+  /** `previousVersion` is the version the user was shown; the server refuses if it has changed. */
+  rollback: async (key: string, previousVersion: string): Promise<ManagedAgentStatus> => {
+    return api.post<ManagedAgentStatus>(`/managedagents/${key}/rollback`, { previousVersion });
+  },
 };
 
 export const SchedulerSettingKeys = {

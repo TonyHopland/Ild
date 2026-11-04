@@ -35,7 +35,29 @@ public class AgentAdapterRegistry : IAgentAdapterRegistry
             throw new InvalidOperationException(
                 $"No adapter registered for provider type '{provider.Type}'");
 
-        return () => (IAgentAdapter)ActivatorUtilities.CreateInstance(_sp, adapterType);
+        return () =>
+        {
+            var adapter = (IAgentAdapter)ActivatorUtilities.CreateInstance(_sp, adapterType);
+            return _sp.GetService<IManagedAgentUsage>() is { } usage
+                ? new LeasingAdapter(adapter, usage, provider.Type)
+                : adapter;
+        };
+    }
+
+    /// <summary>Holds the managed agent's in-use lease for exactly the duration of each execution.</summary>
+    private sealed class LeasingAdapter(IAgentAdapter inner, IManagedAgentUsage usage, string providerType) : IAgentAdapter
+    {
+        public string Name => inner.Name;
+        public string[] SupportedProviderTypes => inner.SupportedProviderTypes;
+        public ConfigFieldDescriptor[] ConfigSchema => inner.ConfigSchema;
+        public AdapterModelSupport ModelSupport => inner.ModelSupport;
+        public AgentAdapterTraits Traits => inner.Traits;
+
+        public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
+        {
+            using var lease = usage.Acquire(providerType);
+            return await inner.ExecuteAsync(context);
+        }
     }
 
     public string[] GetAllSupportedProviderTypes()

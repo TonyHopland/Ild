@@ -5,13 +5,13 @@ import {
   AgentAdapterDescriptor,
   AiProvider,
   CliAuth,
-  ManagedAgentStatus,
   ApiError,
   ConfigFieldDescriptor,
 } from "../../types";
-import { aiProviderService, agentAdapterService, managedAgentService } from "../../services/auth";
+import { aiProviderService, agentAdapterService } from "../../services/auth";
 import AdapterConfigFields from "../../components/AdapterConfigFields";
 import ProviderTerminal from "../../components/ProviderTerminal";
+import InstalledAgentsMenu from "./InstalledAgentsMenu";
 import { sameTag } from "../../utils/providerTags";
 
 /** Adapter config value shapes rendered by {@link AdapterConfigFields}. */
@@ -28,12 +28,6 @@ const parseTags = (text: string) =>
     .split(",")
     .map((tag) => tag.trim())
     .filter((tag, index, all) => tag !== "" && all.findIndex((t) => sameTag(t, tag)) === index);
-
-const isInstalled = (agent: ManagedAgentStatus) => agent.installedVersion != null;
-
-// The server also reports `updateAvailable` for an agent that was never installed, so
-// that its first install is offered as an action. Those are not updates to notify about.
-const hasPendingUpdate = (agent: ManagedAgentStatus) => isInstalled(agent) && agent.updateAvailable;
 
 export default function AiProviders() {
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -53,15 +47,9 @@ export default function AiProviders() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [configSchema, setConfigSchema] = useState<ConfigFieldDescriptor[]>([]);
   const [configValues, setConfigValues] = useState<Record<string, ConfigValue>>({});
-  const [agents, setAgents] = useState<ManagedAgentStatus[]>([]);
-  // Keyed by agent key: each update owns its own entry, so several can run at once.
-  const [updatingAgents, setUpdatingAgents] = useState<Record<string, true>>({});
-  const [agentErrors, setAgentErrors] = useState<Record<string, string>>({});
-  const [bellOpen, setBellOpen] = useState(false);
 
   useEffect(() => {
     void loadData();
-    void loadAgents();
   }, []);
 
   // Load the adapter config schema for the selected provider type so its fields
@@ -104,37 +92,6 @@ export default function AiProviders() {
       console.error("Failed to load AI providers:", error);
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const loadAgents = async () => {
-    try {
-      const result = await managedAgentService.getAll();
-      setAgents(result ?? []);
-    } catch (error) {
-      console.error("Failed to load coding agents:", error);
-    }
-  };
-
-  const handleUpdateAgent = async (agent: ManagedAgentStatus) => {
-    setUpdatingAgents((prev) => ({ ...prev, [agent.key]: true }));
-    setAgentErrors((prev) => {
-      const next = { ...prev };
-      delete next[agent.key];
-      return next;
-    });
-    try {
-      const updated = await managedAgentService.update(agent.key);
-      setAgents((prev) => prev.map((a) => (a.key === updated.key ? updated : a)));
-    } catch (error) {
-      const message = (error as ApiError)?.message ?? "Update failed.";
-      setAgentErrors((prev) => ({ ...prev, [agent.key]: message }));
-    } finally {
-      setUpdatingAgents((prev) => {
-        const next = { ...prev };
-        delete next[agent.key];
-        return next;
-      });
     }
   };
 
@@ -254,60 +211,6 @@ export default function AiProviders() {
     setEditingProvider(null);
   };
 
-  const updateCount = agents.filter(hasPendingUpdate).length;
-
-  const renderAgentRow = (agent: ManagedAgentStatus) => {
-    const updating = updatingAgents[agent.key] === true;
-    const notInstalled = !isInstalled(agent);
-    const label = updating
-      ? notInstalled
-        ? "Installing…"
-        : "Updating…"
-      : agent.updateAvailable
-        ? notInstalled
-          ? `Install ${agent.latestVersion}`
-          : `Update → ${agent.latestVersion}`
-        : notInstalled
-          ? "Unavailable"
-          : "Up to date";
-    const title = agent.updateAvailable
-      ? notInstalled
-        ? `Install ${agent.displayName} ${agent.latestVersion} onto /data`
-        : `Update ${agent.displayName} to ${agent.latestVersion} on /data`
-      : notInstalled
-        ? "Latest version unavailable — check registry connectivity"
-        : "Already up to date";
-    const meta = agent.updateAvailable
-      ? `${agent.installedVersion ?? "not installed"} → ${agent.latestVersion ?? "?"}`
-      : `v${agent.installedVersion ?? "?"}`;
-    const actionable = agent.updateAvailable || updating;
-    return (
-      <div key={agent.key} className="ap-agent-row">
-        <div className="ap-agent-id">
-          <span className="ap-agent-name">{agent.displayName}</span>
-          <span className="ap-agent-meta">{meta}</span>
-          {agent.error && <span className="ap-agent-warn">{agent.error}</span>}
-          {agentErrors[agent.key] && (
-            <span className="ap-agent-error">{agentErrors[agent.key]}</span>
-          )}
-        </div>
-        {actionable || notInstalled ? (
-          <button
-            className="btn btn-primary btn-small"
-            disabled={!agent.updateAvailable || updating}
-            aria-busy={updating}
-            onClick={() => void handleUpdateAgent(agent)}
-            title={title}
-          >
-            {label}
-          </button>
-        ) : (
-          <span className="ap-agent-uptodate">Up to date</span>
-        )}
-      </div>
-    );
-  };
-
   if (isLoading) {
     return (
       <div className="page-container">
@@ -321,43 +224,7 @@ export default function AiProviders() {
       <div className="ap-header">
         <h1 className="page-title">AI Providers</h1>
         <div className="ap-header-actions">
-          {agents.length > 0 && (
-            <div className="ap-bell-wrap">
-              <button
-                className={`ap-bell ${updateCount > 0 ? "has-update" : ""}`}
-                onClick={() => setBellOpen((v) => !v)}
-                title="Coding agents"
-                aria-label={
-                  updateCount > 0
-                    ? `Coding agents — ${updateCount} update${updateCount > 1 ? "s" : ""} available`
-                    : "Coding agents — all up to date"
-                }
-              >
-                <span className="ap-bell-ico">🔔</span>
-                {updateCount > 0 && <span className="ap-bell-dot">{updateCount}</span>}
-              </button>
-              {bellOpen && (
-                <>
-                  <div className="ap-popover-backdrop" onClick={() => setBellOpen(false)} />
-                  <div className="ap-popover">
-                    <div className="ap-popover-head">
-                      <h3>Coding agents</h3>
-                      <span className="ap-popover-sub">
-                        {updateCount > 0
-                          ? `${updateCount} update${updateCount > 1 ? "s" : ""} available`
-                          : "All up to date"}
-                      </span>
-                    </div>
-                    <p className="ap-popover-note">
-                      Pi, OpenCode, Claude Code, GitHub Copilot and Codex live on the persistent{" "}
-                      <code>/data</code> volume and update on demand.
-                    </p>
-                    <div className="ap-agent-list">{agents.map(renderAgentRow)}</div>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+          <InstalledAgentsMenu />
           <button className="btn btn-primary" onClick={openCreate}>
             + New Provider
           </button>
@@ -620,173 +487,10 @@ export default function AiProviders() {
           gap: 0.75rem;
         }
 
-        .ap-agent-list {
-          display: flex;
-          flex-direction: column;
-        }
-
-        .ap-agent-name {
-          font-size: 0.85rem;
-          font-weight: 600;
-          color: #e0e0e0;
-        }
-
-        .ap-agent-warn {
-          font-size: 0.7rem;
-          color: #d9a441;
-        }
-
-        .ap-agent-error {
-          font-size: 0.7rem;
-          color: #ef4444;
-        }
-
         .ap-header-actions {
           display: flex;
           align-items: center;
           gap: 0.6rem;
-        }
-
-        /* Coding-agents bell + popover */
-        .ap-agent-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 1rem;
-          padding: 0.6rem 0.85rem;
-        }
-
-        .ap-agent-id {
-          display: flex;
-          flex-direction: column;
-          gap: 0.15rem;
-          min-width: 0;
-        }
-
-        .ap-agent-meta {
-          font-size: 0.72rem;
-          color: #707090;
-        }
-
-        .ap-agent-uptodate {
-          font-size: 0.72rem;
-          color: #22c55e;
-          display: inline-flex;
-          align-items: center;
-          gap: 0.3rem;
-          white-space: nowrap;
-        }
-
-        .ap-agent-uptodate::before {
-          content: "";
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background-color: #22c55e;
-        }
-
-        .ap-bell-wrap {
-          position: relative;
-        }
-
-        .ap-bell {
-          position: relative;
-          background-color: #1e1e30;
-          border: 1px solid #2d2d44;
-          border-radius: 0.5rem;
-          width: 2.2rem;
-          height: 2.2rem;
-          cursor: pointer;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .ap-bell:hover {
-          border-color: #3a3a5c;
-        }
-
-        .ap-bell.has-update {
-          border-color: #3a3a5c;
-        }
-
-        .ap-bell-ico {
-          font-size: 1rem;
-          line-height: 1;
-        }
-
-        .ap-bell-dot {
-          position: absolute;
-          top: -5px;
-          right: -5px;
-          background-color: #6366f1;
-          color: #fff;
-          font-size: 0.62rem;
-          font-weight: 700;
-          min-width: 1rem;
-          height: 1rem;
-          border-radius: 999px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          border: 2px solid #15151e;
-        }
-
-        .ap-popover-backdrop {
-          position: fixed;
-          inset: 0;
-          z-index: 30;
-        }
-
-        .ap-popover {
-          position: absolute;
-          right: 0;
-          top: calc(100% + 0.5rem);
-          width: 320px;
-          z-index: 40;
-          background-color: #1e1e30;
-          border: 1px solid #2d2d44;
-          border-radius: 0.5rem;
-          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-          overflow: hidden;
-        }
-
-        .ap-popover-head {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 0.6rem 0.85rem;
-          border-bottom: 1px solid #2d2d44;
-        }
-
-        .ap-popover-head h3 {
-          font-size: 0.8rem;
-          margin: 0;
-          color: #e0e0e0;
-        }
-
-        .ap-popover-sub {
-          font-size: 0.7rem;
-          color: #707090;
-        }
-
-        .ap-popover-note {
-          font-size: 0.7rem;
-          color: #707090;
-          padding: 0.55rem 0.85rem;
-          border-bottom: 1px solid #2d2d44;
-          line-height: 1.4;
-          margin: 0;
-        }
-
-        .ap-popover-note code {
-          background-color: #15151e;
-          padding: 0 0.25rem;
-          border-radius: 0.25rem;
-        }
-
-        .ap-popover .ap-agent-row + .ap-agent-row {
-          border-top: 1px solid #2d2d44;
         }
 
         .ap-card {

@@ -1,6 +1,7 @@
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace ILD.Api.Controllers;
 
@@ -49,4 +50,30 @@ public class ManagedAgentsController : ControllerBase
             return StatusCode(StatusCodes.Status502BadGateway, new { error = ex.Message });
         }
     }
+
+    /// <summary>
+    /// Switch an agent back to the version it had before its last update, at once and even while
+    /// it is in use, then return the refreshed version state. A body naming the version the caller
+    /// was shown (<c>previousVersion</c>) makes it refuse, with 409, when that is no longer the one.
+    /// </summary>
+    [HttpPost("{key}/rollback")]
+    public async Task<IActionResult> Rollback(
+        string key,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RollbackRequest? request,
+        CancellationToken ct)
+    {
+        if (ManagedAgentCatalog.Find(key) is null)
+            return NotFound(new { error = $"Unknown agent '{key}'." });
+
+        try
+        {
+            return Ok(await _service.RollbackAsync(key, request?.PreviousVersion, ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
+    public sealed record RollbackRequest(string? PreviousVersion);
 }
