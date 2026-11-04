@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-04
+
 ### Added
 
 - **Coding agents update themselves, a day after a release by default, and an Installed agents menu on AI Providers rolls one back to its previous version or updates it by hand.**
