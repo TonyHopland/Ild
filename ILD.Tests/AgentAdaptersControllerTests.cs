@@ -70,7 +70,7 @@ public class AgentAdaptersControllerTests
 
         var claude = listed["claude-code"].CliAuth!;
         Assert.Equal("Claude Code", claude.CliName);
-        Assert.Contains("`/login`", claude.SignInStep);
+        Assert.Contains("`claude setup-token`", claude.SignInStep);
         Assert.Contains("Claude Code subscription", claude.SignInStep);
 
         var copilot = listed["copilot"].CliAuth!;
