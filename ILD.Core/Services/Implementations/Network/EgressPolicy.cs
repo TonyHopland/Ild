@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -7,12 +8,18 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ILD.Core.Services.Implementations.Network;
 
 /// <summary>The mode and lists in force at one moment, ready to judge a destination.</summary>
-public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<NetworkPolicyEntry> Entries)
+public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<NetworkPolicyEntry> Entries, IModelGatewayRegistry? Gateway = null)
 {
     public static readonly EgressPolicySnapshot Monitor = new(NetworkMode.Monitor, Array.Empty<NetworkPolicyEntry>());
 
+    /// <summary>
+    /// While an agent holds a model gateway lease for its provider, that provider's model hosts are closed
+    /// to it in every mode: the gateway is the only way to the model (ADR-0031).
+    /// </summary>
     public NetworkDecision Decide(string host, Guid? aiProviderId)
-        => EgressRules.Decide(Mode, Entries, host, aiProviderId);
+        => Gateway?.BlocksHost(aiProviderId, EgressRules.NormalizeHost(host)) == true
+            ? NetworkDecision.Blocked
+            : EgressRules.Decide(Mode, Entries, host, aiProviderId);
 }
 
 /// <summary>
@@ -50,14 +57,16 @@ public sealed class EgressPolicy : IEgressPolicy
 
     private readonly IServiceScopeFactory _scopes;
     private readonly TimeProvider _clock;
+    private readonly IModelGatewayRegistry? _gateway;
     private readonly SemaphoreSlim _reload = new(1, 1);
     private Cached? _cached;
     private int _generation;
 
-    public EgressPolicy(IServiceScopeFactory scopes, TimeProvider clock)
+    public EgressPolicy(IServiceScopeFactory scopes, TimeProvider clock, IModelGatewayRegistry? gateway = null)
     {
         _scopes = scopes;
         _clock = clock;
+        _gateway = gateway;
     }
 
     public event Action? Changed;
@@ -113,7 +122,7 @@ public sealed class EgressPolicy : IEgressPolicy
         var modeSetting = await settings.GetByKeyAsync(AppSettingKeys.NetworkMode, ct);
         EgressRules.TryParseMode(modeSetting?.Value ?? AppSettingKeys.DefaultNetworkMode, out var mode);
         var entries = await store.GetEntriesAsync(ct);
-        return new EgressPolicySnapshot(mode, entries);
+        return new EgressPolicySnapshot(mode, entries, _gateway);
     }
 
     private EgressPolicySnapshot? Fresh()

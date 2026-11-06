@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Implementations.RemoteProviders;
@@ -23,6 +24,12 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddIldServices(this IServiceCollection services)
     {
         services.AddSingleton<AgentAuthTokenProvider>();
+        services.AddSingleton<IModelGatewayRegistry, ModelGatewayRegistry>();
+        // One instance for the process: it holds the Codex refresh lock and the "refresh next" flag.
+        services.AddHttpClient(nameof(ModelCredentialSource));
+        services.AddSingleton<IModelCredentialSource>(sp => new ModelCredentialSource(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(ModelCredentialSource)),
+            sp.GetRequiredService<ILogger<ModelCredentialSource>>()));
 
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IWorkItemManager, WorkItemManager>();

@@ -57,18 +57,21 @@ DATA_TRAVERSE_DIRS="${DATA_TRAVERSE_DIRS:-}"
 # project state) is the canonical example: without it, even a valid
 # .claude/.credentials.json reads as logged-out.
 #
-# Under uid isolation the store is group-shared and symlinked into BOTH the
-# orchestrator's and the agent's home, so login (run as the orchestrator in the
-# provider terminal) and the agent run (as AGENT_USER) see one credential store.
+# Under uid isolation the store belongs to the orchestrator alone (0700, no shared
+# group, no ACL) and is linked into its home only (docs/adr/0031-model-gateway.md).
+# The agent runs with its own copies of these directories, seeded once from the
+# store without the credential files (seed_agent_config), and reaches its model
+# through the gateway, so nothing it can read or write holds a provider credential.
 #
-# Names may be nested (e.g. .config/opencode): splitting HOME between the two
-# uids means anything a CLI keeps under an XDG path has to be shared explicitly,
-# or the agent would see an empty home even though the ild-side terminal login
-# succeeded. opencode keeps its auth/state under the XDG data dir, hence the
-# .config/opencode + .local/share/opencode entries.
+# Names may be nested (e.g. .config/opencode): opencode keeps its auth/state under
+# the XDG data dir, hence the .config/opencode + .local/share/opencode entries.
 AGENT_CONFIG_STORE="${AGENT_CONFIG_STORE:-/home/ild/.agent-config}"
 AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot .codex .config/opencode .local/share/opencode}"
 AGENT_CONFIG_FILES="${AGENT_CONFIG_FILES:-.claude.json}"
+# Files that hold a provider credential. They stay in the store and are never copied
+# to the agent's home. Copilot's config.json mixes its tokens with its settings, so
+# it is left out whole.
+AGENT_CREDENTIAL_FILES="${AGENT_CREDENTIAL_FILES:-.credentials.json auth.json .copilot/config.json}"
 
 ensure_owned_by_runtime_user() {
   path="$1"
@@ -371,10 +374,12 @@ link_agent_config_files() {
   done
 }
 
-# Point a second home's dotdirs/dotfiles at the same store (no migration — the
-# primary home already populated it). Used for the agent user's home so it reads
-# the one shared credential store the orchestrator's login writes to.
-link_secondary_home() {
+# Give a second home its own copy of the store's dotdirs/dotfiles, once, without the
+# credential files. Used for the agent user's home: the agent keeps its sessions and
+# settings there, and the store (which holds the logins) stays out of its reach. A
+# link left by an earlier version, which pointed into the store, is replaced; a copy
+# already there is kept.
+seed_agent_config() {
   home="$1"
   owner="$2"
   store="$3"
@@ -386,15 +391,48 @@ link_secondary_home() {
   for name in "$@"; do
     [ -n "$name" ] || continue
     link="$home/$name"
-    # best_effort: this agent-home scaffolding is convenience, not the WI-163 fix,
-    # and its symlink chown below is likewise tolerant — keep both from aborting boot.
-    ensure_home_link_parent "$home" "$owner:$owner" "$link" best_effort
-    if [ -e "$link" ] && [ ! -L "$link" ]; then
-      rm -rf "$link"
+    if [ -L "$link" ]; then
+      rm -f "$link"
     fi
-    ln -sfn "$store/$name" "$link"
-    chown -h "$owner:$owner" "$link" 2>/dev/null || true
+    [ -e "$link" ] && continue
+    # best_effort: this agent-home scaffolding is convenience, and its chown below is
+    # likewise tolerant — keep both from aborting boot.
+    ensure_home_link_parent "$home" "$owner:$owner" "$link" best_effort
+    if [ -e "$store/$name" ]; then
+      cp -a "$store/$name" "$link" 2>/dev/null || true
+    else
+      case "$name" in
+        .claude.json) ;;
+        *) mkdir -p "$link" ;;
+      esac
+    fi
+    for credential in $AGENT_CREDENTIAL_FILES; do
+      case "$credential" in
+        */*) [ -e "$home/$credential" ] && rm -f -- "$home/$credential" ;;
+        *) [ -d "$link" ] && find "$link" -name "$credential" -type f -delete 2>/dev/null ;;
+      esac
+    done
+    chown -R "$owner:$owner" "$link" 2>/dev/null || true
   done
+}
+
+# The credential store is the orchestrator's alone: owned by it, 0700, and rid of the
+# group and ACL grants earlier versions gave the agent. The tripwire keeps the common
+# boot, where nothing drifted, from walking the whole store.
+ensure_credential_store() {
+  path="$1"
+  mkdir -p "$path"
+
+  if find "$path" \( ! -user "$RUNTIME_USER" -o -perm /g+rwxs,o+rwx \) -print -quit 2>/dev/null | grep -q .; then
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -R -b "$path" 2>/dev/null || true
+    fi
+    chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$path"
+    chmod -R g-rwxs,o-rwx "$path"
+  fi
+
+  chown "$RUNTIME_USER:$RUNTIME_GROUP" "$path"
+  chmod 0700 "$path"
 }
 
 wait_for_postgres() {
@@ -734,11 +772,10 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     config_group="$RUNTIME_GROUP"
     if [ -n "$AGENT_USER" ]; then
       # 0710 + shared group: the agent must traverse this home to resolve the
-      # credential-store and .gitconfig symlinks, but it never needs to list it,
-      # and no one outside the two uids needs anything here.
+      # .gitconfig symlink, but it never needs to list it, and no one outside
+      # the two uids needs anything here. The credential store inside stays 0700.
       chown "$RUNTIME_USER:$SHARED_GROUP" "$runtime_home"
       chmod 0710 "$runtime_home"
-      [ -n "$SHARED_GROUP" ] && config_group="$SHARED_GROUP"
     fi
 
     # Intentional word-split on AGENT_CONFIG_DIRS / AGENT_CONFIG_FILES —
@@ -752,13 +789,7 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" "$RUNTIME_GROUP" $AGENT_CONFIG_FILES
 
     if [ -n "$AGENT_USER" ] && [ -n "$AGENT_HOME" ]; then
-      # The link helpers above already applied SHARED_GROUP, so this pass only
-      # has to add the setgid bits + default ACL, and its drift tripwire is no
-      # longer guaranteed to fire every boot. It is not guaranteed to stay quiet
-      # either: the tripwire treats any 0600 file as drift, and these CLIs rewrite
-      # .credentials.json at 0600 on each token refresh, so a boot that follows a
-      # refresh still re-walks the store.
-      [ -n "$SHARED_GROUP" ] && ensure_shared_rw "$AGENT_CONFIG_STORE"
+      ensure_credential_store "$AGENT_CONFIG_STORE"
 
       agent_home="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
       agent_home="${agent_home:-$AGENT_HOME}"
@@ -767,7 +798,7 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
       chmod 0750 "$agent_home"
 
       # shellcheck disable=SC2086
-      link_secondary_home "$agent_home" "$AGENT_USER" "$AGENT_CONFIG_STORE" $AGENT_CONFIG_DIRS $AGENT_CONFIG_FILES
+      seed_agent_config "$agent_home" "$AGENT_USER" "$AGENT_CONFIG_STORE" $AGENT_CONFIG_DIRS $AGENT_CONFIG_FILES
 
       # The npm global prefix a Worktree Preview's install steps use. The preview
       # runs as the agent (ADR-0016), so `npm install -g` writes here and the

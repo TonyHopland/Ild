@@ -33,5 +33,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0028](./0028-agents-propose-loop-template-changes.md)         | Loop templates are human-owned; agents propose whole-document changes                 |
 | [0029](./0029-backup-and-restore.md)                           | Backup and restore are two passphrase-encrypted app-level exports                     |
 | [0030](./0030-agents-suggest-human-input.md)                   | A human answers a parked Human node; agents only suggest the answer                   |
+| [0031](./0031-model-gateway.md)                                | The agent holds a placeholder; the ILD model gateway adds the real credential        |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

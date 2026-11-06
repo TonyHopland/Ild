@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -36,11 +37,27 @@ public sealed class PiAdapter : CliAgentAdapterBase
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
     public override AgentAdapterTraits Traits => TypeTraits;
 
+    public override CredentialPath? CredentialPathFor(AiProvider provider)
+    {
+        if (!Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _)) return CredentialPath.ReadOnlyCopy;
+        return ModelCredentialSource.UpstreamKey(provider) is null ? null : CredentialPath.Gateway;
+    }
+
+    /// <summary>pi's own sign-in, kept in the credential store, which the run gets a copy of rather than the store.</summary>
+    private static string? ReadStoredLogin(IProcessEnvironment environment)
+    {
+        var home = environment.Get("HOME");
+        var path = string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".pi", "agent", "auth.json");
+        try { return path is not null && File.Exists(path) ? File.ReadAllText(path) : null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         try
         {
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables, ctx.NoTools);
+            using var gateway = OpenGateway(ctx);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables, ctx.NoTools, gateway);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
@@ -525,6 +542,10 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // Whatever is there goes, and what cannot go never holds up the launch.
             await AgentWritableFiles.DeleteAsync([LegacyExtensionPath(settings.AgentDirectory)], ct);
 
+            if (!string.IsNullOrWhiteSpace(settings.ReadOnlyAuthJson))
+                await AgentWritableFiles.WriteReadOnlyFileAsync(
+                    Path.Combine(settings.AgentDirectory, "auth.json"), settings.ReadOnlyAuthJson, ct);
+
             if (!string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
                 await AgentWritableFiles.WriteFileAsync(
                     Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent, ct);
@@ -588,9 +609,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
             : [];
     }
 
-    private static PiAdapterSettings ResolveSettings(
+    internal static PiAdapterSettings ResolveSettings(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId,
-        IProcessEnvironment environment, bool noTools)
+        IProcessEnvironment environment, bool noTools, ModelGatewayLease? gateway = null)
     {
         var loopRunId = runContext.LoopRunId;
         var config = AiProviderConfig.Parse(provider.Config);
@@ -637,8 +658,21 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
             agentDirectory = Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
             apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
-            modelsJsonContent = BuildModelsJson(provider, providerName!, model, api, apiKeyEnvironmentVariableName, apiKey);
+            var baseUrl = provider.BaseUrl;
+            if (gateway is not null && !string.IsNullOrWhiteSpace(apiKey))
+            {
+                baseUrl = gateway.UrlFor(GatewayRoutes.Upstream);
+                apiKey = gateway.Token;
+            }
+            modelsJsonContent = BuildModelsJson(baseUrl, providerName!, model, api, apiKeyEnvironmentVariableName, apiKey);
             passApiKeyViaCli = false;
+        }
+
+        string? readOnlyAuthJson = null;
+        if (!hasAbsoluteBaseUrl && gateway is not null && ReadStoredLogin(environment) is { } login)
+        {
+            agentDirectory = Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
+            readOnlyAuthJson = login;
         }
 
         model = StripProviderPrefix(model, providerName);
@@ -655,7 +689,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
             ildExtensionPath,
             ildExtensionContent,
             toolNames,
-            noTools);
+            noTools,
+            readOnlyAuthJson);
     }
 
     private static IReadOnlyList<string> BuildPiToolNames(IReadOnlyList<string> enabledToolKeys, string? ildServerDll)
@@ -710,7 +745,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     }
 
     private static string BuildModelsJson(
-        AiProvider provider,
+        string baseUrl,
         string providerName,
         string model,
         string api,
@@ -719,7 +754,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     {
         var providerNode = new JsonObject
         {
-            ["baseUrl"] = provider.BaseUrl,
+            ["baseUrl"] = baseUrl,
             ["api"] = api,
             // Pi treats a plain uppercase apiKey (e.g. "ILD_PI_PROVIDER_API_KEY")
             // as a *literal* key; a "$"-prefix tells it to interpolate the named
@@ -797,7 +832,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         string? IldExtensionPath,
         string? IldExtensionContent,
         IReadOnlyList<string> ToolNames,
-        bool NoTools);
+        bool NoTools,
+        string? ReadOnlyAuthJson = null);
 
     internal sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents, bool SawTurnEnd);
 

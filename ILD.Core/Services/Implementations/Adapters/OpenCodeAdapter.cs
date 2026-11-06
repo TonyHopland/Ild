@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -35,6 +36,13 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
     public override AgentAdapterTraits Traits => TypeTraits;
+
+    public override CredentialPath? CredentialPathFor(AiProvider provider)
+        => HoldsCredential(provider) ? CredentialPath.Gateway : null;
+
+    /// <summary>A key that reaches the model only through the gateway; a keyless endpoint has nothing to hide.</summary>
+    private static bool HoldsCredential(AiProvider provider)
+        => ModelCredentialSource.UpstreamKey(provider) is not null && Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -105,7 +113,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools);
+            using var gateway = OpenGateway(ctx);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway);
             var extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, _logger);
 
             Process? proc = null;
@@ -748,7 +757,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null, bool noTools = false)
+    internal static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null, bool noTools = false, ModelGatewayLease? gateway = null)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
@@ -756,6 +765,12 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
 
         var baseUrl = provider.BaseUrl.TrimEnd('/');
+        var apiKey = provider.ApiKey ?? string.Empty;
+        if (gateway is not null && HoldsCredential(provider))
+        {
+            baseUrl = gateway.UrlFor(GatewayRoutes.Upstream);
+            apiKey = gateway.Token;
+        }
 
         // opencode runs with `--dir <cwd>`; reads outside that root are gated by
         // the `external_directory` permission. This is opencode's equivalent of
@@ -776,7 +791,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     ["options"] = new Dictionary<string, object?>
                     {
                         ["baseURL"] = baseUrl,
-                        ["apiKey"] = provider.ApiKey ?? string.Empty,
+                        ["apiKey"] = apiKey,
                     },
                     ["models"] = new Dictionary<string, object?>
                     {

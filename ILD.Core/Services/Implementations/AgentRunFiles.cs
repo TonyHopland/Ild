@@ -35,7 +35,14 @@ public static class AgentRunFiles
     {
         IldMcpServer.DeleteConfigFiles(loopRunId);
         PackageFeedCredentialFiles.DeleteRunFiles(loopRunId);
-        return PiAdapter.DeleteRunFilesAsync(loopRunId, ct);
+        return DeleteAgentDirectoriesAsync(loopRunId, ct);
+    }
+
+    private static async Task<bool> DeleteAgentDirectoriesAsync(Guid loopRunId, CancellationToken ct)
+    {
+        var pi = await PiAdapter.DeleteRunFilesAsync(loopRunId, ct);
+        var codex = await CodexAdapter.DeleteRunFilesAsync(loopRunId, ct);
+        return pi && codex;
     }
 
     /// <summary>

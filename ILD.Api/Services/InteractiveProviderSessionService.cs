@@ -1,9 +1,11 @@
 using System.Net.WebSockets;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
 using Porta.Pty;
 
 namespace ILD.Api.Services;
@@ -19,15 +21,18 @@ public sealed class InteractiveProviderSessionService
     private readonly ILogger<InteractiveProviderSessionService> _logger;
     private readonly IEgressPolicy? _egressPolicy;
     private readonly IManagedAgentUsage? _usage;
+    private readonly IServiceScopeFactory? _scopes;
 
     public InteractiveProviderSessionService(
         ILogger<InteractiveProviderSessionService> logger,
         IEgressPolicy? egressPolicy = null,
-        IManagedAgentUsage? usage = null)
+        IManagedAgentUsage? usage = null,
+        IServiceScopeFactory? scopes = null)
     {
         _logger = logger;
         _egressPolicy = egressPolicy;
         _usage = usage;
+        _scopes = scopes;
     }
 
     public async Task RunAsync(
@@ -79,11 +84,20 @@ public sealed class InteractiveProviderSessionService
             // Only the user's extra arguments: the terminal is for logging in and for
             // checking that the CLI accepts them, not a run, so none of a run's flags.
             var (extraArgs, notice) = ResolveExtraArgs(provider);
+            // The CLI runs in a home of its own, thrown away afterwards: what it writes there is
+            // the agent's to write, so the logins it makes are imported into the credential store
+            // by ILD when the terminal closes, rather than written into the store by the agent
+            // (ADR-0031). A Claude terminal makes the long-lived token that the gateway uses.
+            var throwawayHome = Path.Combine(sessionRoot, "home");
+            await AgentWritableFiles.CreateDirectoryAsync(throwawayHome, cancellationToken);
+            var claudeToken = provider.Type == "claude-code" ? new SetupTokenCapture(Math.Clamp(initialCols, 20, 500)) : null;
+            if (claudeToken is not null)
+                extraArgs = ["setup-token"];
             if (notice is not null)
                 await PtyWebSocketBridge.SendNoticeAsync(socket, notice, cancellationToken);
             var routed = AgentIsolation.RouteCommand(
                 binaryPath, extraArgs, provider.Id, await _egressPolicy.LaunchModeAsync(cancellationToken));
-            var environment = new Dictionary<string, string>(routed.Environment);
+            var environment = new Dictionary<string, string>(routed.Environment) { ["HOME"] = throwawayHome };
 
             var options = new PtyOptions
             {
@@ -96,13 +110,45 @@ public sealed class InteractiveProviderSessionService
                 Environment = environment,
             };
 
-            await PtyWebSocketBridge.RunAsync(socket, options, _logger, cancellationToken, reportExit: true);
+            await PtyWebSocketBridge.RunAsync(
+                socket, options, _logger, cancellationToken, reportExit: true,
+                onOutput: claudeToken is null ? null : claudeToken.Feed);
+            await KeepLoginsAsync(provider, throwawayHome, claudeToken?.Token);
         }
         finally
         {
             // The TUI ran as the agent, which can write here: cleared as the agent,
             // so a link it planted is unlinked rather than followed.
             try { await AgentWritableFiles.DeleteAsync([sessionRoot], CancellationToken.None); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// What the terminal made, kept where only ILD can read it: the logins it wrote go into the credential
+    /// store, and a long-lived Claude token it printed is saved, encrypted, on the provider.
+    /// </summary>
+    private async Task KeepLoginsAsync(AiProvider provider, string throwawayHome, string? claudeToken)
+    {
+        try
+        {
+            var home = Environment.GetEnvironmentVariable("HOME");
+            if (!string.IsNullOrEmpty(home))
+                await CredentialImport.ImportAsync(throwawayHome, home, _logger, CancellationToken.None);
+
+            if (claudeToken is not null && _scopes is not null)
+            {
+                await using var scope = _scopes.CreateAsyncScope();
+                var store = scope.ServiceProvider.GetRequiredService<IProviderStore>();
+                if (await store.GetAiProviderByIdAsync(provider.Id) is { } current)
+                {
+                    current.ApiKey = claudeToken;
+                    await store.UpdateAiProviderAsync(current);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not keep what the {ProviderName} terminal produced: {Reason}", provider.Name, ex.Message);
         }
     }
 

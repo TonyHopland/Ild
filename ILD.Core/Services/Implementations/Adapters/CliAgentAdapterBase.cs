@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -106,6 +108,28 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             + "Use the API key or environment settings for secrets (ADR-0014).");
 
     public abstract Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);
+
+    public virtual CredentialPath? CredentialPathFor(AiProvider provider) => null;
+
+    /// <summary>
+    /// Opens the execution's right to use the model gateway (ADR-0031): the CLI is then given the lease's
+    /// URL and placeholder in place of the provider's credential. Null without DI, where nothing runs for real.
+    /// The caller disposes it when the execution ends, which is what ends the token.
+    /// </summary>
+    protected ModelGatewayLease? OpenGateway(AgentExecutionContext ctx)
+    {
+        if (ScopeFactory is null) return null;
+        using var scope = ScopeFactory.CreateScope();
+        var registry = scope.ServiceProvider.GetService<IModelGatewayRegistry>();
+        var apiUrl = EnvironmentVariables.Get("ILD_API_URL") ?? "http://localhost:5000";
+        // The agent reaches the gateway at ILD's own address, which no block may close.
+        var ildHost = Uri.TryCreate(apiUrl, UriKind.Absolute, out var ild) ? ild.Host : null;
+        return registry?.Open(
+            ctx.Provider.Id,
+            ctx.ChatSessionId ?? ctx.RunContext.LoopRunId,
+            apiUrl,
+            GatewayRoutes.ModelHosts(ctx.Provider).Where(host => !string.Equals(host, ildHost, StringComparison.OrdinalIgnoreCase)).ToList());
+    }
 
     /// <summary>
     /// Start a coding-agent CLI. Every agent launch goes through here so that

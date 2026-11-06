@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -68,6 +69,27 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
     public override AgentAdapterTraits Traits => TypeTraits;
 
+    public override CredentialPath? CredentialPathFor(AiProvider provider) => CredentialPath.Gateway;
+
+    /// <summary>
+    /// Points Copilot at the gateway's HTTPS listener, the only endpoint it accepts for GitHub, and trusts
+    /// that listener's certificate. The token has the shape of a GitHub OAuth token, which the CLI checks
+    /// before it makes a request; it is the run's placeholder, not a credential. False without a listener.
+    /// </summary>
+    public static bool TryApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, IProcessEnvironment environment)
+    {
+        var port = environment.Get(GatewayTlsEndpoint.PortVariable);
+        var caFile = environment.Get(GatewayTlsEndpoint.CaFileVariable);
+        if (string.IsNullOrEmpty(port) || string.IsNullOrEmpty(caFile)) return false;
+        psi.Environment["GH_HOST"] = $"127.0.0.1:{port}";
+        psi.Environment["COPILOT_GITHUB_TOKEN"] = gateway.GitHubPlaceholder;
+        psi.Environment["NODE_EXTRA_CA_CERTS"] = caFile;
+        psi.Environment.Remove("GH_TOKEN");
+        psi.Environment.Remove("GITHUB_TOKEN");
+        psi.ArgumentList.Insert(0, "--no-auto-update");
+        return true;
+    }
+
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         // See TypeTraits.SupportsNoTools: launching anyway would hand a caller
@@ -89,12 +111,18 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
             mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
+            using var gateway = OpenGateway(ctx);
             Process? proc;
             try
             {
-                proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
-                    ctx);
+                var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
+                if (gateway is not null)
+                {
+                    if (!TryApplyGateway(psi, gateway, EnvironmentVariables))
+                        return NodeExecutionResult.Fail(
+                            $"[copilot-error] the model gateway has no HTTPS listener, which the Copilot CLI needs: set {GatewayTlsEndpoint.PortVariable} to a free loopback port.");
+                }
+                proc = StartAgentProcess(psi, ctx);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -166,7 +194,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
     internal static readonly string[] ReservedCliFlags =
-        ["--allow-all-tools", "--no-color", "--add-dir", "--additional-mcp-config", "--prompt", "-p"];
+        ["--allow-all-tools", "--no-color", "--no-auto-update", "--add-dir", "--additional-mcp-config", "--prompt", "-p"];
 
     /// <summary>
     /// Copilot signs in through its own <c>/login</c> and its only tool is <c>ild</c>:
