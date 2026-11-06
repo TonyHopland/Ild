@@ -324,7 +324,6 @@ internal sealed class GitMirror
             return null;
         }
 
-
         /// <summary>
         /// What the mirror holds, as a bundle the run can clone or fetch from. <paramref name="runHas"/> are commits the
         /// run already has; they come from the agent, so only those the mirror really holds as commits are used. The

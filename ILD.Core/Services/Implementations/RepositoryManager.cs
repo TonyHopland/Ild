@@ -235,12 +235,12 @@ public class RepositoryManager : IRepositoryManager
     }
 
     /// <summary>The remote's branches into the mirror, with the remote's own default branch as the mirror's HEAD.</summary>
-    private async Task<(bool Ok, string? Error, string? DefaultBranch)> FetchMirrorAsync(GitMirror.Session mirror, GitAuthOptions auth, CancellationToken ct)
+    private async Task<(bool Ok, string? Error)> FetchMirrorAsync(GitMirror.Session mirror, GitAuthOptions auth, CancellationToken ct)
     {
         var (code, stdout, _) = await LsRemoteAsync(["ls-remote", "--symref", "--", auth.RemoteUrl, "HEAD"], auth, ct);
         var defaultBranch = code == 0 ? ParseSymrefDefaultBranch(stdout) : null;
         var (ok, error) = await mirror.FetchAsync(auth, defaultBranch, ct);
-        return (ok, error, defaultBranch);
+        return (ok, error);
     }
 
     /// <summary>
@@ -274,22 +274,44 @@ public class RepositoryManager : IRepositoryManager
         await using var _ = mirrored;
 
         var branches = mirrored.Branches.Where(b => onlyBranch is null || b.Name == onlyBranch).ToList();
-        var commands = new StringBuilder();
-        if (onlyBranch is null)
-            foreach (var stale in tracking.Keys.Where(n => branches.All(b => b.Name != n)))
-                commands.Append($"delete {Remote}{stale}\n");
-        foreach (var b in branches)
-            commands.Append($"delete refs/ild-sync/{b.Name}\n");
-        foreach (var b in branches)
-            commands.Append($"update {Remote}{b.Name} {b.Sha}\n");
-
-        await using var input = new MemoryStream(Encoding.UTF8.GetBytes(commands.ToString()));
-        if ((await RunAsync(worktreePath, ["update-ref", "--stdin"], ct, stdinFrom: input)).ExitCode != 0)
-            return false;
+        try
+        {
+            // Deletes first and on their own: a branch that became a directory name (feature -> feature/x)
+            // cannot be created while the ref it replaces is still there, as `fetch --prune` also saw to.
+            var deletes = onlyBranch is null
+                ? string.Concat(tracking.Keys.Where(n => branches.All(b => b.Name != n)).Select(n => $"delete {Remote}{n}\n"))
+                : string.Empty;
+            if (deletes.Length > 0 && !await UpdateRefsAsync(worktreePath, deletes, ct))
+                return false;
+            if (!await UpdateRefsAsync(worktreePath, string.Concat(branches.Select(b => $"update {Remote}{b.Name} {b.Sha}\n")), ct))
+                return false;
+        }
+        finally
+        {
+            await ClearSyncRefsAsync(worktreePath);
+        }
 
         if (onlyBranch is null && mirrored.HeadBranch is { } head)
             await RunAsync(worktreePath, ["symbolic-ref", $"{Remote}HEAD", $"{Remote}{head}"], ct);
         return true;
+    }
+
+    private async Task<bool> UpdateRefsAsync(string worktreePath, string commands, CancellationToken ct)
+    {
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes(commands));
+        return (await RunAsync(worktreePath, ["update-ref", "--stdin"], ct, stdinFrom: input)).ExitCode == 0;
+    }
+
+    // Nothing of the sync namespace outlives a sync, however it ended: a leftover ref would keep objects alive
+    // and, once its branch became a directory name, block every later fetch.
+    private const string ClearSyncRefsScript = """
+        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin
+        """;
+
+    private async Task ClearSyncRefsAsync(string worktreePath)
+    {
+        if (TrustedRepositoryRoot(worktreePath) is null) return;
+        await _runner.RunAsync("/bin/sh", ["-c", ClearSyncRefsScript, "sh", Path.GetFullPath(worktreePath)], "/", CancellationToken.None, null, _agentOptions);
     }
 
     /// <summary>The mirror bundled for the clone, with the bundle already fetched into it: a narrow one first, then everything.</summary>
@@ -318,6 +340,7 @@ public class RepositoryManager : IRepositoryManager
     // cannot fetch from a pipe. Into a namespace of its own: nothing the clone has is touched here.
     private const string FetchBundleScript = """
         d=$(mktemp -d) || exit 1
+        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin || exit 1
         trap 'rm -rf -- "$d"' EXIT
         cat > "$d/in.bundle" || exit 1
         git -C "$1" fetch --quiet --no-tags --no-write-fetch-head -- "$d/in.bundle" '+refs/heads/*:refs/ild-sync/*'
@@ -338,8 +361,6 @@ public class RepositoryManager : IRepositoryManager
             _logger?.LogDebug("Fetching the bundle into {Worktree} exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
         return r.Success;
     }
-
-
 
     public async Task<RebaseResult> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default)
     {

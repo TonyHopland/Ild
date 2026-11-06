@@ -177,4 +177,43 @@ public class RepositoryManagerBundleFlowTests : IDisposable
         Assert.Equal(GitCli.Out(remote, "rev-parse", "fresh"), GitCli.Out(basePath, "rev-parse", "refs/remotes/origin/fresh"));
         Assert.Equal("refs/remotes/origin/main", GitCli.Out(basePath, "symbolic-ref", "refs/remotes/origin/HEAD"));
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_branch_that_becomes_a_directory_name_upstream_syncs_after_a_fetch_and_after_a_push(bool isolated)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (mgr, _) = NewManager(isolated);
+        var remote = GitCli.MakeRemote(_tmp, "remote");
+        var auth = new GitAuthOptions(remote, "tok", "Forgejo");
+        var basePath = Path.Combine(_tmp, "base");
+        Assert.True((await mgr.CloneAsync(remote, basePath, ct, auth)).Success);
+        GitCli.Run(basePath, "config", "user.name", "Tester");
+        GitCli.Run(basePath, "config", "user.email", "t@t.io");
+        var wt = await mgr.CreateWorktreeAsync(basePath, "ild/wi-3-run-1");
+
+        // A branch exists upstream, the run learns of it, then it is replaced by a directory of branches.
+        GitCli.Run(remote, "branch", "feature", GitCli.Out(remote, "commit-tree", "-p", "main", "-m", "f", "main^{tree}"));
+        Assert.True(await mgr.FetchAsync(wt, ct, auth));
+        Assert.NotEqual("", GitCli.Out(basePath, "for-each-ref", "refs/remotes/origin/feature"));
+        GitCli.Run(remote, "branch", "-D", "feature");
+        GitCli.Run(remote, "branch", "feature/x", GitCli.Out(remote, "commit-tree", "-p", "main", "-m", "fx", "main^{tree}"));
+        Assert.True(await mgr.FetchAsync(wt, ct, auth));
+        Assert.Equal(GitCli.Out(remote, "rev-parse", "feature/x"), GitCli.Out(basePath, "rev-parse", "refs/remotes/origin/feature/x"));
+        Assert.Equal("", GitCli.Out(basePath, "for-each-ref", "refs/ild-sync"));
+
+        // After a push (which syncs only the pushed branch) the same swap must not leave anything that blocks later fetches.
+        File.WriteAllText(Path.Combine(wt, "run.txt"), "out\n");
+        Assert.True(await mgr.CommitAsync(wt, "work"));
+        GitCli.Run(remote, "branch", "other", GitCli.Out(remote, "commit-tree", "-p", "main", "-m", "o", "main^{tree}"));
+        Assert.True((await mgr.PushAsync(wt, "ild/wi-3-run-1", ct, auth)).Success);
+        Assert.Equal("", GitCli.Out(basePath, "for-each-ref", "refs/ild-sync"));
+        GitCli.Run(remote, "branch", "-D", "other");
+        GitCli.Run(remote, "branch", "other/y", GitCli.Out(remote, "commit-tree", "-p", "main", "-m", "oy", "main^{tree}"));
+        Assert.True(await mgr.FetchAsync(wt, ct, auth));
+        Assert.Equal("refs/remotes/origin/other/y", GitCli.Out(basePath, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/other"));
+        Assert.Equal(GitCli.Out(remote, "rev-parse", "other/y"), GitCli.Out(basePath, "rev-parse", "refs/remotes/origin/other/y"));
+        Assert.Equal("", GitCli.Out(basePath, "for-each-ref", "refs/ild-sync"));
+    }
 }
