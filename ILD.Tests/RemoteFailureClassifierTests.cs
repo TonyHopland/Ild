@@ -56,7 +56,7 @@ public class RemoteFailureClassifierTests
     [Fact]
     public void Retry_After_stretches_the_wait_and_is_capped()
     {
-        Assert.Equal(TimeSpan.FromSeconds(300), RemoteRetryPolicy.DelayFor(1, "HTTP 429 (Retry-After: 300s)"));
+        Assert.Equal(TimeSpan.FromSeconds(120), RemoteRetryPolicy.DelayFor(1, "HTTP 429 (Retry-After: 120s)"));
         Assert.Equal(RemoteRetryPolicy.MaxWait, RemoteRetryPolicy.DelayFor(1, "HTTP 429 (Retry-After: 99999s)"));
         var plain = RemoteRetryPolicy.DelayFor(1, "HTTP 502");
         Assert.InRange(plain.TotalSeconds, 12, 18);

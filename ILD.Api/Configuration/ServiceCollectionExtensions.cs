@@ -41,6 +41,7 @@ public static class ServiceCollectionExtensions
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot,
                 mirrorsRoot: RepositoryManager.MirrorRoot(config));
         });
+        services.AddSingleton<IRemoteRetryDelay, RemoteRetryDelay>();
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();

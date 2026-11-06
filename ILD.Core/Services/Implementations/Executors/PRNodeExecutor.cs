@@ -122,7 +122,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             // rather than parking the run for a person to press Retry. Pushing a
             // commit the remote already has succeeds as "up to date", so an
             // attempt whose answer was lost does no harm when repeated.
-            var pushRetries = 0;
+            var pushBudget = new RetryBudget();
             while (prepError is null)
             {
                 string? pushError;
@@ -145,16 +145,14 @@ public sealed class PRNodeExecutor : INodeExecutor
                     pushed = true;
                     break;
                 }
-                if (!transient || pushRetries >= RemoteRetryPolicy.MaxRetries)
+                if (pushBudget.Next(pushError, transient) is not { } delay)
                 {
                     prepError = $"Failed to push branch '{branch}': {pushError}";
                     break;
                 }
 
-                pushRetries++;
-                var delay = RemoteRetryPolicy.DelayFor(pushRetries, pushError);
-                yield return new NodeOutcome.Retrying(pushRetries, RemoteRetryPolicy.MaxRetries, pushError, delay);
-                await RetryDelay(sp).DelayAsync(delay, ctx.CancellationToken);
+                yield return new NodeOutcome.Retrying(pushBudget.Retries, RemoteRetryPolicy.MaxRetries, pushError, delay);
+                await sp.GetRequiredService<IRemoteRetryDelay>().DelayAsync(delay, ctx.CancellationToken);
             }
 
             if (prepError is null && string.IsNullOrEmpty(ctx.Run.PrUrl))
@@ -201,7 +199,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             // Back-dated by the skew allowance: this stamp is ILD's clock and
             // what it is compared against is the forge's.
             var openedAt = DateTime.UtcNow - PrCommentLedger.ClockSkewAllowance;
-            var createRetries = 0;
+            var createBudget = new RetryBudget();
             while (true)
             {
                 prResult = null;
@@ -220,14 +218,12 @@ public sealed class PRNodeExecutor : INodeExecutor
                         || RemoteFailureClassifier.IsTransient(err);
                 }
 
-                if (!transient || createRetries >= RemoteRetryPolicy.MaxRetries)
+                var failure = err ?? prResult?.Error ?? string.Empty;
+                if (createBudget.Next(failure, transient) is not { } delay)
                     break;
 
-                createRetries++;
-                var failure = err ?? prResult!.Error!;
-                var delay = RemoteRetryPolicy.DelayFor(createRetries, failure);
-                yield return new NodeOutcome.Retrying(createRetries, RemoteRetryPolicy.MaxRetries, failure, delay);
-                await RetryDelay(sp).DelayAsync(delay, ctx.CancellationToken);
+                yield return new NodeOutcome.Retrying(createBudget.Retries, RemoteRetryPolicy.MaxRetries, failure, delay);
+                await sp.GetRequiredService<IRemoteRetryDelay>().DelayAsync(delay, ctx.CancellationToken);
             }
             if (err is not null || prResult is null || !string.IsNullOrEmpty(prResult.Error))
             {
@@ -304,8 +300,33 @@ public sealed class PRNodeExecutor : INodeExecutor
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
     }
 
-    private static IRemoteRetryDelay RetryDelay(IServiceProvider sp)
-        => sp.GetService<IRemoteRetryDelay>() ?? new RemoteRetryDelay();
+    /// <summary>
+    /// One step's retry allowance: how many retries it has used and how long it
+    /// has waited. Only decides; the iterator yields the outcome and does the wait.
+    /// </summary>
+    private sealed class RetryBudget
+    {
+        private TimeSpan _waited;
+
+        public int Retries { get; private set; }
+
+        /// <summary>
+        /// The wait before the next attempt, or null when the step should stop
+        /// retrying: the failure is not transient, the retries are used up, or
+        /// the wait would take the step past <see cref="RemoteRetryPolicy.MaxTotalWait"/>.
+        /// </summary>
+        public TimeSpan? Next(string error, bool transient)
+        {
+            if (!transient || Retries >= RemoteRetryPolicy.MaxRetries)
+                return null;
+            var delay = RemoteRetryPolicy.DelayFor(Retries + 1, error);
+            if (_waited + delay > RemoteRetryPolicy.MaxTotalWait)
+                return null;
+            Retries++;
+            _waited += delay;
+            return delay;
+        }
+    }
 
     /// <summary>Attempts before a contended claim gives up; each re-reads the row it lost to.</summary>
     private const int QueueClaimAttempts = 5;

@@ -427,6 +427,25 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
+    public async Task A_Retry_After_that_would_pass_the_total_wait_limit_ends_the_retries_early()
+    {
+        // 170s is under the per-wait cap, but a second wait of it would take the step past five minutes.
+        const string limited = "HTTP 429 (Retry-After: 170s): rate limited";
+        var b = PushNode(out var worktree, limited);
+        try
+        {
+            var outcomes = await b.RunAsync();
+
+            var retry = Assert.Single(outcomes.OfType<NodeOutcome.Retrying>());
+            Assert.Equal(TimeSpan.FromSeconds(170), retry.Delay);
+            var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+            Assert.Contains(limited, fail.Reason);
+            VerifyPushes(b, 2);
+        }
+        finally { Directory.Delete(worktree, recursive: true); }
+    }
+
+    [Fact]
     public async Task A_5xx_from_PR_creation_is_retried_until_it_succeeds()
     {
         var b = new PrNodeBuilder();
