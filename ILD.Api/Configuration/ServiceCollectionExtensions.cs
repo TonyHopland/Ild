@@ -25,7 +25,11 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<AgentAuthTokenProvider>();
         services.AddSingleton<IModelGatewayRegistry, ModelGatewayRegistry>();
-        services.AddHttpClient<IModelCredentialSource, ModelCredentialSource>();
+        // One instance for the process: it holds the Codex refresh lock and the "refresh next" flag.
+        services.AddHttpClient(nameof(ModelCredentialSource));
+        services.AddSingleton<IModelCredentialSource>(sp => new ModelCredentialSource(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(ModelCredentialSource)),
+            sp.GetRequiredService<ILogger<ModelCredentialSource>>()));
 
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IWorkItemManager, WorkItemManager>();

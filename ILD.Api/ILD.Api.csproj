@@ -25,6 +25,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ILD.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="data/**/*.cs" />
     <Content Remove="data/**/*" />
     <None Remove="data/**/*" />

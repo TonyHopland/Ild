@@ -21,12 +21,14 @@ public class CopilotGatewayTests : IAsyncLifetime
     private ApiFactory _factory = null!;
     private string? _seenAuthorization;
     private string? _seenAcceptEncoding;
+    private readonly StubSource _source = new();
 
     public async ValueTask InitializeAsync()
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         _upstream = builder.Build();
+        _upstream.MapGet("/copilot_internal/denied", () => Results.StatusCode(401));
         _upstream.MapGet("/copilot_internal/user", (HttpRequest request) =>
         {
             _seenAuthorization = request.Headers.Authorization.ToString();
@@ -41,7 +43,8 @@ public class CopilotGatewayTests : IAsyncLifetime
         _factory = new ApiFactory(configureServices: services =>
         {
             services.AddSingleton(tls);
-            services.AddSingleton<IModelCredentialSource>(new StubSource(new Uri(upstreamUrl)));
+            _source.Upstream = new Uri(upstreamUrl);
+            services.AddSingleton<IModelCredentialSource>(_source);
         });
     }
 
@@ -107,13 +110,26 @@ public class CopilotGatewayTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, otherGitHubApi.StatusCode);
     }
 
-    private sealed class StubSource(Uri upstream) : IModelCredentialSource
+    [Fact]
+    public async Task A_401_from_the_provider_tells_the_credential_source_it_was_rejected()
     {
-        public Task<ModelCredential?> ResolveAsync(AiProvider provider, string route, CancellationToken ct)
-            => Task.FromResult<ModelCredential?>(new ModelCredential(upstream, "gho_real", ModelCredential.NoHeaders));
+        using var lease = await OpenAsync();
 
-        public void Rejected(AiProvider provider, string route)
-        {
-        }
+        using var response = await _factory.CreateClient()
+            .SendAsync(Request("/gateway/github/copilot_internal/denied", lease.GitHubToken), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal([GatewayRoutes.GitHub], _source.RejectedRoutes);
+    }
+
+    private sealed class StubSource : IModelCredentialSource
+    {
+        public Uri Upstream { get; set; } = null!;
+        public List<string> RejectedRoutes { get; } = [];
+
+        public Task<ModelCredential?> ResolveAsync(AiProvider provider, string route, CancellationToken ct)
+            => Task.FromResult<ModelCredential?>(new ModelCredential(Upstream, "gho_real", ModelCredential.NoHeaders));
+
+        public void Rejected(AiProvider provider, string route) => RejectedRoutes.Add(route);
     }
 }

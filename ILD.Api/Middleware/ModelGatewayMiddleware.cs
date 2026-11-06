@@ -127,15 +127,17 @@ public sealed partial class ModelGatewayMiddleware
         return null;
     }
 
-    private static bool TryBuildTarget(Uri upstream, string route, string rest, QueryString query, out Uri target)
+    // The agent chooses the path, never the host: scheme, host and port always come from the credential's
+    // upstream (for Copilot, from an endpoint the answer named, matched strictly).
+    internal static bool TryBuildTarget(Uri upstream, string route, string rest, QueryString query, out Uri target)
     {
         target = upstream;
         var root = upstream;
         if (route == GatewayRoutes.GitHub && rest.StartsWith(CopilotEndpointPrefix, StringComparison.Ordinal))
         {
             var afterPrefix = rest[CopilotEndpointPrefix.Length..].Split('/', 2);
-            if (!afterPrefix[0].EndsWith(".githubcopilot.com", StringComparison.OrdinalIgnoreCase)) return false;
-            root = new Uri($"https://{afterPrefix[0]}");
+            if (!CopilotHost().IsMatch(afterPrefix[0])) return false;
+            root = new Uri($"https://{afterPrefix[0].ToLowerInvariant()}");
             rest = afterPrefix.Length > 1 ? afterPrefix[1] : string.Empty;
         }
         else if (route == GatewayRoutes.GitHub && rest.Length > 0 && !rest.StartsWith("copilot_internal/", StringComparison.Ordinal) && !rest.StartsWith("mcp/", StringComparison.Ordinal))
@@ -143,10 +145,22 @@ public sealed partial class ModelGatewayMiddleware
             return false;
         }
 
-        var basePath = root.AbsolutePath.TrimEnd('/');
-        target = new Uri(root, $"{basePath}/{rest}{query}");
-        return true;
+        if (rest.StartsWith('/') || rest.Any(c => c is '\\' or '#' or '?' or '@' || char.IsControl(c))
+            || rest.Split('/').Any(segment => segment is ".."))
+            return false;
+
+        var builder = new UriBuilder(root.Scheme, root.Host, root.Port)
+        {
+            Path = $"{root.AbsolutePath.TrimEnd('/')}/{rest}",
+            Query = query.HasValue ? query.Value![1..] : string.Empty,
+        };
+        target = builder.Uri;
+        return string.Equals(target.Host, root.Host, StringComparison.OrdinalIgnoreCase)
+            && target.Port == root.Port && target.Scheme == root.Scheme;
     }
+
+    [GeneratedRegex(@"^[a-z0-9-]+(\.[a-z0-9-]+)*\.githubcopilot\.com\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CopilotHost();
 
     private static Task RefuseAsync(HttpContext context, int status, string message)
     {

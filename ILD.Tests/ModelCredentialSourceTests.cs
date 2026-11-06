@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.DependencyInjection;
 using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Data.Entities;
 
@@ -160,6 +161,32 @@ public sealed class ModelCredentialSourceTests : IDisposable
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, "*.tmp"));
         if (!OperatingSystem.IsWindows())
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+    }
+
+    [Fact]
+    public async Task Concurrent_requests_for_an_expiring_codex_login_refresh_it_once()
+    {
+        WriteCodexLogin(Jwt(_clock.GetUtcNow().AddDays(9)), _clock.GetUtcNow().AddDays(-9));
+        _handler.Reply = """{"access_token":"new-access","refresh_token":"refresh-2"}""";
+
+        var secrets = await Task.WhenAll(Enumerable.Range(0, 8).Select(async _ =>
+            (await _source.ResolveAsync(Provider("codex"), GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken))!.Secret));
+
+        Assert.All(secrets, secret => Assert.Equal("new-access", secret));
+        Assert.Single(_handler.Requests);
+    }
+
+    [Fact]
+    public void The_host_shares_one_credential_source_so_refresh_state_is_shared()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        ILD.Api.Configuration.ServiceCollectionExtensions.AddIldServices(services);
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Same(
+            provider.GetRequiredService<IModelCredentialSource>(),
+            provider.GetRequiredService<IModelCredentialSource>());
     }
 
     [Fact]

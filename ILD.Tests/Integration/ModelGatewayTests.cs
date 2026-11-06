@@ -159,6 +159,50 @@ public class ModelGatewayTests : IAsyncLifetime
         Assert.Equal("", seen.GetProperty("gatewayToken").GetString());
     }
 
+    [Theory]
+    [InlineData("/gateway/upstream//evil.example/v1/echo")]
+    [InlineData("/gateway/upstream/%2Fevil.example/v1/echo")]
+    [InlineData("/gateway/upstream/..%2F..%2Fx")]
+    [InlineData("/gateway/upstream/a%5Cb")]
+    [InlineData("/gateway/upstream/a%23b")]
+    [InlineData("/gateway/upstream/a%3Fb")]
+    [InlineData("/gateway/upstream/a%40evil.example")]
+    public async Task A_path_that_tries_to_choose_the_upstream_host_is_refused_and_nothing_is_sent(string path)
+    {
+        var provider = await SeedProviderAsync();
+        provider.BaseUrl = _upstreamUrl;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<IProviderStore>().UpdateAiProviderAsync(provider);
+        using var lease = Open(provider);
+
+        using var response = await _factory.CreateClient().SendAsync(Get(path, lease.Token), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/gateway/github/_ep/evil.example%23.githubcopilot.com/x")]
+    [InlineData("/gateway/github/_ep/evil.example%3F.githubcopilot.com/x")]
+    [InlineData("/gateway/github/_ep/a@evil.example%23.githubcopilot.com/x")]
+    [InlineData("/gateway/github/_ep/%2Fevil.example/x")]
+    public void A_copilot_endpoint_host_must_be_a_plain_githubcopilot_host(string path)
+    {
+        var rest = Uri.UnescapeDataString(path["/gateway/github/".Length..]);
+
+        Assert.False(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://api.github.com"), GatewayRoutes.GitHub, rest, default, out _));
+    }
+
+    [Fact]
+    public void A_plain_copilot_endpoint_keeps_its_host_path_and_query()
+    {
+        Assert.True(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://api.github.com"), GatewayRoutes.GitHub, "_ep/api.individual.githubcopilot.com/v1/messages",
+            new QueryString("?a=1"), out var target));
+
+        Assert.Equal("https://api.individual.githubcopilot.com/v1/messages?a=1", target.ToString());
+    }
+
     [Fact]
     public async Task A_provider_without_a_credential_is_not_forwarded()
     {
