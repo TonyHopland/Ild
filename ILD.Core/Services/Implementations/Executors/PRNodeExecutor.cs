@@ -115,23 +115,59 @@ public sealed class PRNodeExecutor : INodeExecutor
                 {
                     prepError = "Failed to commit uncommitted changes";
                 }
-                if (prepError is null)
+            }
+            catch (Exception ex) { prepError = ex.Message; }
+
+            // A temporary forge failure is waited out here, in the running node,
+            // rather than parking the run for a person to press Retry. Pushing a
+            // commit the remote already has succeeds as "up to date", so an
+            // attempt whose answer was lost does no harm when repeated.
+            var pushRetries = 0;
+            while (prepError is null)
+            {
+                string? pushError;
+                var transient = false;
+                try
                 {
                     var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath, branch, ctx.CancellationToken, gitAuth);
-                    if (!pushResult.Success)
-                        prepError = $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}";
-                    else
-                        pushed = true;
+                    pushError = pushResult.Success ? null : pushResult.Error ?? "unknown error";
+                    transient = pushError is not null && RemoteFailureClassifier.IsTransient(pushError);
                 }
-                if (prepError is null && string.IsNullOrEmpty(ctx.Run.PrUrl))
+                catch (Exception ex)
+                {
+                    pushError = ex.Message;
+                    transient = RemoteFailureClassifier.IsTransient(ex, ctx.CancellationToken)
+                        || RemoteFailureClassifier.IsTransient(pushError);
+                }
+
+                if (pushError is null)
+                {
+                    pushed = true;
+                    break;
+                }
+                if (!transient || pushRetries >= RemoteRetryPolicy.MaxRetries)
+                {
+                    prepError = $"Failed to push branch '{branch}': {pushError}";
+                    break;
+                }
+
+                pushRetries++;
+                var delay = RemoteRetryPolicy.DelayFor(pushRetries, pushError);
+                yield return new NodeOutcome.Retrying(pushRetries, RemoteRetryPolicy.MaxRetries, pushError, delay);
+                await RetryDelay(sp).DelayAsync(delay, ctx.CancellationToken);
+            }
+
+            if (prepError is null && string.IsNullOrEmpty(ctx.Run.PrUrl))
+            {
+                try
                 {
                     await repoManager.FetchAsync(ctx.Run.WorktreePath, ctx.CancellationToken, gitAuth);
                     var ahead = await repoManager.GetCommitsAheadCountAsync(ctx.Run.WorktreePath, $"origin/{target}");
                     if (ahead == 0)
                         prepError = $"Branch '{branch}' has no commits ahead of 'origin/{target}'";
                 }
+                catch (Exception ex) { prepError = ex.Message; }
             }
-            catch (Exception ex) { prepError = ex.Message; }
             // The stored result belongs to the previous commit; the pushed one has none yet.
             if (pushed && prExisted)
                 await RecordPrPushAsync(ctx, sp, repoManager);
@@ -165,8 +201,34 @@ public sealed class PRNodeExecutor : INodeExecutor
             // Back-dated by the skew allowance: this stamp is ILD's clock and
             // what it is compared against is the forge's.
             var openedAt = DateTime.UtcNow - PrCommentLedger.ClockSkewAllowance;
-            try { var r = await remote.CreatePullRequestAsync(repo.CloneUrl, branch, target, wi.Title, body); prResult = r; }
-            catch (Exception ex) { err = ex.Message; }
+            var createRetries = 0;
+            while (true)
+            {
+                prResult = null;
+                err = null;
+                var transient = false;
+                try
+                {
+                    prResult = await remote.CreatePullRequestAsync(repo.CloneUrl, branch, target, wi.Title, body);
+                    if (!string.IsNullOrEmpty(prResult.Error))
+                        transient = RemoteFailureClassifier.IsTransient(prResult.Error);
+                }
+                catch (Exception ex)
+                {
+                    err = ex.Message;
+                    transient = RemoteFailureClassifier.IsTransient(ex, ctx.CancellationToken)
+                        || RemoteFailureClassifier.IsTransient(err);
+                }
+
+                if (!transient || createRetries >= RemoteRetryPolicy.MaxRetries)
+                    break;
+
+                createRetries++;
+                var failure = err ?? prResult!.Error!;
+                var delay = RemoteRetryPolicy.DelayFor(createRetries, failure);
+                yield return new NodeOutcome.Retrying(createRetries, RemoteRetryPolicy.MaxRetries, failure, delay);
+                await RetryDelay(sp).DelayAsync(delay, ctx.CancellationToken);
+            }
             if (err is not null || prResult is null || !string.IsNullOrEmpty(prResult.Error))
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"PR creation failed: {err ?? prResult?.Error ?? "unknown"}");
@@ -241,6 +303,9 @@ public sealed class PRNodeExecutor : INodeExecutor
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
     }
+
+    private static IRemoteRetryDelay RetryDelay(IServiceProvider sp)
+        => sp.GetService<IRemoteRetryDelay>() ?? new RemoteRetryDelay();
 
     /// <summary>Attempts before a contended claim gives up; each re-reads the row it lost to.</summary>
     private const int QueueClaimAttempts = 5;

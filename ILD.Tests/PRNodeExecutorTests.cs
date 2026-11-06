@@ -340,4 +340,120 @@ public class PRNodeExecutorTests
         Assert.Equal(PrNodeEdges.Describe(LoopOutputs.OnCiFailed),
             outcomes.OfType<NodeOutcome.Success>().Single().Output);
     }
+
+    private static PrNodeBuilder PushNode(out string worktree, params string?[] pushErrors)
+    {
+        worktree = Path.Combine(Path.GetTempPath(), "ild-pr-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktree);
+        var path = worktree;
+        var b = new PrNodeBuilder();
+        b.RepositoryManager.Setup(m => m.GetDiffAsync(path)).ReturnsAsync(string.Empty);
+        b.RepositoryManager.Setup(m => m.GetCommitsAheadCountAsync(path, It.IsAny<string>())).ReturnsAsync(1);
+        var calls = 0;
+        b.RepositoryManager.Setup(m => m.PushAsync(path, It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(() =>
+            {
+                var error = pushErrors[Math.Min(calls++, pushErrors.Length - 1)];
+                return (error is null, error);
+            });
+        b.Run.WorktreePath = path;
+        ExpectCreatedPr(b.Remote);
+        return b;
+    }
+
+    private static void VerifyPushes(PrNodeBuilder b, int times)
+        => b.RepositoryManager.Verify(m => m.PushAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Exactly(times));
+
+    private const string RulesError = "remote: fatal error in commit_refs_rules\n ! [remote rejected] 5d1d3f3 -> b (fatal error in commit_refs_rules)";
+
+    [Fact]
+    public async Task A_push_that_fails_transiently_twice_then_succeeds_creates_the_PR_without_failing()
+    {
+        var b = PushNode(out var worktree, RulesError, "error: RPC failed; HTTP 500", null);
+        try
+        {
+            var outcomes = await b.RunAsync();
+
+            Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+            var retries = outcomes.OfType<NodeOutcome.Retrying>().ToList();
+            Assert.Equal(new[] { 1, 2 }, retries.Select(r => r.Attempt));
+            Assert.All(retries, r => Assert.Equal(3, r.MaxAttempts));
+            Assert.Contains("commit_refs_rules", retries[0].Error);
+            Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
+            Assert.Equal(HumanFeedbackReasons.PrAwaitingMerge, outcomes.OfType<NodeOutcome.WaitingAction>().Single().Reason);
+            VerifyPushes(b, 3);
+        }
+        finally { Directory.Delete(worktree, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("remote: error: GH013: Repository rule violations found")]
+    [InlineData("remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/o/r'")]
+    [InlineData("! [rejected] b -> b (non-fast-forward)")]
+    public async Task A_permanent_push_error_fails_on_the_first_attempt(string error)
+    {
+        var b = PushNode(out var worktree, error);
+        try
+        {
+            var outcomes = await b.RunAsync();
+
+            var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+            Assert.Contains(error, fail.Reason);
+            Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Retrying);
+            VerifyPushes(b, 1);
+        }
+        finally { Directory.Delete(worktree, recursive: true); }
+    }
+
+    [Fact]
+    public async Task A_push_that_keeps_failing_transiently_fails_the_node_with_the_last_error()
+    {
+        var b = PushNode(out var worktree, "error: RPC failed; attempt 1", "error: RPC failed; attempt 2",
+            "error: RPC failed; attempt 3", "error: RPC failed; attempt 4");
+        try
+        {
+            var outcomes = await b.RunAsync();
+
+            Assert.Equal(3, outcomes.OfType<NodeOutcome.Retrying>().Count());
+            var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+            Assert.Equal(EdgeType.OnFailure, fail.Edge);
+            Assert.Contains("Failed to push branch", fail.Reason);
+            Assert.Contains("attempt 4", fail.Reason);
+            Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrCreated);
+            VerifyPushes(b, 4);
+        }
+        finally { Directory.Delete(worktree, recursive: true); }
+    }
+
+    [Fact]
+    public async Task A_5xx_from_PR_creation_is_retried_until_it_succeeds()
+    {
+        var b = new PrNodeBuilder();
+        var calls = 0;
+        b.Remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(() => calls++ == 0
+                ? new RemotePrResult(null, null, RemotePrStatus.Open, "HTTP 502")
+                : new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
+
+        var outcomes = await b.RunAsync();
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Single(outcomes.OfType<NodeOutcome.Retrying>());
+        Assert.Equal("https://example.com/o/r/pull/42", outcomes.OfType<NodeOutcome.PrCreated>().Single().PrUrl);
+    }
+
+    [Fact]
+    public async Task A_refused_PR_creation_that_is_not_transient_fails_without_retrying()
+    {
+        var b = new PrNodeBuilder();
+        b.Remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(null, null, RemotePrStatus.Open, "HTTP 422"));
+
+        var outcomes = await b.RunAsync();
+
+        Assert.Equal("PR creation failed: HTTP 422", outcomes.OfType<NodeOutcome.Fail>().Single().Reason);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Retrying);
+        b.Remote.Verify(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Once);
+    }
 }

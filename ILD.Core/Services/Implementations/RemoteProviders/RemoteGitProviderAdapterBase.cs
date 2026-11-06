@@ -71,7 +71,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             new { title, body, head = sourceBranch, @base = targetBranch });
 
         if (!resp.IsSuccessStatusCode)
-            return new RemotePrResult(null, null, RemotePrStatus.Open, $"HTTP {(int)resp.StatusCode}");
+            return new RemotePrResult(null, null, RemotePrStatus.Open, await DescribeFailureAsync(resp));
 
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
         return new RemotePrResult(
@@ -79,6 +79,30 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             doc.RootElement.TryGetProperty("html_url", out var htmlUrl) ? htmlUrl.GetString() : null,
             RemotePrStatus.Open,
             null);
+    }
+
+    /// <summary>
+    /// "HTTP {code}", plus the forge's message and <c>Retry-After</c> for 429 and
+    /// 403: those are the answers that can be rate limits, and a rate limit is
+    /// only told from a refusal by that detail.
+    /// </summary>
+    private static async Task<string> DescribeFailureAsync(HttpResponseMessage resp)
+    {
+        var code = (int)resp.StatusCode;
+        var text = $"HTTP {code}";
+        if (code is not (429 or 403))
+            return text;
+
+        if (resp.Headers.RetryAfter?.Delta is { } delta)
+            text += $" (Retry-After: {(int)Math.Ceiling(delta.TotalSeconds)}s)";
+        try
+        {
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (doc.RootElement.TryGetProperty("message", out var message) && message.GetString() is { Length: > 0 } m)
+                text += $": {m}";
+        }
+        catch (JsonException) { }
+        return text;
     }
 
     public virtual async Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)

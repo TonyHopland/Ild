@@ -14,6 +14,7 @@ const eventTypeColors: Record<string, string> = {
   HumanFeedbackReceived: "#22c55e",
   RecoveryTriggered: "#f59e0b",
   VariableSet: "#06b6d4",
+  NodeRetrying: "#f59e0b",
   Error: "#ef4444",
 };
 

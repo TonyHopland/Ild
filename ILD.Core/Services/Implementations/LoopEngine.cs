@@ -1255,6 +1255,14 @@ public sealed class LoopEngine : ILoopEngine
                         await loopRunStore.UpdateRunAsync(run);
                         break;
                     }
+                    case NodeOutcome.Retrying retry:
+                    {
+                        if (eventLog is not null)
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeRetrying,
+                                $"{NodeDisplayName(node)} failed, retry {retry.Attempt}/{retry.MaxAttempts} in {retry.Delay.TotalSeconds:0}s: {retry.Error}",
+                                node.Id, runNodeId: runNodeId));
+                        break;
+                    }
                     case NodeOutcome.PrCreated pc:
                     {
                         await TrySafe(run.Id, () => loopRunStore.ReloadAsync(run));

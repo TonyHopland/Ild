@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
+
 ## [0.23.0] - 2026-11-04
 
 ### Added
