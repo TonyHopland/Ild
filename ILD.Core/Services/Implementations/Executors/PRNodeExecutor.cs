@@ -313,14 +313,14 @@ public sealed class PRNodeExecutor : INodeExecutor
         /// <summary>
         /// The wait before the next attempt, or null when the step should stop
         /// retrying: the failure is not transient, the retries are used up, or
-        /// the wait would take the step past <see cref="RemoteRetryPolicy.MaxTotalWait"/>.
+        /// the server's Retry-After rules the retry out (see <see cref="RemoteRetryPolicy.AllowsRetry"/>).
         /// </summary>
         public TimeSpan? Next(string error, bool transient)
         {
             if (!transient || Retries >= RemoteRetryPolicy.MaxRetries)
                 return null;
             var delay = RemoteRetryPolicy.DelayFor(Retries + 1, error);
-            if (_waited + delay > RemoteRetryPolicy.MaxTotalWait)
+            if (!RemoteRetryPolicy.AllowsRetry(_waited, delay, error))
                 return null;
             Retries++;
             _waited += delay;

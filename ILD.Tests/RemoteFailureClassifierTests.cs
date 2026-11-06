@@ -61,4 +61,20 @@ public class RemoteFailureClassifierTests
         var plain = RemoteRetryPolicy.DelayFor(1, "HTTP 502");
         Assert.InRange(plain.TotalSeconds, 12, 18);
     }
+
+    [Fact]
+    public void Jitter_at_its_upper_bound_never_costs_a_scheduled_retry()
+    {
+        var waited = TimeSpan.Zero;
+        for (var retry = 1; retry <= RemoteRetryPolicy.MaxRetries; retry++)
+        {
+            var delay = RemoteRetryPolicy.DelayFor(retry, "HTTP 502", jitter: 1.2);
+            Assert.True(RemoteRetryPolicy.AllowsRetry(waited, delay, "HTTP 502"), $"retry {retry}");
+            waited += delay;
+        }
+    }
+
+    [Fact]
+    public void A_Retry_After_over_the_per_wait_cap_is_not_retried_early()
+        => Assert.False(RemoteRetryPolicy.AllowsRetry(TimeSpan.Zero, RemoteRetryPolicy.MaxWait, "HTTP 429 (Retry-After: 600s)"));
 }
