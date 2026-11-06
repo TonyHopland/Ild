@@ -340,8 +340,8 @@ public class RepositoryManager : IRepositoryManager
     // cannot fetch from a pipe. Into a namespace of its own: nothing the clone has is touched here.
     private const string FetchBundleScript = """
         d=$(mktemp -d) || exit 1
-        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin || exit 1
         trap 'rm -rf -- "$d"' EXIT
+        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin || exit 1
         cat > "$d/in.bundle" || exit 1
         git -C "$1" fetch --quiet --no-tags --no-write-fetch-head -- "$d/in.bundle" '+refs/heads/*:refs/ild-sync/*'
         """;
