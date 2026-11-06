@@ -23,7 +23,7 @@ const DECLARED_CLI_AUTH: Record<string, { cliName: string; signInStep: string }>
   "claude-code": {
     cliName: "Claude Code",
     signInStep:
-      "run the `/login` slash command to sign in (with an active Claude Code subscription)",
+      "let it run `claude setup-token` and sign in (with an active Claude Code subscription): ILD keeps the long-lived token it prints",
   },
   copilot: {
     cliName: "GitHub Copilot",
@@ -1240,6 +1240,71 @@ describe("AI Providers page", () => {
     expect((putReq!.body as { model?: string }).model).toBe("sonnet");
     // Base URL is still the CLI's to own, so it keeps being blanked on save.
     expect((putReq!.body as { baseUrl?: string }).baseUrl).toBe("");
+  });
+
+  test("saving a claude-code provider sends the long-lived token typed into its field", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Claude Max",
+        type: "claude-code",
+        baseUrl: "",
+        apiKey: "",
+        hasApiKey: false,
+        model: "opus",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["claude-code", "pi"],
+        schema: customMcpSchema,
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+    expect(screen.getByText("(not set: open the terminal)")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Edit"));
+    const token = await screen.findByLabelText("Long-lived token (from claude setup-token)");
+    fireEvent.change(token, { target: { value: "sk-ant-oat01-pasted" } });
+    fireEvent.click(screen.getByText("Update"));
+
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect((putReq!.body as { apiKey?: string }).apiKey).toBe("sk-ant-oat01-pasted");
+  });
+
+  test("shows which path each provider's credential takes, and nothing when the adapter does not say", async () => {
+    const base = {
+      baseUrl: "",
+      apiKey: "",
+      model: "",
+      isDefault: false,
+      createdAt: "2025-01-01T00:00:00Z",
+    };
+    serveProviders({
+      providers: [
+        { ...base, id: "a", name: "Via gateway", type: "codex", credentialPath: "gateway" },
+        { ...base, id: "b", name: "Via copy", type: "pi", credentialPath: "read-only-copy" },
+        { ...base, id: "c", name: "Unsaid", type: "opencode", credentialPath: null },
+        { ...base, id: "d", name: "Unspoken", type: "opencode" },
+      ],
+    });
+    renderProviders();
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    expect(screen.getByTestId("credential-path-a").textContent).toBe("Gateway");
+    expect(screen.getByTestId("credential-path-b").textContent).toBe("Read-only copy");
+    expect(screen.queryByTestId("credential-path-c")).toBeNull();
+    expect(screen.queryByTestId("credential-path-d")).toBeNull();
+    expect(screen.getAllByText("Credentials")).toHaveLength(2);
   });
 
   test("a provider type whose adapter declares no model support shows no model input", async () => {

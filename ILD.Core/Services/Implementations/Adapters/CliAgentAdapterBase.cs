@@ -121,11 +121,14 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         if (ScopeFactory is null) return null;
         using var scope = ScopeFactory.CreateScope();
         var registry = scope.ServiceProvider.GetService<IModelGatewayRegistry>();
+        var apiUrl = EnvironmentVariables.Get("ILD_API_URL") ?? "http://localhost:5000";
+        // The agent reaches the gateway at ILD's own address, which no block may close.
+        var ildHost = Uri.TryCreate(apiUrl, UriKind.Absolute, out var ild) ? ild.Host : null;
         return registry?.Open(
             ctx.Provider.Id,
             ctx.ChatSessionId ?? ctx.RunContext.LoopRunId,
-            EnvironmentVariables.Get("ILD_API_URL") ?? "http://localhost:5000",
-            GatewayRoutes.ModelHosts(ctx.Provider));
+            apiUrl,
+            GatewayRoutes.ModelHosts(ctx.Provider).Where(host => !string.Equals(host, ildHost, StringComparison.OrdinalIgnoreCase)).ToList());
     }
 
     /// <summary>

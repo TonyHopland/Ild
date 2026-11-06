@@ -121,7 +121,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
                 return NodeExecutionResult.Fail(
-                    $"[claude-code-error] cannot start '{binaryPath}' — install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure you are logged in (e.g. via 'claude /login'). Details: {ex.Message}");
+                    $"[claude-code-error] cannot start '{binaryPath}' — install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure the provider has its long-lived token (open the provider terminal). Details: {ex.Message}");
             }
 
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
@@ -225,7 +225,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     internal static readonly AgentAdapterTraits TypeTraits = new()
     {
         DisplayName = "Claude Code",
-        CliAuth = new("Claude Code", "run the `/login` slash command to sign in (with an active Claude Code subscription)"),
+        CliAuth = new("Claude Code", "let it run `claude setup-token` and sign in (with an active Claude Code subscription): ILD keeps the long-lived token it prints"),
         SupportedTools = AiToolCatalog.DefaultTools,
         EmptyToolSelectionMeansNone = false,
         SupportsNoTools = true,

@@ -29,6 +29,7 @@ public static class PtyWebSocketBridge
     /// code before closing, so a CLI that rejects its arguments and exits at once
     /// leaves something to read.
     /// </param>
+    /// <param name="onOutput">Called with each chunk the child writes, before it is sent on.</param>
     /// <param name="timeProvider">Clock for the bounded teardown waits; <see cref="TimeProvider.System"/> when null.</param>
     /// <param name="spawn">Starts the child; <see cref="PtyProvider.SpawnAsync"/> when null.</param>
     public static async Task RunAsync(
@@ -38,7 +39,8 @@ public static class PtyWebSocketBridge
         CancellationToken cancellationToken,
         bool reportExit = false,
         TimeProvider? timeProvider = null,
-        Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? spawn = null)
+        Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? spawn = null,
+        Action<ReadOnlySpan<byte>>? onOutput = null)
     {
         var clock = timeProvider ?? TimeProvider.System;
         IPtyConnection? pty = null;
@@ -85,7 +87,7 @@ public static class PtyWebSocketBridge
             // the socket takes this. Not disposed: a pump that outlives the bounded
             // waits below may still release it.
             var sendLock = new SemaphoreSlim(1, 1);
-            var ptyToSocket = PumpPtyToSocketAsync(pty, socket, sendLock, cancellationToken);
+            var ptyToSocket = PumpPtyToSocketAsync(pty, socket, sendLock, cancellationToken, onOutput);
             var socketToPty = PumpSocketToPtyAsync(socket, pty, cancellationToken);
             var childExited = AwaitCancellationAsync(ptyExited.Token);
 
@@ -210,7 +212,7 @@ public static class PtyWebSocketBridge
 
     /// <returns>Whether the pump ended because the PTY output came to its end.</returns>
     private static async Task<bool> PumpPtyToSocketAsync(
-        IPtyConnection pty, WebSocket socket, SemaphoreSlim sendLock, CancellationToken requestCt)
+        IPtyConnection pty, WebSocket socket, SemaphoreSlim sendLock, CancellationToken requestCt, Action<ReadOnlySpan<byte>>? onOutput = null)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(ReadBufferSize);
         try
@@ -230,6 +232,7 @@ public static class PtyWebSocketBridge
                 // reader doesn't observe a token, so the end of the output (not
                 // ptyExited) is the real signal that ends the pump.
                 if (read <= 0) return true;
+                onOutput?.Invoke(buffer.AsSpan(0, read));
 
                 try
                 {

@@ -1125,6 +1125,7 @@ export interface AiProvider {
   type: string;
   baseUrl: string;
   apiKey: string;
+  hasApiKey?: boolean;
   model: string;
   isDefault: boolean;
   parallelism: number;
@@ -1151,8 +1152,16 @@ export interface AiProvider {
   emptyToolSelectionMeansNone?: boolean;
   supportsNoTools?: boolean;
   typeDisplayName?: string;
+  /**
+   * How a run reaches this provider's model credential, from its adapter:
+   * `gateway` means the agent holds only a placeholder, `read-only-copy` that it
+   * is given a copy it can read. Absent when the adapter does not say.
+   */
+  credentialPath?: CredentialPath | null;
   createdAt: string;
 }
+
+export type CredentialPath = "gateway" | "read-only-copy";
 
 /**
  * What a provider type's adapter declares about a model selector: `Required` is

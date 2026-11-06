@@ -66,20 +66,20 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     public override CredentialPath? CredentialPathFor(AiProvider provider) => CredentialPath.Gateway;
 
     internal const string GatewayProviderId = "ild";
-    internal const string TokenEnvironmentVariable = "ILD_GATEWAY_TOKEN";
 
     /// <summary>
     /// Points codex at the model gateway through a provider of its own that keeps the ChatGPT login but
-    /// talks HTTP (the built-in one upgrades to a WebSocket the gateway does not relay). The run's token
-    /// travels in a header read from the environment; the login file only ever holds a placeholder.
+    /// talks HTTP (the built-in one upgrades to a WebSocket the gateway does not relay). The run gets a
+    /// <c>CODEX_HOME</c> of its own whose login holds the run's token as the access token, so every
+    /// request codex makes carries it; the real login stays in the credential store (ADR-0031).
     /// </summary>
-    public static void ApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway)
+    public static void ApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, string codexHome)
     {
         var chatGpt = gateway.UrlFor(GatewayRoutes.ChatGpt);
         string[] settings =
         [
             $"chatgpt_base_url=\"{chatGpt}\"",
-            $"model_providers.{GatewayProviderId}={{name=\"ild\",base_url=\"{chatGpt}/codex\",wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false,env_http_headers={{\"{GatewayRoutes.TokenHeader}\"=\"{TokenEnvironmentVariable}\"}}}}",
+            $"model_providers.{GatewayProviderId}={{name=\"ild\",base_url=\"{chatGpt}/codex\",wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
             $"model_provider=\"{GatewayProviderId}\"",
         ];
         for (var i = 0; i < settings.Length; i++)
@@ -87,12 +87,21 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             psi.ArgumentList.Insert(1 + 2 * i, "-c");
             psi.ArgumentList.Insert(2 + 2 * i, settings[i]);
         }
-        psi.Environment[TokenEnvironmentVariable] = gateway.Token;
+        psi.Environment["CODEX_HOME"] = codexHome;
         psi.Environment.Remove("OPENAI_API_KEY");
     }
 
+    /// <summary>The directory removed with the run: codex's home for a gateway run.</summary>
+    public static Task<bool> DeleteRunFilesAsync(Guid runOrChatId, CancellationToken ct = default)
+        => AgentWritableFiles.DeleteAsync([Path.Combine(AgentIsolation.ScratchRoot, HomeDirSegment, runOrChatId.ToString("N"))], ct);
+
+    private const string HomeDirSegment = "ild-codex-home";
+
+    private static string RunCodexHome(Guid runOrChatId)
+        => Path.Combine(AgentIsolation.ScratchRoot, HomeDirSegment, runOrChatId.ToString("N"));
+
     /// <summary>The <c>auth.json</c> codex reads in the agent's home: a ChatGPT login with nothing in it that works anywhere.</summary>
-    internal static string BuildPlaceholderLogin(DateTimeOffset now)
+    internal static string BuildPlaceholderLogin(DateTimeOffset now, string runToken)
     {
         static string Segment(object value)
             => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(value)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
@@ -116,7 +125,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             ["tokens"] = new Dictionary<string, object>
             {
                 ["id_token"] = idToken,
-                ["access_token"] = "ild-placeholder-access",
+                ["access_token"] = runToken,
                 ["refresh_token"] = "ild-placeholder-refresh",
                 ["account_id"] = "ild-placeholder",
             },
@@ -124,12 +133,6 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         });
     }
 
-    private async Task WritePlaceholderLoginAsync(CancellationToken ct)
-    {
-        if (CodexHome() is not { } home) return;
-        await AgentWritableFiles.CreateDirectoryAsync(home, ct);
-        await AgentWritableFiles.WriteFileAsync(Path.Combine(home, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow), ct);
-    }
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -152,7 +155,9 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
             mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
-            var sessionsDirectory = SessionsDirectory();
+            using var gateway = OpenGateway(ctx);
+            var codexHome = gateway is null ? UserCodexHome() : RunCodexHome(ctx.ChatSessionId ?? ctx.RunContext.LoopRunId);
+            var sessionsDirectory = codexHome is null ? null : Path.Combine(codexHome, "sessions");
             if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId))
             {
                 // Fork: seed a copy of the source session under the new id, so the
@@ -177,15 +182,16 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
             var resumeId = await ResumableSessionAsync(ctx.SessionId, sessionsDirectory, ctx.Cancel);
 
-            using var gateway = OpenGateway(ctx);
             Process? proc;
             try
             {
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
-                if (gateway is not null)
+                if (gateway is not null && codexHome is not null)
                 {
-                    await WritePlaceholderLoginAsync(ctx.Cancel);
-                    ApplyGateway(psi, gateway);
+                    await AgentWritableFiles.CreateDirectoryAsync(codexHome, ctx.Cancel);
+                    await AgentWritableFiles.WriteFileAsync(
+                        Path.Combine(codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, gateway.Token), ctx.Cancel);
+                    ApplyGateway(psi, gateway, codexHome);
                 }
                 proc = StartAgentProcess(psi, ctx);
             }
@@ -598,9 +604,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     // codex keeps its sessions under the HOME it runs with, which under uid
     // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
-    private string? SessionsDirectory() => CodexHome() is { } home ? Path.Combine(home, "sessions") : null;
-
-    private string? CodexHome()
+    private string? UserCodexHome()
     {
         var home = AgentIsolation.ResolveChildHome(AgentIsolation.AgentUser, AgentIsolation.AgentHome)
             ?? EnvironmentVariables.Get("HOME");

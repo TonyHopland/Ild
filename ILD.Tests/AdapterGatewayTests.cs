@@ -61,11 +61,11 @@ public class AdapterGatewayTests
     }
 
     [Fact]
-    public void Codex_gets_its_own_http_provider_and_the_token_through_the_environment()
+    public void Codex_gets_its_own_http_provider_and_a_home_of_its_own_for_the_run()
     {
         var psi = CodexAdapter.BuildRunProcessStartInfo("codex", Path.GetTempPath(), "hi", "sess-1", mcpServers: []);
 
-        CodexAdapter.ApplyGateway(psi, _lease);
+        CodexAdapter.ApplyGateway(psi, _lease, "/scratch/ild-codex-home/run");
 
         var arguments = psi.ArgumentList.ToList();
         Assert.Equal("exec", arguments[0]);
@@ -75,25 +75,24 @@ public class AdapterGatewayTests
         Assert.Contains("base_url=\"http://127.0.0.1:8080/gateway/chatgpt/codex\"", provider);
         Assert.Contains("supports_websockets=false", provider);
         Assert.Contains("requires_openai_auth=true", provider);
-        Assert.Contains("env_http_headers={\"X-ILD-Gateway-Token\"=\"ILD_GATEWAY_TOKEN\"}", provider);
         Assert.Contains("model_provider=\"ild\"", arguments);
         Assert.True(arguments.IndexOf("resume") > arguments.LastIndexOf("-c"), "options must come before the resume subcommand");
-        Assert.Equal(_lease.Token, psi.Environment["ILD_GATEWAY_TOKEN"]);
+        Assert.Equal("/scratch/ild-codex-home/run", psi.Environment["CODEX_HOME"]);
         Assert.DoesNotContain(_lease.Token, string.Join('\n', arguments));
         AssertHoldsNoSecret(psi);
     }
 
     [Fact]
-    public void The_codex_login_file_holds_only_placeholders_in_the_shape_codex_checks()
+    public void The_codex_login_file_holds_only_the_run_token_in_the_shape_codex_checks()
     {
         var now = new DateTimeOffset(2026, 11, 6, 12, 0, 0, TimeSpan.Zero);
 
-        var login = JsonDocument.Parse(CodexAdapter.BuildPlaceholderLogin(now)).RootElement;
+        var login = JsonDocument.Parse(CodexAdapter.BuildPlaceholderLogin(now, _lease.Token)).RootElement;
 
         Assert.Equal("chatgpt", login.GetProperty("auth_mode").GetString());
         var tokens = login.GetProperty("tokens");
         Assert.DoesNotContain(RealSecret, login.ToString());
-        Assert.DoesNotContain(_lease.Token, login.ToString());
+        Assert.Equal(_lease.Token, tokens.GetProperty("access_token").GetString());
         var parts = tokens.GetProperty("id_token").GetString()!.Split('.');
         Assert.Equal(3, parts.Length);
         var payload = parts[1].Replace('-', '+').Replace('_', '/');
@@ -220,6 +219,33 @@ public class AdapterGatewayTests
         Assert.Null(Adapter("pi").CredentialPathFor(Provider("pi", null, withUrl)));
         Assert.Equal(CredentialPath.ReadOnlyCopy, Adapter("pi").CredentialPathFor(Provider("pi", null, "pi")));
     }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public async Task A_read_only_copy_is_a_file_only_its_owner_can_read_and_nobody_can_change()
+    {
+        var directory = Directory.CreateTempSubdirectory("ild-copy-").FullName;
+        try
+        {
+            var path = Path.Combine(directory, "auth.json");
+            await AgentWritableFiles.WriteFileAsync(path, "old", TestContext.Current.CancellationToken);
+
+            await AgentWritableFiles.WriteReadOnlyFileAsync(path, "{\"login\":1}", TestContext.Current.CancellationToken);
+
+            Assert.Equal("{\"login\":1}", File.ReadAllText(path));
+            Assert.Equal(UnixFileMode.UserRead, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("Claude-Code")]
+    [InlineData(" codex ")]
+    public void The_route_follows_the_provider_type_whatever_its_case(string type)
+        => Assert.NotNull(GatewayRoutes.RouteFor(type));
 
     private static ILD.Core.Services.Interfaces.IAgentAdapter Adapter(string type) => type switch
     {

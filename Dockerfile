@@ -360,7 +360,7 @@ ENV ORCHESTRATOR_PRIVATE_DIR=/tmp/ild-orchestrator-private
 # orchestrator with the shared group and no group write, so the agent can read
 # them but cannot create, rename or delete anything there. Ephemeral on /tmp.
 ENV AGENT_READ_DIR=/tmp/ild-agent-read
-ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-sessions /tmp/ild-agent-scratch"
+ENV SHARED_RW_DIRS="/worktrees /data/repos /data/chat-sessions /tmp/ild-agent-scratch"
 # Shared read-only: the agent execs the npm-installed CLIs but must not be able
 # to rewrite them — the orchestrator runs those same binaries as ild (version
 # checks, the provider terminal), so a writable install would be a way back
@@ -372,11 +372,13 @@ ENV DATA_TRAVERSE_DIRS=/data
 
 # Baseline ownership; the entrypoint finalizes modes + default ACLs on the
 # volume-mounted paths at startup (a named volume overlays these build-time
-# perms). /worktrees and the agent-config store are group-owned by the shared
-# group up front; /data stays ild-private and is opened to traverse-only later.
+# perms). /worktrees is group-owned by the shared group up front; /data stays
+# ild-private and is opened to traverse-only later. The agent-config store holds
+# the provider logins and is the orchestrator's alone (docs/adr/0031-model-gateway.md).
 RUN mkdir -p /data /worktrees /home/ild/.agent-config && \
-  chown ild:ild /app /data && \
-  chown ild:ild-agents /worktrees /home/ild/.agent-config
+  chown ild:ild /app /data /home/ild/.agent-config && \
+  chmod 0700 /home/ild/.agent-config && \
+  chown ild:ild-agents /worktrees
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh

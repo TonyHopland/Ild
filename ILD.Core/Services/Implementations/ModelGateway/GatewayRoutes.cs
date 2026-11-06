@@ -21,7 +21,7 @@ public static class GatewayRoutes
     public const string ChatGptHost = "chatgpt.com";
 
     /// <summary>The route a provider type's CLI talks to the gateway on, or null for a type that does not use the gateway.</summary>
-    public static string? RouteFor(string providerType) => providerType switch
+    public static string? RouteFor(string providerType) => providerType.Trim().ToLowerInvariant() switch
     {
         "claude-code" => Anthropic,
         "codex" => ChatGpt,

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials**; Claude subscriptions now use a long-lived token that the provider terminal creates once.
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
 
 ## [0.23.0] - 2026-11-04
