@@ -16,7 +16,6 @@ namespace ILD.Tests;
 public class RepositoryManagerMirrorTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.
-    private const string SharedGroup = "agents";
 
     private readonly string _tmp = Path.Combine(Path.GetTempPath(), "ild-mirror-tests-" + Guid.NewGuid().ToString("N"));
     private readonly string _mirrors;
@@ -44,7 +43,7 @@ public class RepositoryManagerMirrorTests : IDisposable
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         _runners.Add(runner);
-        return (new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup), runner);
+        return (new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors), runner);
     }
 
     private static GitAuthOptions Auth(string remote) => new(remote, "tok-" + Guid.NewGuid().ToString("N"), "Forgejo");
@@ -110,7 +109,7 @@ public class RepositoryManagerMirrorTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task The_mirror_is_reused_per_remote_cannot_be_written_by_the_agent_and_remembers_no_remote(bool isolated)
+    public async Task The_mirror_is_reused_per_remote_is_closed_to_the_agent_and_remembers_no_remote(bool isolated)
     {
         var (mgr, _) = NewManager(isolated);
         var (remote, basePath, auth) = await ClonedAsync(mgr);
@@ -124,15 +123,10 @@ public class RepositoryManagerMirrorTests : IDisposable
         Assert.Equal(mirror, Assert.Single(Directory.GetDirectories(_mirrors)));
         Assert.Equal(mirrorInode, Inode(mirror));
 
-        foreach (var entry in Directory.EnumerateFileSystemEntries(mirror, "*", SearchOption.AllDirectories)
-                     .Where(e => new FileInfo(e).LinkTarget is null))
-        {
-            var mode = File.GetUnixFileMode(entry);
-            var ceiling = Directory.Exists(entry)
-                ? UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
-                : UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
-            Assert.True((mode & ~ceiling) == 0, $"{entry} is {Convert.ToString((int)mode, 8)}: the agent group may only read the mirror");
-        }
+        // The agent has no access to the mirror store at all: owner-only, the store root and the mirror alike.
+        var ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Assert.Equal(ownerOnly, File.GetUnixFileMode(_mirrors));
+        Assert.Equal(ownerOnly, File.GetUnixFileMode(mirror));
 
         Assert.False(File.Exists(Path.Combine(mirror, "FETCH_HEAD")));
         var token = auth.ApiKey!;

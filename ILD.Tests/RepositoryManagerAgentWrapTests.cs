@@ -40,7 +40,7 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
     }
 
     private RepositoryManager NewManager()
-        => new(_runner, null, Path.Combine(_tmp, "wt"), _runner.ManagerAgent, Path.Combine(_tmp, "mirrors"), sharedGroup: "agents");
+        => new(_runner, null, Path.Combine(_tmp, "wt"), _runner.ManagerAgent, Path.Combine(_tmp, "mirrors"));
 
     [Fact]
     public async Task Every_git_call_on_a_clone_or_worktree_is_launched_as_the_agent()
@@ -63,7 +63,7 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
     }
 
     [Fact]
-    public async Task The_git_that_populates_a_clone_runs_as_the_agent_and_the_mirror_it_reads_from_as_the_orchestrator()
+    public async Task The_mirror_is_read_as_the_orchestrator_and_the_clone_is_populated_by_an_agent_script()
     {
         var manager = NewManager();
 
@@ -72,8 +72,8 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
         Assert.True(success, error);
         _runner.AssertClean();
         var calls = _runner.Calls;
-        Assert.Contains(calls, call => call.Args.Contains("clone") && !call.Orchestrator);
-        Assert.Contains(calls, call => call.Orchestrator);
+        Assert.Contains(calls, call => call.Args.Contains("for-each-ref") && call.Orchestrator);
+        Assert.DoesNotContain(calls, call => call.Args.Contains("clone"));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
         var inner = new RecordingRunner(exitCode);
         var runner = new AuditingRunner(isolated: true, inner: inner);
         runner.Forbid(_clone);
-        var manager = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"), sharedGroup: "agents");
+        var manager = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"));
 
         var ok = await manager.ShareWorktreeWithOrchestratorAsync(_clone, TestContext.Current.CancellationToken);
 
@@ -130,7 +130,7 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
     {
         var inner = new RecordingRunner(0);
         var runner = new AuditingRunner(isolated: true, inner: inner);
-        var manager = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"), sharedGroup: "agents");
+        var manager = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"));
         var stray = Path.Combine(_tmp, "stray");
         Directory.CreateDirectory(stray);
 
