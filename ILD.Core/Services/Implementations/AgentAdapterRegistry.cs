@@ -52,6 +52,7 @@ public class AgentAdapterRegistry : IAgentAdapterRegistry
         public ConfigFieldDescriptor[] ConfigSchema => inner.ConfigSchema;
         public AdapterModelSupport ModelSupport => inner.ModelSupport;
         public AgentAdapterTraits Traits => inner.Traits;
+        public CredentialPath? CredentialPathFor(AiProvider provider) => inner.CredentialPathFor(provider);
 
         public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -59,6 +60,9 @@ public class AgentAdapterRegistry : IAgentAdapterRegistry
             return await inner.ExecuteAsync(context);
         }
     }
+
+    public CredentialPath? GetCredentialPath(AiProvider provider)
+        => _adapterTypes.ContainsKey(provider.Type) ? ResolveForProvider(provider)().CredentialPathFor(provider) : null;
 
     public string[] GetAllSupportedProviderTypes()
     {

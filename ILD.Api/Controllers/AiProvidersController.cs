@@ -208,6 +208,13 @@ public class AiProvidersController : ControllerBase
             emptyToolSelectionMeansNone = traits.EmptyToolSelectionMeansNone,
             supportsNoTools = traits.SupportsNoTools,
             typeDisplayName = traits.DisplayName,
+            // How a run reaches its model credential, from the adapter; absent when it does not say.
+            credentialPath = _adapterRegistry.GetCredentialPath(p) switch
+            {
+                CredentialPath.Gateway => "gateway",
+                CredentialPath.ReadOnlyCopy => "read-only-copy",
+                _ => null,
+            },
             createdAt = p.CreatedAt,
             updatedAt = p.UpdatedAt,
         };

@@ -59,6 +59,13 @@ public static class AgentWritableFiles
         => RunCheckedAsync($"""p="$1"; {Remove} && set -C && cat > "$p" """, [path], content, ct);
 
     /// <summary>
+    /// <see cref="WriteFileAsync(string, string, CancellationToken)"/> for a file only its owner, the agent,
+    /// can read, and nobody can change: the run's copy of a credential (ADR-0031).
+    /// </summary>
+    public static Task WriteReadOnlyFileAsync(string path, string content, CancellationToken ct = default)
+        => RunCheckedAsync($"""p="$1"; {Remove} && umask 0277 && set -C && cat > "$p" """, [path], content, ct);
+
+    /// <summary>
     /// Replace whatever is at <paramref name="path"/> with a file holding everything
     /// <paramref name="content"/> yields. The bytes go to a new sibling file first, created
     /// exclusively, which is renamed onto the path only once the stream has ended; a stream

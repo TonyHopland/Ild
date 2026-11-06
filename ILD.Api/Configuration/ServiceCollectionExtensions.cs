@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Implementations.RemoteProviders;
@@ -23,6 +24,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddIldServices(this IServiceCollection services)
     {
         services.AddSingleton<AgentAuthTokenProvider>();
+        services.AddSingleton<IModelGatewayRegistry, ModelGatewayRegistry>();
+        services.AddHttpClient<IModelCredentialSource, ModelCredentialSource>();
 
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IWorkItemManager, WorkItemManager>();

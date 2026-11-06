@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -46,6 +47,30 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
     public override AgentAdapterTraits Traits => TypeTraits;
 
+    public override CredentialPath? CredentialPathFor(AiProvider provider) => CredentialPath.Gateway;
+
+    /// <summary>
+    /// Points the CLI at the model gateway with the lease's placeholder in the slot its token has:
+    /// an API key travels as <c>x-api-key</c>, a subscription token as a bearer token. Nothing the
+    /// gateway swaps in is ever in the CLI's environment, arguments or files (ADR-0031).
+    /// </summary>
+    public static void ApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, AiProvider provider)
+    {
+        psi.Environment["ANTHROPIC_BASE_URL"] = gateway.UrlFor(GatewayRoutes.Anthropic);
+        var key = ModelCredentialSource.ClaudeLongLivedToken(provider);
+        if (key is not null && key.StartsWith("sk-ant-api", StringComparison.Ordinal))
+        {
+            psi.Environment["ANTHROPIC_API_KEY"] = gateway.Token;
+            psi.Environment.Remove("CLAUDE_CODE_OAUTH_TOKEN");
+        }
+        else
+        {
+            psi.Environment["CLAUDE_CODE_OAUTH_TOKEN"] = gateway.Token;
+            psi.Environment.Remove("ANTHROPIC_API_KEY");
+        }
+        psi.Environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
+    }
+
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         string? mcpConfigPath = null;
@@ -85,12 +110,13 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 ? 0m
                 : await ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
 
+            using var gateway = OpenGateway(ctx);
             Process? proc;
             try
             {
-                proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
-                    ctx);
+                var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
+                if (gateway is not null) ApplyGateway(psi, gateway, ctx.Provider);
+                proc = StartAgentProcess(psi, ctx);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
