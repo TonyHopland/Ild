@@ -6,6 +6,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 
@@ -700,6 +701,58 @@ public class RemoteProviderServiceTests
         Assert.Equal(new AuthenticationHeaderValue("Bearer", "github-key"), handler.Requests[0].Headers.Authorization);
         Assert.Contains(handler.Requests[0].Headers.Accept, h => h.MediaType == "application/vnd.github+json");
         Assert.Contains(handler.Requests[0].Headers.UserAgent, h => h.Product?.Name == "ILD");
+    }
+
+    private async Task<string?> GitHubCreateErrorAsync(HttpStatusCode status, string body, TimeSpan? retryAfter = null)
+    {
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(), Name = "github", Type = "GitHub", Url = "https://github.com", ApiKey = "github-key",
+        });
+        db.Context.SaveChanges();
+        var handler = new AutoMergeHandler(_ =>
+        {
+            var resp = new HttpResponseMessage(status) { Content = new StringContent(body) };
+            if (retryAfter is { } after)
+                resp.Headers.RetryAfter = new RetryConditionHeaderValue(after);
+            return resp;
+        });
+
+        var result = await CreateService(db, handler).CreatePullRequestAsync(
+            "https://github.com/team/repo.git", "ild/test", "main", "title", "body");
+        return result.Error;
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, 30)]
+    [InlineData(HttpStatusCode.TooManyRequests, 30)]
+    public async Task A_rate_limited_create_reports_an_error_the_node_retries_after_the_stated_delay(HttpStatusCode status, int seconds)
+    {
+        var error = await GitHubCreateErrorAsync(
+            status, """{"message":"You have exceeded a secondary rate limit"}""", TimeSpan.FromSeconds(seconds));
+
+        Assert.True(RemoteFailureClassifier.IsTransient(error));
+        Assert.Equal(TimeSpan.FromSeconds(seconds), RemoteFailureClassifier.RetryAfter(error));
+    }
+
+    [Fact]
+    public async Task A_403_refusal_that_is_not_a_rate_limit_is_permanent()
+    {
+        var error = await GitHubCreateErrorAsync(HttpStatusCode.Forbidden, """{"message":"Resource not accessible by integration"}""");
+
+        Assert.Contains("Resource not accessible", error);
+        Assert.False(RemoteFailureClassifier.IsTransient(error));
+        Assert.Null(RemoteFailureClassifier.RetryAfter(error));
+    }
+
+    [Fact]
+    public async Task A_5xx_create_error_stays_the_bare_status_and_is_transient()
+    {
+        var error = await GitHubCreateErrorAsync(HttpStatusCode.InternalServerError, """{"message":"boom"}""");
+
+        Assert.Equal("HTTP 500", error);
+        Assert.True(RemoteFailureClassifier.IsTransient(error));
     }
 
     // Records each request's method, URL and body, returning a caller-supplied
