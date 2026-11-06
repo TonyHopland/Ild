@@ -11,7 +11,6 @@ namespace ILD.Tests;
 public sealed class RepositoryManagerTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.
-    private const string SharedGroup = "agents";
 
     private readonly string _tmp;
     private readonly string _repo;
@@ -25,7 +24,7 @@ public sealed class RepositoryManagerTests : IDisposable
         runner.Forbid(_repo);
         runner.Forbid(worktreesRoot);
         lock (_auditors) _auditors.Add(runner);
-        return new RepositoryManager(runner, logger, worktreesRoot, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup);
+        return new RepositoryManager(runner, logger, worktreesRoot, runner.ManagerAgent, _mirrors);
     }
 
     private static readonly AgentIdentity IsolatedAgent = new("agent", "agents", "/home/agent");
@@ -324,9 +323,8 @@ public sealed class RepositoryManagerTests : IDisposable
             Assert.Equal("oauth2", call.Environment["ILD_GIT_USERNAME"]);
             Assert.Equal("token-123", call.Environment["ILD_GIT_PASSWORD"]);
         });
-        var clone = calls.Single(c => c.Args.Contains("clone"));
-        Assert.False(clone.Orchestrator);
-        Assert.DoesNotContain(origin, clone.Args);
+        // The agent's clone is made from a bundle on stdin, so no git call of ours names the origin to it.
+        Assert.DoesNotContain(calls, c => !c.Orchestrator && c.Args.Contains(origin));
     }
 
     [Fact]
@@ -1296,7 +1294,7 @@ public sealed class RepositoryManagerTests : IDisposable
         var runner = new CancellingRebaseRunner();
         // A directory with a .git directory is a clone of ours, which is all the manager checks before it runs git.
         Directory.CreateDirectory(Path.Combine(_repo, ".git"));
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 

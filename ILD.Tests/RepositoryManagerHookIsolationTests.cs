@@ -164,7 +164,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         _runners.Add(runner);
         runner.Forbid(Path.Combine(_tmp, "base"));
         runner.Forbid(Path.Combine(_tmp, "wt"));
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"), sharedGroup: "agents");
+        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"));
 
         await RunCycleAsync(mgr);
 
@@ -179,7 +179,6 @@ public class RepositoryManagerHookIsolationTests : IDisposable
     {
         var user = Environment.GetEnvironmentVariable("ILD_TEST_AGENT_USER") ?? "agent";
         var group = Environment.GetEnvironmentVariable("ILD_TEST_AGENT_GROUP") ?? "agent";
-        var sharedGroup = Environment.GetEnvironmentVariable("ILD_TEST_SHARED_GROUP") ?? "ild-agents";
         var home = Environment.GetEnvironmentVariable("ILD_TEST_AGENT_HOME") ?? "/home/agent";
         var ownUid = Capture("id", "-u");
         var agentUid = TryCapture("/usr/bin/setpriv", $"--reuid={user}", $"--regid={group}", "--init-groups", "id", "-u");
@@ -192,7 +191,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         File.SetUnixFileMode(_probe, (UnixFileMode)0b111_101_101);
         var worktrees = Directory.CreateDirectory(Path.Combine(_tmp, "wt")).FullName;
         File.SetUnixFileMode(worktrees, (UnixFileMode)0b111_111_111);
-        var mgr = new RepositoryManager(new ProcessRunner(), null, worktrees, new AgentIdentity(user, group, home), Path.Combine(_tmp, "mirrors"), sharedGroup);
+        var mgr = new RepositoryManager(new ProcessRunner(), null, worktrees, new AgentIdentity(user, group, home), Path.Combine(_tmp, "mirrors"));
         // The agent owns the clone and the worktree, and in a real attack it is the agent that plants.
         _agentSide = new AsAgent(user, group, home);
 

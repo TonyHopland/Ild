@@ -108,7 +108,7 @@ public class RepositoryManagerProxyEnvironmentTests : IDisposable
         var runner = new AuditingRunner(isolated: false);
         var proxies = AllProxies();
         var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"),
-            sharedGroup: "agents", readEnvironment: Reader(proxies.Concat(Noise).ToDictionary(p => p.Key, p => p.Value)));
+            readEnvironment: Reader(proxies.Concat(Noise).ToDictionary(p => p.Key, p => p.Value)));
 
         var (success, error) = await mgr.CloneAsync(remote, Path.Combine(_tmp, "target"), TestContext.Current.CancellationToken);
 

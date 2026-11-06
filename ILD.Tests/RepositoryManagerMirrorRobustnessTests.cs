@@ -15,7 +15,6 @@ namespace ILD.Tests;
 public class RepositoryManagerMirrorRobustnessTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.
-    private const string SharedGroup = "agents";
 
     private readonly string _tmp = Path.Combine(Path.GetTempPath(), "ild-mirror-robust-" + Guid.NewGuid().ToString("N"));
     private readonly string _mirrors;
@@ -43,7 +42,7 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         _runners.Add(runner);
-        return new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup);
+        return new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors);
     }
 
     private async Task<(string Remote, string Base, GitAuthOptions Auth, string Worktree)> ClonedWithWorktreeAsync(RepositoryManager mgr, string branch)
@@ -260,9 +259,10 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
 
         public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
         {
+            if (fileName == "/bin/sh" && args.Count > 3 && args[0] == "-c" && args[3].StartsWith(clonesParent, StringComparison.Ordinal))
+                CloneParentExisted = Directory.Exists(clonesParent);
             if (fileName == "git" && options?.CleanEnvironment != true)
             {
-                if (args.Contains("clone")) CloneParentExisted = Directory.Exists(clonesParent);
                 if (args.Contains("worktree") && args.Contains("add")) WorktreeParentExisted = Directory.Exists(worktreesParent);
             }
 
@@ -289,24 +289,5 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.False(watcher.CloneParentExisted);
         Assert.False(watcher.WorktreeParentExisted);
         Assert.True(Directory.Exists(worktree));
-    }
-
-    [Fact]
-    public async Task The_setgid_bit_the_store_root_hands_down_survives_the_mode_tightening()
-    {
-        if (!OperatingSystem.IsLinux()) Assert.Skip("setgid inheritance is a Linux filesystem behaviour");
-        Directory.CreateDirectory(_mirrors);
-        File.SetUnixFileMode(_mirrors, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.SetGroup);
-        var probe = Directory.CreateDirectory(Path.Combine(_mirrors, "probe")).FullName;
-        if (!File.GetUnixFileMode(probe).HasFlag(UnixFileMode.SetGroup))
-            Assert.Skip("this filesystem does not hand setgid down to new directories");
-        Directory.Delete(probe);
-
-        var mgr = NewManager(isolated: false);
-        var (_, _, auth, wt) = await ClonedWithWorktreeAsync(mgr, "ild/wi-34-run-1");
-        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken, auth));
-
-        var mirror = Assert.Single(Directory.GetDirectories(_mirrors));
-        Assert.True(File.GetUnixFileMode(mirror).HasFlag(UnixFileMode.SetGroup));
     }
 }

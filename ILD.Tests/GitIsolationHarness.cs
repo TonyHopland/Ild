@@ -37,6 +37,7 @@ internal sealed class AuditingRunner : IProcessRunner
     private readonly List<string> _violations = new();
     private readonly List<(string Path, UnixFileMode Mode)> _bundlesSeen = new();
     private readonly List<string> _forbiddenRoots = new();
+    private readonly List<string> _agentForbiddenRoots = new();
 
     public AuditingRunner(bool isolated, bool tagRoutes = false, IProcessRunner? inner = null)
     {
@@ -68,6 +69,9 @@ internal sealed class AuditingRunner : IProcessRunner
 
     /// <summary>Every git call in order, with the explicit environment the caller handed the runner.</summary>
     public IReadOnlyList<GitCall> Calls { get { lock (_gate) return _calls.ToList(); } }
+
+    /// <summary>Paths the agent has no business with (the mirror store): no agent-class call may run in or name them.</summary>
+    public void ForbidAgentAccess(string path) { lock (_gate) _agentForbiddenRoots.Add(Path.GetFullPath(path)); }
 
     /// <summary>Paths in agent-writable repositories: no orchestrator-class git call may run in or name them.</summary>
     public void Forbid(string path) { lock (_gate) _forbiddenRoots.Add(Path.GetFullPath(path)); }
@@ -143,7 +147,10 @@ internal sealed class AuditingRunner : IProcessRunner
         if (orchestrator)
             AuditOrchestrator(label, args, cwd, psi.FileName, argv, environment);
         else
+        {
             AuditAgent(label, psi.FileName, argv, environment);
+            AuditAgentReach(label, args, cwd);
+        }
     }
 
     private void AuditAgentScript(
@@ -155,6 +162,7 @@ internal sealed class AuditingRunner : IProcessRunner
         if (!Isolated && psi.FileName == Setpriv)
             Violate($"{label}: setpriv used outside isolated mode");
         AuditAgent(label, psi.FileName, psi.ArgumentList.ToList(), environment, fileName);
+        AuditAgentReach(label, args, cwd);
     }
 
     private void AuditAgent(string label, string file, List<string> argv, Dictionary<string, string> environment, string command = "git")
@@ -248,6 +256,22 @@ internal sealed class AuditingRunner : IProcessRunner
         }
 
         RecordBundles();
+    }
+
+    private void AuditAgentReach(string label, IReadOnlyList<string> args, string? cwd)
+    {
+        foreach (var candidate in (cwd is null ? args : args.Append(cwd)).Where(a => a.Length > 0))
+        {
+            var value = candidate.Contains('=') ? candidate[(candidate.IndexOf('=') + 1)..] : candidate;
+            string full;
+            try { full = Path.GetFullPath(value); }
+            catch (ArgumentException) { continue; }
+            bool reaches;
+            lock (_gate)
+                reaches = _agentForbiddenRoots.Any(root => full == root || full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+            if (reaches)
+                Violate($"{label}: an agent call names the mirror store ({candidate})");
+        }
     }
 
     private bool IsForbidden(string path)

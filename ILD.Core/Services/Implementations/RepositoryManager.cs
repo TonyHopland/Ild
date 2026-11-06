@@ -43,18 +43,12 @@ public class RepositoryManager : IRepositoryManager
     /// and git then runs as the orchestrator itself when no agent user is configured.
     /// </param>
     /// <param name="mirrorsRoot">Where the per-remote mirrors live.</param>
-    /// <param name="sharedGroup">
-    /// The group the orchestrator and the agent share, which the mirrors are handed to; null reads
-    /// <see cref="AgentIsolation.SharedGroup"/>. Not <see cref="AgentIdentity.Group"/>, which is the agent's
-    /// primary group, only for <c>setpriv --regid</c>, and which the orchestrator is not a member of.
-    /// </param>
     public RepositoryManager(
         IProcessRunner runner,
         ILogger<RepositoryManager>? logger = null,
         string? worktreesRoot = null,
         AgentIdentity? agent = null,
         string? mirrorsRoot = null,
-        string? sharedGroup = null,
         Func<string, string?>? readEnvironment = null)
     {
         _runner = runner;
@@ -65,8 +59,6 @@ public class RepositoryManager : IRepositoryManager
         _agentOptions = new ProcessRunOptions(AsAgent: _agent, AgentScoped: true);
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
-            sharedGroup ?? AgentIsolation.SharedGroup,
-            sharedWithAgent: _agent is not null,
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
             logger);
     }
@@ -97,21 +89,37 @@ public class RepositoryManager : IRepositoryManager
         {
             var fetched = await FetchMirrorAsync(mirror, remote, cancellationToken);
             if (!fetched.Ok) return (false, fetched.Error);
-
-            // A full copy of its own: no hardlinks and no alternates, so the clone
-            // stays whole whatever happens to the mirror.
-            try
+            // The agent never reads the mirror: it is handed a bundle on stdin, which it writes to a
+            // scratch directory of its own and clones from. A full copy, so the clone stays whole
+            // whatever happens to the mirror, and its origin is the remote, not any path of ours.
+            var (bundle, bundleError) = await mirror.BundleForAsync([], cancellationToken);
+            if (bundle is null) return (false, bundleError);
+            await using (bundle)
             {
-                var (code, _, stderr) = await mirror.ReadableByAgentAsync(
-                    path => AgentGitAsync(["clone", "--quiet", "--no-local", "--", path, target], cancellationToken), cancellationToken);
-                return code == 0 ? (true, null) : (false, stderr);
-            }
-            catch (IOException ex)
-            {
-                return (false, ex.Message);
+                var r = await _runner.RunAsync(
+                    "/bin/sh", ["-c", CloneScript, "sh", target, WithoutUserInfo(cloneUrl)], "/", cancellationToken, null,
+                    _agentOptions with { StandardInputFrom = bundle.Bundle ?? Stream.Null });
+                if (!r.Success)
+                    _logger?.LogDebug("Cloning {Target} from the bundle exited {Code}: {Err}", target, r.ExitCode, r.StdErr);
+                return r.Success ? (true, null) : (false, r.StdErr);
             }
         }
     }
+
+    // The bundle arrives on stdin; git cannot read one from a pipe, so it goes to a file in a scratch
+    // directory the agent makes and removes. An empty stdin is a remote with no branches yet.
+    private const string CloneScript = """
+        d=$(mktemp -d) || exit 1
+        trap 'rm -rf -- "$d"' EXIT
+        cat > "$d/in.bundle" || exit 1
+        if [ -s "$d/in.bundle" ]; then
+            git clone --quiet -- "$d/in.bundle" "$1" || exit 1
+            git -C "$1" config remote.origin.url "$2"
+        else
+            git init --quiet --initial-branch=main -- "$1" || exit 1
+            git -C "$1" remote add origin "$2"
+        fi
+        """;
 
     public async Task<string> CreateWorktreeAsync(string repoPath, string branchName)
     {
@@ -222,49 +230,137 @@ public class RepositoryManager : IRepositoryManager
         using (mirror)
         {
             var fetched = await FetchMirrorAsync(mirror, auth, cancellationToken);
-            return fetched.Ok && await SyncFromMirrorAsync(mirror, worktreePath, fetched.DefaultBranch, cancellationToken);
+            return fetched.Ok && await SyncFromMirrorAsync(mirror, worktreePath, cancellationToken);
         }
     }
 
     /// <summary>The remote's branches into the mirror, with the remote's own default branch as the mirror's HEAD.</summary>
-    private async Task<(bool Ok, string? Error, string? DefaultBranch)> FetchMirrorAsync(GitMirror.Session mirror, GitAuthOptions auth, CancellationToken ct)
+    private async Task<(bool Ok, string? Error)> FetchMirrorAsync(GitMirror.Session mirror, GitAuthOptions auth, CancellationToken ct)
     {
         var (code, stdout, _) = await LsRemoteAsync(["ls-remote", "--symref", "--", auth.RemoteUrl, "HEAD"], auth, ct);
         var defaultBranch = code == 0 ? ParseSymrefDefaultBranch(stdout) : null;
         var (ok, error) = await mirror.FetchAsync(auth, defaultBranch, ct);
-        return (ok, error, defaultBranch);
+        return (ok, error);
     }
 
     /// <summary>
-    /// Bring the clone's remote-tracking refs to what the mirror holds: every branch, pruning the ones the
-    /// remote no longer has, or just <paramref name="onlyBranch"/> when the mirror is known to hold no more
-    /// than that (a push to a mirror not fetched yet). The agent does this without credentials, from the
-    /// mirror's path rather than from any remote its config names.
+    /// Bring the clone's remote-tracking refs to what the mirror holds: every branch, removing the ones the
+    /// mirror no longer has, or just <paramref name="onlyBranch"/> when the mirror is known to hold no more
+    /// than that (a push to a mirror not fetched yet). The mirror is not read by the agent: the orchestrator
+    /// writes a bundle of what the clone lacks (the clone says what it has), the agent fetches it from its own
+    /// scratch into a private namespace, and then the refs are set from the mirror's list of branches. Not
+    /// <c>fetch --prune</c>: a narrow bundle leaves out branches the clone already has, and pruning would delete them.
     /// </summary>
-    private async Task<bool> SyncFromMirrorAsync(
-        GitMirror.Session mirror, string worktreePath, string? defaultBranch, CancellationToken ct, string? onlyBranch = null)
+    private async Task<bool> SyncFromMirrorAsync(GitMirror.Session mirror, string worktreePath, CancellationToken ct, string? onlyBranch = null)
     {
-        var refspec = onlyBranch is null
-            ? "+refs/heads/*:refs/remotes/origin/*"
-            : $"+refs/heads/{onlyBranch}:refs/remotes/origin/{onlyBranch}";
-        int code;
+        const string Remote = "refs/remotes/origin/";
+        var listed = await RunAsync(worktreePath, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes/origin", "refs/heads"], ct);
+        if (listed.ExitCode != 0) return false;
+
+        var tracking = new Dictionary<string, string>(StringComparer.Ordinal);
+        var has = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in listed.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var space = line.IndexOf(' ');
+            if (space <= 0 || !IsCommitSha(line[..space])) continue;
+            has.Add(line[..space]);
+            var name = line[(space + 1)..];
+            if (name.StartsWith(Remote, StringComparison.Ordinal) && name != $"{Remote}HEAD")
+                tracking[name[Remote.Length..]] = line[..space];
+        }
+
+        var mirrored = await BundleIntoAsync(mirror, worktreePath, has, ct);
+        if (mirrored is null) return false;
+        await using var _ = mirrored;
+
+        var branches = mirrored.Branches.Where(b => onlyBranch is null || b.Name == onlyBranch).ToList();
         try
         {
-            (code, _, _) = await mirror.ReadableByAgentAsync(
-                path => RunAsync(worktreePath, ["fetch", "--quiet", .. onlyBranch is null ? new[] { "--prune" } : [], "--", path, refspec], ct), ct);
+            // Deletes first and on their own: a branch that became a directory name (feature -> feature/x)
+            // cannot be created while the ref it replaces is still there, as `fetch --prune` also saw to.
+            var deletes = onlyBranch is null
+                ? string.Concat(tracking.Keys.Where(n => branches.All(b => b.Name != n)).Select(n => $"delete {Remote}{n}\n"))
+                : string.Empty;
+            if (deletes.Length > 0 && !await UpdateRefsAsync(worktreePath, deletes, ct))
+                return false;
+            if (!await UpdateRefsAsync(worktreePath, string.Concat(branches.Select(b => $"update {Remote}{b.Name} {b.Sha}\n")), ct))
+                return false;
         }
-        catch (IOException ex)
+        finally
         {
-            _logger?.LogWarning(ex, "Could not open the mirror to the agent for {Worktree}", worktreePath);
-            return false;
+            await ClearSyncRefsAsync(worktreePath);
         }
-        if (code != 0) return false;
 
-        if (defaultBranch is not null)
-            await RunAsync(worktreePath, ["symbolic-ref", "refs/remotes/origin/HEAD", $"refs/remotes/origin/{defaultBranch}"], ct);
+        if (onlyBranch is null && mirrored.HeadBranch is { } head)
+            await RunAsync(worktreePath, ["symbolic-ref", $"{Remote}HEAD", $"{Remote}{head}"], ct);
         return true;
     }
 
+    private async Task<bool> UpdateRefsAsync(string worktreePath, string commands, CancellationToken ct)
+    {
+        await using var input = new MemoryStream(Encoding.UTF8.GetBytes(commands));
+        return (await RunAsync(worktreePath, ["update-ref", "--stdin"], ct, stdinFrom: input)).ExitCode == 0;
+    }
+
+    // Nothing of the sync namespace outlives a sync, however it ended: a leftover ref would keep objects alive
+    // and, once its branch became a directory name, block every later fetch.
+    private const string ClearSyncRefsScript = """
+        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin
+        """;
+
+    private async Task ClearSyncRefsAsync(string worktreePath)
+    {
+        if (TrustedRepositoryRoot(worktreePath) is null) return;
+        await _runner.RunAsync("/bin/sh", ["-c", ClearSyncRefsScript, "sh", Path.GetFullPath(worktreePath)], "/", CancellationToken.None, null, _agentOptions);
+    }
+
+    /// <summary>The mirror bundled for the clone, with the bundle already fetched into it: a narrow one first, then everything.</summary>
+    private async Task<MirrorBundle?> BundleIntoAsync(GitMirror.Session mirror, string worktreePath, IReadOnlyCollection<string> has, CancellationToken ct)
+    {
+        foreach (var runHas in new[] { has, [] })
+        {
+            var (bundle, error) = await mirror.BundleForAsync(runHas, ct);
+            if (bundle is null)
+            {
+                _logger?.LogWarning("Could not bundle the mirror for {Worktree}: {Error}", worktreePath, error?.Trim());
+                return null;
+            }
+
+            if (bundle.Bundle is null || await FetchBundleAsync(worktreePath, bundle.Bundle, ct))
+                return bundle;
+            var narrow = bundle.Narrow;
+            await bundle.DisposeAsync();
+            if (!narrow) return null;
+        }
+
+        return null;
+    }
+
+    // The bundle arrives on stdin and is written to a scratch directory of the agent's, because git
+    // cannot fetch from a pipe. Into a namespace of its own: nothing the clone has is touched here.
+    private const string FetchBundleScript = """
+        d=$(mktemp -d) || exit 1
+        trap 'rm -rf -- "$d"' EXIT
+        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin || exit 1
+        cat > "$d/in.bundle" || exit 1
+        git -C "$1" fetch --quiet --no-tags --no-write-fetch-head -- "$d/in.bundle" '+refs/heads/*:refs/ild-sync/*'
+        """;
+
+    private async Task<bool> FetchBundleAsync(string worktreePath, Stream bundle, CancellationToken ct)
+    {
+        if (TrustedRepositoryRoot(worktreePath) is null)
+        {
+            _logger?.LogWarning("Refused fetching into {Directory}: its .git is not a clone or worktree of ours", worktreePath);
+            return false;
+        }
+
+        var r = await _runner.RunAsync(
+            "/bin/sh", ["-c", FetchBundleScript, "sh", Path.GetFullPath(worktreePath)], "/", ct, null,
+            _agentOptions with { StandardInputFrom = bundle });
+        if (!r.Success)
+            _logger?.LogDebug("Fetching the bundle into {Worktree} exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
+        return r.Success;
+    }
 
     public async Task<RebaseResult> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default)
     {
@@ -408,7 +504,7 @@ public class RepositoryManager : IRepositoryManager
             if (!pushed.Ok)
                 return (false, pushed.Error);
 
-            if (!await SyncFromMirrorAsync(mirror, worktreePath, null, cancellationToken, branchName)
+            if (!await SyncFromMirrorAsync(mirror, worktreePath, cancellationToken, branchName)
                 || (await RunAsync(worktreePath, ["branch", "--set-upstream-to", $"origin/{branchName}", branchName], cancellationToken)).ExitCode != 0)
                 _logger?.LogWarning("Pushed {Branch}, but could not record origin/{Branch} as its upstream in {Worktree}", branchName, branchName, worktreePath);
             return (true, null);
@@ -1190,7 +1286,7 @@ public class RepositoryManager : IRepositoryManager
     /// whose <c>.git</c> pointer is not one <see cref="TrustedRepositoryRoot"/> accepts.
     /// </summary>
     private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(
-        string cwd, IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null)
+        string cwd, IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null, Stream? stdinFrom = null)
     {
         if (TrustedRepositoryRoot(cwd) is null)
         {
@@ -1198,15 +1294,15 @@ public class RepositoryManager : IRepositoryManager
             return (RefusedExitCode, string.Empty, $"{cwd} is not a git clone or worktree created by ILD");
         }
 
-        return await AgentGitAsync(["-C", Path.GetFullPath(cwd), .. args], ct, stdoutTo);
+        return await AgentGitAsync(["-C", Path.GetFullPath(cwd), .. args], ct, stdoutTo, stdinFrom);
     }
 
     private async Task<(int ExitCode, string StdOut, string StdErr)> AgentGitAsync(
-        IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null)
+        IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null, Stream? stdinFrom = null)
     {
         // From "/" and addressing the directory with -C: the orchestrator never enters
         // one the agent owns.
-        var options = stdoutTo is null ? _agentOptions : _agentOptions with { StandardOutputTo = stdoutTo };
+        var options = _agentOptions with { StandardOutputTo = stdoutTo, StandardInputFrom = stdinFrom };
         var r = await _runner.RunAsync("git", args, "/", ct, null, options);
         if (!r.Success)
             _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), r.ExitCode, r.StdErr);
