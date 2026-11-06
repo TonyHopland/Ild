@@ -94,6 +94,13 @@ public abstract record NodeOutcome
     public sealed record Interrupted(string Reason, string? Output = null, DateTime? ResetAt = null) : NodeOutcome;
 
     /// <summary>
+    /// A step of the node failed in a way that looks temporary and the node is
+    /// about to wait <paramref name="Delay"/> and try it again. The node keeps
+    /// running; the engine only records it. Not an end of node work.
+    /// </summary>
+    public sealed record Retrying(int Attempt, int MaxAttempts, string Error, TimeSpan Delay) : NodeOutcome;
+
+    /// <summary>
     /// Node is awaiting an external action (human response, webhook). The
     /// engine parks the run in <c>WaitingHuman</c> and the work item in
     /// <c>HumanFeedback</c>. When the signal arrives the engine re-enters

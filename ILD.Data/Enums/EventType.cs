@@ -70,4 +70,10 @@ public enum EventType
     /// the write made it new, changed it or left it unchanged; never the value.
     /// </summary>
     VariableSet = 24,
+
+    /// <summary>
+    /// A node hit a temporary failure and is waiting to try again within the
+    /// same run. Names the attempt, the error and the delay before the next one.
+    /// </summary>
+    NodeRetrying = 25,
 }

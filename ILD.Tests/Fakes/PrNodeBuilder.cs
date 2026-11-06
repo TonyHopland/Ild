@@ -53,11 +53,17 @@ internal sealed class PrNodeBuilder
         services.AddSingleton(Providers.Object);
         services.AddSingleton(Remote.Object);
         services.AddSingleton(RepositoryManager.Object);
+        services.AddSingleton<IRemoteRetryDelay>(new NoDelay());
         if (Runs is not null) services.AddSingleton(Runs);
         if (Notifier is not null) services.AddSingleton(Notifier);
         if (Events is not null) services.AddSingleton(Events);
         if (Rendering is not null) services.AddSingleton(Rendering);
         return services.BuildServiceProvider();
+    }
+
+    private sealed class NoDelay : IRemoteRetryDelay
+    {
+        public Task DelayAsync(TimeSpan delay, CancellationToken ct) => Task.CompletedTask;
     }
 
     public async Task<List<NodeOutcome>> RunAsync()
