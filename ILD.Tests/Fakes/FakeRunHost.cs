@@ -132,8 +132,18 @@ internal sealed class FakeRunHost : IRunHost
         return Task.FromResult(new RunHostResult(0, string.Empty));
     }
 
-    public Task<RunHostResult> FetchBundleAsync(string clonePath, Stream bundle, CancellationToken ct = default)
-        => Task.FromResult(new RunHostResult(0, string.Empty));
+    /// <summary>The bundles fetched into clones, with the clone each went to.</summary>
+    public List<(string ClonePath, byte[] Bundle)> FetchedBundles { get; } = [];
+
+    public RunHostResult FetchBundleResult { get; set; } = new(0, string.Empty);
+
+    public async Task<RunHostResult> FetchBundleAsync(string clonePath, Stream bundle, CancellationToken ct = default)
+    {
+        using var copy = new MemoryStream();
+        await bundle.CopyToAsync(copy, ct);
+        lock (_gate) FetchedBundles.Add((clonePath, copy.ToArray()));
+        return FetchBundleResult;
+    }
 
     public Task<RunHostResult> PullBundleAsync(string clonePath, string branch, bool incremental, Stream sink, CancellationToken ct = default)
         => Task.FromResult(new RunHostResult(0, string.Empty));
@@ -198,6 +208,44 @@ internal sealed class FakeRunHost : IRunHost
     public Task<bool> DirectoryExistsAsync(string path, CancellationToken ct = default)
     {
         lock (_gate) return Task.FromResult(_directories.Contains(path) || (_seesDisk && Directory.Exists(path)));
+    }
+
+    /// <summary>The chat folders asked for, and where the next one goes: below the local root, as on the local host, unless set.</summary>
+    public List<Guid> ChatFolders { get; } = [];
+
+    public Func<Guid, string, string>? ChatFolderFor { get; set; }
+
+    public List<(string ChatPath, string BasePath)> ChatTools { get; } = [];
+
+    public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
+    {
+        var path = ChatFolderFor?.Invoke(chatId, localRoot) ?? Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+        lock (_gate)
+        {
+            ChatFolders.Add(chatId);
+            _directories.Add(path);
+        }
+        return Task.FromResult(path);
+    }
+
+    public Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
+    {
+        lock (_gate) ChatTools.Add((chatPath, basePath));
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default)
+    {
+        var prefix = directory.TrimEnd('/') + "/";
+        lock (_gate)
+            return Task.FromResult<IReadOnlyList<string>>(_directories
+                .Where(d => d.StartsWith(prefix, StringComparison.Ordinal) && !d[prefix.Length..].Contains('/'))
+                .Select(d => d[prefix.Length..]).ToList());
+    }
+
+    public Task<bool> EntryExistsAsync(string path, CancellationToken ct = default)
+    {
+        lock (_gate) return Task.FromResult(_directories.Contains(path) || _files.ContainsKey(path) || (_seesDisk && (File.Exists(path) || Directory.Exists(path))));
     }
 
     public Task<IReadOnlyList<(string Path, string FirstLine)>> ListFilesAsync(string directory, string namePattern, CancellationToken ct = default)

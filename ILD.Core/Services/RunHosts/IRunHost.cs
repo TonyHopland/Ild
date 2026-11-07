@@ -118,6 +118,18 @@ public interface IRunHost
     /// <summary>Delete each path, whatever it is. Returns whether every one is gone.</summary>
     Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default);
 
+    /// <summary>Make the folder a chat works in and return its path: below <paramref name="localRoot"/> on this machine, or a folder of its own in the chat container when the host keeps chats there. Fine when it is already there.</summary>
+    Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default);
+
+    /// <summary>Add the toolchains the repository checked out at <paramref name="basePath"/> (ILD's own clone) needs to those of the chat that holds <paramref name="chatPath"/>. A host that gives chats no toolchains does nothing.</summary>
+    Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default);
+
+    /// <summary>The names of the directories directly below <paramref name="directory"/>, leaving out links and names starting with '.'; none when there is no such directory.</summary>
+    Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default);
+
+    /// <summary>Whether anything, a link included, is at <paramref name="path"/>.</summary>
+    Task<bool> EntryExistsAsync(string path, CancellationToken ct = default);
+
     // -- Preview and gateway -----------------------------------------------------
 
     /// <summary>Where the preview proxy forwards to reach a service listening on <paramref name="port"/> in the run whose working directory is <paramref name="workingDirectory"/>.</summary>

@@ -58,6 +58,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             ReadyPollInterval = TimeSpan.FromMilliseconds(10),
             ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
             Agents = () => agents ?? [],
+            ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"),
         };
 
     private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
@@ -1052,5 +1053,249 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal("2", shared.CpuLimit);
         Assert.Equal("9", older.CpuLimit);
         Assert.Equal("3Gi", shared.MemoryLimit);
+    }
+
+    // -- Chats -------------------------------------------------------------------
+
+    private const string ChatContainer = "ild-chat-main";
+
+    private static string ChatFolder(Guid chat) => RunPaths.ChatRoot(chat);
+
+    private static IEnumerable<string> BindsOf(JsonObject container)
+        => container["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>());
+
+    [Fact]
+    public async Task The_first_chat_creates_the_shared_chat_container_once_with_a_volume_an_internal_network_and_the_store_read_only()
+    {
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+
+        var firstPath = await _host.CreateChatFolderAsync(first, "/unused", TestContext.Current.CancellationToken);
+        var secondPath = await _host.CreateChatFolderAsync(second, "/unused", TestContext.Current.CancellationToken);
+
+        Assert.Equal(ChatFolder(first), firstPath);
+        Assert.Equal(ChatFolder(second), secondPath);
+        Assert.Equal(
+            [$"volumes/{ChatContainer}", "volumes/ild-tools", $"networks/{ChatContainer}", $"containers/{ChatContainer}"],
+            _api.Created);
+        var container = _api.Container(ChatContainer)!;
+        Assert.Equal("registry.example/ild-runner:1", container["Image"]!.GetValue<string>());
+        Assert.Equal("10001:10001", container["User"]!.GetValue<string>());
+        Assert.Equal([$"{ChatContainer}:/ild-chat:rw", "ild-tools:/opt/ild-tools:ro"], BindsOf(container));
+        var host = container["HostConfig"]!;
+        Assert.Equal(ChatContainer, host["NetworkMode"]!.GetValue<string>());
+        Assert.Equal("ALL", host["CapDrop"]!.AsArray().Single()!.GetValue<string>());
+        Assert.Equal("no-new-privileges", host["SecurityOpt"]!.AsArray().Single()!.GetValue<string>());
+        Assert.Null(host["Memory"]);
+        Assert.Null(host["NanoCpus"]);
+        Assert.True(_api.Network(ChatContainer)!["Internal"]!.GetValue<bool>());
+        Assert.Equal("Ada", container["Env"]!.AsArray().Select(e => e!.GetValue<string>()).Single(e => e.StartsWith("GIT_AUTHOR_NAME=", StringComparison.Ordinal))["GIT_AUTHOR_NAME=".Length..]);
+    }
+
+    [Fact]
+    public async Task The_chat_container_has_no_run_label_so_the_sweep_never_takes_it_for_a_runs()
+    {
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+
+        foreach (var labels in new[] { _api.Container(ChatContainer)!["Labels"]!, _api.Network(ChatContainer)!["Labels"]! })
+        {
+            Assert.Equal("ild", labels["app.kubernetes.io/managed-by"]!.GetValue<string>());
+            Assert.Equal(Instance, labels["ild/instance"]!.GetValue<string>());
+            Assert.Equal("chat", labels["ild/role"]!.GetValue<string>());
+            Assert.Null(labels["ild/run"]);
+        }
+
+        var stale = Guid.NewGuid();
+        SeedRun(stale, Instance);
+        var leftovers = await _host.ListLeftoversAsync(new HashSet<Guid>(), TestContext.Current.CancellationToken);
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
+
+        Assert.Equal(stale.ToString("N"), Assert.Single(leftovers).Location);
+        Assert.Contains(ChatContainer, _api.Containers());
+        Assert.Contains(ChatContainer, _api.Volumes());
+        Assert.Contains(ChatContainer, _api.Networks());
+    }
+
+    [Fact]
+    public async Task A_chats_folder_gets_its_home_made_in_the_chat_container()
+    {
+        var chat = Guid.NewGuid();
+
+        await _host.CreateChatFolderAsync(chat, "/unused", TestContext.Current.CancellationToken);
+
+        var exec = _api.Execs.Last();
+        Assert.Equal(ChatContainer, exec.Container);
+        Assert.Contains(RunPaths.ChatHome(chat), exec.Command);
+    }
+
+    [Fact]
+    public async Task A_stopped_chat_container_is_made_again_on_next_use_and_the_volume_keeps_the_chats()
+    {
+        var chat = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(chat, "/unused", TestContext.Current.CancellationToken);
+        _api.Stop(ChatContainer);
+
+        Assert.True(await _host.DirectoryExistsAsync(ChatFolder(chat), TestContext.Current.CancellationToken));
+
+        Assert.Equal(2, _api.Created.Count(c => c == $"containers/{ChatContainer}"));
+        Assert.Equal(1, _api.Created.Count(c => c == $"volumes/{ChatContainer}"));
+        Assert.Equal(ChatContainer, _api.Execs.Last().Container);
+    }
+
+    [Fact]
+    public async Task A_chat_command_runs_in_the_chat_container_as_that_chat_with_its_home_and_the_agents_on_the_path()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        AnswerInstaller(AgentNodeLine, ClaudeLine);
+        var chat = Guid.NewGuid();
+        var folder = $"{ChatFolder(chat)}/repos/widgets";
+
+        using var process = await host.StartCommandAsync(RunCommand.Routed(Command(folder, "git", "status"), chat), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var exec = _api.Execs.Last();
+        var home = RunPaths.ChatHome(chat);
+        Assert.Equal(ChatContainer, exec.Container);
+        Assert.Equal($"HOME={home}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.Equal(
+            $"PATH=/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}",
+            exec.Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)));
+        Assert.Contains(folder, exec.Command);
+        Assert.Equal(["git", "status"], exec.Command.TakeLast(2));
+        Assert.Contains($"{chat:N}/", exec.Command.Single(c => c.StartsWith(chat.ToString("N") + "/", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task A_command_in_a_chat_folder_is_the_chats_even_when_its_caller_names_another_id_to_kill_it_by()
+    {
+        var chat = Guid.NewGuid();
+        var title = Guid.NewGuid();
+
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(Command(ChatFolder(chat), "claude"), title), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var exec = _api.Execs.Last();
+        Assert.Equal(ChatContainer, exec.Container);
+        Assert.Equal($"HOME={RunPaths.ChatHome(chat)}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.Contains(exec.Command, c => c.StartsWith(title.ToString("N") + "/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_toolchains_of_the_repositories_a_chat_clones_are_installed_and_put_on_its_path_after_a_restart_too()
+    {
+        using var host = NewHost(Options(), []);
+        var installs = AnswerInstaller(NodeLine);
+        var chat = Guid.NewGuid();
+        var repo = MakeBaseRepository("base", ("package.json", "{}"), (".nvmrc", "v20\n"));
+
+        await host.AddChatToolsAsync(ChatFolder(chat), repo, TestContext.Current.CancellationToken);
+
+        Assert.Equal("tool=node@20", Assert.Single(installs).Last());
+        using var restarted = NewHost(Options(), []);
+        using var process = await restarted.StartCommandAsync(RunCommand.Routed(Command(ChatFolder(chat), "node", "-v"), chat), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var path = _api.Execs.Last().Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.StartsWith("PATH=/opt/ild-tools/mise/installs/node/20.19.1/bin:", path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_second_repository_wanting_another_version_of_a_tool_the_chat_has_does_not_change_it_and_says_so()
+    {
+        using var host = NewHost(Options(), []);
+        var installs = AnswerInstaller(NodeLine);
+        var chat = Guid.NewGuid();
+
+        await host.AddChatToolsAsync(ChatFolder(chat), MakeBaseRepository("one", ("package.json", "{}"), (".nvmrc", "v20\n")), TestContext.Current.CancellationToken);
+        await host.AddChatToolsAsync(ChatFolder(chat), MakeBaseRepository("two", ("package.json", "{}"), (".nvmrc", "v22\n")), TestContext.Current.CancellationToken);
+
+        Assert.Single(installs);
+        Assert.Contains(_log.Warnings, w => w.Contains("node@20", StringComparison.Ordinal) && w.Contains("node@22", StringComparison.Ordinal));
+        Assert.Equal(["\"node@20\""], File.ReadAllText(Path.Combine(_scratch, "chat-tools", $"{chat:N}.json")).Trim('[', ']').Split(','));
+    }
+
+    [Fact]
+    public async Task Deleting_a_chats_folder_removes_it_in_the_chat_container_and_forgets_its_toolchains()
+    {
+        using var host = NewHost(Options(), []);
+        AnswerInstaller(NodeLine);
+        var chat = Guid.NewGuid();
+        await host.AddChatToolsAsync(ChatFolder(chat), MakeBaseRepository("base", ("package.json", "{}"), (".nvmrc", "v20\n")), TestContext.Current.CancellationToken);
+
+        Assert.True(await host.DeleteAsync([ChatFolder(chat)], TestContext.Current.CancellationToken));
+
+        var exec = _api.Execs.Last();
+        Assert.Equal(ChatContainer, exec.Container);
+        Assert.Contains(ChatFolder(chat), exec.Command);
+        Assert.False(File.Exists(Path.Combine(_scratch, "chat-tools", $"{chat:N}.json")));
+    }
+
+    [Fact]
+    public async Task Kill_all_for_a_chat_ends_what_runs_in_the_chat_container()
+    {
+        var chat = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(chat, "/unused", TestContext.Current.CancellationToken);
+        _api.OnExec = async e =>
+        {
+            await e.WriteStdoutAsync("1\n");
+            await e.ExitAsync(0);
+        };
+
+        var killed = await _host.KillAllAsync(chat, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, killed);
+        var kill = _api.Execs.Last();
+        Assert.Equal(ChatContainer, kill.Container);
+        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[2]);
+        Assert.Equal(chat.ToString("N"), kill.Command[^1]);
+    }
+
+    [Fact]
+    public async Task Kill_all_for_a_chat_when_there_is_no_chat_container_asks_nothing_of_the_engine()
+    {
+        Assert.Equal(0, await _host.KillAllAsync(Guid.NewGuid(), TestContext.Current.CancellationToken));
+
+        Assert.Empty(_api.Execs);
+        Assert.DoesNotContain(ChatContainer, _api.Containers());
+    }
+
+    [Fact]
+    public async Task A_recreated_ild_container_is_put_back_on_the_chat_network_at_the_address_the_chat_container_has_for_it()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var host = NewHost(Options(ildContainer: "ild-main"));
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        var given = _api.Container(ChatContainer)!["HostConfig"]!["ExtraHosts"]!.AsArray().Single()!.GetValue<string>();
+
+        _api.SeedIldContainer("ild-main");
+        using var restarted = NewHost(Options(ildContainer: "ild-main"));
+        await restarted.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal([ChatContainer], _api.NetworksOf("ild-main"));
+        Assert.Equal(given["ild.example:".Length..], _api.Connects[^1]["EndpointConfig"]!["IPAMConfig"]!["IPv4Address"]!.GetValue<string>());
+        Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("Reconnected ILD to the network of the chat container", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_routing_host_keeps_chats_in_the_container_and_chats_from_before_on_the_local_host()
+    {
+        var chat = Guid.NewGuid();
+        var local = new FakeRunHost().WithDirectory("/data/chat-sessions/old");
+        var routing = new RoutingRunHost(local, _host);
+
+        var path = await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", TestContext.Current.CancellationToken);
+        Assert.Equal(ChatFolder(chat), path);
+        Assert.Empty(local.ChatFolders);
+
+        Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/old", TestContext.Current.CancellationToken));
+        Assert.Equal(ChatContainer, _api.Execs.Last().Container);
+        var before = _api.Execs.Count;
+        Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/old", TestContext.Current.CancellationToken));
+        Assert.Equal(before, _api.Execs.Count);
+
+        await routing.DeleteAsync([ChatFolder(chat), "/data/chat-sessions/old"], TestContext.Current.CancellationToken);
+        Assert.Equal(ChatContainer, _api.Execs.Last().Container);
+        Assert.Contains(RunPaths.ChatRoot(chat), _api.Execs.Last().Command);
     }
 }

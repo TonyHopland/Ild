@@ -91,6 +91,17 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         lock (_gate) _containers[name] = new FakeContainer(name, new JsonObject(), new Dictionary<string, string>()) { Running = true };
     }
 
+    /// <summary>Stops a container as if the engine or the machine had: it stays, not running.</summary>
+    public void Stop(string name)
+    {
+        lock (_gate)
+        {
+            var container = _containers[name];
+            container.Running = false;
+            container.Started = false;
+        }
+    }
+
     /// <summary>The networks a container is connected to.</summary>
     public IReadOnlyList<string> NetworksOf(string container)
     {

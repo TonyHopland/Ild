@@ -401,7 +401,7 @@ CMD ["dotnet", "ILD.Api.dll"]
 # installs the ones a repository needs, at the versions it picks, into a shared store the run mounts read-only, so a
 # node project does not carry a .NET SDK. The same image installs them: ILD runs mise in it against the store.
 # The MCP server is the self-contained build, at the path the agent's MCP config names. tini is the init, which reaps
-# what a killed command leaves behind. /ild-run is the runner's, so the named volume a container run host mounts there
+# what a killed command leaves behind. /ild-run and /ild-chat are the runner's, so the named volume a container run host mounts there
 # starts out writable by it (a volume takes the ownership of the image directory).
 FROM ${RUNNER_BASE} AS runner
 ARG RUNNER_UID=10001
@@ -419,7 +419,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     (getent group ${RUNNER_UID} >/dev/null || groupadd --gid ${RUNNER_UID} runner) && \
     (getent passwd ${RUNNER_UID} >/dev/null || useradd --uid ${RUNNER_UID} --gid ${RUNNER_UID} --no-create-home --home-dir /tmp --shell /bin/bash runner) && \
     git config --system --add safe.directory '*' && \
-    mkdir -p /app /ild-run /opt/ild-tools && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /opt/ild-tools && chmod 0755 /ild-run
+    mkdir -p /app /ild-run /ild-chat /opt/ild-tools && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /ild-chat /opt/ild-tools && chmod 0755 /ild-run /ild-chat
 # Chrome, for the chrome-devtools MCP server agents drive a browser with: it needs system libraries the store cannot
 # provide, so it is part of the image, at /opt/google/chrome/chrome where Puppeteer's stable channel looks. As in the
 # ILD image (see WITH_CHROME there): amd64 and arm64 only, recommends left out, fonts-liberation added back.
@@ -455,7 +455,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends tini bash && \
     npm install -g --prefix /usr/local --cache /tmp/npm-install-cache --no-audit --no-fund \
       @anthropic-ai/claude-code opencode-ai @earendil-works/pi-coding-agent && \
     rm -rf /tmp/npm-install-cache /root/.npm && \
-    rm -rf /app && mkdir -p /app /ild-run && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run && chmod 0755 /ild-run
+    rm -rf /app && mkdir -p /app /ild-run /ild-chat && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /ild-chat && chmod 0755 /ild-run /ild-chat
 COPY --from=build --chown=${RUNNER_UID}:${RUNNER_UID} /app/mcp-server/ /app/
 ENV HOME=/tmp
 USER ${RUNNER_UID}
