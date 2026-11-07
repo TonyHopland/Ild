@@ -66,6 +66,20 @@ And these must work: `curl -m 5 -s -o /dev/null -w '%{http_code}\n' $ILD_API_URL
 
 If the first check in this list or the health check fails with ILD on the host, record which: it decides whether the host needs a different way to reach ILD.
 
+## 3b. Toolchains
+
+Use a work item on a repository with a `package.json` and an `.nvmrc` (say `20`), and an AI provider whose agent ILD has installed.
+
+| Check | Expected |
+| --- | --- |
+| First run | ILD's log says `Run <run> gets node@20 …` and then `has node@20.x.y, <agent>@<version>`. While it installs, `podman ps --filter label=ild/role=tools` shows an `ild-tools-…` container; it is gone when the run starts. `podman volume ls` lists `ild-tools` |
+| In the run | `podman exec ild-run-<run> sh -c 'node --version; command -v <agent>; echo $PATH'` prints v20, a path under `/opt/ild-tools/agents/<key>/<version>/wrap`, and a PATH that starts with the store's directories and has `$HOME/.local/bin` before the image's. `<agent> --version` matches Settings |
+| No .NET | `podman exec ild-run-<run> sh -c 'command -v dotnet'` prints nothing for a node-only repository |
+| Read-only | `podman exec ild-run-<run> touch /opt/ild-tools/x` fails. `podman exec ild-run-<run> npm install -g cowsay` succeeds, through the egress proxy, and `cowsay hi` works |
+| Second run | A second work item on the same repository starts without an `ild-tools-…` container |
+| `run.tools` | With `{"run": {"tools": ["python@3.12"]}}` merged to the base branch, the next run has `python3 --version` 3.12, and node as before |
+| A failed install | With `.nvmrc` set to `99` on the base branch, the run fails at Start with mise's message, and no `ild-run-…` container is left |
+
 ## 4. A killed ILD leaves nothing behind
 
 1. With a run at a Human node, kill ILD hard: `kill -9 <ild pid>` (or `podman kill ild`).

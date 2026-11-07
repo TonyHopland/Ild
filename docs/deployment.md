@@ -242,9 +242,12 @@ Pick `local` for a single-user install where the agent may see the machine. Pick
      - { name: ILD_API_URL, value: "http://ild.ild.svc:8080" }
      - { name: ILD_K8S_NAMESPACE, value: ild-runs }
      - { name: ILD_K8S_RUNNER_IMAGE, value: "ghcr.io/tonyhopland/ild-runner:latest" }
+     - { name: ILD_K8S_TOOLS_CLAIM, value: ild-tools }
    ```
 
    The runner image is published with the same tags as the ILD image; pin the version ILD runs. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have.
+
+   `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains): ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs to reach the internet, so allow that label egress if the namespace denies it by default. Without a ReadWriteMany class, run `ghcr.io/tonyhopland/ild-runner-full` with `ILD_RUN_TOOLCHAINS=off` instead: Node, the .NET SDK, Chrome and three agent CLIs, baked in.
 4. The preview proxy forwards to the pod's address, so ILD must be able to reach pod IPs, as any pod in the cluster can.
 
 ### Storage
@@ -272,6 +275,7 @@ Whoever holds the socket controls every container on the host: it can start a pr
 - A named volume for its files, an `internal` network of its own, and a container from the runner image started with `sleep infinity` as uid 10001, all capabilities dropped, `no-new-privileges`, the engine's default seccomp profile, and the CPU and memory limits of `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT`. The three are made at Start and deleted at Cleanup; the container stays up while a Human node waits, so previews keep working.
 - The network is `internal`, so the container cannot reach the internet or the host's other networks. **With ILD in a container (below), it reaches ILD and nothing else**: the model gateway, the MCP endpoint and the egress proxy. **With ILD on the host it does not:** the run reaches ILD at the network's gateway address, which is the host, so it can connect to every service listening on the host (SSH, a database, anything bound to all interfaces), and the egress proxy listens on all of the host's interfaces and accepts connections from the LAN as well as from runs. Run ILD in a container to isolate runs; if ILD must be on the host, add host firewall rules that let only the run networks' subnets reach ILD's port and the proxy port, and block the proxy port from the LAN. Anything else the agent connects to goes through the egress proxy and its limits.
 - The container is given the host name in `ILD_API_URL` as ILD's address on its own network. The code goes in and out as bundles over exec, so the container never holds the git credential or the mirror.
+- The toolchains its repository needs and the agents ILD has installed, from the [toolchain store](configuration.md#run-toolchains): the `ild-tools` volume, mounted read-only. The first run that needs a version installs it, in a short-lived `ild-tools-…` container of the runner image on the engine's default network; later runs reuse it. The volume is shared by every run, and never pruned.
 - Every object is labelled `app.kubernetes.io/managed-by=ild`, `ild/instance=<ILD_CONTAINER_INSTANCE>` and `ild/run=<run id>`. There are no owner references on a single host, so Cleanup deletes the container, the volume and the network explicitly, and the sweeper (once at startup, then every `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`) deletes the labelled objects of runs that are finished or gone. It only touches its own instance. An ILD that is killed mid-run leaves nothing behind after its next start.
 
 ### ILD on the host
@@ -286,7 +290,7 @@ ILD_API_URL=http://$(hostname):8080
 ASPNETCORE_URLS=http://0.0.0.0:8080
 ```
 
-- Build or pull the runner image first (`podman pull`, or `podman build --target runner -t ild-runner .`); ILD does not pull it and says so when it is missing.
+- Build or pull the runner image first (`podman pull`, or `podman build --target runner -t ild-runner .`, which needs no build arguments); ILD does not pull it and says so when it is missing.
 - `ILD_API_URL` must name ILD by a host name that is not `localhost` and not an IP address, and that resolves on this machine too (the machine's name, or an `/etc/hosts` entry): each run's container is given that name for ILD's address on its network, which is the network's gateway, that is, the host.
 - ILD must listen on an address the run's network can reach, not only on loopback, and the host's firewall must let the run network's subnet reach ILD's port and the egress proxy port (`ILD_NETWORK_PROXY_PORT`).
 - The preview proxy forwards to the container's address on its network, so ILD must be able to route to it. With rootful Docker or Podman it can. A rootless Podman's networks live in a user namespace the host does not route into; run ILD in a container (below) in that case.
@@ -420,12 +424,16 @@ The main `Dockerfile` builds the frontend, publishes the .NET host, and optional
 
 ### Published images
 
-CI also builds and pushes both images to GHCR (see [ADR-0012](./adr/0012-ghcr-image-tagging-strategy.md)):
+CI also builds and pushes these images to GHCR (see [ADR-0012](./adr/0012-ghcr-image-tagging-strategy.md)):
 
 - `ghcr.io/tonyhopland/ild` — batteries-included app plus the bundled MCP server
 - `ghcr.io/tonyhopland/ild-workitem-server` — the WorkItem Server
+- `ghcr.io/tonyhopland/ild-runner` — the slim image of a run's container or pod: an OS, the tools every project uses and mise, with no toolchain or agent ([ADR-0035](./adr/0035-run-toolchains.md))
+- `ghcr.io/tonyhopland/ild-runner-full` — the previous runner: Node, the .NET SDK, Chrome and three agent CLIs baked in, for a cluster without a store (`ILD_RUN_TOOLCHAINS=off`)
 
-A `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for both images (amd64 + arm64, each built on a native runner and joined into one multi-arch manifest); pushes to `main` build and test but publish nothing. The compose stack still builds locally with `--build` — it does not pull these images.
+A project that needs system packages beyond the slim runner (a browser for end-to-end tests, a database client) builds its own runner image `FROM ghcr.io/tonyhopland/ild-runner` and points `ILD_CONTAINER_RUNNER_IMAGE` or `ILD_K8S_RUNNER_IMAGE` at it.
+
+A `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for all of them (amd64 + arm64, each built on a native runner and joined into one multi-arch manifest); pushes to `main` build and test but publish nothing. The compose stack still builds locally with `--build` — it does not pull these images.
 
 **One-time setup:** the first push lands each package **private**. Flip each to **public** once in its GHCR package settings (Package → Settings → Change visibility).
 

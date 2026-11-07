@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Run each loop run in its own Kubernetes pod**, spread across nodes and removed when the run is cleaned up.
 - **Run each loop run in its own Docker or Podman container on the same machine**, with a warning in Settings when the container socket is not rootless or cannot be reached.
+- **A run in a container or pod gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows**; `run.tools` in `ild.config.json` names them when finding them is not enough.
 
 ### Changed
 

@@ -1,0 +1,25 @@
+# ADR-0035: A run gets its repository's toolchains and ILD's agents from a shared, read-only store
+
+[ADR-0033](./0033-kubernetes-run-host.md) and [ADR-0034](./0034-container-run-host.md) ran every loop run under one runner image: the ILD image's toolchains (Node, the .NET SDK, Chrome), plus three coding agents baked in at whatever version was newest when it was built. A node project carried a .NET SDK, a repository that needed Python or Go had no way to get it, Codex and Copilot were missing, and a run's agent was not the version ILD showed in Settings, with no update cooldown. Taking the model from [devvm](https://github.com/devvmhq/devvm), a run now starts from a slim image and gets the toolchains its repository needs, and the agents ILD has installed, from a store every run mounts read-only.
+
+## Decision
+
+- **The runner image is slim.** `ild-runner` is Ubuntu with what every project uses (git, a shell, a compiler, curl, jq, ripgrep) and [mise](https://mise.jdx.dev). It carries no language toolchain and no agent. The MCP server in it is a self-contained build, started through its apphost at the path the agent's MCP config names, so it runs whatever .NET the project has, or none. Adapters start the server through its apphost on every host, so the config is the same everywhere.
+- **Toolchains are installed once per version, into a store.** The store is a named volume (`ild-tools`) on a single engine, and a ReadWriteMany claim (`ILD_K8S_TOOLS_CLAIM`) on Kubernetes. ILD fills it by running a script, as the runner's user, in a short-lived installer of the runner image that mounts it writable. mise installs each toolchain; the script records its `PATH` entries and variables (`DOTNET_ROOT`) in a manifest. A later run that needs the same reads the manifest, and runs never run mise or download a toolchain themselves.
+- **Agents come from ILD's own installs.** The store gets every agent ILD has a current install of, at that install's version, so a run uses what Settings shows, rollbacks and the update cooldown included. Each agent gets a wrapper that starts it on a Node of its own (the newest LTS line), so a project that pins an old Node cannot break its agent, and the agent's own commands still see the project's Node.
+- **What a run needs is read from the repository, not from the branch the agent writes.** ILD reads its own checkout of the base branch before the run exists. `ild.config.json`'s `run.tools` names tools outright and wins; otherwise a project's `mise.toml` or `.tool-versions`; otherwise marker files with their version files (`package.json` and `.nvmrc`, a .NET project's target framework or `global.json`, `.python-version`, `go.mod`, `rust-toolchain.toml`), at the top of the repository or one folder down. Tool names and versions are refused if they could carry a shell character.
+- **A run's home is where it installs things.** The store is read-only, so `NPM_CONFIG_PREFIX` is the run's `$HOME/.local` and its `bin` is on `PATH`, after the toolchains and agents. When the run's Node has corepack, its shims go there too, so `pnpm` and `yarn` are what the project's `packageManager` pins. ILD's own `PATH` never reaches a run.
+- **Off is a setting.** `ILD_RUN_TOOLCHAINS=off` gives runs only what their image has, for `ild-runner-full`, the previous runner, still published. A Kubernetes cluster without a ReadWriteMany claim for the store gets the same, with a warning at startup.
+
+## Considered options
+
+- **Image variants per stack** (`ild-runner-node`, `ild-runner-dotnet`): quick, and no store, but every combination is an image to build and publish, the agents stay baked in at a version ILD does not choose, and a version pin in a repository still could not be honoured.
+- **Installing in each run**: no shared state, but every run downloads its toolchains again, and the run's network, which reaches only ILD, would have to reach the internet.
+- **A downloader of ILD's own** for each toolchain: no new tool, but it re-implements what mise already does for every language, and projects that already pin tools for mise would get a different answer.
+- **Building an image per repository** with the engine's build API: fast runs once built, but Kubernetes cannot build, and every new pin is a new image to store.
+
+## Consequences
+
+- The first run of a repository waits for its toolchains to download; later runs and other repositories on the same versions do not. The store grows with every version used and is never pruned by ILD; remove the volume, or the claim's contents, to start it over.
+- The installer has the engine's default network, or no NetworkPolicy, since it downloads from the toolchains' and npm's servers. A namespace that denies egress by default must allow pods labelled `ild/role=tools`.
+- System packages a project needs beyond the slim image (a browser for end-to-end tests, a database client) are a runner image of the operator's own, `FROM ild-runner`.

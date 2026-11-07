@@ -53,7 +53,8 @@ Nothing in ILD is specific to a CNI or a storage backend. The cluster needs Kube
 | Variable | Meaning |
 | --- | --- |
 | `ILD_API_URL` | **Required.** ILD's Service address as the run pods reach it, for example `http://ild.ild.svc:8080`. A loopback address is refused. The pods reach the model gateway and the MCP endpoint there |
-| `ILD_K8S_RUNNER_IMAGE` | **Required.** The pod image: the agent CLIs and toolchains, without ILD. The published `ild-runner` image, or one you build from the `runner` target of the Dockerfile |
+| `ILD_K8S_RUNNER_IMAGE` | **Required.** The pod image. With `ILD_K8S_TOOLS_CLAIM` set, the slim published `ild-runner` image (or the `runner` target of the Dockerfile): runs get their toolchains and agents from the store. Without it, `ild-runner-full` (the `runner-full` target), which carries Node, the .NET SDK, Chrome and three agent CLIs, with `ILD_RUN_TOOLCHAINS=off` |
+| `ILD_K8S_TOOLS_CLAIM` | A ReadWriteMany PersistentVolumeClaim in the run namespace that holds the [toolchain store](#run-toolchains). Unset: runs have only what their image has, and ILD warns at startup |
 | `ILD_K8S_NAMESPACE` | The namespace of the run objects. Default: the namespace ILD itself runs in |
 | `ILD_K8S_INSTANCE` | Names this ILD install, default `default`. Every object is labelled `ild/instance=<it>` and the sweeper only touches its own, so two installs can share a namespace if they set different names |
 | `ILD_K8S_STORAGE_CLASS` | StorageClass of a run's volume (`ReadWriteOnce`). Unset: the cluster's default class. At startup ILD warns if the class's `reclaimPolicy` is not `Delete`, because a kept volume outlives its run |
@@ -82,7 +83,9 @@ With `ILD_RUN_HOST=container`, each **loop run** gets a container, a volume and 
 | Variable | Meaning |
 | --- | --- |
 | `ILD_CONTAINER_SOCKET` | **Required.** The path of the engine's unix socket (a `unix://` prefix is accepted). Never detected: whoever holds the socket controls every container on the host, so rootless Podman is the supported setup |
-| `ILD_CONTAINER_RUNNER_IMAGE` | **Required.** The container image: the agent CLIs and toolchains, without ILD. The published `ild-runner` image, or one you build from the `runner` target of the Dockerfile. It must already be on the host |
+| `ILD_CONTAINER_RUNNER_IMAGE` | **Required.** The container image: the slim published `ild-runner` image, or one you build from the `runner` target of the Dockerfile. Runs get their toolchains and agents from the [toolchain store](#run-toolchains), which is filled with this image too. It must already be on the host |
+| `ILD_CONTAINER_TOOLS_VOLUME` | The named volume that holds the [toolchain store](#run-toolchains), default `ild-tools`. ILD creates it; every run and every ILD on the engine shares it |
+| `ILD_RUN_TOOLCHAINS` | `on` (default): runs get toolchains and agents from the store. `off`: only what the runner image has, for `ild-runner-full`. The `kubernetes` host reads it too |
 | `ILD_API_URL` | **Required.** ILD's address as the run's container reaches it. Its host must be a name (not `localhost`, not an IP address): each container is given that name for ILD's address on its network. The container reaches the model gateway and the MCP endpoint there |
 | `ILD_CONTAINER_ILD_CONTAINER` | The name of ILD's own container, when ILD runs in one. ILD connects itself to each run's network and the run reaches it at its address there. Unset: ILD runs on the host and the run reaches it at the network's gateway |
 | `ILD_CONTAINER_INSTANCE` | Names this ILD install, default `default`. Every object is labelled `ild/instance=<it>` and the sweeper only touches its own, so two installs can share an engine if they set different names |
@@ -92,6 +95,30 @@ With `ILD_RUN_HOST=container`, each **loop run** gets a container, a volume and 
 | `ILD_CONTAINER_READY_TIMEOUT_SECONDS` | How long a starting run waits for its container to run (default `120`) |
 
 What a run gets: a named volume, an `internal` network (that reaches only ILD when ILD runs in a container; with ILD on the host it also reaches the host's services), and a container (uid 10001, all capabilities dropped, `no-new-privileges`, default seccomp) from the runner image, all labelled `app.kubernetes.io/managed-by=ild`, `ild/instance` and `ild/run`. As with a pod, code goes in and out as bundles over exec, the container never holds the git credential, and the model is reached through ILD's gateway with a placeholder credential. Set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` on ILD so commits have an author.
+
+### Run toolchains
+
+Under `container` and `kubernetes`, a run's image has no language toolchain and no coding agent. A run gets the toolchains its repository needs, and the agents ILD has installed, from a **toolchain store** it mounts read-only at `/opt/ild-tools` ([ADR-0035](adr/0035-run-toolchains.md)).
+
+- **What a run needs** is read from ILD's checkout of the base branch, in this order:
+  1. `run.tools` in [`ild.config.json`](#ildconfigjson)
+  2. the project's `mise.toml` or `.tool-versions`
+  3. marker files at the top of the repository or one folder down:
+
+| Marker | Toolchain | Version from |
+| --- | --- | --- |
+| `package.json` | node | `.nvmrc` or `.node-version`, else 24 (the newest LTS line that ships corepack) |
+| `bun.lock`, `bun.lockb` | bun | latest |
+| `*.sln`, `*.slnx`, `*.csproj`, `*.fsproj` | dotnet | `global.json`'s SDK version, else the newest target framework's major (`net10.0` → 10) |
+| `pyproject.toml`, `requirements.txt`, `uv.lock`, `setup.py`, `Pipfile` | python | `.python-version`, else 3 |
+| `go.mod` | go | its `toolchain` line, else its `go` line |
+| `Cargo.toml` | rust | `rust-toolchain.toml`'s channel, else stable |
+| `pom.xml`, `build.gradle(.kts)` | java | `.java-version`, else 21 |
+
+- **Agents** are the CLIs ILD has a current install of, at that install's version: what **Settings** shows, after the update cooldown and any rollback. Each one starts on a Node of its own, whatever Node the project pins.
+- **The first run that needs a version** installs it into the store, in a short-lived installer of the runner image that has the engine's default network (a pod with no NetworkPolicy on Kubernetes). It downloads from the toolchains' own sites, GitHub and the npm registry. Later runs that need the same start without it. If an install fails, the run fails with the installer's last lines.
+- **`npm install -g`** and `cargo install` go into the run's home (`$HOME/.local`), which is on `PATH`. When the run's Node has corepack, `pnpm` and `yarn` are its shims, at the version the project's `packageManager` pins.
+- **The store is never pruned.** Remove the volume (`docker volume rm ild-tools`) or empty the claim to start over.
 
 ## Agent telemetry
 
@@ -282,6 +309,10 @@ Place an `ild.config.json` file in the root of a repository to enable QA preview
 | ------------------------ | ------ | -------------------------------------------------------------- |
 | `preview.defaultProfile` | string | Profile used when `profileName` is omitted from the start call |
 | `preview.profiles`       | object | Map of profile name → profile definition                       |
+| `run.tools`              | array or object | The [toolchains](#run-toolchains) a loop run gets under `container` or `kubernetes`, as mise names them: `["node@22", "dotnet@10", "pnpm@9"]` or `{"node": "22"}`. Each wins over what ILD finds for the same tool |
+| `run.detect`             | boolean | Default `true`. `false`: the run gets only `run.tools` |
+
+ILD reads `run` from its checkout of the repository's base branch when a run starts, so a change the agent makes to it on its branch applies only once it is merged.
 
 ### Profile fields
 
