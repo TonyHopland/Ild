@@ -9,6 +9,8 @@ using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Remote;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Middleware;
 using ILD.Api.Services;
 using ILD.Data.Stores;
@@ -46,12 +48,19 @@ public static class ServiceCollectionExtensions
                 runner,
                 logger,
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot,
-                mirrorsRoot: RepositoryManager.MirrorRoot(config));
+                mirrorsRoot: RepositoryManager.MirrorRoot(config),
+                host: sp.GetRequiredService<IRunHost>());
         });
         services.AddSingleton<IRemoteRetryDelay, RemoteRetryDelay>();
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+        // Chosen by the setting and never detected; the other two backends fail at startup until they exist.
+        services.AddSingleton<IRunHost>(sp =>
+        {
+            RunHostOptions.Select(sp.GetRequiredService<IConfiguration>()[RunHostOptions.SettingName]);
+            return new LocalRunHost(sp.GetRequiredService<IProcessRunner>(), sp);
+        });
         services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, GitHubRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, AzureDevOpsRemoteGitProviderAdapter>();

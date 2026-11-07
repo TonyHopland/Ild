@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -95,7 +96,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             var binaryPath = ResolveBinaryPath(ctx);
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[opencode-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
@@ -117,10 +118,10 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway);
             var extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, _logger);
 
-            Process? proc = null;
+            IRunProcess? proc = null;
             try
             {
-                proc = StartAgentProcess(BuildRunProcessStartInfo(
+                proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
                     binaryPath,
                     worktreePath,
                     ctx.Prompt,
@@ -131,11 +132,11 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
-                if (ShouldRetryWithoutWorkingDirectory(ex, worktreePath))
+                if (await ShouldRetryWithoutWorkingDirectoryAsync(ex, worktreePath, ctx.Cancel))
                 {
                     try
                     {
-                        proc = StartAgentProcess(BuildRunProcessStartInfo(
+                        proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
                             binaryPath,
                             worktreePath,
                             ctx.Prompt,
@@ -359,13 +360,13 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return (null, sessionJson);
     }
 
-    private static async Task<OpencodeCommandResult> RunOpencodeCommandAsync(
+    private async Task<OpencodeCommandResult> RunOpencodeCommandAsync(
         string binaryPath,
         string worktreePath,
         AgentExecutionContext ctx,
         IReadOnlyList<string> arguments)
     {
-        Process? proc = null;
+        IRunProcess? proc = null;
         try
         {
             var psi = BuildProcessStartInfo(binaryPath, worktreePath);
@@ -374,16 +375,16 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
             // Session export/import must run as the same agent user as the run
             // itself, or it would look for the session under the wrong home.
-            proc = StartAgentProcess(psi, ctx);
+            proc = await StartAgentProcessAsync(psi, ctx);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
-            if (ShouldRetryWithoutWorkingDirectory(ex, worktreePath))
+            if (await ShouldRetryWithoutWorkingDirectoryAsync(ex, worktreePath, ctx.Cancel))
             {
                 var retryPsi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory: false);
                 foreach (var argument in arguments)
                     retryPsi.ArgumentList.Add(argument);
-                proc = StartAgentProcess(retryPsi, ctx);
+                proc = await StartAgentProcessAsync(retryPsi, ctx);
             }
             else
             {
@@ -519,9 +520,9 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return psi;
     }
 
-    private static bool ShouldRetryWithoutWorkingDirectory(Exception ex, string worktreePath)
+    private async Task<bool> ShouldRetryWithoutWorkingDirectoryAsync(Exception ex, string worktreePath, CancellationToken ct)
     {
-        if (!Directory.Exists(worktreePath))
+        if (!await RunHost.DirectoryExistsAsync(worktreePath, ct))
             return false;
 
         var message = ex.Message;

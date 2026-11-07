@@ -10,6 +10,8 @@ using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using Microsoft.Extensions.Configuration;
@@ -69,6 +71,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         AllowTrailingCommas = true,
     };
 
+    private readonly IRunHost _host;
+
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
@@ -76,11 +80,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         ILogger<WorktreePreviewService> logger,
         PreviewDataClaims claims,
         IEgressPolicy? egressPolicy = null,
-        IWorkItemNotifier? notifier = null)
+        IWorkItemNotifier? notifier = null,
+        IRunHost? host = null)
         : this(httpClientFactory, configuration, proxyBase, logger,
             AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
             AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims,
-            networkOpenGroup: AgentIsolation.NetworkOpenGroup, egressPolicy: egressPolicy, notifier: notifier)
+            networkOpenGroup: AgentIsolation.NetworkOpenGroup, egressPolicy: egressPolicy, notifier: notifier, host: host)
     {
     }
 
@@ -117,8 +122,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewDataClaims? claims = null,
         string? networkOpenGroup = null,
         IEgressPolicy? egressPolicy = null,
-        IWorkItemNotifier? notifier = null)
+        IWorkItemNotifier? notifier = null,
+        IRunHost? host = null)
     {
+        _host = host ?? LocalRunHost.Shared;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _proxyBase = proxyBase;
@@ -982,13 +989,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private async Task<LoadedPreviewConfig> LoadConfigAsync(string worktreePath, CancellationToken cancellationToken)
     {
         var configPath = Path.Combine(worktreePath, ConfigFileName);
-        if (!File.Exists(configPath))
+        if (await _host.GetFileLengthAsync(configPath, cancellationToken) is not { } configLength)
         {
             return new LoadedPreviewConfig(false, worktreePath, configPath, null, $"No {ConfigFileName} found in worktree root.");
         }
 
-        await using var stream = File.OpenRead(configPath);
-        var config = await JsonSerializer.DeserializeAsync<IldWorkspaceConfig>(stream, _jsonOptions, cancellationToken);
+        IldWorkspaceConfig? config = null;
+        await _host.ReadFileRangeAsync(configPath, 0, configLength, async stream =>
+            config = await JsonSerializer.DeserializeAsync<IldWorkspaceConfig>(stream, _jsonOptions, cancellationToken));
         if (config?.Preview?.Profiles == null || config.Preview.Profiles.Count == 0)
         {
             return new LoadedPreviewConfig(false, worktreePath, configPath, null, "ild.config.json does not define any preview profiles.");
@@ -1482,13 +1490,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             // the gate the pumps contend for.
             await writer.WriteLineAsync($"> {resolved.Command}");
 
-            var process = Process.Start(BuildPreviewProcess(resolved))
-                ?? throw new InvalidOperationException($"Failed to start preview service '{service.Name}'.");
+            var process = await _host.StartCommandAsync(new RunCommand(BuildPreviewProcess(resolved)), cancellationToken);
 
             // Subscribed before the check, so an exit that has already happened and
             // one still to come both let go (the lease ignores the second).
-            process.EnableRaisingEvents = true;
-            process.Exited += (_, _) => feeds.Dispose();
+            _ = process.WaitForExitAsync().ContinueWith(_ => feeds.Dispose(), TaskScheduler.Default);
             if (process.HasExited)
                 feeds.Dispose();
 
@@ -1530,7 +1536,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             if (!process.Process.HasExited)
             {
-                process.Process.Kill(entireProcessTree: true);
+                process.Process.TryKill();
                 await process.Process.WaitForExitAsync(cancellationToken);
             }
         }
@@ -2316,8 +2322,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task<CommandResult> RunCommandAsync(ResolvedStep resolved, CancellationToken cancellationToken)
     {
-        using var process = Process.Start(BuildPreviewProcess(resolved))
-            ?? throw new InvalidOperationException($"Failed to start command '{resolved.Command}'.");
+        using var process = await _host.StartCommandAsync(new RunCommand(BuildPreviewProcess(resolved)), cancellationToken);
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
@@ -2328,15 +2333,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
         catch (OperationCanceledException)
         {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-                // Already exited.
-            }
-
+            process.TryKill();
             throw;
         }
 
@@ -2546,7 +2543,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     {
         public ManagedPreviewProcess(
             PreviewServiceConfig service,
-            Process process,
+            IRunProcess process,
             StreamWriter writer,
             SemaphoreSlim writeGate,
             Task stdOutPump,
@@ -2565,7 +2562,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
 
         public PreviewServiceConfig Service { get; }
-        public Process Process { get; }
+        public IRunProcess Process { get; }
         public StreamWriter Writer { get; }
         public SemaphoreSlim WriteGate { get; }
         public Task StdOutPump { get; }
@@ -2658,4 +2655,4 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         /// </summary>
         public bool RewriteHost { get; set; } = true;
     }
-}
+}

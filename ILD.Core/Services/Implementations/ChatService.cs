@@ -1,6 +1,8 @@
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Remote;
 using ILD.Data;
 using ILD.Data.Analytics;
@@ -52,6 +54,8 @@ public sealed class ChatService : IChatService
     private readonly ClaudeProjectFolders _claudeProjects;
     private readonly IEgressPolicy? _egressPolicy;
 
+    private readonly IRunHost _runHost;
+
     public ChatService(
         AppDbContext db,
         IProviderStore providers,
@@ -66,8 +70,10 @@ public sealed class ChatService : IChatService
         IChatTitleScheduler? titles = null,
         IChatScheduleNotifier? schedules = null,
         ClaudeProjectFolders? claudeProjects = null,
-        IEgressPolicy? egressPolicy = null)
+        IEgressPolicy? egressPolicy = null,
+        IRunHost? runHost = null)
     {
+        _runHost = runHost ?? LocalRunHost.Shared;
         _db = db;
         _providers = providers;
         _registry = registry;
@@ -468,7 +474,7 @@ public sealed class ChatService : IChatService
                 // per ADR-0008 but are not exposed to the chat.
                 var activeRun = await _runs.GetActiveByWorkItemAsync(openWorkItemId!);
                 var worktreePath = activeRun?.WorktreePath;
-                if (!string.IsNullOrWhiteSpace(worktreePath) && Directory.Exists(worktreePath))
+                if (!string.IsNullOrWhiteSpace(worktreePath) && await _runHost.DirectoryExistsAsync(worktreePath))
                 {
                     lines.Add($"Its active run's worktree is checked out at: {worktreePath}");
                     lines.Add("You may read and edit files there directly with your filesystem tools using that absolute path.");

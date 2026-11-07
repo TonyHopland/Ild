@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -481,6 +482,7 @@ public sealed class LoopEngine : ILoopEngine
         // Only a halted, parked run can be steered/resumed here.
         if (run.Status != LoopRunStatus.WaitingHuman || !run.IsHalted) return;
 
+        await KillStrayCommandsAsync(sp, runId);
         var old = run.Status;
         // A non-null note (empty allowed) flags the AI node to continue the
         // captured session; the executor consumes and clears it one-shot. Only a
@@ -520,6 +522,24 @@ public sealed class LoopEngine : ILoopEngine
             reason: automatic ? "Run resumed automatically" : "Run resumed", currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
+    }
+
+    /// <summary>
+    /// Before a node runs again: the run host ends anything still running for the run. A disconnect halts the node
+    /// (ADR-0017) but may leave its command alive, and a retry must not start beside it. A host that cannot be
+    /// reached never holds the retry up; the attempt then meets what is left, as it did before.
+    /// </summary>
+    private async Task KillStrayCommandsAsync(IServiceProvider sp, Guid runId)
+    {
+        try
+        {
+            if (await sp.GetRunHost().KillAllAsync(runId) is > 0 and var killed)
+                _logger.LogInformation("Ended {Count} command(s) still running for run {RunId} before it resumed", killed, runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not end the commands still running for run {RunId} before it resumed", runId);
+        }
     }
 
     private static async Task<bool> ParkedBeforeANodeOtherThanAiAsync(LoopRun run, IServiceProvider sp)
@@ -716,6 +736,7 @@ public sealed class LoopEngine : ILoopEngine
             prevOutput = prev?.Output;
         }
 
+        await KillStrayCommandsAsync(scope.ServiceProvider, runId);
         if (ended)
             await ReopenToRetryAsync(run, target, prevOutput, loopRunStore, workItems, eventLog);
         else

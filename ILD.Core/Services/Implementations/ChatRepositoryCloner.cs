@@ -1,3 +1,5 @@
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Interfaces;
@@ -45,6 +47,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private readonly IConfiguration _config;
     private readonly IShutdownState _shutdown;
     private readonly ILogger<ChatRepositoryCloner> _log;
+    private readonly IRunHost _host;
 
     public ChatRepositoryCloner(
         AppDbContext db,
@@ -54,8 +57,10 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         IRepositoryManager git,
         IConfiguration config,
         IShutdownState shutdown,
-        ILogger<ChatRepositoryCloner>? log = null)
+        ILogger<ChatRepositoryCloner>? log = null,
+        IRunHost? host = null)
     {
+        _host = host ?? LocalRunHost.Shared;
         _db = db;
         _scopes = scopes;
         _chats = chats;
@@ -174,7 +179,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         => Refused(ChatRepositoryCloneOutcome.UnknownChat, "The chat was deleted.");
 
     /// <summary>Clone into, or update, the chat's folder for the repository, as the agent.</summary>
-    private static async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)
+    private async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)
     {
         var reposDir = Path.Combine(job.ScratchPath, ReposFolder);
         var (folderName, exists) = await FindFolderAsync(reposDir, job.Repo.Id, Clean(job.Repo.Name), ct);
@@ -238,7 +243,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// Every step either does all it says or nothing, so a refusal leaves HEAD,
     /// the branches, the index and the working tree as they were.
     /// </summary>
-    private static async Task<AgentProcessResult> SwitchOrFastForwardAsync(
+    private async Task<AgentProcessResult> SwitchOrFastForwardAsync(
         Func<string[], Task<AgentProcessResult>> git, string branch, string remoteRef)
     {
         var local = await git(["rev-parse", "--verify", "-q", $"refs/heads/{branch}"]);
@@ -271,7 +276,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// repository may have been renamed since. Failing that, the first of those
     /// names that is free.
     /// </summary>
-    private static async Task<(string Name, bool Exists)> FindFolderAsync(
+    private async Task<(string Name, bool Exists)> FindFolderAsync(
         string reposDir, Guid repositoryId, string name, CancellationToken ct)
     {
         string[] candidates = [name, $"{name}-{repositoryId:N}"];
@@ -295,7 +300,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// marker in a repository of its own: a worktree the agent added to the clone
     /// reads the same marker, but is not the clone.
     /// </summary>
-    private static async Task<bool> IsCloneOfAsync(string folder, string reposDir, Guid repositoryId, CancellationToken ct)
+    private async Task<bool> IsCloneOfAsync(string folder, string reposDir, Guid repositoryId, CancellationToken ct)
     {
         var marker = await RunGitAsync(folder, reposDir, ["config", "--local", "--get", MarkerKey], ct);
         if (marker.ExitCode != 0 || !Guid.TryParse(marker.Stdout.Trim(), out var id) || id != repositoryId)
@@ -376,12 +381,11 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     // cannot make a switch that has already happened look refused; so are
     // automatic gc and maintenance, which detach from git and would go on
     // writing in the clone after it is killed, e.g. as the chat is deleted.
-    private static async Task<AgentProcessResult> RunGitAsync(
+    private async Task<AgentProcessResult> RunGitAsync(
         string folder, string ceilingDirectory, IReadOnlyList<string> arguments, CancellationToken ct)
     {
-        using var process = Process.Start(BuildStartInfo(
-                [.. QuietGitOptions, "-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory))
-            ?? throw new IOException("could not start git");
+        using var process = await _host.StartCommandAsync(new RunCommand(BuildStartInfo(
+            [.. QuietGitOptions, "-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory)), ct);
         return await AgentProcess.RunAsync(process, stdin: null, ct);
     }
 }

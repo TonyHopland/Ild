@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -63,7 +64,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrWhiteSpace(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[pi-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
@@ -76,7 +77,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // per-directory config to set for ctx.AdditionalAllowedDirectories.
 
             var sessionDirectory = Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
-            await AgentWritableFiles.CreateDirectoryAsync(sessionDirectory, ctx.Cancel);
+            await RunHost.CreateDirectoryAsync(sessionDirectory, ctx.Cancel);
             await PrepareRuntimeFilesAsync(settings, ctx.Cancel);
 
             string? sessionIdToUse = ctx.SessionId;
@@ -94,10 +95,10 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 sessionPathToUse = restoreResult.SessionPathToUse;
             }
 
-            Process? proc;
+            IRunProcess? proc;
             try
             {
-                proc = StartAgentProcess(BuildRunProcessStartInfo(
+                proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
                     settings,
                     worktreePath,
                     sessionDirectory,
@@ -483,9 +484,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     // The session dir is the agent's to write, so it is listed and read as the
     // agent (see AgentWritableFiles), never by the orchestrator through a link.
-    private static async Task<string?> FindSessionFileAsync(string sessionDirectory, string sessionId, CancellationToken ct)
+    private async Task<string?> FindSessionFileAsync(string sessionDirectory, string sessionId, CancellationToken ct)
     {
-        var files = await AgentWritableFiles.ListFilesAsync(sessionDirectory, "*.jsonl", ct);
+        var files = await RunHost.ListFilesAsync(sessionDirectory, "*.jsonl", ct);
 
         var exactPath = BuildSnapshotPath(sessionDirectory, sessionId);
         if (files.Any(file => file.Path == exactPath))
@@ -529,25 +530,25 @@ public sealed class PiAdapter : CliAgentAdapterBase
         return sb.ToString();
     }
 
-    private static async Task PrepareRuntimeFilesAsync(PiAdapterSettings settings, CancellationToken ct)
+    private async Task PrepareRuntimeFilesAsync(PiAdapterSettings settings, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
         {
-            await AgentWritableFiles.CreateDirectoryAsync(settings.AgentDirectory, ct);
+            await RunHost.CreateDirectoryAsync(settings.AgentDirectory, ct);
 
             // Older builds wrote an HTTP-calling ild.ts here, and the agent dir is
             // reused by later turns of the same run or chat. pi loads it before any
             // `-e` path and keeps the first tool of a name, so a leftover would
             // shadow the MCP tools; it also still holds the token of its day.
             // Whatever is there goes, and what cannot go never holds up the launch.
-            await AgentWritableFiles.DeleteAsync([LegacyExtensionPath(settings.AgentDirectory)], ct);
+            await RunHost.DeleteAsync([LegacyExtensionPath(settings.AgentDirectory)], ct);
 
             if (!string.IsNullOrWhiteSpace(settings.ReadOnlyAuthJson))
-                await AgentWritableFiles.WriteReadOnlyFileAsync(
+                await RunHost.WriteReadOnlyFileAsync(
                     Path.Combine(settings.AgentDirectory, "auth.json"), settings.ReadOnlyAuthJson, ct);
 
             if (!string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
-                await AgentWritableFiles.WriteFileAsync(
+                await RunHost.WriteFileAsync(
                     Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent, ct);
         }
 

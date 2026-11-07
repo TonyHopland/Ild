@@ -6,6 +6,8 @@ using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using Porta.Pty;
 
 namespace ILD.Api.Services;
@@ -22,13 +24,16 @@ public sealed class InteractiveProviderSessionService
     private readonly IEgressPolicy? _egressPolicy;
     private readonly IManagedAgentUsage? _usage;
     private readonly IServiceScopeFactory? _scopes;
+    private readonly IRunHost _host;
 
     public InteractiveProviderSessionService(
         ILogger<InteractiveProviderSessionService> logger,
         IEgressPolicy? egressPolicy = null,
         IManagedAgentUsage? usage = null,
-        IServiceScopeFactory? scopes = null)
+        IServiceScopeFactory? scopes = null,
+        IRunHost? host = null)
     {
+        _host = host ?? LocalRunHost.Shared;
         _logger = logger;
         _egressPolicy = egressPolicy;
         _usage = usage;
@@ -89,13 +94,13 @@ public sealed class InteractiveProviderSessionService
             // by ILD when the terminal closes, rather than written into the store by the agent
             // (ADR-0031). A Claude terminal makes the long-lived token that the gateway uses.
             var throwawayHome = Path.Combine(sessionRoot, "home");
-            await AgentWritableFiles.CreateDirectoryAsync(throwawayHome, cancellationToken);
+            await _host.CreateDirectoryAsync(throwawayHome, cancellationToken);
             var claudeToken = provider.Type == "claude-code" ? new SetupTokenCapture(Math.Clamp(initialCols, 20, 500)) : null;
             if (claudeToken is not null)
                 extraArgs = ["setup-token"];
             if (notice is not null)
                 await PtyWebSocketBridge.SendNoticeAsync(socket, notice, cancellationToken);
-            var routed = AgentIsolation.RouteCommand(
+            var routed = _host.RouteTerminalCommand(
                 binaryPath, extraArgs, provider.Id, await _egressPolicy.LaunchModeAsync(cancellationToken));
             var environment = new Dictionary<string, string>(routed.Environment) { ["HOME"] = throwawayHome };
 
@@ -112,14 +117,14 @@ public sealed class InteractiveProviderSessionService
 
             await PtyWebSocketBridge.RunAsync(
                 socket, options, _logger, cancellationToken, reportExit: true,
-                onOutput: claudeToken is null ? null : claudeToken.Feed);
+                onOutput: claudeToken is null ? null : claudeToken.Feed, host: _host);
             await KeepLoginsAsync(provider, throwawayHome, claudeToken?.Token);
         }
         finally
         {
             // The TUI ran as the agent, which can write here: cleared as the agent,
             // so a link it planted is unlinked rather than followed.
-            try { await AgentWritableFiles.DeleteAsync([sessionRoot], CancellationToken.None); } catch { }
+            try { await _host.DeleteAsync([sessionRoot], CancellationToken.None); } catch { }
         }
     }
 

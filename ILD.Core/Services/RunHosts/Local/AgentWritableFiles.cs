@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using System.Globalization;
 using System.Text;
 
@@ -349,9 +351,10 @@ public static class AgentWritableFiles
     private static async Task<AgentProcessResult> RunAsync(
         string script, IReadOnlyList<string> arguments, string? stdin, CancellationToken ct)
     {
-        using var process = Process.Start(BuildStartInfo(
-                script, arguments, AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
-            ?? throw new IOException("could not start /bin/sh");
+        using var process = new LocalRunProcess(
+            Process.Start(BuildStartInfo(script, arguments, AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
+                ?? throw new IOException("could not start /bin/sh"),
+            static _ => { });
         return await AgentProcess.RunAsync(process, stdin, ct);
     }
 

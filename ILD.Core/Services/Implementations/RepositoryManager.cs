@@ -3,6 +3,8 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Win32.SafeHandles;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
 
@@ -32,6 +34,7 @@ public class RepositoryManager : IRepositoryManager
     private static readonly string AskPassScriptPath = EnsureAskPassScript();
     private readonly ILogger<RepositoryManager>? _logger;
     private readonly IProcessRunner _runner;
+    private readonly IRunHost _host;
     private readonly string _worktreesRoot;
     private readonly AgentIdentity? _agent;
     private readonly GitMirror _mirrors;
@@ -49,7 +52,8 @@ public class RepositoryManager : IRepositoryManager
         string? worktreesRoot = null,
         AgentIdentity? agent = null,
         string? mirrorsRoot = null,
-        Func<string, string?>? readEnvironment = null)
+        Func<string, string?>? readEnvironment = null,
+        IRunHost? host = null)
     {
         _runner = runner;
         _readEnvironment = readEnvironment ?? Environment.GetEnvironmentVariable;
@@ -57,6 +61,7 @@ public class RepositoryManager : IRepositoryManager
         _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
         _agent = agent ?? ConfiguredAgent();
         _agentOptions = new ProcessRunOptions(AsAgent: _agent, AgentScoped: true);
+        _host = host ?? new LocalRunHost(runner, agent: _agent);
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
@@ -96,30 +101,13 @@ public class RepositoryManager : IRepositoryManager
             if (bundle is null) return (false, bundleError);
             await using (bundle)
             {
-                var r = await _runner.RunAsync(
-                    "/bin/sh", ["-c", CloneScript, "sh", target, WithoutUserInfo(cloneUrl)], "/", cancellationToken, null,
-                    _agentOptions with { StandardInputFrom = bundle.Bundle ?? Stream.Null });
+                var r = await _host.PushBundleAsync(target, WithoutUserInfo(cloneUrl), bundle.Bundle ?? Stream.Null, cancellationToken);
                 if (!r.Success)
                     _logger?.LogDebug("Cloning {Target} from the bundle exited {Code}: {Err}", target, r.ExitCode, r.StdErr);
                 return r.Success ? (true, null) : (false, r.StdErr);
             }
         }
     }
-
-    // The bundle arrives on stdin; git cannot read one from a pipe, so it goes to a file in a scratch
-    // directory the agent makes and removes. An empty stdin is a remote with no branches yet.
-    private const string CloneScript = """
-        d=$(mktemp -d) || exit 1
-        trap 'rm -rf -- "$d"' EXIT
-        cat > "$d/in.bundle" || exit 1
-        if [ -s "$d/in.bundle" ]; then
-            git clone --quiet -- "$d/in.bundle" "$1" || exit 1
-            git -C "$1" config remote.origin.url "$2"
-        else
-            git init --quiet --initial-branch=main -- "$1" || exit 1
-            git -C "$1" remote add origin "$2"
-        fi
-        """;
 
     public async Task<string> CreateWorktreeAsync(string repoPath, string branchName)
     {
@@ -336,16 +324,6 @@ public class RepositoryManager : IRepositoryManager
         return null;
     }
 
-    // The bundle arrives on stdin and is written to a scratch directory of the agent's, because git
-    // cannot fetch from a pipe. Into a namespace of its own: nothing the clone has is touched here.
-    private const string FetchBundleScript = """
-        d=$(mktemp -d) || exit 1
-        trap 'rm -rf -- "$d"' EXIT
-        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin || exit 1
-        cat > "$d/in.bundle" || exit 1
-        git -C "$1" fetch --quiet --no-tags --no-write-fetch-head -- "$d/in.bundle" '+refs/heads/*:refs/ild-sync/*'
-        """;
-
     private async Task<bool> FetchBundleAsync(string worktreePath, Stream bundle, CancellationToken ct)
     {
         if (TrustedRepositoryRoot(worktreePath) is null)
@@ -354,9 +332,7 @@ public class RepositoryManager : IRepositoryManager
             return false;
         }
 
-        var r = await _runner.RunAsync(
-            "/bin/sh", ["-c", FetchBundleScript, "sh", Path.GetFullPath(worktreePath)], "/", ct, null,
-            _agentOptions with { StandardInputFrom = bundle });
+        var r = await _host.FetchBundleAsync(worktreePath, bundle, ct);
         if (!r.Success)
             _logger?.LogDebug("Fetching the bundle into {Worktree} exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
         return r.Success;
@@ -492,13 +468,14 @@ public class RepositoryManager : IRepositoryManager
         {
             // The agent writes the bundle; what the remote receives is what the mirror
             // took from it, pushed by the orchestrator from a place the agent cannot write.
-            var bundle = new[] { "bundle", "create", "--quiet", "-", $"refs/heads/{branchName}" };
             var pushed = await mirror.PushAsync(
                 auth, branchName, sha,
                 async (incremental, sink) =>
                 {
-                    var r = await RunAsync(worktreePath, incremental ? [.. bundle, "--not", "--remotes=origin"] : bundle, cancellationToken, sink);
-                    return new ProcessResult(r.ExitCode, r.StdOut, r.StdErr);
+                    if (TrustedRepositoryRoot(worktreePath) is null)
+                        return new ProcessResult(RefusedExitCode, string.Empty, $"{worktreePath} is not a git clone or worktree created by ILD");
+                    var r = await _host.PullBundleAsync(worktreePath, branchName, incremental, sink, cancellationToken);
+                    return new ProcessResult(r.ExitCode, string.Empty, r.StdErr);
                 },
                 cancellationToken);
             if (!pushed.Ok)

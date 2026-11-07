@@ -21,6 +21,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_WORKITEM_SERVER_URL`                    | URL used to auto-seed the global WorkItem Server connection                                                                |
 | `ILD_WORKITEM_SERVER_API_KEY`                | API key used to auto-seed the global WorkItem Server connection                                                            |
 | `ILD_API_URL`                                | Base URL agents and the MCP server use to call back into the ILD API                                                       |
+| `ILD_RUN_HOST`                               | Where runs live: `local` (default, the agent uid split described below). `container` and `kubernetes` are accepted names but refuse to start until they are built; the host is never detected |
 | `ILD_ALLOWED_ORIGINS`                        | Comma-separated CORS origins allowed to call the ILD API                                                                   |
 | `ILD_PREVIEW_PROXY_BASE`                     | Origin worktree previews are served under, e.g. `http://ild.localhost:8080`. Unset ⇒ preview proxying is off               |
 | `ILD_PREVIEW_PUBLIC_HOST`                    | Host used to build direct preview URLs when no proxy base is set (default `127.0.0.1`)                                     |

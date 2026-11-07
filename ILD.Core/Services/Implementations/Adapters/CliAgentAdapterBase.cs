@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
@@ -121,7 +123,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         if (ScopeFactory is null) return null;
         using var scope = ScopeFactory.CreateScope();
         var registry = scope.ServiceProvider.GetService<IModelGatewayRegistry>();
-        var apiUrl = EnvironmentVariables.Get("ILD_API_URL") ?? "http://localhost:5000";
+        var apiUrl = RunHost.GatewayApiUrl(EnvironmentVariables.Get("ILD_API_URL"));
         // The agent reaches the gateway at ILD's own address, which no block may close.
         var ildHost = Uri.TryCreate(apiUrl, UriKind.Absolute, out var ild) ? ild.Host : null;
         return registry?.Open(
@@ -146,16 +148,31 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// already carries, and the <see cref="AgentExecutionContext.NetworkMode"/> that
     /// decides whether the child is proxied (ADR-0019).
     /// </param>
-    protected static Process? StartAgentProcess(ProcessStartInfo psi, AgentExecutionContext ctx)
-        => Process.Start(RouteForExecution(psi, ctx));
+    protected Task<IRunProcess> StartAgentProcessAsync(ProcessStartInfo psi, AgentExecutionContext ctx)
+        => RunHost.StartCommandAsync(
+            RunCommand.Agent(psi, OwnerOf(ctx), ctx.Provider.Id, ctx.NetworkMode, ctx.Environment), ctx.Cancel);
+
+    /// <summary>The run or chat an execution belongs to: whose processes <see cref="IRunHost.KillAllAsync"/> ends.</summary>
+    protected static Guid OwnerOf(AgentExecutionContext ctx) => ctx.ChatSessionId ?? ctx.RunContext.LoopRunId;
+
+    private IRunHost? _runHost;
+
+    /// <summary>
+    /// Where the agent's processes and files live: the run host registered with DI, or the local one for an
+    /// adapter built without it.
+    /// </summary>
+    protected IRunHost RunHost => _runHost ??= ResolveRunHost();
+
+    private IRunHost ResolveRunHost()
+    {
+        if (ScopeFactory is null) return LocalRunHost.Shared;
+        using var scope = ScopeFactory.CreateScope();
+        return scope.ServiceProvider.GetService<IRunHost>() ?? LocalRunHost.Shared;
+    }
 
     /// <summary>The launch <see cref="StartAgentProcess"/> starts: <paramref name="psi"/> with the execution's environment, crossed to the agent uid.</summary>
     internal static ProcessStartInfo RouteForExecution(ProcessStartInfo psi, AgentExecutionContext ctx)
-    {
-        foreach (var (name, value) in ctx.Environment ?? new Dictionary<string, string>())
-            psi.Environment[name] = value;
-        return AgentIsolation.Route(psi, ctx.Provider.Id, ctx.NetworkMode);
-    }
+        => LocalRunHost.RouteAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment);
 
     /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind
@@ -167,30 +184,14 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// the engine moves on, so callers surface the failure instead.
     /// </summary>
     /// <returns><c>true</c> when the process is gone (killed, or already exited).</returns>
-    protected static bool KillProcessTree(Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-            return true;
-        }
-        catch (InvalidOperationException)
-        {
-            // Already exited — that is the outcome we wanted anyway.
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    protected static bool KillProcessTree(IRunProcess process) => process.TryKill();
 
     /// <summary>
     /// Kill the agent process tree and build the node's failure message, adding a
     /// diagnostic when the kill did not take (see <see cref="KillProcessTree"/>)
     /// so an un-killable agent is visible in the run instead of silent.
     /// </summary>
-    protected static string KillAndDescribe(Process process, string message)
+    protected static string KillAndDescribe(IRunProcess process, string message)
         => KillProcessTree(process)
             ? message
             : message + " — WARNING: the agent process could not be killed and may still be running. "
@@ -253,13 +254,13 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     }
 
     /// <summary>True once the file is saved or there was nothing to save; false when an append lost a race and the save should be decided again.</summary>
-    private static async Task<bool> SaveSessionFileAsync(
+    private async Task<bool> SaveSessionFileAsync(
         IAdapterSessionSnapshotStore store, SessionSnapshotKey key, string path, string format, CancellationToken ct)
     {
         // The session file sits where the agent can write, so it is only measured and
         // read as the agent (see AgentWritableFiles), never through a link.
         // An empty file holds nothing to keep, and must not replace a history stored earlier.
-        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not ({ } length and > 0)) return true;
+        if (await RunHost.GetFileLengthAsync(path, ct) is not ({ } length and > 0)) return true;
 
         var stored = await store.GetMetadataAsync(key, ct);
         if (stored is not null
@@ -271,21 +272,21 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
             var tailHash = await TailHashAsync(path, length, ct);
             var result = SessionSnapshotAppendResult.Conflict;
-            await AgentWritableFiles.ReadFileRangeAsync(path, stored.ByteLength, length - stored.ByteLength,
+            await RunHost.ReadFileRangeAsync(path, stored.ByteLength, length - stored.ByteLength,
                 async added => result = await store.AppendAsync(key, format, added, stored.ByteLength, tailHash, ct));
             return result == SessionSnapshotAppendResult.Appended;
         }
 
-        await AgentWritableFiles.ReadFileRangeAsync(path, 0, length, whole => store.ReplaceAsync(key, format, whole, ct));
+        await RunHost.ReadFileRangeAsync(path, 0, length, whole => store.ReplaceAsync(key, format, whole, ct));
         return true;
     }
 
     /// <summary>The <see cref="SessionSnapshotFormats.TailHash"/> of the file's bytes just before <paramref name="end"/>.</summary>
-    private static async Task<string> TailHashAsync(string path, long end, CancellationToken ct)
+    private async Task<string> TailHashAsync(string path, long end, CancellationToken ct)
     {
         var length = Math.Min(end, SessionSnapshotFormats.TailWindow);
         using var tail = new MemoryStream((int)length);
-        await AgentWritableFiles.ReadFileRangeAsync(path, end - length, length, content => content.CopyToAsync(tail, ct));
+        await RunHost.ReadFileRangeAsync(path, end - length, length, content => content.CopyToAsync(tail, ct));
         return SessionSnapshotFormats.TailHash(tail.GetBuffer().AsSpan(0, (int)tail.Length));
     }
 
@@ -305,8 +306,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
         await using var content = await store.OpenReadAsync(key, 0, ctx.Cancel);
         if (content is null) return false;
-        await AgentWritableFiles.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
-        await AgentWritableFiles.WriteFileAsync(path, content, ctx.Cancel);
+        await RunHost.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
+        await RunHost.WriteFileAsync(path, content, ctx.Cancel);
         return true;
     }
 
@@ -315,11 +316,11 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// read line by line as the agent without holding the file whole; the default when
     /// there is no regular file there.
     /// </summary>
-    protected static async Task<T?> ParseSessionFileAsync<T>(string path, Func<TextReader, T> parse, CancellationToken ct)
+    protected async Task<T?> ParseSessionFileAsync<T>(string path, Func<TextReader, T> parse, CancellationToken ct)
     {
-        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not { } length) return default;
+        if (await RunHost.GetFileLengthAsync(path, ct) is not { } length) return default;
         T? result = default;
-        await AgentWritableFiles.ReadFileRangeAsync(path, 0, length, content =>
+        await RunHost.ReadFileRangeAsync(path, 0, length, content =>
         {
             using var reader = new StreamReader(content, Encoding.UTF8);
             result = parse(reader);
