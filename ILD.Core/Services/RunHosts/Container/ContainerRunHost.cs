@@ -451,6 +451,52 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     {
         if (await WarningAsync(ct) is { } warning)
             Logger?.LogWarning("{Warning}", warning);
+        await ReconnectToRunsAsync(ct);
+    }
+
+    /// <summary>
+    /// Puts ILD's own container back on the network of every running run of this instance, at the address each run
+    /// was given for ILD. A container that is recreated (an upgrade, <c>docker compose up</c>) starts on none of them,
+    /// and without this the runs it left could reach neither the model gateway nor the MCP endpoint, and their previews
+    /// could not be reached. A restarted container keeps its networks, and nothing is done.
+    /// </summary>
+    internal async Task ReconnectToRunsAsync(CancellationToken ct)
+    {
+        if (_options.IldContainer is not { } ild) return;
+        try
+        {
+            var self = await _api.GetAsync($"/containers/{Escaped(ild)}/json", ct, HttpStatusCode.NotFound);
+            if (self is null) return;
+            var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
+            foreach (var listed in (await _api.GetAsync($"/containers/json?filters={filter}", ct))?.AsArray() ?? [])
+            {
+                if (listed?["Labels"]?[RunPaths.RunLabel]?.GetValue<string>() is not { } run || !Guid.TryParseExact(run, "N", out var owner)) continue;
+                var network = ObjectName(owner);
+                if (AddressIn(self, network) is not null) continue;
+
+                var container = await _api.GetAsync($"/containers/{Escaped(network)}/json", ct, HttpStatusCode.NotFound);
+                var prefix = $"{_options.IldHost}:";
+                var address = container?["HostConfig"]?["ExtraHosts"]?.AsArray()
+                    .Select(h => h?.GetValue<string>())
+                    .FirstOrDefault(h => h?.StartsWith(prefix, StringComparison.Ordinal) == true)?[prefix.Length..];
+                try
+                {
+                    await _api.PostAsync($"/networks/{Escaped(network)}/connect", address is null
+                        ? new { Container = ild }
+                        : new { Container = ild, EndpointConfig = new { IPAMConfig = new { IPv4Address = address } } }, ct);
+                    Logger?.LogInformation("Reconnected ILD to the network of run {Run} at {Address}", owner, address ?? "a new address");
+                }
+                catch (DockerApiException ex)
+                {
+                    Logger?.LogWarning("Could not put ILD back on the network of run {Run} at {Address}; the run cannot reach ILD until it is retried: {Reason}",
+                        owner, address, ex.Message);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException)
+        {
+            Logger?.LogWarning(ex, "Could not put ILD back on the networks of its runs at {Socket}", _options.Socket);
+        }
     }
 
     /// <summary>

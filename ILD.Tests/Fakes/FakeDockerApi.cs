@@ -35,6 +35,9 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     /// <summary>Every create, as <c>kind/name</c>, in order.</summary>
     public List<string> Created { get; } = [];
 
+    /// <summary>The bodies of the network connect calls, in order.</summary>
+    public List<JsonNode> Connects { get; } = [];
+
     /// <summary>Every delete a client asked for, as <c>kind/name</c>, in order.</summary>
     public List<string> Deleted { get; } = [];
 
@@ -313,7 +316,8 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         var container = JsonNode.Parse(request.Body)!["Container"]!.GetValue<string>();
         if (!_networks.ContainsKey(network)) return Failure(404, $"network {network} not found");
         if (!_containers.TryGetValue(container, out var found)) return Failure(404, $"no such container: {container}");
-        if (connect) found.Networks.Add(network); else found.Networks.Remove(network);
+        if (connect) { found.Networks.Add(network); Connects.Add(JsonNode.Parse(request.Body)!); }
+        else found.Networks.Remove(network);
         // Podman answers both with a plain-text "OK", not an empty body.
         return (200, new PlainText("OK"));
     }
@@ -363,6 +367,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
             State = new { Running = container.Running, Status = container.Running ? "running" : "created", ExitCode = 0, Error = "" },
             NetworkSettings = new { Networks = networks },
             Config = new { Labels = container.Labels },
+            HostConfig = container.Config["HostConfig"]?.DeepClone(),
         });
     }
 

@@ -661,6 +661,28 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Single(_api.Execs);
     }
 
+    [Fact]
+    public async Task A_recreated_ild_container_is_put_back_on_each_runs_network_at_the_address_the_run_has_for_it()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var host = NewHost(Options(ildContainer: "ild-main"));
+        await CreateRunAsync(host);
+        var given = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Single()!.GetValue<string>();
+
+        _api.SeedIldContainer("ild-main");
+        Assert.Empty(_api.NetworksOf("ild-main"));
+        using var restarted = NewHost(Options(ildContainer: "ild-main"));
+        await restarted.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal([Name(_run)], _api.NetworksOf("ild-main"));
+        Assert.Equal(given["ild.example:".Length..], _api.Connects[^1]["EndpointConfig"]!["IPAMConfig"]!["IPv4Address"]!.GetValue<string>());
+        Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("Reconnected ILD to the network of run", StringComparison.Ordinal));
+
+        var connects = _api.Connects.Count;
+        await restarted.CheckAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(connects, _api.Connects.Count);
+    }
+
     // -- Toolchains --------------------------------------------------------------
 
     private static readonly RunAgent Claude = new(ManagedAgentCatalog.ClaudeCode, "2.1.0");
