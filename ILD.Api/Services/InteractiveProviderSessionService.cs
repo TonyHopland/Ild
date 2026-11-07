@@ -40,6 +40,12 @@ public sealed class InteractiveProviderSessionService
         _scopes = scopes;
     }
 
+    /// <summary>Where ILD's agent installs are. Replaced in tests.</summary>
+    internal string DataRoot { get; init; } = ManagedAgentInstall.ResolveDataRoot();
+
+    /// <summary>Where the logins are kept: ILD's own home. Replaced in tests.</summary>
+    internal string? StoreHome { get; init; }
+
     public async Task RunAsync(
         WebSocket socket,
         AiProvider provider,
@@ -55,6 +61,13 @@ public sealed class InteractiveProviderSessionService
         {
             await PtyWebSocketBridge.SendErrorAndCloseAsync(
                 socket, "Provider has no binaryPath configured.", cancellationToken);
+            return;
+        }
+
+        // With the container run host the CLI runs in a short-lived container of its own, with the agent from the toolchain store.
+        if (_host is RoutingRunHost { Isolated: ISignInTerminalHost signIn })
+        {
+            await RunInContainerAsync(socket, provider, binaryPath, signIn, initialCols, initialRows, cancellationToken);
             return;
         }
 
@@ -118,7 +131,8 @@ public sealed class InteractiveProviderSessionService
             await PtyWebSocketBridge.RunAsync(
                 socket, options, _logger, cancellationToken, reportExit: true,
                 onOutput: claudeToken is null ? null : claudeToken.Feed, host: _host);
-            await KeepLoginsAsync(provider, throwawayHome, claudeToken?.Token);
+            await KeepLoginsAsync(
+                provider, (home, ct) => CredentialImport.ImportAsync(throwawayHome, home, _logger, ct), claudeToken?.Token);
         }
         finally
         {
@@ -129,16 +143,69 @@ public sealed class InteractiveProviderSessionService
     }
 
     /// <summary>
+    /// Runs the login in a short-lived container that nothing else uses, since it writes the credentials the model gateway
+    /// keeps from agents. What it wrote is read out of the container when the CLI exits, and the container is removed.
+    /// </summary>
+    private async Task RunInContainerAsync(
+        WebSocket socket, AiProvider provider, string binaryPath, ISignInTerminalHost signIn, int initialCols, int initialRows, CancellationToken cancellationToken)
+    {
+        var managed = ManagedAgentCatalog.Find(provider.Type);
+        if (managed is not null
+            && AiProviderConfig.Parse(provider.Config).BinaryPath is null
+            && ManagedAgentInstall.CurrentVersionId(DataRoot, managed) is null)
+        {
+            await PtyWebSocketBridge.SendErrorAndCloseAsync(socket, BuildUnavailableMessage(provider, binaryPath), cancellationToken);
+            return;
+        }
+
+        var (extraArgs, notice) = ResolveExtraArgs(provider);
+        var cols = Math.Clamp(initialCols, 20, 500);
+        var rows = Math.Clamp(initialRows, 5, 200);
+        var claudeToken = provider.Type == "claude-code" ? new SetupTokenCapture(cols) : null;
+        if (claudeToken is not null)
+            extraArgs = ["setup-token"];
+        if (notice is not null)
+            await PtyWebSocketBridge.SendNoticeAsync(socket, notice, cancellationToken);
+        await PtyWebSocketBridge.SendNoticeAsync(socket, "Starting the sign-in container...", cancellationToken);
+
+        SignInTerminal? terminal = null;
+        try
+        {
+            var options = new PtyOptions { Name = $"ild-{provider.Type}", Cols = cols, Rows = rows, App = binaryPath, CommandLine = extraArgs.ToArray() };
+            await PtyWebSocketBridge.RunAsync(
+                socket, options, _logger, cancellationToken, reportExit: true,
+                spawn: async (_, token) =>
+                {
+                    terminal = await signIn.OpenSignInAsync(managed, binaryPath, extraArgs, cols, rows, token);
+                    return terminal.Pty;
+                },
+                onOutput: claudeToken is null ? null : claudeToken.Feed, host: _host);
+            if (terminal is not null)
+                await KeepLoginsAsync(
+                    provider, (home, ct) => CredentialImport.ImportAsync(terminal.ReadLoginAsync, home, _logger, ct), claudeToken?.Token);
+        }
+        finally
+        {
+            if (terminal is not null)
+            {
+                try { await terminal.DisposeAsync(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Could not remove the sign-in container of {ProviderName}: {Reason}", provider.Name, ex.Message); }
+            }
+        }
+    }
+
+    /// <summary>
     /// What the terminal made, kept where only ILD can read it: the logins it wrote go into the credential
     /// store, and a long-lived Claude token it printed is saved, encrypted, on the provider.
     /// </summary>
-    private async Task KeepLoginsAsync(AiProvider provider, string throwawayHome, string? claudeToken)
+    private async Task KeepLoginsAsync(
+        AiProvider provider, Func<string, CancellationToken, Task<IReadOnlyList<string>>> importLogins, string? claudeToken)
     {
         try
         {
-            var home = Environment.GetEnvironmentVariable("HOME");
+            var home = StoreHome ?? Environment.GetEnvironmentVariable("HOME");
             if (!string.IsNullOrEmpty(home))
-                await CredentialImport.ImportAsync(throwawayHome, home, _logger, CancellationToken.None);
+                await importLogins(home, CancellationToken.None);
 
             if (claudeToken is not null && _scopes is not null)
             {

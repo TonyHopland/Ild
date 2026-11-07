@@ -1310,4 +1310,162 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.Equal(created, _api.Created.Count);
     }
+
+    // -- Provider sign-in --------------------------------------------------------
+
+    private static string SignInContainerOf(FakeDockerApi api)
+        => api.Created.Single(c => c.StartsWith("containers/ild-signin-", StringComparison.Ordinal))["containers/".Length..];
+
+    [Fact]
+    public async Task The_sign_in_container_has_the_default_network_the_store_read_only_and_nothing_of_a_chat_or_run()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        AnswerInstaller(AgentNodeLine, ClaudeLine);
+        string? seen = null;
+        var answer = _api.OnExec;
+        _api.OnExec = e =>
+        {
+            if (e.Container.StartsWith("ild-signin-", StringComparison.Ordinal)) seen = _api.Container(e.Container)!.ToJsonString();
+            return answer(e);
+        };
+
+        await using var terminal = await host.OpenSignInAsync(
+            ManagedAgentCatalog.ClaudeCode, "/data/agents/claude/bin/claude", ["setup-token"], 100, 30, TestContext.Current.CancellationToken);
+
+        var name = SignInContainerOf(_api);
+        var config = _api.Container(name)!;
+        Assert.Null(config["HostConfig"]!["NetworkMode"]);
+        Assert.Null(config["HostConfig"]!["ExtraHosts"]);
+        Assert.Equal(["ild-tools:/opt/ild-tools:ro"], config["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+        Assert.Equal(["ALL"], config["HostConfig"]!["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Equal(["no-new-privileges"], config["HostConfig"]!["SecurityOpt"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
+        Assert.Equal("signin", config["Labels"]!["ild/role"]!.GetValue<string>());
+        Assert.Null(config["Labels"]![RunPaths.RunLabel]);
+        Assert.Empty(_api.Networks());
+        Assert.DoesNotContain(_api.Volumes(), v => v != "ild-tools");
+        Assert.Contains("PATH=/opt/ild-tools/agents/claude-code/2.1.0/wrap:/tmp/home/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:" + RunToolEnvironment.ImagePath,
+            config["Env"]!.AsArray().Select(v => v!.GetValue<string>()));
+        Assert.NotNull(seen);
+
+        var exec = _api.Execs.Last();
+        Assert.True(exec.Tty);
+        Assert.Equal(["claude", "setup-token"], exec.Command.TakeLast(2));
+        Assert.Contains("100x30", exec.Resizes);
+    }
+
+    [Fact]
+    public async Task The_sign_in_container_is_removed_when_the_terminal_is_disposed()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        AnswerInstaller(ClaudeLine);
+
+        var terminal = await host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken);
+        var name = SignInContainerOf(_api);
+        Assert.Contains(name, _api.Containers());
+
+        await terminal.DisposeAsync();
+        await terminal.DisposeAsync();
+
+        Assert.DoesNotContain(name, _api.Containers());
+    }
+
+    [Fact]
+    public async Task The_sign_in_container_is_removed_when_it_fails_to_start()
+    {
+        using var slow = NewHost(Options() with { ReadyTimeout = TimeSpan.FromMilliseconds(100) }, [Claude]);
+        AnswerInstaller(ClaudeLine);
+        _api.ContainerReadsBeforeRunning = int.MaxValue;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => slow.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(_api.Containers(), c => c.StartsWith("ild-signin-", StringComparison.Ordinal));
+    }
+
+    private async Task<SignInTerminal> OpenReadingAsync(ContainerRunHost host, Func<FakeDockerExec, Task> answer)
+    {
+        AnswerInstaller(ClaudeLine);
+        var installer = _api.OnExec;
+        _api.OnExec = e => e.Container.StartsWith("ild-signin-", StringComparison.Ordinal) && !e.Tty ? answer(e) : installer(e);
+        return await host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_login_file_is_read_out_of_the_sign_in_container_as_text()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        await using var terminal = await OpenReadingAsync(host, async e =>
+        {
+            await e.WriteStdoutAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes("""{"a":1}""")));
+            await e.ExitAsync(0);
+        });
+
+        var text = await terminal.ReadLoginAsync(".claude/.credentials.json", TestContext.Current.CancellationToken);
+
+        Assert.Equal("""{"a":1}""", text);
+        var script = _api.Execs.Last().Command;
+        Assert.Contains("! -L", script[2]);
+        Assert.Contains("-le \"$2\"", script[2]);
+        Assert.Equal([".claude/.credentials.json", "262144"], script.TakeLast(2));
+    }
+
+    [Fact]
+    public async Task A_link_or_an_oversized_login_file_is_not_read()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        // The script's own refusal (not a regular file, or over the cap) is its exit status 3: nothing is printed.
+        await using var terminal = await OpenReadingAsync(host, e => e.ExitAsync(3));
+
+        Assert.Null(await terminal.ReadLoginAsync(".codex/auth.json", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_sign_in_login_read_that_fails_otherwise_is_an_error()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        await using var terminal = await OpenReadingAsync(host, async e =>
+        {
+            await e.WriteStderrAsync("base64: boom");
+            await e.ExitAsync(1);
+        });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => terminal.ReadLoginAsync(".codex/auth.json", TestContext.Current.CancellationToken));
+        Assert.Contains("boom", ex.Message);
+    }
+
+    [Fact]
+    public async Task The_sweep_removes_sign_in_containers_a_killed_ild_left_but_not_open_ones_or_other_installs()
+    {
+        _api.SeedSignIn("ild-signin-left", Instance);
+        _api.SeedSignIn("ild-signin-other", "other");
+        using var host = NewHost(Options(), [Claude]);
+        AnswerInstaller(ClaudeLine);
+        await using var open = await host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken);
+        var openName = SignInContainerOf(_api);
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+
+        await sweeper.SweepAsync(host, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("ild-signin-left", _api.Containers());
+        Assert.Contains("ild-signin-other", _api.Containers());
+        Assert.Contains(openName, _api.Containers());
+    }
+
+    [Fact]
+    public async Task A_sign_in_container_whose_removal_failed_is_left_for_the_sweep()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        AnswerInstaller(ClaudeLine);
+        var terminal = await host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken);
+        var name = SignInContainerOf(_api);
+
+        _api.Down = true;
+        await terminal.DisposeAsync();
+        _api.Down = false;
+
+        var leftovers = await host.ListLeftoversAsync(new HashSet<Guid>(), TestContext.Current.CancellationToken);
+        Assert.Contains(leftovers, l => l.Location == name);
+    }
 }

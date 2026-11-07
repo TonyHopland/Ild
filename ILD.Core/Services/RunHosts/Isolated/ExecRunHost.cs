@@ -561,7 +561,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             : RunPaths.ChatOf(path) is { } chat && HostsChats ? new ExecOwner(chat, Chat: true)
             : throw new InvalidOperationException($"{path} is not a path in a run's or chat's {Noun}");
 
-    private async Task<IExecStream> OpenExecAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
+    private protected async Task<IExecStream> OpenExecAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
     {
         try
         {
