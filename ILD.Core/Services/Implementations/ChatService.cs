@@ -2,6 +2,7 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Remote;
 using ILD.Data;
@@ -297,7 +298,7 @@ public sealed class ChatService : IChatService
                 : LoopEditorContext.NeedsBriefing;
 
         var (contextPreamble, additionalAllowedDirectories) =
-            await BuildChatContextAsync(openWorkItemId, loopEditor, tools);
+            await BuildChatContextAsync(openWorkItemId, loopEditor, tools, session.ScratchPath);
 
         // Decisions on this chat's edit proposals, global variable suggestions and
         // loop template proposals ride the prompt until a turn that reached the
@@ -444,7 +445,7 @@ public sealed class ChatService : IChatService
     /// rebuilt on each call.
     /// </summary>
     private async Task<(string? Preamble, IReadOnlyList<string>? AllowedDirectories)> BuildChatContextAsync(
-        string? openWorkItemId, LoopEditorContext loopEditor, IReadOnlyList<string> tools)
+        string? openWorkItemId, LoopEditorContext loopEditor, IReadOnlyList<string> tools, string chatScratchPath)
     {
         var hasWorkItem = !string.IsNullOrWhiteSpace(openWorkItemId);
         if (!hasWorkItem && loopEditor == LoopEditorContext.Closed)
@@ -473,11 +474,21 @@ public sealed class ChatService : IChatService
                 // per ADR-0008 but are not exposed to the chat.
                 var activeRun = await _runs.GetActiveByWorkItemAsync(openWorkItemId!);
                 var worktreePath = activeRun?.WorktreePath;
-                if (!string.IsNullOrWhiteSpace(worktreePath) && await _runHost.DirectoryExistsAsync(worktreePath))
+                if (!string.IsNullOrWhiteSpace(worktreePath))
                 {
-                    lines.Add($"Its active run's worktree is checked out at: {worktreePath}");
-                    lines.Add("You may read and edit files there directly with your filesystem tools using that absolute path.");
-                    allowedDirectories = new[] { worktreePath };
+                    if (!ChatSharesHostWithRun(worktreePath, chatScratchPath))
+                    {
+                        var note = "Its active run runs in an isolated container, so its worktree cannot be read or edited from this chat.";
+                        if (!string.IsNullOrWhiteSpace(activeRun!.BranchName))
+                            note += $" To look at the run's code, call clone_repository with the run's branch `{activeRun.BranchName}`; this only has what the run has pushed.";
+                        lines.Add(note);
+                    }
+                    else if (await _runHost.DirectoryExistsAsync(worktreePath))
+                    {
+                        lines.Add($"Its active run's worktree is checked out at: {worktreePath}");
+                        lines.Add("You may read and edit files there directly with your filesystem tools using that absolute path.");
+                        allowedDirectories = new[] { worktreePath };
+                    }
                 }
             }
         }
@@ -495,6 +506,15 @@ public sealed class ChatService : IChatService
 
         return (string.Join("\n", lines), allowedDirectories);
     }
+
+    /// <summary>
+    /// Whether the chat can read the run's worktree: both live on ILD's own disk. It cannot see the
+    /// folder when the run is in a container (<c>/ild-run/…</c>, which exists only there) and the chat
+    /// is in the chat container or is an older local chat, when a Kubernetes run has a local chat, or
+    /// when an older local run has its chat in the chat container (<c>/ild-chat/…</c>).
+    /// </summary>
+    private static bool ChatSharesHostWithRun(string worktreePath, string chatScratchPath)
+        => RunPaths.OwnerOf(worktreePath) is null && RunPaths.ChatOf(chatScratchPath) is null;
 
     /// <summary>
     /// What the Loop Editor half of the Chat Context owes a turn. The two underlying
