@@ -444,7 +444,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                     "ild-codex-mcp", runContext.LoopRunId, IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
                     logger, environment) is { } settingsFile)
                 servers.Add(new("ild", settingsFile,
-                    $"{{command=\"dotnet\",args=[{TomlString(dll)}],env={{ILD_MCP_ENV_FILE={TomlString(settingsFile)}}},"
+                    $"{{{TomlLaunch(dll, [])},env={{ILD_MCP_ENV_FILE={TomlString(settingsFile)}}},"
                     + "required=true,startup_timeout_sec=30,tool_timeout_sec=120}"));
 
             // The parser reserves the "ild" name, so these can never clobber it.
@@ -476,7 +476,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
                 if (IldMcpServer.TryWriteConfigFile("ild-codex-mcp-server", runContext.LoopRunId, launch, logger, environment) is { } launchFile)
                     servers.Add(new(server.Name, launchFile,
-                        $"{{command=\"dotnet\",args=[{TomlString(dll)},\"--launch\",{TomlString(launchFile)}]}}"));
+                        $"{{{TomlLaunch(dll, ["--launch", launchFile])}}}"));
             }
 
             return servers;
@@ -499,6 +499,13 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     /// <summary>A name codex accepts unquoted in <c>-c mcp_servers.&lt;name&gt;=…</c>.</summary>
     private static readonly Regex ConfigKeyName = new("^[A-Za-z0-9_-]+$", RegexOptions.CultureInvariant);
+
+    /// <summary>The <c>command=…,args=[…]</c> pair that starts the ILD MCP server at <paramref name="dll"/>, then <paramref name="extra"/>.</summary>
+    private static string TomlLaunch(string dll, IReadOnlyList<string> extra)
+    {
+        var (command, arguments) = IldMcpServer.LaunchFor(dll);
+        return $"command={TomlString(command)},args=[{string.Join(",", arguments.Concat(extra).Select(TomlString))}]";
+    }
 
     /// <summary><paramref name="value"/> as a TOML basic string.</summary>
     private static string TomlString(string value)

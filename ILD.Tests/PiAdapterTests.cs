@@ -443,7 +443,7 @@ public class PiAdapterTests
             Assert.Single(System.Text.RegularExpressions.Regex.Matches(ildTs, @"registerMcpServer\("));
             Assert.Matches(@"""?exposure""?\s*:\s*""direct""", ildTs);
             Assert.Matches(@"""?timeout""?\s*:\s*120\b", ildTs);
-            Assert.Contains("ild-mcp-server.dll", ildTs);
+            Assert.Contains("ild-mcp-server", ildTs);
             Assert.Contains("ILD_API_URL", ildTs);
             Assert.Contains("ILD_LOOP_RUN_ID", ildTs);
             Assert.Contains(runId.ToString(), ildTs);

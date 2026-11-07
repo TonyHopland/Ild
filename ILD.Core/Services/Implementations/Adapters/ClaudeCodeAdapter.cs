@@ -337,11 +337,12 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     {
         var dllPath = IldMcpServer.ResolveServerDll(environment);
         if (dllPath == null) return null;
+        var (command, arguments) = IldMcpServer.LaunchFor(dllPath);
 
         return new Dictionary<string, object?>
         {
-            ["command"] = "dotnet",
-            ["args"] = new[] { dllPath },
+            ["command"] = command,
+            ["args"] = arguments.ToArray(),
             ["env"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
         };
     }

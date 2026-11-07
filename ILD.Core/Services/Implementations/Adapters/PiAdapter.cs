@@ -633,7 +633,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
             ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
-        var ildServerDll = (ildServer?["args"] as string[])?.FirstOrDefault();
+        // The DLL its tool names are read from, whether the entry starts it through dotnet or its apphost.
+        var ildServerDll = ildServer is null ? null : IldMcpServer.ResolveServerDll(environment);
         var toolNames = BuildPiToolNames(enabledToolKeys, ildServerDll);
 
         // Loaded with `-e` from its own directory rather than from the agent dir,

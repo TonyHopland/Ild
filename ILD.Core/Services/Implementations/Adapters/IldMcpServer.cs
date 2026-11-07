@@ -155,6 +155,20 @@ public static class IldMcpServer
     }
 
     /// <summary>
+    /// How to start the server published at <paramref name="dllPath"/>: its native apphost when one sits next to it,
+    /// otherwise <c>dotnet &lt;dll&gt;</c>. The apphost is what a run's pod or container has at the same path, built
+    /// self-contained, so the server starts there without a .NET of the project's on <c>PATH</c>, which may be one
+    /// too old to run it, or none.
+    /// </summary>
+    public static (string Command, IReadOnlyList<string> Arguments) LaunchFor(string dllPath)
+    {
+        var apphost = Path.Combine(Path.GetDirectoryName(dllPath) ?? string.Empty, Path.GetFileNameWithoutExtension(dllPath));
+        return !OperatingSystem.IsWindows() && File.Exists(apphost)
+            ? (apphost, [])
+            : ("dotnet", [dllPath]);
+    }
+
+    /// <summary>
     /// <see cref="AgentIsolation.AgentReadRoot"/>, read from <paramref name="environment"/>
     /// rather than from the process.
     /// </summary>

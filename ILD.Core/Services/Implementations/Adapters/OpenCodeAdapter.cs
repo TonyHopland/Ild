@@ -879,11 +879,12 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     {
         var dllPath = IldMcpServer.ResolveServerDll(environment);
         if (dllPath == null) return null;
+        var (command, arguments) = IldMcpServer.LaunchFor(dllPath);
 
         return new Dictionary<string, object?>
         {
             ["type"] = "local",
-            ["command"] = new[] { "dotnet", dllPath },
+            ["command"] = new[] { command }.Concat(arguments).ToArray(),
             ["environment"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
         };
     }
