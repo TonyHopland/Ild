@@ -2,9 +2,11 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json.Nodes;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Tools;
 using Microsoft.Extensions.Logging;
@@ -17,7 +19,7 @@ namespace ILD.Core.Services.RunHosts.Container;
 /// its own that reaches only ILD, and all three carry the run's labels. There are no owner references: ending the
 /// run deletes the container, the volume and the network, and the sweeper deletes what a killed ILD left.
 /// </summary>
-public sealed class ContainerRunHost : ExecRunHost, IDisposable
+public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDisposable
 {
     public const string RunLeftoverKind = "container-run";
 
@@ -36,6 +38,8 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     private readonly ConcurrentDictionary<Guid, List<RunTool>> _chatTools = new();
     // Containers that are not a run's, exec'd into by an id of their own: the store's installers.
     private readonly ConcurrentDictionary<Guid, string> _execNames = new();
+    // The sign-in terminals open now, which the sweep must not take for leftovers.
+    private readonly ConcurrentDictionary<string, byte> _signIns = new(StringComparer.Ordinal);
 
     public ContainerRunHost(ContainerRunHostOptions options, IProcessRunner runner, ILogger? logger = null)
         : base(runner, logger)
@@ -248,11 +252,11 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     /// installed, installed into the store first when it lacks them. Null when toolchains are off, so the run has only
     /// what the runner image has.
     /// </summary>
-    private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, CancellationToken ct)
+    private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, CancellationToken ct, IReadOnlyList<RunAgent>? only = null)
     {
         if (!_options.Toolchains) return null;
 
-        var agents = Agents();
+        var agents = only ?? Agents();
         var key = string.Join('\n', RunToolStore.Arguments(plan.Tools, agents));
         // Nothing to give: the run does not mount the store, but still gets its home's .local/bin and npm prefix.
         if (key.Length == 0) return RunToolEnvironment.None;
@@ -542,6 +546,110 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
+    // -- Provider sign-in --------------------------------------------------------
+
+    private const string SignInRole = "signin";
+    private const string SignInHome = "/tmp/home";
+
+    private static string SignInName(Guid id) => $"ild-signin-{id:N}";
+
+    // No run label: the sweep, which deletes what a run left, never takes it for a run's.
+    private IDictionary<string, string> SignInLabels() => new Dictionary<string, string>
+    {
+        [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+        [RunPaths.InstanceLabel] = _options.Instance,
+        [RunPaths.RoleLabel] = SignInRole,
+    };
+
+    // Reads one regular, non-empty file of at most the import's cap in the home, as base64; nothing else is printed.
+    private const string ReadLoginScript = """
+        f="$HOME/$1"
+        { [ -f "$f" ] && [ ! -L "$f" ]; } || exit 3
+        size=$(stat -c %s -- "$f") || exit 3
+        { [ "$size" -gt 0 ] && [ "$size" -le "$2" ]; } || exit 3
+        base64 -w0 -- "$f"
+        """;
+
+    /// <summary>
+    /// A terminal for a provider's login in a short-lived container of the runner image of its own: the agent from the toolchain
+    /// store, mounted read-only (installed first if it is missing), the engine's default network for the OAuth flow, and
+    /// none of what a chat has. It writes the credentials that the model gateway keeps from agents, so no chat or run
+    /// shares it. The container goes when the result is disposed, or on a failure to start.
+    /// </summary>
+    public async Task<SignInTerminal> OpenSignInAsync(ManagedAgent? agent, string command, IReadOnlyList<string> arguments, int cols, int rows, CancellationToken ct)
+    {
+        var id = Guid.NewGuid();
+        var name = SignInName(id);
+        _signIns[name] = 0;
+        _execNames[id] = name;
+
+        async Task RemoveAsync()
+        {
+            _execNames.TryRemove(id, out _);
+            try { await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true&v=true", null, CancellationToken.None)); }
+            catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
+            {
+                Logger?.LogWarning(ex, "Could not remove the sign-in container {Name}; the next sweep removes it", name);
+                return;
+            }
+            _signIns.TryRemove(name, out _);
+        }
+
+        try
+        {
+            var agents = agent is null ? (IReadOnlyList<RunAgent>)[] : Agents().Where(a => a.Agent.Key == agent.Key).ToList();
+            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), ct, agents);
+            try
+            {
+                await _api.PostAsync($"/containers/create?name={Escaped(name)}", new
+                {
+                    Image = _options.RunnerImage,
+                    Entrypoint = new[] { "/usr/bin/tini", "--" },
+                    Cmd = new[] { "sleep", "infinity" },
+                    User = $"{RunnerUid}:{RunnerUid}",
+                    Env = new[] { $"HOME={SignInHome}" }.Concat(tools?.For(SignInHome) ?? []).ToArray(),
+                    Labels = SignInLabels(),
+                    // The engine's default network, as the toolchain installer has; no volume of a run or chat, no ILD address.
+                    HostConfig = new
+                    {
+                        Binds = tools is { Path.Count: > 0 } ? new[] { $"{_options.ToolsVolume}:{RunToolStore.Root}:ro" } : Array.Empty<string>(),
+                        CapDrop = new[] { "ALL" },
+                        SecurityOpt = new[] { "no-new-privileges" },
+                        RestartPolicy = new { Name = "no" },
+                    },
+                }, ct);
+            }
+            catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
+            {
+                throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
+            }
+            await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
+            await WaitRunningAsync(name, ct);
+
+            if (Path.IsPathRooted(command)) command = Path.GetFileName(command);
+            IReadOnlyList<string> terminal = ["/bin/sh", "-c", "mkdir -p -- \"$HOME\" && cd -- \"$HOME\" && exec env TERM=xterm-256color \"$@\"", "sh", command, .. arguments];
+            var exec = await OpenExecAsync(id, terminal, stdin: true, tty: true, ct);
+            var pty = new ExecPty(exec);
+            pty.Resize(cols, rows);
+
+            return new SignInTerminal(pty, (path, token) => ReadSignInFileAsync(id, path, token), RemoveAsync);
+        }
+        catch
+        {
+            await RemoveAsync();
+            throw;
+        }
+    }
+
+    private async Task<string?> ReadSignInFileAsync(Guid id, string relativePath, CancellationToken ct)
+    {
+        var result = await RunScriptAsync(id, ReadLoginScript, [relativePath, CredentialImport.MaxBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)], ct);
+        if (result.ExitCode == 3) return null;
+        if (!result.Success)
+            throw new InvalidOperationException($"could not read {relativePath} in the sign-in container: {result.StdErr.Trim()}");
+        return Encoding.UTF8.GetString(Convert.FromBase64String(result.StdOut.Trim()));
+    }
+
     // -- Preview -----------------------------------------------------------------
 
     public override async Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
@@ -577,10 +685,17 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
             Collect(await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct), c => c["Labels"]);
             Collect((await _api.GetAsync($"/volumes?filters={filter}", ct))?["Volumes"], v => v["Labels"]);
             Collect(await _api.GetAsync($"/networks?filters={filter}", ct), n => n["Labels"]);
+            var signIns = new List<string>();
+            foreach (var listed in (await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct))?.AsArray() ?? [])
+                if (listed?["Labels"]?[RunPaths.RoleLabel]?.GetValue<string>() == SignInRole
+                    && listed["Names"]?.AsArray().FirstOrDefault()?.GetValue<string>()?.TrimStart('/') is { } signIn
+                    && !_signIns.ContainsKey(signIn))
+                    signIns.Add(signIn);
 
             return runs
                 .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
                 .Select(run => new RunLeftover(RunLeftoverKind, run))
+                .Concat(signIns.Select(name => new RunLeftover(RunLeftoverKind, name)))
                 .ToList();
         }
         catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
@@ -594,6 +709,19 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     {
         if (leftover.Kind != RunLeftoverKind)
             throw new ArgumentException($"unknown leftover kind '{leftover.Kind}'", nameof(leftover));
+        if (leftover.Location.StartsWith("ild-signin-", StringComparison.Ordinal))
+        {
+            try
+            {
+                await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(leftover.Location)}?force=true&v=true", null, ct));
+                return true;
+            }
+            catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
+            {
+                Logger?.LogWarning(ex, "Could not delete the sign-in container {Name}; the next sweep tries again", leftover.Location);
+                return false;
+            }
+        }
         if (!Guid.TryParseExact(leftover.Location, "N", out var owner))
             return false;
 

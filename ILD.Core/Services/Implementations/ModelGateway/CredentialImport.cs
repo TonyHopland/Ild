@@ -12,7 +12,8 @@ namespace ILD.Core.Services.Implementations.ModelGateway;
 /// </summary>
 public static class CredentialImport
 {
-    private const int MaxBytes = 256 * 1024;
+    /// <summary>The most a login file may hold; a larger one is not kept.</summary>
+    public const int MaxBytes = 256 * 1024;
 
     private sealed record Login(string RelativePath, Func<JsonNode, bool> HoldsLogin, bool Jsonc = false);
 
@@ -26,28 +27,41 @@ public static class CredentialImport
     ];
 
     /// <returns>The files imported, relative to the home.</returns>
-    public static async Task<IReadOnlyList<string>> ImportAsync(string throwawayHome, string storeHome, ILogger logger, CancellationToken ct)
+    public static Task<IReadOnlyList<string>> ImportAsync(string throwawayHome, string storeHome, ILogger logger, CancellationToken ct)
+        => ImportAsync(async (relativePath, token) =>
+        {
+            var source = Path.Combine(throwawayHome, relativePath);
+            if (await AgentWritableFiles.GetFileLengthAsync(source, token) is not ({ } length and > 0 and <= MaxBytes)) return null;
+
+            string? text = null;
+            await AgentWritableFiles.ReadFileRangeAsync(source, 0, length, async content =>
+            {
+                using var reader = new StreamReader(content);
+                text = await reader.ReadToEndAsync(token);
+            });
+            return text;
+        }, storeHome, logger, ct);
+
+    /// <summary>
+    /// Keeps the logins that <paramref name="read"/> finds, given a path relative to the home they were written in. It
+    /// returns the file's text, or null for a file that is not there, is not a regular file, or is over <see cref="MaxBytes"/>.
+    /// </summary>
+    /// <returns>The files imported, relative to the home.</returns>
+    public static async Task<IReadOnlyList<string>> ImportAsync(
+        Func<string, CancellationToken, Task<string?>> read, string storeHome, ILogger logger, CancellationToken ct)
     {
         var imported = new List<string>();
         foreach (var login in Logins)
         {
             try
             {
-                var source = Path.Combine(throwawayHome, login.RelativePath);
-                if (await AgentWritableFiles.GetFileLengthAsync(source, ct) is not ({ } length and > 0 and <= MaxBytes)) continue;
-
-                string? text = null;
-                await AgentWritableFiles.ReadFileRangeAsync(source, 0, length, async content =>
-                {
-                    using var reader = new StreamReader(content);
-                    text = await reader.ReadToEndAsync(ct);
-                });
-                if (text is null || !Holds(login, text)) continue;
+                var text = await read(login.RelativePath, ct);
+                if (text is null || text.Length > MaxBytes || !Holds(login, text)) continue;
 
                 Write(Path.Combine(storeHome, login.RelativePath), text);
                 imported.Add(login.RelativePath);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
             {
                 logger.LogWarning(ex, "Could not import the login {File} from the provider terminal: {Reason}", login.RelativePath, ex.Message);
             }

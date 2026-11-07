@@ -71,6 +71,40 @@ public sealed class CredentialImportTests : IDisposable
 
         Assert.Empty(await ImportAsync());
     }
+    [Fact]
+    public async Task A_reader_supplies_the_files_and_only_real_logins_are_kept()
+    {
+        var files = new Dictionary<string, string>
+        {
+            [".claude/.credentials.json"] = """{"claudeAiOauth":{"accessToken":"a"}}""",
+            [".codex/auth.json"] = "{}",
+            [".pi/agent/auth.json"] = "not json",
+        };
+        var asked = new List<string>();
+
+        var imported = await CredentialImport.ImportAsync((path, _) =>
+        {
+            asked.Add(path);
+            return Task.FromResult(files.GetValueOrDefault(path));
+        }, Store, NullLogger.Instance, TestContext.Current.CancellationToken);
+
+        Assert.Equal([".claude/.credentials.json"], imported);
+        Assert.Equal(5, asked.Count);
+        Assert.True(File.Exists(Path.Combine(Store, ".claude", ".credentials.json")));
+        Assert.False(File.Exists(Path.Combine(Store, ".codex", "auth.json")));
+    }
+
+    [Fact]
+    public async Task A_reader_that_fails_on_one_file_does_not_stop_the_others()
+    {
+        var imported = await CredentialImport.ImportAsync(
+            (path, _) => path == ".claude/.credentials.json"
+                ? throw new InvalidOperationException("boom")
+                : Task.FromResult<string?>(path == ".codex/auth.json" ? """{"OPENAI_API_KEY":"k"}""" : null),
+            Store, NullLogger.Instance, TestContext.Current.CancellationToken);
+
+        Assert.Equal([".codex/auth.json"], imported);
+    }
 }
 
 public class SetupTokenCaptureTests
@@ -121,4 +155,5 @@ public class SetupTokenCaptureTests
 
         Assert.Null(capture.Token);
     }
+
 }
