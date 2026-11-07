@@ -28,7 +28,7 @@ Run it twice for Podman if you can: once with **ILD on the host**, once with **I
    GIT_AUTHOR_NAME=... GIT_AUTHOR_EMAIL=... GIT_COMMITTER_NAME=... GIT_COMMITTER_EMAIL=...
    ```
 
-   For ILD in a container use the override in [Deployment](../deployment.md#ild-in-a-container) and `ILD_CONTAINER_ILD_CONTAINER=ild`.
+   For ILD in a container follow [Trying it with this repository's compose stack](../deployment.md#trying-it-with-this-repositorys-compose-stack): the override, the socket for your engine (a Podman machine's is the path inside its VM), and `localhost/ild-runner:latest`.
 
 3. Start ILD and read its log. Expected: no startup failure and no warning about the socket. With ILD in a container, the log has `Container engine socket /run/container.sock: ild can open it through group …`. Open **Settings > General**: no "Run host" warning.
 4. Stop the engine's socket (`systemctl --user stop podman.socket`) and reload **Settings > General**. Expected: a "Run host" card says ILD cannot reach the engine, and why. Start the socket again and restart ILD; the card is gone.
@@ -46,7 +46,7 @@ watch -n1 'podman ps -a --filter label=app.kubernetes.io/managed-by=ild; podman 
 | Run reaches its Start node | One container, one volume and one network, all named `ild-run-<run>`, labelled `ild/instance=<instance>` and `ild/run=<run>`. `podman network inspect ild-run-<run>` shows `"internal": true` |
 | Container comes up | `Up` within a few seconds. `podman inspect ild-run-<run> --format '{{.Config.User}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}}'` prints `10001:10001 [ALL] [no-new-privileges]` (rootless Podman may also list its seccomp setting) |
 | Agent turns | The agent node completes and the event log shows the output as it streams. `podman exec ild-run-<run> ls /ild-run/<run>/repo` shows the checkout, and `ls -ld /ild-run` inside is owned by uid 10001 |
-| Limits | `podman inspect ild-run-<run> --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}'` prints `8589934592 4000000000`. **If the container fails to create on a rootless engine because the cpu controller is not delegated, set `ILD_RUN_CPU_LIMIT=0`** and report it |
+| Limits | `podman inspect ild-run-<run> --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}'` prints `8589934592 4000000000`. **If the container fails to start on a rootless engine with `crun: open 'memory.max'` (the cgroup controllers are not delegated, as on a Podman machine), set `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0`** and report it |
 | Human reply | The run waits at the Human node; the container stays `Up`. Answer in the UI and the next node runs in the same container |
 | Preview | Start the preview from the work item's Preview tab; the preview URL loads. **With ILD on the host under rootless Podman this may not load**, because the host cannot route to a rootless network: note it, and check it with ILD in a container |
 | PR push | The PR node pushes the branch and opens the PR. `podman exec ild-run-<run> env` shows no token, and `git -C /ild-run/<run>/repo remote -v` shows the remote URL without credentials |

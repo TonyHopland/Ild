@@ -307,7 +307,7 @@ services:
     environment:
       - ILD_RUN_HOST=container
       - ILD_CONTAINER_SOCKET=/run/container.sock
-      - ILD_CONTAINER_RUNNER_IMAGE=ghcr.io/tonyhopland/ild-runner:latest
+      - ILD_CONTAINER_RUNNER_IMAGE=ghcr.io/tonyhopland/ild-runner:latest # or localhost/ild-runner:latest, built below
       - ILD_CONTAINER_ILD_CONTAINER=ild # this service's container_name
       - ILD_API_URL=http://ild:8080
     volumes:
@@ -322,6 +322,37 @@ ILD's entrypoint gives ILD's own user, and never the agent's, a group that can o
 - **A socket of the host's `root` group** (rootful Podman): the entrypoint leaves it alone and says so, and ILD cannot open it. Give the socket a group of its own first.
 
 The entrypoint will not join a group the agent's user is in, since that would hand the agent the engine. The runner image must be on the host the socket belongs to.
+
+#### Trying it with this repository's compose stack
+
+`docker compose up --build` on its own keeps `ILD_RUN_HOST` unset, so runs stay on the `local` host inside ILD's container. To try container runs from a checkout:
+
+1. Build the runner image on the engine the runs will use. Compose does not build it, and it needs no build arguments:
+
+   ```sh
+   podman build --target runner -t localhost/ild-runner:latest .
+   ```
+
+2. Save the override above as `docker-compose.container-runs.yml`, with `ILD_CONTAINER_RUNNER_IMAGE=localhost/ild-runner:latest`, and set `ILD_CONTAINER_SOCKET_HOST` in `.env` to the engine's socket (below).
+3. Start it: `podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build`. The log says `Container engine socket /run/container.sock: ild can open it through group …`, and **Settings > General** shows no "Run host" warning.
+4. Tag the test work item `HIL`. A Develop run then stops at **Approve PR**, before the PR node pushes a branch and opens a pull request on the repository.
+
+The first run of a repository installs its toolchains and ILD's agents into the `ild-tools` volume before it starts, which takes from seconds to a few minutes; later runs reuse them. With a local model (LM Studio, Ollama) behind the provider, the agent nodes take as long as the model does.
+
+**Which socket.** The path is the socket's path on the machine the engine runs on:
+
+| Engine | `ILD_CONTAINER_SOCKET_HOST` | Notes |
+| --- | --- | --- |
+| Rootless Podman on Linux | `/run/user/<uid>/podman/podman.sock` (`$XDG_RUNTIME_DIR/podman/podman.sock`) | The supported setup. Needs `systemctl --user enable --now podman.socket` |
+| Podman machine (Windows, macOS), rootless | `/run/user/1000/podman/podman.sock` | The path inside the machine's VM, where the containers run |
+| Podman machine, rootful | `/run/podman/podman.sock` | Belongs to the VM's `root` group, so see below |
+| Rootful Docker | `/var/run/docker.sock` | ILD's user joins its `docker` group |
+
+On a Podman machine, compose talks to whichever of the two engines the machine forwards its API to: the rootful one when the machine is rootful (`podman machine inspect --format '{{.Rootful}}'`), the rootless one otherwise. The stack, its volumes and the runner image all live on that engine, and the socket you mount must be that engine's. `podman machine set --rootful=false` switches a stopped machine to rootless; containers and volumes made on the rootful side stay there.
+
+**Rootful Podman.** Its socket belongs to the host's `root` group, which the entrypoint does not join. To use it anyway, accepting that ILD is then root-equivalent on that machine (Settings warns about it), give the socket the group of ILD's user inside the machine, `sudo chgrp 10001 /run/podman/podman.sock`, and restart ILD. A restart of the socket undoes it.
+
+**Limits on a rootless engine.** When the user's cgroup controllers are not delegated (a Podman machine, or a Linux host without systemd's `Delegate=`), a run's container fails to start with `crun: open 'memory.max' … No such file or directory`. Set both `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0` in the override's environment, which start runs without limits.
 
 ## Agent network limits (`NET_ADMIN`)
 
