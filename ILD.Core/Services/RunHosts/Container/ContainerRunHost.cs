@@ -586,13 +586,13 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
         async Task RemoveAsync()
         {
             _execNames.TryRemove(id, out _);
+            // Forgotten whether or not the delete works, so the sweep can remove a container that it did not.
+            _signIns.TryRemove(name, out _);
             try { await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true&v=true", null, CancellationToken.None)); }
             catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
             {
                 Logger?.LogWarning(ex, "Could not remove the sign-in container {Name}; the next sweep removes it", name);
-                return;
             }
-            _signIns.TryRemove(name, out _);
         }
 
         try

@@ -38,7 +38,7 @@ public sealed class RunHostSweeper(
         foreach (var leftover in leftovers)
         {
             if (await isolated.DeleteLeftoverAsync(leftover, ct))
-                logger?.LogInformation("Removed the objects of run {Run}, which is finished or gone", leftover.Location);
+                logger?.LogInformation("Removed the leftover {Run}, which is finished or gone", leftover.Location);
         }
     }
 

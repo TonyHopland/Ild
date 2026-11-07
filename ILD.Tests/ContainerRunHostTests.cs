@@ -1452,4 +1452,20 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains("ild-signin-other", _api.Containers());
         Assert.Contains(openName, _api.Containers());
     }
+
+    [Fact]
+    public async Task A_sign_in_container_whose_removal_failed_is_left_for_the_sweep()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        AnswerInstaller(ClaudeLine);
+        var terminal = await host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken);
+        var name = SignInContainerOf(_api);
+
+        _api.Down = true;
+        await terminal.DisposeAsync();
+        _api.Down = false;
+
+        var leftovers = await host.ListLeftoversAsync(new HashSet<Guid>(), TestContext.Current.CancellationToken);
+        Assert.Contains(leftovers, l => l.Location == name);
+    }
 }
