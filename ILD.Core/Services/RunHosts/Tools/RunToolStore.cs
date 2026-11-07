@@ -74,13 +74,17 @@ public static class RunToolStore
     /// </summary>
     public const string InstallScript = """
         set -euo pipefail
-        root=/opt/ild-tools
+        # A failure inside $(…) stops the script too.
+        shopt -s inherit_errexit
+        # The store's root; another only in tests.
+        root="${ILD_TOOLS_ROOT:-/opt/ild-tools}"
         mkdir -p "$root/manifests" "$root/agents" "$root/cache"
         base_path="$PATH"
 
         manifest_for() { printf '%s/manifests/%s.json' "$root" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._@-' '_')"; }
 
-        # Installs a toolchain once and leaves its manifest; prints the manifest's path.
+        # Installs a toolchain once and leaves its manifest at manifest_for. Called as a command, never inside $(…):
+        # a failure there would not stop the script, and the run would start without the toolchain it asked for.
         ensure_tool() {
           local spec="$1" m where envjson
           m="$(manifest_for "$spec")"
@@ -95,11 +99,11 @@ public static class RunToolStore
                 | {spec: $spec, version: ($where | split("/") | last),
                    path: (if ($added | length) > 0 then $added else [$where + "/bin"] end),
                    env: ($env | del(.PATH) | with_entries(select(.key | test("^_?_?MISE") | not)))}' > "$m.tmp"
+              [ -s "$m.tmp" ]
               mv -f "$m.tmp" "$m"
             fi
             exec 9>&-
           fi
-          printf '%s' "$m"
         }
 
         # Installs an agent CLI once, at an exact version, with a wrapper that starts it on the agents' Node.
@@ -132,8 +136,8 @@ public static class RunToolStore
         agent_node=""
         for arg in "$@"; do
           case "$arg" in
-            agentnode=*) agent_node="$(jq -r '.path[0]' "$(ensure_tool "${arg#agentnode=}")")" ;;
-            tool=*) jq -c '. + {kind: "tool"}' "$(ensure_tool "${arg#tool=}")" ;;
+            agentnode=*) spec="${arg#agentnode=}"; ensure_tool "$spec"; agent_node="$(jq -r '.path[0]' "$(manifest_for "$spec")")" ;;
+            tool=*) spec="${arg#tool=}"; ensure_tool "$spec"; jq -c '. + {kind: "tool"}' "$(manifest_for "$spec")" ;;
             agent=*) IFS='|' read -r key package version bin <<< "${arg#agent=}"; ensure_agent "$key" "$package" "$version" "$bin" ;;
           esac
         done
