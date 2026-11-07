@@ -3,6 +3,7 @@ using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.ModelGateway;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 
@@ -171,6 +172,21 @@ public class AdapterGatewayTests
         Assert.Contains("http://127.0.0.1:8080/gateway/upstream", settings.ModelsJsonContent);
         Assert.Null(settings.ReadOnlyAuthJson);
         AssertHoldsNoSecret(psi);
+    }
+
+    [Fact]
+    public void Pi_in_a_run_of_its_own_keeps_its_agent_directory_in_the_runs_home()
+    {
+        var provider = Provider("pi", baseUrl: "https://models.example.test/v1");
+        var runContext = new LoopRunContext(Guid.NewGuid(), "1", "t", "d", Path.GetTempPath(), "b", [], null);
+        var runHome = RunPaths.HomeDirectory(runContext.LoopRunId);
+
+        var settings = PiAdapter.ResolveSettings(provider, runContext, null, null, new TestProcessEnvironment(), noTools: true, gateway: _lease, runHome: runHome);
+        var psi = PiAdapter.BuildRunProcessStartInfo(settings, Path.GetTempPath(), Path.GetTempPath(), null, null);
+
+        Assert.Equal(Path.Combine(runHome, ".pi", "agent"), settings.AgentDirectory);
+        Assert.Equal(settings.AgentDirectory, psi.Environment["PI_CODING_AGENT_DIR"]);
+        Assert.NotNull(RunPaths.OwnerOf(settings.AgentDirectory));
     }
 
     [Fact]

@@ -58,7 +58,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
         try
         {
             using var gateway = OpenGateway(ctx);
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables, ctx.NoTools, gateway);
+            // A run in its own pod or container cannot see ILD's scratch directory: pi's files go to the run's home there.
+            var runHome = string.IsNullOrWhiteSpace(ctx.RunContext.WorktreePath) ? null : RunHost.RunHomeFor(ctx.RunContext.WorktreePath);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables, ctx.NoTools, gateway, runHome);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
@@ -76,7 +78,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // turn's Chat Context preamble is already reachable — there is no
             // per-directory config to set for ctx.AdditionalAllowedDirectories.
 
-            var sessionDirectory = Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
+            var sessionDirectory = runHome is not null
+                ? Path.Combine(runHome, ".pi", "sessions")
+                : Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
             await RunHost.CreateDirectoryAsync(sessionDirectory, ctx.Cancel);
             await PrepareRuntimeFilesAsync(settings, ctx.Cancel);
 
@@ -612,9 +616,12 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     internal static PiAdapterSettings ResolveSettings(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId,
-        IProcessEnvironment environment, bool noTools, ModelGatewayLease? gateway = null)
+        IProcessEnvironment environment, bool noTools, ModelGatewayLease? gateway = null, string? runHome = null)
     {
         var loopRunId = runContext.LoopRunId;
+        var runAgentDirectory = runHome is not null
+            ? Path.Combine(runHome, ".pi", "agent")
+            : Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
         var config = AiProviderConfig.Parse(provider.Config);
         var binaryPath = config.BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Pi, environment));
         var apiKey = config.ApiKey ?? provider.ApiKey;
@@ -657,7 +664,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             providerName ??= BuildSyntheticProviderName(provider);
             model = StripProviderPrefix(model, providerName);
 
-            agentDirectory = Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
+            agentDirectory = runAgentDirectory;
             apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
             var baseUrl = provider.BaseUrl;
             if (gateway is not null && !string.IsNullOrWhiteSpace(apiKey))
@@ -672,7 +679,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         string? readOnlyAuthJson = null;
         if (!hasAbsoluteBaseUrl && gateway is not null && ReadStoredLogin(environment) is { } login)
         {
-            agentDirectory = Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
+            agentDirectory = runAgentDirectory;
             readOnlyAuthJson = login;
         }
 
