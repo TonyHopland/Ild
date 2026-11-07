@@ -293,8 +293,12 @@ internal sealed class AuditingRunner : IProcessRunner
 
         foreach (var path in BundleFilesUnderPrivateRoot())
         {
+            // The private root is shared with tests running in parallel, which delete their bundles and locks as they finish.
+            UnixFileMode mode;
+            try { mode = File.GetUnixFileMode(path); }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { continue; }
             lock (_gate)
-                _bundlesSeen.Add((path, File.GetUnixFileMode(path)));
+                _bundlesSeen.Add((path, mode));
         }
     }
 
