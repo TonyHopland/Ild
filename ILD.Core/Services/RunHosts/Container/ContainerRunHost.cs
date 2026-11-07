@@ -326,11 +326,14 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         if (_warning is not null) return _warning;
         try
         {
-            var rootless = await IsRootlessAsync(ct);
+            // A socket that stalls must not hold the settings page for the HTTP client's own five minutes.
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(TimeSpan.FromSeconds(5));
+            var rootless = await IsRootlessAsync(limit.Token);
             if (rootless != false) return null;
             return _warning = $"The container engine at {_options.Socket} is not rootless, so whoever holds that socket is root on this machine. Use rootless Podman (or rootless Docker) for runs.";
         }
-        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException or System.Text.Json.JsonException)
+        catch (Exception ex) when (!ct.IsCancellationRequested && (ex is DockerApiException or HttpRequestException or IOException or SocketException or System.Text.Json.JsonException or OperationCanceledException))
         {
             Logger?.LogInformation("Could not ask the container engine at {Socket} whether it is rootless ({Reason}); not warning", _options.Socket, ex.Message);
             return null;

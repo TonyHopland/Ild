@@ -57,7 +57,7 @@ From inside a run's container (`podman exec -it ild-run-<run> bash`), each of th
 
 - `curl -m 5 https://example.com` (the internet)
 - `curl -m 5 http://<another run's container ip>:<any port>` (another run; start a second run to get one)
-- `curl -m 5 http://<host's LAN address>:22` or any other service of the host except ILD
+- `curl -m 5 http://<host's LAN address>:22` or any other service of the host except ILD. **With ILD in a container this must fail. With ILD on the host it is expected to succeed** (the gateway is the host); record it, and whether your host firewall rules stop it
 - `id` prints uid 10001, and `grep Cap /proc/self/status` shows `CapEff: 0000000000000000`
 - `ls /var/run/*.sock` finds no engine socket
 

@@ -269,13 +269,13 @@ Whoever holds the socket controls every container on the host: it can start a pr
 ### What a run gets
 
 - A named volume for its files, an `internal` network of its own, and a container from the runner image started with `sleep infinity` as uid 10001, all capabilities dropped, `no-new-privileges`, the engine's default seccomp profile, and the CPU and memory limits of `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT`. The three are made at Start and deleted at Cleanup; the container stays up while a Human node waits, so previews keep working.
-- The network is `internal`, so the container cannot reach the internet or the host's other networks. It reaches ILD, and only ILD: the model gateway, the MCP endpoint and the egress proxy. Anything else the agent connects to goes through the egress proxy and its limits, which listens on all interfaces under this host.
+- The network is `internal`, so the container cannot reach the internet or the host's other networks. **With ILD in a container (below), it reaches ILD and nothing else**: the model gateway, the MCP endpoint and the egress proxy. **With ILD on the host it does not:** the run reaches ILD at the network's gateway address, which is the host, so it can connect to every service listening on the host (SSH, a database, anything bound to all interfaces), and the egress proxy listens on all of the host's interfaces and accepts connections from the LAN as well as from runs. Run ILD in a container to isolate runs; if ILD must be on the host, add host firewall rules that let only the run networks' subnets reach ILD's port and the proxy port, and block the proxy port from the LAN. Anything else the agent connects to goes through the egress proxy and its limits.
 - The container is given the host name in `ILD_API_URL` as ILD's address on its own network. The code goes in and out as bundles over exec, so the container never holds the git credential or the mirror.
 - Every object is labelled `app.kubernetes.io/managed-by=ild`, `ild/instance=<ILD_CONTAINER_INSTANCE>` and `ild/run=<run id>`. There are no owner references on a single host, so Cleanup deletes the container, the volume and the network explicitly, and the sweeper (once at startup, then every `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`) deletes the labelled objects of runs that are finished or gone. It only touches its own instance. An ILD that is killed mid-run leaves nothing behind after its next start.
 
 ### ILD on the host
 
-Run ILD as a normal process and point it at the socket:
+This setup does **not** isolate a run from the host's services (see above); use it for trying the host out, or with the firewall rules described there. Run ILD as a normal process and point it at the socket:
 
 ```sh
 ILD_RUN_HOST=container
