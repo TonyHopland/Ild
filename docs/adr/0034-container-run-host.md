@@ -18,3 +18,12 @@
 - **A Docker client library.** Rejected: the surface used is a dozen calls and one hijacked stream, and a library's version of the API would have to match both engines.
 - **A pod-like grouping of one container with a sidecar for the network.** Rejected: an internal network per run reaches the same isolation with nothing to run beside the container.
 - **Publishing a port per preview on the host.** Rejected: the preview proxy already forwards to an address, and the pod host works the same way.
+
+## Chats
+
+With `ILD_RUN_HOST=container`, chats do not run in ILD's own container either. One always-running container per instance, `ild-chat-<instance>`, holds every chat: a volume at `/ild-chat`, a folder `/ild-chat/<chat id>` for each chat, an internal network that reaches only ILD, and the toolchain store mounted read-only. The routing host sends `/ild-chat/...` paths there, as it sends `/ild-run/...` to a run's container. Chats share the container with each other, as they shared ILD's before; what changed is that ILD's database, secrets and credential store are no longer in it.
+
+- **Made on first use** and again when it is missing or stopped; the volume keeps the chats' folders. It carries no run label, so the sweeper never takes it for a run's. After ILD's own container is recreated, `CheckAsync` puts ILD back on its network at the address the container was given.
+- **Code goes in as a bundle**: ILD bundles the branch from its own base clone under a temporary branch, the container fetches it, and the chat's clone points `origin/<branch>` at it. The marker, fast-forward-only update and refusal rules are the same as for a chat on local disk.
+- **Toolchains per chat**: the repositories a chat clones are detected from ILD's base clones and installed into the store; the chat's commands get `PATH` and variables for them. Which toolchains a chat has is kept on ILD's side, not in the chat's folder, which the chat's agent can write and which would otherwise let it ask the store to install anything. When two repositories want different versions of a tool, the first one cloned wins.
+- **Chats made before the switch keep running on local disk**, and the Kubernetes host keeps all chats local.

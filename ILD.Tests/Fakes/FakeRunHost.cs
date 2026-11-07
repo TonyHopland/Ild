@@ -169,11 +169,18 @@ internal sealed class FakeRunHost : IRunHost
         await consume(new MemoryStream(bytes, (int)offset, (int)count, writable: false));
     }
 
+    /// <summary>Every stream written to a file, kept after the file is deleted.</summary>
+    public List<(string Path, byte[] Content)> WrittenStreams { get; } = [];
+
     public async Task WriteFileAsync(string path, Stream content, CancellationToken ct = default)
     {
         using var copy = new MemoryStream();
         await content.CopyToAsync(copy, ct);
-        lock (_gate) _files[path] = copy.ToArray();
+        lock (_gate)
+        {
+            _files[path] = copy.ToArray();
+            WrittenStreams.Add((path, copy.ToArray()));
+        }
     }
 
     public Task WriteFileAsync(string path, string content, CancellationToken ct = default)
@@ -198,6 +205,44 @@ internal sealed class FakeRunHost : IRunHost
     public Task<bool> DirectoryExistsAsync(string path, CancellationToken ct = default)
     {
         lock (_gate) return Task.FromResult(_directories.Contains(path) || (_seesDisk && Directory.Exists(path)));
+    }
+
+    /// <summary>The chat folders asked for, and where the next one goes: below the local root, as on the local host, unless set.</summary>
+    public List<Guid> ChatFolders { get; } = [];
+
+    public Func<Guid, string, string>? ChatFolderFor { get; set; }
+
+    public List<(string ChatPath, string BasePath)> ChatTools { get; } = [];
+
+    public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
+    {
+        var path = ChatFolderFor?.Invoke(chatId, localRoot) ?? Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+        lock (_gate)
+        {
+            ChatFolders.Add(chatId);
+            _directories.Add(path);
+        }
+        return Task.FromResult(path);
+    }
+
+    public Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
+    {
+        lock (_gate) ChatTools.Add((chatPath, basePath));
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default)
+    {
+        var prefix = directory.TrimEnd('/') + "/";
+        lock (_gate)
+            return Task.FromResult<IReadOnlyList<string>>(_directories
+                .Where(d => d.StartsWith(prefix, StringComparison.Ordinal) && !d[prefix.Length..].Contains('/'))
+                .Select(d => d[prefix.Length..]).ToList());
+    }
+
+    public Task<bool> EntryExistsAsync(string path, CancellationToken ct = default)
+    {
+        lock (_gate) return Task.FromResult(_directories.Contains(path) || _files.ContainsKey(path) || (_seesDisk && (File.Exists(path) || Directory.Exists(path))));
     }
 
     public Task<IReadOnlyList<(string Path, string FirstLine)>> ListFilesAsync(string directory, string namePattern, CancellationToken ct = default)

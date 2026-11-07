@@ -243,7 +243,7 @@ public sealed class KubernetesRunHost : ExecRunHost
 
     public override async Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
     {
-        var owner = OwnerFor(workingDirectory);
+        var owner = OwnerFor(workingDirectory).Id;
         if (!_podAddresses.TryGetValue(owner, out var address))
         {
             var pod = await _client.CoreV1.ReadNamespacedPodAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct);
@@ -253,11 +253,12 @@ public sealed class KubernetesRunHost : ExecRunHost
         return new UriBuilder(Uri.UriSchemeHttp, address, port).Uri;
     }
 
-    protected override async Task<bool> RunExistsAsync(Guid owner, CancellationToken ct)
+    protected override async Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
     {
+        if (owner.Chat) return false;
         try
         {
-            await _client.CoreV1.ReadNamespacedPodAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct);
+            await _client.CoreV1.ReadNamespacedPodAsync(KubernetesNames.ObjectName(owner.Id), _namespace, cancellationToken: ct);
             return true;
         }
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
@@ -266,8 +267,8 @@ public sealed class KubernetesRunHost : ExecRunHost
         }
     }
 
-    protected override async Task<IExecStream> OpenExecStreamAsync(Guid owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
-        => await PodExec.OpenAsync(_client, _namespace, _execNames.TryGetValue(owner, out var other) ? other : KubernetesNames.ObjectName(owner), command, stdin, tty, ct);
+    protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
+        => await PodExec.OpenAsync(_client, _namespace, _execNames.TryGetValue(owner.Id, out var other) ? other : KubernetesNames.ObjectName(owner.Id), command, stdin, tty, ct);
 
     // -- Sweep -------------------------------------------------------------------
 

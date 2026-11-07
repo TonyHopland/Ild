@@ -11,6 +11,14 @@ using Porta.Pty;
 
 namespace ILD.Core.Services.RunHosts.Isolated;
 
+/// <summary>Whose environment a command runs in: a run's own pod or container, or a chat's folder in the shared chat container.</summary>
+public readonly record struct ExecOwner(Guid Id, bool Chat)
+{
+    public static implicit operator ExecOwner(Guid run) => new(run, false);
+
+    public string Home => Chat ? RunPaths.ChatHome(Id) : RunPaths.HomeDirectory(Id);
+}
+
 /// <summary>
 /// What the run hosts that put each loop run in an environment of its own (a Kubernetes pod, a container) share: the
 /// agent's processes are commands exec'd there, its files are read and written the same way, and code goes in and out
@@ -86,11 +94,14 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>The port of ILD's egress proxy; 0 when there is none.</summary>
     protected abstract int EgressProxyPort { get; }
 
+    /// <summary>Whether this host keeps chats: whether a path under <see cref="RunPaths.ChatsRoot"/> is one of its own.</summary>
+    public virtual bool HostsChats => false;
+
     /// <summary>Start a command in the run's environment, with the streams it needs.</summary>
-    protected abstract Task<IExecStream> OpenExecStreamAsync(Guid owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct);
+    protected abstract Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct);
 
     /// <summary>Whether the run has an environment to exec in.</summary>
-    protected abstract Task<bool> RunExistsAsync(Guid owner, CancellationToken ct);
+    protected abstract Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct);
 
     /// <summary>Check how the host is set up when ILD starts and on every sweep, logging what the operator should fix. Never throws.</summary>
     public virtual Task CheckAsync(CancellationToken ct = default) => Task.CompletedTask;
@@ -185,13 +196,19 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
         var psi = command.Start;
-        var owner = command.OwnerId != Guid.Empty ? command.OwnerId : RunPaths.OwnerOf(psi.WorkingDirectory)
-            ?? throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to");
+        // A command in a chat's folder is the chat's, whatever run or chat id its caller names to kill it by (a title is made under an id of its own).
+        var owner = RunPaths.ChatOf(psi.WorkingDirectory) is { } chat && HostsChats
+            ? new ExecOwner(chat, Chat: true)
+            : command.OwnerId != Guid.Empty ? command.OwnerId : RunPaths.OwnerOf(psi.WorkingDirectory)
+                ?? throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to");
 
         var (fileName, arguments) = command.AsAgent
             ? (psi.FileName, psi.ArgumentList.ToList())
             : AgentIsolation.Unrouted(psi) is { } inner ? (inner.FileName, inner.Arguments.ToList()) : (psi.FileName, psi.ArgumentList.ToList());
         var environment = EnvironmentFor(command, psi, owner, out var network);
+        if (owner.Chat)
+            foreach (var line in await ChatEnvironmentAsync(owner.Id, ct))
+                environment[line[..line.IndexOf('=')]] = line[(line.IndexOf('=') + 1)..];
         if (command.AsAgent)
         {
             if (Path.IsPathRooted(fileName)) fileName = Path.GetFileName(fileName);
@@ -199,7 +216,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
         foreach (var (name, value) in network) environment[name] = value;
 
-        var directory = string.IsNullOrEmpty(psi.WorkingDirectory) ? RunPaths.WorkingDirectory(owner) : psi.WorkingDirectory;
+        var directory = string.IsNullOrEmpty(psi.WorkingDirectory) ? RunPaths.WorkingDirectory(owner.Id) : psi.WorkingDirectory;
         // Only a command started for the run itself is one KillAllAsync ends; a preview service, which has no owner, outlives a retry.
         var id = $"{(command.OwnerId != Guid.Empty ? command.OwnerId.ToString("N") : "unowned")}/{Guid.NewGuid():N}";
         var wrapped = new List<string> { "/bin/sh", "-c", CommandWrapper, "sh", directory, id, "env" };
@@ -216,7 +233,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// already hold (a start info begins as a copy of that environment, none of which belongs in the run), with the
     /// orchestrator's secrets taken out, and the run's own home.
     /// </summary>
-    private Dictionary<string, string> EnvironmentFor(RunCommand command, ProcessStartInfo psi, Guid owner, out Dictionary<string, string> network)
+    private Dictionary<string, string> EnvironmentFor(RunCommand command, ProcessStartInfo psi, ExecOwner owner, out Dictionary<string, string> network)
     {
         var own = Environment.GetEnvironmentVariables();
         var secrets = AgentIsolation.SecretEnvironmentKeys;
@@ -246,7 +263,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             foreach (var (name, value) in bag.ToList())
                 bag[name] = ThroughIldHost(value, ild);
 
-        environment["HOME"] = RunPaths.HomeDirectory(owner);
+        environment["HOME"] = owner.Home;
         return environment;
     }
 
@@ -259,7 +276,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // The files a launch is given to read (MCP configs, package feed settings, an agent extension) sit in a directory
     // of ILD's that a run cannot see; they go to memory in it and the launch is pointed at the copies.
     private async Task<(List<string> Arguments, Dictionary<string, string> Environment)> StageAgentFilesAsync(
-        Guid owner, List<string> arguments, Dictionary<string, string> environment, CancellationToken ct)
+        ExecOwner owner, List<string> arguments, Dictionary<string, string> environment, CancellationToken ct)
     {
         string root;
         try { root = AgentReadRoot(); }
@@ -289,7 +306,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return (rewrittenArguments, rewrittenEnvironment);
     }
 
-    private async Task CopyIntoRunAsync(Guid owner, string local, string remote, CancellationToken ct)
+    private async Task CopyIntoRunAsync(ExecOwner owner, string local, string remote, CancellationToken ct)
     {
         if (File.Exists(local))
         {
@@ -303,13 +320,19 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
     }
 
-    private async Task<bool> KillCommandAsync(Guid owner, string commandId, CancellationToken ct)
+    private async Task<bool> KillCommandAsync(ExecOwner owner, string commandId, CancellationToken ct)
         => (await RunScriptAsync(owner, KillCommandScript, [commandId], ct)).Success;
 
+    // The id is a run's or a chat's; a run has an environment of its own and a chat does not, so a run is the one with a pod or container.
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
     {
-        if (!await RunExistsAsync(ownerId, ct)) return 0;
-        var result = await RunScriptAsync(ownerId, KillAllScript, [ownerId.ToString("N")], ct);
+        ExecOwner owner = ownerId;
+        if (!await RunExistsAsync(owner, ct))
+        {
+            owner = new ExecOwner(ownerId, Chat: true);
+            if (!HostsChats || !await RunExistsAsync(owner, ct)) return 0;
+        }
+        var result = await RunScriptAsync(owner, KillAllScript, [ownerId.ToString("N")], ct);
         return result.Success && int.TryParse(result.StdOut.Trim(), out var killed) ? killed : 0;
     }
 
@@ -430,7 +453,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         await WriteFileInRunAsync(OwnerFor(path), path, bytes, readOnly: true, ct);
     }
 
-    private async Task WriteFileInRunAsync(Guid owner, string path, Stream content, bool readOnly, CancellationToken ct)
+    private async Task WriteFileInRunAsync(ExecOwner owner, string path, Stream content, bool readOnly, CancellationToken ct)
     {
         var result = await ExecAsync(
             owner,
@@ -474,6 +497,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         {
             var result = await RunScriptAsync(group.Key, "rm -rf -- \"$@\"", [.. group], ct);
             all &= result.Success;
+            if (result.Success && HostsChats)
+                foreach (var path in group)
+                    if (RunPaths.ChatOf(path) is { } chat && path.TrimEnd('/') == RunPaths.ChatRoot(chat))
+                        ChatRemoved(chat);
         }
         return all;
     }
@@ -481,7 +508,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // -- Preview and gateway -----------------------------------------------------
 
     public string? RunHomeFor(string workingDirectory)
-        => RunPaths.OwnerOf(workingDirectory) is { } owner ? RunPaths.HomeDirectory(owner) : null;
+        => RunPaths.OwnerOf(workingDirectory) is { } owner ? RunPaths.HomeDirectory(owner)
+            : HostsChats && RunPaths.ChatOf(workingDirectory) is { } chat ? RunPaths.ChatHome(chat)
+            : null;
 
     public string GatewayApiUrl(string? configuredApiUrl) => IldUrl;
 
@@ -494,12 +523,45 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     public abstract Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default);
 
+    // -- Chats -------------------------------------------------------------------
+
+    /// <summary>The variables (<c>NAME=value</c>) every command of the chat starts with besides its caller's: its toolchains on <c>PATH</c>.</summary>
+    protected virtual Task<IReadOnlyList<string>> ChatEnvironmentAsync(Guid chat, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
+
+    /// <summary>The chat's folder was deleted: forget what was kept about it.</summary>
+    protected virtual void ChatRemoved(Guid chat)
+    {
+    }
+
+    public virtual Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default) => Task.CompletedTask;
+
+    public async Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
+    {
+        if (!HostsChats) throw new NotSupportedException($"this host does not keep chats in a {Noun}");
+        var home = await RunScriptAsync(new ExecOwner(chatId, Chat: true), HomeScript, [RunPaths.ChatHome(chatId)], ct);
+        if (!home.Success)
+            throw new IOException($"could not make the chat's folder in the {Noun}: {home.StdErr.Trim()}");
+        return RunPaths.ChatRoot(chatId);
+    }
+
+    public async Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default)
+    {
+        const string Script = """for d in "$1"/*/; do d="${d%/}"; [ -d "$d" ] && [ ! -L "$d" ] && printf '%s\0' "${d##*/}"; done; exit 0""";
+        var result = await RunScriptAsync(OwnerFor(directory), Script, [directory], ct);
+        return result.StdOut.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    public async Task<bool> EntryExistsAsync(string path, CancellationToken ct = default)
+        => (await RunScriptAsync(OwnerFor(path), "[ -e \"$1\" ] || [ -L \"$1\" ]", [path], ct)).Success;
+
     // -- Exec --------------------------------------------------------------------
 
-    protected Guid OwnerFor(string path)
-        => RunPaths.OwnerOf(path) ?? throw new InvalidOperationException($"{path} is not a path in a run's {Noun}");
+    protected ExecOwner OwnerFor(string path)
+        => RunPaths.OwnerOf(path) is { } run ? run
+            : RunPaths.ChatOf(path) is { } chat && HostsChats ? new ExecOwner(chat, Chat: true)
+            : throw new InvalidOperationException($"{path} is not a path in a run's or chat's {Noun}");
 
-    private async Task<IExecStream> OpenExecAsync(Guid owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
+    private async Task<IExecStream> OpenExecAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
     {
         try
         {
@@ -507,18 +569,18 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new InvalidOperationException($"could not run a command in the {Noun} of run {owner:N}: {ex.Message}", ex);
+            throw new InvalidOperationException($"could not run a command in the {Noun} of {(owner.Chat ? "chat" : "run")} {owner.Id:N}: {ex.Message}", ex);
         }
     }
 
-    protected Task<RunHostOutput> RunScriptAsync(Guid owner, string script, IReadOnlyList<string> arguments, CancellationToken ct)
+    protected Task<RunHostOutput> RunScriptAsync(ExecOwner owner, string script, IReadOnlyList<string> arguments, CancellationToken ct)
         => ExecAsync(owner, ["/bin/bash", "-c", script, "bash", .. arguments], null, null, ct);
 
     /// <summary>
     /// A command in the run, to its end. <paramref name="stdin"/> is sent and closed; <paramref name="stdout"/> receives
     /// the output when given, otherwise it is collected as text.
     /// </summary>
-    private async Task<RunHostOutput> ExecAsync(Guid owner, IReadOnlyList<string> command, Stream? stdin, Stream? stdout, CancellationToken ct)
+    private async Task<RunHostOutput> ExecAsync(ExecOwner owner, IReadOnlyList<string> command, Stream? stdin, Stream? stdout, CancellationToken ct)
     {
         using var exec = await OpenExecAsync(owner, command, stdin is not null, tty: false, ct);
         using var collected = new MemoryStream();

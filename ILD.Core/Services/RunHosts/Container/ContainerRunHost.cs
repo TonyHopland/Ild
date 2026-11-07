@@ -32,6 +32,8 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     // What the store gave each set of toolchains and agents asked for, so a run like one before starts without an installer.
     private readonly ConcurrentDictionary<string, RunToolEnvironment> _tools = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _toolsGate = new(1, 1);
+    private readonly SemaphoreSlim _chatGate = new(1, 1);
+    private readonly ConcurrentDictionary<Guid, List<RunTool>> _chatTools = new();
     // Containers that are not a run's, exec'd into by an id of their own: the store's installers.
     private readonly ConcurrentDictionary<Guid, string> _execNames = new();
 
@@ -44,6 +46,9 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
 
     /// <summary>The agent CLIs a run gets: those ILD has installed, at their versions. Replaced in tests.</summary>
     internal Func<IReadOnlyList<RunAgent>> Agents { get; init; } = () => RunAgent.Installed(ManagedAgentInstall.ResolveDataRoot());
+
+    /// <summary>Where what each chat's repositories need from the toolchain store is kept. Replaced in tests.</summary>
+    internal Func<string> ChatToolsRoot { get; init; } = () => Path.Combine(ManagedAgentInstall.ResolveDataRoot(), "chat-tools");
 
     /// <summary>How often a starting container is looked at.</summary>
     internal TimeSpan ReadyPollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
@@ -87,13 +92,13 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         try
         {
             var name = ObjectName(owner);
-            var tools = await ToolsForAsync(request, ct);
+            var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), ct);
             await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
             await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = Labels(owner) }, ct));
-            var ild = await IldAddressAsync(owner, ct);
+            var ild = await IldAddressAsync(name, $"run {owner:N}", ct);
             await CreateContainerAsync(owner, ild, tools, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
-            _addresses[owner] = await WaitReadyAsync(owner, ct);
+            _addresses[owner] = await WaitReadyAsync(name, $"run {owner:N}", ct);
 
             await PrepareAsync(owner, request, ct);
         }
@@ -159,12 +164,11 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         => container?["NetworkSettings"]?["Networks"]?[network]?["IPAddress"]?.GetValue<string>() is { Length: > 0 } ip ? ip : null;
 
     /// <summary>
-    /// Where the run reaches ILD on its network: ILD's own container, which is connected to the network, when ILD runs
+    /// Where the run (or the chat container) reaches ILD on its network: ILD's own container, which is connected to the network, when ILD runs
     /// in one, and otherwise the network's gateway, which is the host.
     /// </summary>
-    private async Task<string> IldAddressAsync(Guid owner, CancellationToken ct)
+    private async Task<string> IldAddressAsync(string network, string subject, CancellationToken ct)
     {
-        var network = ObjectName(owner);
         if (_options.IldContainer is { } ild)
         {
             var inspected = await _api.GetAsync($"/containers/{Escaped(ild)}/json", ct)
@@ -175,12 +179,12 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
                 inspected = await _api.GetAsync($"/containers/{Escaped(ild)}/json", ct);
             }
             return AddressIn(inspected, network)
-                ?? throw new InvalidOperationException($"ILD's container {ild} has no address on the network of run {owner:N}");
+                ?? throw new InvalidOperationException($"ILD's container {ild} has no address on the network of {subject}");
         }
 
         var created = await _api.GetAsync($"/networks/{Escaped(network)}", ct);
         return created?["IPAM"]?["Config"]?.AsArray().Select(c => c?["Gateway"]?.GetValue<string>()).FirstOrDefault(g => !string.IsNullOrEmpty(g))
-            ?? throw new InvalidOperationException($"the network of run {owner:N} has no gateway address, so the run cannot reach ILD");
+            ?? throw new InvalidOperationException($"the network of {subject} has no gateway address, so it cannot reach ILD");
     }
 
     private async Task CreateContainerAsync(Guid owner, string ildAddress, RunToolEnvironment? tools, CancellationToken ct)
@@ -244,11 +248,10 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     /// installed, installed into the store first when it lacks them. Null when toolchains are off, so the run has only
     /// what the runner image has.
     /// </summary>
-    private async Task<RunToolEnvironment?> ToolsForAsync(RunEnvironmentRequest request, CancellationToken ct)
+    private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, CancellationToken ct)
     {
         if (!_options.Toolchains) return null;
 
-        var plan = RunToolDetector.Resolve(request.BasePath);
         var agents = Agents();
         var key = string.Join('\n', RunToolStore.Arguments(plan.Tools, agents));
         // Nothing to give: the run does not mount the store, but still gets its home's .local/bin and npm prefix.
@@ -261,10 +264,10 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
             if (_tools.TryGetValue(key, out known)) return known;
             await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = _options.ToolsVolume, Labels = ToolsLabels() }, ct));
 
-            Logger?.LogInformation("Run {Run} gets {Plan}, and the agents {Agents}, from the toolchain store {Volume}",
-                request.OwnerId, plan, string.Join(", ", agents.Select(a => $"{a.Agent.Key}@{a.Version}")), _options.ToolsVolume);
+            Logger?.LogInformation("{Owner} gets {Plan}, and the agents {Agents}, from the toolchain store {Volume}",
+                owner, plan, string.Join(", ", agents.Select(a => $"{a.Agent.Key}@{a.Version}")), _options.ToolsVolume);
             var environment = await WithInstallerAsync(installer => InstallToolsAsync(installer, plan.Tools, agents, ct), ct);
-            Logger?.LogInformation("Run {Run} has {Installed}", request.OwnerId, string.Join(", ", environment.Installed));
+            Logger?.LogInformation("{Owner} has {Installed}", owner, string.Join(", ", environment.Installed));
             return _tools[key] = environment;
         }
         finally
@@ -347,20 +350,19 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         return _podman.Value ? "U" : $"uid={RunnerUid},gid={RunnerUid}";
     }
 
-    private async Task<string> WaitReadyAsync(Guid owner, CancellationToken ct)
+    private async Task<string> WaitReadyAsync(string name, string subject, CancellationToken ct)
     {
-        var name = ObjectName(owner);
         var started = Stopwatch.StartNew();
         while (true)
         {
             var container = await _api.GetAsync($"/containers/{Escaped(name)}/json", ct)
-                ?? throw new InvalidOperationException($"the container of run {owner:N} is gone");
+                ?? throw new InvalidOperationException($"the container of {subject} is gone");
             if (container["State"]?["Running"]?.GetValue<bool>() == true && AddressIn(container, name) is { } address)
                 return address;
             if (container["State"]?["Status"]?.GetValue<string>() is "exited" or "dead")
-                throw new InvalidOperationException($"the container of run {owner:N} ended before it was ready: {WhyNotReady(container)}");
+                throw new InvalidOperationException($"the container of {subject} ended before it was ready: {WhyNotReady(container)}");
             if (started.Elapsed > _options.ReadyTimeout)
-                throw new InvalidOperationException($"the container of run {owner:N} was not ready after {_options.ReadyTimeout.TotalSeconds:0} s: {WhyNotReady(container)}");
+                throw new InvalidOperationException($"the container of {subject} was not ready after {_options.ReadyTimeout.TotalSeconds:0} s: {WhyNotReady(container)}");
             await Task.Delay(ReadyPollInterval, ct);
         }
     }
@@ -373,17 +375,180 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
             : "no status";
     }
 
-    protected override async Task<bool> RunExistsAsync(Guid owner, CancellationToken ct)
-        => await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct, HttpStatusCode.NotFound) is not null;
+    // A chat container that is stopped has nothing running to kill, and asking would start it again.
+    protected override async Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
+        => owner.Chat ? await ChatContainerRunningAsync(ct) : await _api.GetAsync($"/containers/{Escaped(owner.Chat ? ChatName : ObjectName(owner.Id))}/json", ct, HttpStatusCode.NotFound) is not null;
 
-    protected override async Task<IExecStream> OpenExecStreamAsync(Guid owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
-        => await DockerExec.OpenAsync(_api, _execNames.TryGetValue(owner, out var other) ? other : ObjectName(owner), command, stdin, tty, ExitStatusTimeout, ct);
+    protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
+        => await DockerExec.OpenAsync(
+            _api, owner.Chat ? await EnsureChatContainerAsync(ct) : _execNames.TryGetValue(owner.Id, out var other) ? other : ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct);
+
+    // -- Chats -------------------------------------------------------------------
+
+    /// <summary>The chat container, its volume and its network: one of each for the instance, kept running.</summary>
+    internal string ChatName => $"ild-chat-{_options.Instance}";
+
+    public override bool HostsChats => true;
+
+    // No run label: the sweep, which deletes what a run left, never takes the chat container for one.
+    private IDictionary<string, string> ChatLabels() => new Dictionary<string, string>
+    {
+        [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+        [RunPaths.InstanceLabel] = _options.Instance,
+        [RunPaths.RoleLabel] = RunPaths.ChatRole,
+    };
+
+    /// <summary>The name of the chat container, made and started first when it is missing or stopped. The volume keeps the chats' folders through that.</summary>
+    private async Task<string> EnsureChatContainerAsync(CancellationToken ct)
+    {
+        if (await ChatContainerRunningAsync(ct)) return ChatName;
+
+        await _chatGate.WaitAsync(ct);
+        try
+        {
+            if (await ChatContainerRunningAsync(ct)) return ChatName;
+
+            await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = ChatName, Labels = ChatLabels() }, ct));
+            if (_options.Toolchains)
+                await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = _options.ToolsVolume, Labels = ToolsLabels() }, ct));
+            await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = ChatName, Internal = true, CheckDuplicate = true, Labels = ChatLabels() }, ct));
+            // A stopped one is replaced; what it held is in the volume.
+            await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(ChatName)}?force=true", null, ct));
+            var ild = await IldAddressAsync(ChatName, "the chat container", ct);
+            await CreateChatContainerAsync(ild, ct);
+            await _api.PostAsync($"/containers/{Escaped(ChatName)}/start", null, ct, HttpStatusCode.NotModified);
+            await WaitReadyAsync(ChatName, "the chats", ct);
+            return ChatName;
+        }
+        finally
+        {
+            _chatGate.Release();
+        }
+    }
+
+    private async Task<bool> ChatContainerRunningAsync(CancellationToken ct)
+    {
+        var container = await _api.GetAsync($"/containers/{Escaped(ChatName)}/json", ct, HttpStatusCode.NotFound);
+        return container?["State"]?["Running"]?.GetValue<bool>() == true && AddressIn(container, ChatName) is not null;
+    }
+
+    private async Task CreateChatContainerAsync(string ildAddress, CancellationToken ct)
+    {
+        // The same settings as a run's container, but no memory or CPU limit, as chats had in ILD's own container.
+        var body = new
+        {
+            Image = _options.RunnerImage,
+            Entrypoint = new[] { "/usr/bin/tini", "--" },
+            Cmd = new[] { "sleep", "infinity" },
+            User = $"{RunnerUid}:{RunnerUid}",
+            WorkingDir = RunPaths.ChatsRoot,
+            Env = _options.GitIdentity.Select(e => $"{e.Key}={e.Value}").ToArray(),
+            Labels = ChatLabels(),
+            HostConfig = new
+            {
+                Binds = _options.Toolchains
+                    ? [$"{ChatName}:{RunPaths.ChatsRoot}:rw", $"{_options.ToolsVolume}:{RunToolStore.Root}:ro"]
+                    : new[] { $"{ChatName}:{RunPaths.ChatsRoot}:rw" },
+                Tmpfs = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{await StateOwnerOptionAsync(ct)}" },
+                CapDrop = new[] { "ALL" },
+                SecurityOpt = new[] { "no-new-privileges" },
+                NetworkMode = ChatName,
+                ExtraHosts = new[] { $"{_options.IldHost}:{ildAddress}" },
+                RestartPolicy = new { Name = "no" },
+            },
+            NetworkingConfig = new { EndpointsConfig = new Dictionary<string, object> { [ChatName] = new { } } },
+        };
+        try
+        {
+            await _api.PostAsync($"/containers/create?name={Escaped(ChatName)}", body, ct);
+        }
+        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.Conflict)
+        {
+            // Made by another request a moment ago: started above.
+        }
+        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
+        {
+            throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
+        }
+    }
+
+    // What the chat's repositories need, kept on ILD's side: a chat's agent writes everything in the chat's folder, and
+    // what is asked of the toolchain store (which every run and chat shares) must not be something it can write.
+    private string ChatToolsFile(Guid chat) => Path.Combine(ChatToolsRoot(), $"{chat:N}.json");
+
+    private List<RunTool> ChatToolsOf(Guid chat)
+        => _chatTools.GetOrAdd(chat, _ =>
+        {
+            try
+            {
+                var file = ChatToolsFile(chat);
+                return File.Exists(file)
+                    ? (System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(file)) ?? []).Select(RunTool.Parse).OfType<RunTool>().ToList()
+                    : [];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            {
+                Logger?.LogWarning(ex, "Could not read the toolchains of chat {Chat}; it gets none until a repository is cloned into it again", chat);
+                return [];
+            }
+        });
+
+    public override async Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
+    {
+        if (!_options.Toolchains || RunPaths.ChatOf(chatPath) is not { } chat) return;
+
+        var plan = RunToolDetector.Resolve(basePath);
+        var known = ChatToolsOf(chat);
+        var added = false;
+        lock (known)
+        {
+            foreach (var tool in plan.Tools)
+            {
+                if (known.FirstOrDefault(t => t.Name == tool.Name) is { } existing)
+                {
+                    if (existing != tool)
+                        Logger?.LogWarning("Chat {Chat} already has {Existing}, so {Tool} from {BasePath} is not added", chat, existing, tool, basePath);
+                    continue;
+                }
+                known.Add(tool);
+                added = true;
+            }
+            if (added)
+            {
+                Directory.CreateDirectory(ChatToolsRoot());
+                File.WriteAllText(ChatToolsFile(chat), System.Text.Json.JsonSerializer.Serialize(known.Select(t => t.ToString())));
+            }
+        }
+
+        // Installed now, in the clone call, rather than on the chat's next command.
+        if (added) await ChatEnvironmentAsync(chat, ct);
+    }
+
+    protected override async Task<IReadOnlyList<string>> ChatEnvironmentAsync(Guid chat, CancellationToken ct)
+    {
+        if (!_options.Toolchains) return [];
+
+        List<RunTool> tools;
+        var known = ChatToolsOf(chat);
+        lock (known) tools = [.. known];
+        var tooling = await ToolsForAsync($"Chat {chat}", new RunToolPlan(tools, tools.Select(t => t.ToString()).ToList()), ct);
+        return tooling?.For(RunPaths.ChatHome(chat)) ?? [];
+    }
+
+    protected override void ChatRemoved(Guid chat)
+    {
+        _chatTools.TryRemove(chat, out _);
+        try { File.Delete(ChatToolsFile(chat)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
 
     // -- Preview -----------------------------------------------------------------
 
     public override async Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
     {
-        var owner = OwnerFor(workingDirectory);
+        var target = OwnerFor(workingDirectory);
+        if (target.Chat) throw new NotSupportedException("a service in a chat cannot be previewed");
+        var owner = target.Id;
         if (!_addresses.TryGetValue(owner, out var address))
         {
             var container = await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct);
@@ -455,10 +620,11 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     }
 
     /// <summary>
-    /// Puts ILD's own container back on the network of every running run of this instance, at the address each run
-    /// was given for ILD. A container that is recreated (an upgrade, <c>docker compose up</c>) starts on none of them,
-    /// and without this the runs it left could reach neither the model gateway nor the MCP endpoint, and their previews
-    /// could not be reached. A restarted container keeps its networks, and nothing is done.
+    /// Puts ILD's own container back on the network of every running run of this instance, and of the chat container,
+    /// at the address each was given for ILD. A container that is recreated (an upgrade, <c>docker compose up</c>)
+    /// starts on none of them, and without this the runs and chats it left could reach neither the model gateway nor
+    /// the MCP endpoint, and their previews could not be reached. A restarted container keeps its networks, and
+    /// nothing is done.
     /// </summary>
     internal async Task ReconnectToRunsAsync(CancellationToken ct)
     {
@@ -468,10 +634,17 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
             var self = await _api.GetAsync($"/containers/{Escaped(ild)}/json", ct, HttpStatusCode.NotFound);
             if (self is null) return;
             var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
+            var networks = new List<(string Network, string Subject)>();
             foreach (var listed in (await _api.GetAsync($"/containers/json?filters={filter}", ct))?.AsArray() ?? [])
             {
-                if (listed?["Labels"]?[RunPaths.RunLabel]?.GetValue<string>() is not { } run || !Guid.TryParseExact(run, "N", out var owner)) continue;
-                var network = ObjectName(owner);
+                if (listed?["Labels"]?[RunPaths.RunLabel]?.GetValue<string>() is { } run && Guid.TryParseExact(run, "N", out var owner))
+                    networks.Add((ObjectName(owner), $"run {owner:N}"));
+                else if (listed?["Labels"]?[RunPaths.RoleLabel]?.GetValue<string>() == RunPaths.ChatRole)
+                    networks.Add((ChatName, "the chat container"));
+            }
+
+            foreach (var (network, subject) in networks)
+            {
                 if (AddressIn(self, network) is not null) continue;
 
                 var container = await _api.GetAsync($"/containers/{Escaped(network)}/json", ct, HttpStatusCode.NotFound);
@@ -484,18 +657,18 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
                     await _api.PostAsync($"/networks/{Escaped(network)}/connect", address is null
                         ? new { Container = ild }
                         : new { Container = ild, EndpointConfig = new { IPAMConfig = new { IPv4Address = address } } }, ct);
-                    Logger?.LogInformation("Reconnected ILD to the network of run {Run} at {Address}", owner, address ?? "a new address");
+                    Logger?.LogInformation("Reconnected ILD to the network of {Subject} at {Address}", subject, address ?? "a new address");
                 }
                 catch (DockerApiException ex)
                 {
-                    Logger?.LogWarning("Could not put ILD back on the network of run {Run} at {Address}; the run cannot reach ILD until it is retried: {Reason}",
-                        owner, address, ex.Message);
+                    Logger?.LogWarning("Could not put ILD back on the network of {Subject} at {Address}; it cannot reach ILD until it is retried: {Reason}",
+                        subject, address, ex.Message);
                 }
             }
         }
         catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException)
         {
-            Logger?.LogWarning(ex, "Could not put ILD back on the networks of its runs at {Socket}", _options.Socket);
+            Logger?.LogWarning(ex, "Could not put ILD back on the networks of its runs and chats at {Socket}", _options.Socket);
         }
     }
 
@@ -554,5 +727,6 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     {
         _api.Dispose();
         _toolsGate.Dispose();
+        _chatGate.Dispose();
     }
 }

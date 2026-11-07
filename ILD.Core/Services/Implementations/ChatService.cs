@@ -190,8 +190,7 @@ public sealed class ChatService : IChatService
         var normalizedTools = AiToolCatalog.NormalizeSelectedToolKeys(_registry.GetTraits(provider.Type), tools);
 
         var id = Guid.NewGuid();
-        var scratchPath = Path.GetFullPath(Path.Combine(_options.ScratchRoot, id.ToString("N")));
-        Directory.CreateDirectory(scratchPath);
+        var scratchPath = await _runHost.CreateChatFolderAsync(id, _options.ScratchRoot, ct);
 
         var session = new ChatSession
         {
@@ -789,9 +788,9 @@ public sealed class ChatService : IChatService
         try
         {
             if (!string.IsNullOrEmpty(session.ScratchPath))
-                await AgentWritableFiles.DeleteAsync([session.ScratchPath], CancellationToken.None);
+                await _runHost.DeleteAsync([session.ScratchPath], CancellationToken.None);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
 
         // Claude Code's transcripts of the chat, whose copies went with the row.
         await _claudeProjects.DeleteForAsync(session.ScratchPath, CancellationToken.None);

@@ -6,9 +6,9 @@ using Porta.Pty;
 namespace ILD.Core.Services.RunHosts;
 
 /// <summary>
-/// Sends each call to the host that holds what it is about. A loop run lives in its pod or container and everything else (a chat, a
+/// Sends each call to the host that holds what it is about. A loop run lives in its pod or container, and so does a chat when the host keeps chats; everything else (a chat from before, a
 /// scheduled job, the provider sign-in terminal) stays on the local host. What a call is about is told by the path it
-/// names, which for a run is below that run's directory, or by the run it is for.
+/// names, which for a run or chat is below its directory, or by the run it is for.
 /// </summary>
 public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunHost
 {
@@ -18,7 +18,10 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     private static bool InRun(string? path) => RunPaths.OwnerOf(path) is not null;
 
-    private IRunHost For(string? path) => InRun(path) ? isolated : local;
+    // A chat's folder is in the isolated host only when it keeps chats; a chat from before, or on a host that does not, has a path on this disk.
+    private bool OnIsolated(string? path) => InRun(path) || isolated.HostsChats && RunPaths.ChatOf(path) is not null;
+
+    private IRunHost For(string? path) => OnIsolated(path) ? isolated : local;
 
     // -- Lifecycle ---------------------------------------------------------------
 
@@ -32,7 +35,7 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     // -- Commands ----------------------------------------------------------------
 
     public Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
-        => (InRun(command.Start.WorkingDirectory) ? isolated : local).StartCommandAsync(command, ct);
+        => For(command.Start.WorkingDirectory).StartCommandAsync(command, ct);
 
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
         => await local.KillAllAsync(ownerId, ct) + await isolated.KillAllAsync(ownerId, ct);
@@ -97,12 +100,24 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public async Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default)
     {
         var all = paths.ToList();
-        var inRun = all.Where(InRun).ToList();
-        var onDisk = all.Where(p => !InRun(p)).ToList();
+        var inRun = all.Where(OnIsolated).ToList();
+        var onDisk = all.Where(p => !OnIsolated(p)).ToList();
         var runsGone = inRun.Count == 0 || await isolated.DeleteAsync(inRun, ct);
         var diskGone = onDisk.Count == 0 || await local.DeleteAsync(onDisk, ct);
         return runsGone && diskGone;
     }
+
+    // A chat's folder goes where chats are kept: the isolated host when it keeps them, this disk otherwise.
+    public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
+        => (isolated.HostsChats ? isolated : local).CreateChatFolderAsync(chatId, localRoot, ct);
+
+    public Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
+        => For(chatPath).AddChatToolsAsync(chatPath, basePath, ct);
+
+    public Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default)
+        => For(directory).ListDirectoriesAsync(directory, ct);
+
+    public Task<bool> EntryExistsAsync(string path, CancellationToken ct = default) => For(path).EntryExistsAsync(path, ct);
 
     // -- Preview and gateway -----------------------------------------------------
 

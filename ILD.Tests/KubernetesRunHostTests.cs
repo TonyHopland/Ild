@@ -3,6 +3,7 @@ using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Kubernetes;
 using ILD.Core.Services.RunHosts.Tools;
 using ILD.Data.Enums;
@@ -694,6 +695,24 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         await routing.KillAllAsync(chat, TestContext.Current.CancellationToken);
         Assert.Equal([chat], local.KillAllCalls);
         Assert.Single(_api.Execs);
+    }
+
+    [Fact]
+    public async Task Chats_stay_local_on_kubernetes_whatever_their_path_says()
+    {
+        var chat = Guid.NewGuid();
+        var local = FakeLocal();
+        var routing = new RoutingRunHost(local, _host);
+
+        var path = await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", TestContext.Current.CancellationToken);
+        using var process = await routing.StartCommandAsync(
+            RunCommand.Routed(Command(RunPaths.ChatRoot(chat), "git", "status"), chat), TestContext.Current.CancellationToken);
+
+        Assert.False(_host.HostsChats);
+        Assert.Equal(Path.Combine("/data/chat-sessions", chat.ToString("N")), path);
+        Assert.Equal([chat], local.ChatFolders);
+        Assert.Single(local.Started);
+        Assert.Empty(_api.Execs);
     }
 
     [Fact]

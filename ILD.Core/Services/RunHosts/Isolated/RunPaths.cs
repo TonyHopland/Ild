@@ -15,17 +15,31 @@ public static class RunPaths
     public const string ProcessDirectory = StateDirectory + "/procs";
     public const string AgentReadDirectory = StateDirectory + "/agent-read";
 
+    /// <summary>Every chat's files sit under this directory of the shared chat container, in a directory of its own.</summary>
+    public const string ChatsRoot = "/ild-chat";
+    public const string ChatRole = "chat";
+    public const string RoleLabel = "ild/role";
+
     public static string RunRoot(Guid ownerId) => $"{RunsRoot}/{ownerId:N}";
 
     public static string WorkingDirectory(Guid ownerId) => $"{RunRoot(ownerId)}/repo";
 
     public static string HomeDirectory(Guid ownerId) => $"{RunRoot(ownerId)}/home";
 
+    public static string ChatRoot(Guid chatId) => $"{ChatsRoot}/{chatId:N}";
+
+    public static string ChatHome(Guid chatId) => $"{ChatRoot(chatId)}/home";
+
+    /// <summary>The chat that holds <paramref name="path"/>, or null when it is not a path in the chat container.</summary>
+    public static Guid? ChatOf(string? path) => OwnerIn(path, ChatsRoot);
+
     /// <summary>The run that holds <paramref name="path"/>, or null when it is not a path in a run's pod or container.</summary>
-    public static Guid? OwnerOf(string? path)
+    public static Guid? OwnerOf(string? path) => OwnerIn(path, RunsRoot);
+
+    private static Guid? OwnerIn(string? path, string root)
     {
-        if (string.IsNullOrEmpty(path) || !path.StartsWith(RunsRoot + "/", StringComparison.Ordinal)) return null;
-        var rest = path[(RunsRoot.Length + 1)..];
+        if (string.IsNullOrEmpty(path) || !path.StartsWith(root + "/", StringComparison.Ordinal)) return null;
+        var rest = path[(root.Length + 1)..];
         var slash = rest.IndexOf('/');
         var name = slash < 0 ? rest : rest[..slash];
         return Guid.TryParseExact(name, "N", out var id) ? id : null;
