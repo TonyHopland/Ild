@@ -29,7 +29,7 @@ public sealed class KubernetesRunHost : IRunHost
     private const string CommandWrapper = """
         dir=$1; id=$2; shift 2
         cd -- "$dir" || exit 126
-        mkdir -p -- /run/ild/procs
+        mkdir -p -- "/run/ild/procs/${id%/*}"
         exec setsid -w sh -c 'f=/run/ild/procs/$1; shift; echo $$ > "$f"; "$@"; rc=$?; rm -f -- "$f"; exit $rc' sh "$id" "$@"
         """;
 
@@ -47,7 +47,7 @@ public sealed class KubernetesRunHost : IRunHost
 
     internal const string KillAllScript = """
         n=0; pids=
-        for f in /run/ild/procs/*; do
+        for f in "/run/ild/procs/$1"/*; do
             [ -f "$f" ] || continue
             pid=$(cat -- "$f" 2>/dev/null); rm -f -- "$f"
             case "$pid" in ''|*[!0-9]*) continue ;; esac
@@ -95,6 +95,9 @@ public sealed class KubernetesRunHost : IRunHost
     internal Func<string> AgentReadRoot { get; init; } = () => AgentIsolation.AgentReadRoot;
 
     public RunHostKind Kind => RunHostKind.Kubernetes;
+
+    /// <summary>The runs whose pods are kept whatever the caller of <see cref="ListLeftoversAsync"/> says is live: those that have not ended, a failed one included, since it can be retried in the pod it has.</summary>
+    internal Func<CancellationToken, Task<IReadOnlySet<Guid>>> RetainedRuns { get; init; } = _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>());
 
     public TimeSpan SweepInterval => _options.SweepInterval;
 
@@ -270,7 +273,8 @@ public sealed class KubernetesRunHost : IRunHost
         foreach (var (name, value) in network) environment[name] = value;
 
         var directory = string.IsNullOrEmpty(psi.WorkingDirectory) ? KubernetesNames.WorkingDirectory(owner) : psi.WorkingDirectory;
-        var id = Guid.NewGuid().ToString("N");
+        // Only a command started for the run itself is one KillAllAsync ends; a preview service, which has no owner, outlives a retry.
+        var id = $"{(command.OwnerId != Guid.Empty ? command.OwnerId.ToString("N") : "unowned")}/{Guid.NewGuid():N}";
         var wrapped = new List<string> { "/bin/sh", "-c", CommandWrapper, "sh", directory, id, "env" };
         wrapped.AddRange(environment.Select(e => $"{e.Key}={e.Value}"));
         wrapped.Add(fileName);
@@ -376,7 +380,7 @@ public sealed class KubernetesRunHost : IRunHost
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
     {
         if (!await PodExistsAsync(ownerId, ct)) return 0;
-        var result = await RunScriptAsync(ownerId, KillAllScript, [], ct);
+        var result = await RunScriptAsync(ownerId, KillAllScript, [ownerId.ToString("N")], ct);
         return result.Success && int.TryParse(result.StdOut.Trim(), out var killed) ? killed : 0;
     }
 
@@ -572,6 +576,9 @@ public sealed class KubernetesRunHost : IRunHost
         return new UriBuilder(Uri.UriSchemeHttp, address, port).Uri;
     }
 
+    public string? RunHomeFor(string workingDirectory)
+        => KubernetesNames.OwnerOf(workingDirectory) is { } owner ? KubernetesNames.HomeDirectory(owner) : null;
+
     public string GatewayApiUrl(string? configuredApiUrl) => _options.IldUrl;
 
     // -- Sweep -------------------------------------------------------------------
@@ -580,6 +587,7 @@ public sealed class KubernetesRunHost : IRunHost
     {
         try
         {
+            var retained = await RetainedRuns(ct);
             var selector = KubernetesNames.SelectorFor(_options.Instance);
             var runs = new HashSet<string>(StringComparer.Ordinal);
             void Collect(IEnumerable<IMetadata<V1ObjectMeta>> items)
@@ -595,7 +603,7 @@ public sealed class KubernetesRunHost : IRunHost
             Collect((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
 
             return runs
-                .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id))
+                .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
                 .Select(run => new RunLeftover(RunLeftoverKind, run))
                 .ToList();
         }

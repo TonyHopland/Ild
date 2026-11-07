@@ -14,4 +14,12 @@ internal static class LiveRunIds
                 .ToListAsync(ct))
             .Concat(await dbContext.ChatSessions.Select(c => c.Id).ToListAsync(ct))
             .ToHashSet();
+
+    /// <summary>The runs that have not ended: running, waiting, or failed on a node and open to a retry. A run host that keeps a run's environment keeps these.</summary>
+    public static async Task<IReadOnlySet<Guid>> NotEndedAsync(AppDbContext dbContext, CancellationToken ct)
+        => (await dbContext.LoopRuns
+                .Where(r => r.Status != LoopRunStatus.Completed && r.Status != LoopRunStatus.Cancelled)
+                .Select(r => r.Id)
+                .ToListAsync(ct))
+            .ToHashSet();
 }

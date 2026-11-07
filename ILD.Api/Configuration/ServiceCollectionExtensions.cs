@@ -24,6 +24,12 @@ namespace ILD.Api.Configuration;
 
 public static class ServiceCollectionExtensions
 {
+    private static Func<CancellationToken, Task<IReadOnlySet<Guid>>> RetainedRuns(IServiceProvider sp) => async ct =>
+    {
+        using var scope = sp.CreateScope();
+        return await LiveRunIds.NotEndedAsync(scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>(), ct);
+    };
+
     public static IServiceCollection AddIldServices(this IServiceCollection services)
     {
         services.AddSingleton<AgentAuthTokenProvider>();
@@ -66,15 +72,11 @@ public static class ServiceCollectionExtensions
             if (kind != RunHostKind.Kubernetes) return local;
 
             EgressProxyOptions.BindAddress = System.Net.IPAddress.Any;
-            return KubernetesRunHostFactory.Create(local, name => config[name], runner, sp.GetRequiredService<ILoggerFactory>());
+            return KubernetesRunHostFactory.Create(local, name => config[name], runner, sp.GetRequiredService<ILoggerFactory>(), RetainedRuns(sp));
         });
         services.AddHostedService(sp => new KubernetesSweeper(
             sp.GetRequiredService<IRunHost>(),
-            async ct =>
-            {
-                using var scope = sp.CreateScope();
-                return await LiveRunIds.GetAsync(scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>(), ct);
-            },
+            RetainedRuns(sp),
             sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Kubernetes.SweepInterval : TimeSpan.FromMinutes(10),
             sp.GetService<ILogger<KubernetesSweeper>>()));
         services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();

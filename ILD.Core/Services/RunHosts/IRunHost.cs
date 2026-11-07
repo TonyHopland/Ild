@@ -126,6 +126,9 @@ public interface IRunHost
     /// <summary>The base address of ILD that the run's CLI is given for the model gateway; <paramref name="configuredApiUrl"/> is the operator's setting, null when unset.</summary>
     string GatewayApiUrl(string? configuredApiUrl);
 
+    /// <summary>The <c>HOME</c> the CLIs of the run that holds <paramref name="workingDirectory"/> run with, when it is not the agent home of this machine; null when it is.</summary>
+    string? RunHomeFor(string workingDirectory);
+
     // -- Sweep -------------------------------------------------------------------
 
     /// <summary>What runs and chats that are finished, or no longer exist, left behind. Anything of <paramref name="liveIds"/> is kept.</summary>

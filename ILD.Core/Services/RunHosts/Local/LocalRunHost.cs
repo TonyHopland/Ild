@@ -261,6 +261,8 @@ public sealed class LocalRunHost : IRunHost
     public Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
         => Task.FromResult(new Uri($"http://127.0.0.1:{port}"));
 
+    public string? RunHomeFor(string workingDirectory) => null;
+
     public string GatewayApiUrl(string? configuredApiUrl) => configuredApiUrl ?? "http://localhost:5000";
 
     // -- Sweep -------------------------------------------------------------------

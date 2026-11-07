@@ -534,7 +534,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         // Claude keeps its session files in the shared credential store, which the
         // agent can write, so they are only checked, written and read as the agent
         // (see AgentWritableFiles), never by the orchestrator through a link.
-        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
+        var path = SessionFilePath(worktreePath, sessionId);
         if (path is null || await RunHost.FileExistsAsync(path, ctx.Cancel)) return;
 
         try
@@ -550,7 +550,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// <summary>The cost the session's transcript says it reached, or zero when there is none or it cannot be read (logged).</summary>
     private async Task<decimal> ReadSessionCostBeforeAsync(string sessionId, string worktreePath, CancellationToken ct)
     {
-        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
+        var path = SessionFilePath(worktreePath, sessionId);
         if (path is null) return 0m;
 
         try
@@ -566,11 +566,21 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
     private async Task TryPersistSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
     {
-        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
+        var path = SessionFilePath(worktreePath, sessionId);
         if (path is null) return;
 
         await PersistSessionFileAsync(ctx, sessionId, path, SessionSnapshotFormats.ClaudeJsonl, _logger);
     }
+
+    private string? SessionFilePath(string worktreePath, string sessionId)
+        => SessionFilePath(RunHost, worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
+
+    /// <summary>Where Claude keeps the session: under the home the run's host says its CLIs run with, otherwise under ours.</summary>
+    internal static string? SessionFilePath(
+        IRunHost host, string worktreePath, string sessionId, string? agentUser, string? agentHome, IProcessEnvironment environment)
+        => host.RunHomeFor(worktreePath) is { } home && !string.IsNullOrEmpty(sessionId)
+            ? Path.Combine(home, ".claude", "projects", EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl")
+            : GetSessionFilePath(worktreePath, sessionId, agentUser, agentHome, environment);
 
     // Claude keeps its sessions under the HOME it runs with, which under uid
     // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.

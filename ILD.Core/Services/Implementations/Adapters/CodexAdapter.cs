@@ -157,7 +157,9 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             using var gateway = OpenGateway(ctx);
-            var codexHome = gateway is null ? UserCodexHome() : RunCodexHome(ctx.ChatSessionId ?? ctx.RunContext.LoopRunId);
+            var codexHome = RunHost.RunHomeFor(worktreePath) is { } runHome
+                ? Path.Combine(runHome, ".codex")
+                : gateway is null ? UserCodexHome() : RunCodexHome(ctx.ChatSessionId ?? ctx.RunContext.LoopRunId);
             var sessionsDirectory = codexHome is null ? null : Path.Combine(codexHome, "sessions");
             if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId))
             {

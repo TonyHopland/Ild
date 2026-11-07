@@ -230,6 +230,8 @@ internal sealed class FakeRunHost : IRunHost
     public Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
         => Task.FromResult(new Uri($"http://fake-run-host:{port}"));
 
+    public string? RunHomeFor(string workingDirectory) => null;
+
     public Task<bool> IsRunCloneAsync(string path, CancellationToken ct = default)
         => Task.FromResult(ILD.Core.Services.Implementations.LocalWorktrees.TrustedRepositoryRoot(path) is not null);
 

@@ -14,7 +14,7 @@ The unit and integration tests run against a fake Kubernetes API. They cannot sh
 
    ```sh
    kubectl apply -f docs/kubernetes/serviceaccount.yaml -f docs/kubernetes/role.yaml \
-     -f docs/kubernetes/rolebinding.yaml -f docs/kubernetes/storageclass-optional.yaml
+     -f docs/kubernetes/rolebinding.yaml -f docs/kubernetes/storageclass-reader-optional.yaml
    ```
 
 3. Set on the ILD Deployment (`serviceAccountName: ild`, and the pods labelled `app.kubernetes.io/name=ild`):

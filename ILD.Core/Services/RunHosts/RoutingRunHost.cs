@@ -112,6 +112,8 @@ public sealed class RoutingRunHost(IRunHost local, KubernetesRunHost kubernetes)
     // The local host answers with the operator's setting, which for this backend is ILD's Service address too.
     public string GatewayApiUrl(string? configuredApiUrl) => local.GatewayApiUrl(configuredApiUrl);
 
+    public string? RunHomeFor(string workingDirectory) => For(workingDirectory).RunHomeFor(workingDirectory);
+
     // -- Sweep -------------------------------------------------------------------
 
     public async Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)
