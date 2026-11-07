@@ -2676,4 +2676,4 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         /// </summary>
         public bool RewriteHost { get; set; } = true;
     }
-}
+}
