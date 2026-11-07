@@ -265,6 +265,7 @@ Whoever holds the socket controls every container on the host: it can start a pr
 
 - **Rootless Podman is the supported setup.** Its socket is your user account's: a container it starts has no more reach than the account that runs it. Enable it with `systemctl --user enable --now podman.socket`; the socket is `$XDG_RUNTIME_DIR/podman/podman.sock`.
 - **A rootful Docker or Podman socket is root-equivalent on the host**, and so is ILD, and so is anything that gets code execution in ILD. Use it only on a machine you would give ILD root on. ILD asks the engine whether it is rootless (Podman's `/libpod/info`, else Docker's `/info`) and shows a warning in **Settings > General** and in its log when it is not. If the engine does not say, ILD shows nothing rather than guess; this paragraph is then the warning.
+- **When ILD cannot reach the socket at all** (not mounted, no permission, the engine stopped), the same card and the log say so, with the reason: no run can start until it can. The warning goes by itself once the socket answers.
 
 ### What a run gets
 
@@ -310,7 +311,13 @@ services:
       - ${ILD_CONTAINER_SOCKET_HOST:?Set ILD_CONTAINER_SOCKET_HOST to the engine socket on the host}:/run/container.sock
 ```
 
-ILD's process must be able to open the socket: ILD drops to uid 10001 after its entrypoint, so the socket needs to be accessible to that uid inside the container (with rootless Podman, the socket's owner is `root` inside a container run by the same user, and a `group_add` or a looser mode on the socket may be needed). The runner image must be on the host the socket belongs to.
+ILD's entrypoint gives ILD's own user, and never the agent's, a group that can open the mounted socket, before it drops from root. `group_add` does not work for this, since the drop rebuilds the user's groups. What it does depends on the socket:
+
+- **Rootless Podman or Docker.** Inside ILD's container the socket shows as `root:root`. The entrypoint gives it a group of its own, `ild-engine`, which only ILD's user is in. On the host the socket stays yours; only its group changes. Restarting the engine's socket (`systemctl --user restart podman.socket`) makes a new one with the old group; restart ILD after it.
+- **A socket with a group of its own,** such as rootful Docker's `docker` group: ILD's user joins that group. Nothing outside the container changes.
+- **A socket of the host's `root` group** (rootful Podman): the entrypoint leaves it alone and says so, and ILD cannot open it. Give the socket a group of its own first.
+
+The entrypoint will not join a group the agent's user is in, since that would hand the agent the engine. The runner image must be on the host the socket belongs to.
 
 ## Agent network limits (`NET_ADMIN`)
 

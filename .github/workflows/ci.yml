@@ -30,6 +30,9 @@ jobs:
       - name: Entrypoint egress-rule tests
         run: .github/scripts/entrypoint-egress-rules.test.sh
 
+      - name: Entrypoint engine socket tests
+        run: .github/scripts/entrypoint-engine-socket.test.sh
+
       - name: Compose security_opt tests
         run: .github/scripts/compose-security-opt.test.sh
 

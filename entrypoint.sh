@@ -662,6 +662,64 @@ install_agent_egress_rules() {
   echo "Agent egress enforced: $ILD_NETWORK_ENFORCEMENT_REASON"
 }
 
+# Whether this container runs in a user namespace (rootless Podman or Docker), where root here is not
+# the host's root. The initial namespace maps every uid to itself.
+in_user_namespace() {
+  [ "$(awk 'NR==1{print $1" "$2" "$3}' "${UID_MAP_FILE:-/proc/self/uid_map}" 2>/dev/null)" != "0 0 4294967295" ]
+}
+
+# The container run host (ILD_RUN_HOST=container) drives the engine through the socket mounted at
+# ILD_CONTAINER_SOCKET. Only the orchestrator may open it: whoever holds it controls the engine, so the
+# agent uid never may. capsh and gosu rebuild the supplementary groups from /etc/group when they drop to
+# RUNTIME_USER, so a compose group_add is lost; the group is granted here, before the drop.
+#  - A socket whose group is not root (a rootful Docker's docker group, a socket an operator gave a group):
+#    RUNTIME_USER joins a group of that gid, made if the image has none. Nothing outside changes.
+#  - A socket of group root in a user namespace (rootless Podman or Docker: the host user's own socket
+#    shows as root:root here): its group becomes ild-engine, which only RUNTIME_USER is in. The host user
+#    still owns it, so nothing on the host loses access. A restart of the engine's socket makes a new one,
+#    which ILD cannot open until it restarts too; ILD says so in its log and on the settings page.
+#  - A socket of group root outside a user namespace is the host's root group: left alone, and said why.
+grant_engine_socket() {
+  [ "${ILD_RUN_HOST:-}" = "container" ] || return 0
+  socket="${ILD_CONTAINER_SOCKET:-}"
+  socket="${socket#unix://}"
+  if [ -z "$socket" ] || [ ! -S "$socket" ]; then
+    echo "WARNING: ILD_CONTAINER_SOCKET=${socket:-(unset)} is not a socket in this container; mount the container engine's socket there. No run can start." >&2
+    return 0
+  fi
+
+  gid="$(stat -c %g "$socket")"
+  if [ "$gid" != 0 ]; then
+    group="$(getent group "$gid" | cut -d: -f1)"
+    if [ -z "$group" ]; then
+      group="ild-engine-$gid"
+      groupadd --gid "$gid" "$group"
+    fi
+  elif in_user_namespace; then
+    group=ild-engine
+    getent group "$group" >/dev/null || groupadd "$group"
+    if ! chgrp "$group" "$socket"; then
+      echo "WARNING: could not give $socket to group $group; ILD cannot open it and no run can start." >&2
+      return 0
+    fi
+    gid="$(getent group "$group" | cut -d: -f3)"
+  else
+    echo "WARNING: $socket belongs to the host's root group, which ILD does not join; no run can start. Give the socket a group of its own (Docker's docker group), or use rootless Podman." >&2
+    return 0
+  fi
+
+  if [ -n "${AGENT_USER:-}" ] && id -G "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$gid"; then
+    echo "WARNING: the agent user $AGENT_USER is in group $group, which can open $socket; ILD does not join it, since that would hand the agent the engine. No run can start." >&2
+    return 0
+  fi
+  case "$(stat -c %A "$socket")" in
+    ????rw*) ;;
+    *) echo "WARNING: $socket is not readable and writable by its group $group; ILD cannot open it and no run can start." >&2 ;;
+  esac
+  usermod -aG "$group" "$RUNTIME_USER"
+  echo "Container engine socket $socket: $RUNTIME_USER can open it through group $group."
+}
+
 # Drop from root to the runtime user and exec the app. Under uid isolation the
 # orchestrator keeps ambient RUNTIME_AMBIENT_CAPS (via capsh --keep) so it can
 # later drop the agent CLI to AGENT_USER under no_new_privs; otherwise a plain
@@ -827,6 +885,7 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     export ILD_NETWORK_ENFORCEMENT_REASON="Agent uid isolation is off (AGENT_USER is empty), so there is no separate uid to key firewall rules on; the proxy still logs and filters proxy-honouring clients."
   fi
 
+  grant_engine_socket
   wait_for_postgres
   drop_and_exec "$@"
 fi

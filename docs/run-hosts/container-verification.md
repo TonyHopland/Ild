@@ -30,7 +30,8 @@ Run it twice for Podman if you can: once with **ILD on the host**, once with **I
 
    For ILD in a container use the override in [Deployment](../deployment.md#ild-in-a-container) and `ILD_CONTAINER_ILD_CONTAINER=ild`.
 
-3. Start ILD and read its log. Expected: no startup failure and no warning about the socket. Open **Settings > General**: no "Run host" warning.
+3. Start ILD and read its log. Expected: no startup failure and no warning about the socket. With ILD in a container, the log has `Container engine socket /run/container.sock: ild can open it through group …`. Open **Settings > General**: no "Run host" warning.
+4. Stop the engine's socket (`systemctl --user stop podman.socket`) and reload **Settings > General**. Expected: a "Run host" card says ILD cannot reach the engine, and why. Start the socket again and restart ILD; the card is gone.
 
 ## 2. A full Develop run
 
