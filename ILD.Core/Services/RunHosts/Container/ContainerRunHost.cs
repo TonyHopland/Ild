@@ -25,6 +25,7 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     private readonly DockerApiClient _api;
     private readonly ConcurrentDictionary<Guid, string> _addresses = new();
     private string? _warning;
+    private bool? _podman;
 
     public ContainerRunHost(ContainerRunHostOptions options, IProcessRunner runner, ILogger? logger = null)
         : base(runner, logger)
@@ -180,13 +181,15 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
             Entrypoint = new[] { "/usr/bin/tini", "--" },
             Cmd = new[] { "sleep", "infinity" },
             User = $"{RunnerUid}:{RunnerUid}",
-            WorkingDir = RunPaths.RunRoot(owner),
+            // The volume's root, which the image gives the runner. An engine makes a missing working directory as root
+            // (Podman does), and the runner could then not make the run's own directory in it: the runner makes that.
+            WorkingDir = RunPaths.RunsRoot,
             Env = new[] { $"HOME={RunPaths.HomeDirectory(owner)}" }.Concat(_options.GitIdentity.Select(e => $"{e.Key}={e.Value}")).ToArray(),
             Labels = Labels(owner),
             HostConfig = new
             {
                 Binds = new[] { $"{name}:{RunPaths.RunsRoot}:rw" },
-                Tmpfs = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,uid={RunnerUid},gid={RunnerUid}" },
+                Tmpfs = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{await StateOwnerOptionAsync(ct)}" },
                 CapDrop = new[] { "ALL" },
                 SecurityOpt = new[] { "no-new-privileges" },
                 NetworkMode = name,
@@ -209,6 +212,16 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         {
             throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
         }
+    }
+
+    /// <summary>
+    /// The tmpfs option that hands the state directory to the runner's uid. Docker passes uid/gid on to the kernel;
+    /// Podman refuses them as unknown and has its own <c>U</c>, which chowns the mount to the container's user.
+    /// </summary>
+    private async Task<string> StateOwnerOptionAsync(CancellationToken ct)
+    {
+        _podman ??= await _api.InfoAsync(libpod: true, ct) is not null;
+        return _podman.Value ? "U" : $"uid={RunnerUid},gid={RunnerUid}";
     }
 
     private async Task<string> WaitReadyAsync(Guid owner, CancellationToken ct)

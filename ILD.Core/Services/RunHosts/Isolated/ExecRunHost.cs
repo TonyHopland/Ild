@@ -106,7 +106,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>Make the environment ready to work in: the run's home and the code the base repository has.</summary>
     protected async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
     {
-        await RunScriptAsync(owner, "mkdir -p -- \"$1\"", [RunPaths.HomeDirectory(owner)], ct);
+        var home = await RunScriptAsync(owner, "mkdir -p -- \"$1\"", [RunPaths.HomeDirectory(owner)], ct);
+        if (!home.Success)
+            throw new InvalidOperationException($"could not make the run's home in its {Noun}: {home.StdErr.Trim()}");
         await PopulateAsync(owner, request, RunPaths.WorkingDirectory(owner), ct);
     }
 

@@ -132,6 +132,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal("10001:10001", container["User"]!.GetValue<string>());
         Assert.Equal(["/usr/bin/tini", "--"], container["Entrypoint"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Equal(["sleep", "infinity"], container["Cmd"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Equal(RunPaths.RunsRoot, container["WorkingDir"]!.GetValue<string>());
         Assert.Equal(["ALL"], host["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Equal(["no-new-privileges"], host["SecurityOpt"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Equal(512L * 1024 * 1024, host["Memory"]!.GetValue<long>());
@@ -142,6 +143,18 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var env = container["Env"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
         Assert.Contains($"HOME={RunPaths.HomeDirectory(_run)}", env);
         Assert.Contains("GIT_AUTHOR_NAME=Ada", env);
+    }
+
+    [Fact]
+    public async Task Create_on_podman_hands_the_state_directory_to_the_runner_with_podmans_own_option()
+    {
+        _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":true}}}""");
+
+        await CreateRunAsync();
+
+        var options = _api.Container(Name(_run))!["HostConfig"]!["Tmpfs"]!["/run/ild"]!.GetValue<string>().Split(',');
+        Assert.Contains("U", options);
+        Assert.DoesNotContain(options, o => o.StartsWith("uid=", StringComparison.Ordinal));
     }
 
     [Fact]

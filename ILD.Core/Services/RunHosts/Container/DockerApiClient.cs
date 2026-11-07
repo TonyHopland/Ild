@@ -71,8 +71,14 @@ internal sealed class DockerApiClient : IDisposable
             if (tolerate.Contains(response.StatusCode)) return null;
             throw new DockerApiException(response.StatusCode, $"{method} {path}: {MessageOf(text) ?? response.ReasonPhrase ?? response.StatusCode.ToString()}");
         }
-        return string.IsNullOrWhiteSpace(text) ? null : JsonNode.Parse(text);
+        // Only a JSON answer is a body: Podman answers some calls (network connect and disconnect) with a plain-text "OK".
+        return string.IsNullOrWhiteSpace(text) || !IsJson(response.Content.Headers.ContentType?.MediaType) ? null : JsonNode.Parse(text);
     }
+
+    private static bool IsJson(string? mediaType)
+        => mediaType is not null
+           && (mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+               || mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase));
 
     public Task<JsonNode?> GetAsync(string path, CancellationToken ct, params HttpStatusCode[] tolerate)
         => SendAsync(HttpMethod.Get, path, null, ct, tolerate);
@@ -83,7 +89,8 @@ internal sealed class DockerApiClient : IDisposable
     /// <summary>The engine's own info as <c>/info</c> answers it; the Podman-only <c>/libpod/info</c> when <paramref name="libpod"/>. Null when the endpoint is not there.</summary>
     public async Task<JsonNode?> InfoAsync(bool libpod, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, libpod ? "/libpod/info" : $"/{ApiVersion}/info");
+        // Podman serves its own API under a version prefix only: an unversioned /libpod/info is a 404.
+        using var request = new HttpRequestMessage(HttpMethod.Get, libpod ? $"/{ApiVersion}/libpod/info" : $"/{ApiVersion}/info");
         using var response = await _http.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode) return null;
         return JsonNode.Parse(await response.Content.ReadAsStringAsync(ct));

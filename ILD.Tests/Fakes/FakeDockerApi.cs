@@ -187,14 +187,24 @@ internal sealed class FakeDockerApi : IAsyncDisposable
 
     private static async Task RespondAsync(Stream stream, int status, object? body)
     {
-        var payload = body is null ? [] : Encoding.UTF8.GetBytes(body is string s ? s : JsonSerializer.Serialize(body));
-        var head = $"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {payload.Length}\r\n\r\n";
+        var payload = body switch
+        {
+            null => [],
+            PlainText p => Encoding.UTF8.GetBytes(p.Text),
+            string s => Encoding.UTF8.GetBytes(s),
+            _ => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(body)),
+        };
+        var contentType = body is PlainText ? "text/plain; charset=us-ascii" : "application/json";
+        var head = $"HTTP/1.1 {status} X\r\nContent-Type: {contentType}\r\nContent-Length: {payload.Length}\r\n\r\n";
         await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
         await stream.WriteAsync(payload);
         await stream.FlushAsync();
     }
 
     private static (int, object?) Failure(int status, string message) => (status, new { message });
+
+    /// <summary>A body sent as <c>text/plain</c>, not JSON.</summary>
+    private sealed record PlainText(string Text);
 
     // -- Routes ------------------------------------------------------------------
 
@@ -203,7 +213,8 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         lock (_gate)
         {
             var path = request.Path;
-            if (path == "/libpod/info")
+            // Like Podman: its own API only under a version prefix.
+            if (path == "/v1.41/libpod/info")
                 return LibpodInfo is null ? Failure(404, "page not found") : (200, LibpodInfo.ToJsonString());
             if (!path.StartsWith("/v1.41/", StringComparison.Ordinal)) return Failure(404, "page not found");
             var parts = path["/v1.41/".Length..].Split('/');
@@ -303,7 +314,8 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         if (!_networks.ContainsKey(network)) return Failure(404, $"network {network} not found");
         if (!_containers.TryGetValue(container, out var found)) return Failure(404, $"no such container: {container}");
         if (connect) found.Networks.Add(network); else found.Networks.Remove(network);
-        return (200, null);
+        // Podman answers both with a plain-text "OK", not an empty body.
+        return (200, new PlainText("OK"));
     }
 
     private (int, object?) CreateContainer(Request request)
@@ -312,6 +324,11 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         if (!ImagePresent) return Failure(404, "No such image: " + JsonNode.Parse(request.Body)!["Image"]);
         if (_containers.ContainsKey(name)) return Failure(409, $"container name {name} is already in use");
         var config = JsonNode.Parse(request.Body)!.AsObject();
+        // Podman refuses tmpfs options it does not know, uid= and gid= among them; Docker passes them to the kernel.
+        if (LibpodInfo is not null && config["HostConfig"]?["Tmpfs"] is JsonObject tmpfs)
+            foreach (var option in tmpfs.SelectMany(t => t.Value!.GetValue<string>().Split(',')))
+                if (option.StartsWith("uid=", StringComparison.Ordinal) || option.StartsWith("gid=", StringComparison.Ordinal))
+                    return Failure(500, $"container create: unknown mount option \"{option}\": invalid mount option");
         var container = new FakeContainer(name, config, LabelsOf(config["Labels"]));
         var mode = config["HostConfig"]?["NetworkMode"]?.GetValue<string>();
         if (mode is not null)
