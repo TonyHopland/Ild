@@ -1,29 +1,29 @@
 using ILD.Core.Services.Implementations;
-using ILD.Core.Services.RunHosts.Kubernetes;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Data.Enums;
 using Porta.Pty;
 
 namespace ILD.Core.Services.RunHosts;
 
 /// <summary>
-/// Sends each call to the host that holds what it is about. A loop run lives in its pod and everything else (a chat, a
+/// Sends each call to the host that holds what it is about. A loop run lives in its pod or container and everything else (a chat, a
 /// scheduled job, the provider sign-in terminal) stays on the local host. What a call is about is told by the path it
-/// names, which for a pod is below that run's directory, or by the run it is for.
+/// names, which for a run is below that run's directory, or by the run it is for.
 /// </summary>
-public sealed class RoutingRunHost(IRunHost local, KubernetesRunHost kubernetes) : IRunHost
+public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunHost
 {
-    public RunHostKind Kind => RunHostKind.Kubernetes;
+    public RunHostKind Kind => isolated.Kind;
 
-    public KubernetesRunHost Kubernetes => kubernetes;
+    public ExecRunHost Isolated => isolated;
 
-    private static bool InPod(string? path) => KubernetesNames.OwnerOf(path) is not null;
+    private static bool InRun(string? path) => RunPaths.OwnerOf(path) is not null;
 
-    private IRunHost For(string? path) => InPod(path) ? kubernetes : local;
+    private IRunHost For(string? path) => InRun(path) ? isolated : local;
 
     // -- Lifecycle ---------------------------------------------------------------
 
     public Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
-        => kubernetes.CreateAsync(request, ct);
+        => isolated.CreateAsync(request, ct);
 
     // A run's environment, or a path the run's row kept from before the host was switched, so a worktree on this disk still goes.
     public Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
@@ -32,10 +32,10 @@ public sealed class RoutingRunHost(IRunHost local, KubernetesRunHost kubernetes)
     // -- Commands ----------------------------------------------------------------
 
     public Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
-        => (InPod(command.Start.WorkingDirectory) ? kubernetes : local).StartCommandAsync(command, ct);
+        => (InRun(command.Start.WorkingDirectory) ? isolated : local).StartCommandAsync(command, ct);
 
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
-        => await local.KillAllAsync(ownerId, ct) + await kubernetes.KillAllAsync(ownerId, ct);
+        => await local.KillAllAsync(ownerId, ct) + await isolated.KillAllAsync(ownerId, ct);
 
     // -- Terminal ----------------------------------------------------------------
 
@@ -97,11 +97,11 @@ public sealed class RoutingRunHost(IRunHost local, KubernetesRunHost kubernetes)
     public async Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default)
     {
         var all = paths.ToList();
-        var inPod = all.Where(InPod).ToList();
-        var onDisk = all.Where(p => !InPod(p)).ToList();
-        var podsGone = inPod.Count == 0 || await kubernetes.DeleteAsync(inPod, ct);
+        var inRun = all.Where(InRun).ToList();
+        var onDisk = all.Where(p => !InRun(p)).ToList();
+        var runsGone = inRun.Count == 0 || await isolated.DeleteAsync(inRun, ct);
         var diskGone = onDisk.Count == 0 || await local.DeleteAsync(onDisk, ct);
-        return podsGone && diskGone;
+        return runsGone && diskGone;
     }
 
     // -- Preview and gateway -----------------------------------------------------
@@ -117,8 +117,8 @@ public sealed class RoutingRunHost(IRunHost local, KubernetesRunHost kubernetes)
     // -- Sweep -------------------------------------------------------------------
 
     public async Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)
-        => [.. await local.ListLeftoversAsync(liveIds, ct), .. await kubernetes.ListLeftoversAsync(liveIds, ct)];
+        => [.. await local.ListLeftoversAsync(liveIds, ct), .. await isolated.ListLeftoversAsync(liveIds, ct)];
 
     public Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default)
-        => leftover.Kind == KubernetesRunHost.RunLeftoverKind ? kubernetes.DeleteLeftoverAsync(leftover, ct) : local.DeleteLeftoverAsync(leftover, ct);
+        => leftover.Kind == isolated.LeftoverKind ? isolated.DeleteLeftoverAsync(leftover, ct) : local.DeleteLeftoverAsync(leftover, ct);
 }

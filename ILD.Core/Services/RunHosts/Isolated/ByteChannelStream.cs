@@ -1,6 +1,6 @@
 using System.Threading.Channels;
 
-namespace ILD.Core.Services.RunHosts.Kubernetes;
+namespace ILD.Core.Services.RunHosts.Isolated;
 
 /// <summary>A readable stream fed by another task: what a pod's command printed, handed to the caller as it arrives, ended by <see cref="Complete"/>.</summary>
 internal sealed class ByteChannelStream : Stream

@@ -36,5 +36,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0031](./0031-model-gateway.md)                                | The agent holds a placeholder; the ILD model gateway adds the real credential        |
 | [0032](./0032-run-host-interface.md)                                | Where a run's processes and files live is one interface, the run host              |
 | [0033](./0033-kubernetes-run-host.md)                                | A loop run is a pod, owned by one object and swept by label                        |
+| [0034](./0034-container-run-host.md)                                | A loop run is a container, a volume and a network, swept by label                  |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

@@ -7,6 +7,7 @@ import {
   WorkItemHistoryEntry,
   WorkItemAttachment,
   AttachmentLimits,
+  RunHostInfo,
   LoopTemplate,
   NodeOutput,
   LoopRun,
@@ -1210,6 +1211,9 @@ export const settingsService = {
   },
   getAttachmentLimits: async (): Promise<AttachmentLimits> => {
     return api.get<AttachmentLimits>("/settings/attachments");
+  },
+  getRunHost: async (): Promise<RunHostInfo> => {
+    return api.get<RunHostInfo>("/settings/run-host");
   },
 };
 

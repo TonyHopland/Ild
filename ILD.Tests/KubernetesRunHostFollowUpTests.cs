@@ -1,6 +1,7 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Kubernetes;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.Entities;
@@ -74,8 +75,8 @@ public sealed class KubernetesRunHostFollowUpTests
         using var preview = await host.StartCommandAsync(RunCommand.Routed(new System.Diagnostics.ProcessStartInfo("npm") { WorkingDirectory = wd }), TestContext.Current.CancellationToken);
         await host.KillAllAsync(run, TestContext.Current.CancellationToken);
 
-        var ownedId = ((KubernetesRunProcess)owned).CommandId;
-        var previewId = ((KubernetesRunProcess)preview).CommandId;
+        var ownedId = ((ExecRunProcess)owned).CommandId;
+        var previewId = ((ExecRunProcess)preview).CommandId;
         Assert.StartsWith(run.ToString("N") + "/", ownedId);
         Assert.StartsWith("unowned/", previewId);
         var kill = api.Execs.Last();

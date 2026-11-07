@@ -243,6 +243,15 @@ export interface AttachmentLimits {
 }
 
 /**
+ * Where loop runs execute, as the environment of this instance chose. `warning` is present only when the
+ * host can say that its setup should be fixed, such as a container socket that is root on the machine.
+ */
+export interface RunHostInfo {
+  kind: "local" | "container" | "kubernetes";
+  warning?: string | null;
+}
+
+/**
  * One PR in a {@link WorkItem}'s history (mirrors the backend's
  * WorkItemPullRequest). Self-contained, because the runs it came from may
  * already have been reclaimed.

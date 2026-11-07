@@ -146,11 +146,6 @@ public class RunHostSeamTests
     public void An_unknown_backend_is_refused()
         => Assert.Contains("ILD_RUN_HOST", Assert.Throws<InvalidOperationException>(() => RunHostOptions.Parse("docker")).Message);
 
-    [Theory]
-    [InlineData("container")]
-    public void A_backend_that_is_not_built_yet_stops_startup(string value)
-        => Assert.Contains("not implemented yet", Assert.Throws<InvalidOperationException>(() => RunHostOptions.Select(value)).Message);
-
     [Fact]
     public async Task The_local_host_points_the_preview_proxy_at_loopback()
         => Assert.Equal("http://127.0.0.1:5173/", (await new LocalRunHost().PreviewTargetAsync("/w", 5173, TestContext.Current.CancellationToken)).ToString());

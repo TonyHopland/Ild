@@ -491,7 +491,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         SeedRun(orphan, Instance, secret: false);
         SeedRun(otherInstance, "other");
         SeedRun(notOurs, Instance, managedBy: "someone-else");
-        var sweeper = new KubernetesSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }), TimeSpan.FromMinutes(1));
 
         await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
 
