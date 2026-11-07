@@ -10,6 +10,7 @@ using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Remote;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
 using ILD.Core.Services.RunHosts.Kubernetes;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Middleware;
@@ -62,17 +63,21 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
-        // Chosen by the setting and never detected; the container backend fails at startup until it exists.
+        // Chosen by the setting and never detected.
         services.AddSingleton<IRunHost>(sp =>
         {
             var config = sp.GetRequiredService<IConfiguration>();
-            var kind = RunHostOptions.Select(config[RunHostOptions.SettingName]);
+            var kind = RunHostOptions.Parse(config[RunHostOptions.SettingName]);
             var runner = sp.GetRequiredService<IProcessRunner>();
             var local = new LocalRunHost(runner, sp);
-            if (kind != RunHostKind.Kubernetes) return local;
+            if (kind == RunHostKind.Local) return local;
 
+            // A run's pod or container reaches the egress proxy over the network, not on ILD's loopback.
             EgressProxyOptions.BindAddress = System.Net.IPAddress.Any;
-            return KubernetesRunHostFactory.Create(local, name => config[name], runner, sp.GetRequiredService<ILoggerFactory>(), RetainedRuns(sp));
+            var loggers = sp.GetRequiredService<ILoggerFactory>();
+            return kind == RunHostKind.Kubernetes
+                ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp))
+                : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp));
         });
         services.AddHostedService(sp => new RunHostSweeper(
             sp.GetRequiredService<IRunHost>(),

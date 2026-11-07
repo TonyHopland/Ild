@@ -192,4 +192,32 @@ describe("Ild settings", () => {
     expect(await screen.findByText("database down")).toBeTruthy();
     expect((toggle as HTMLInputElement).checked).toBe(true);
   });
+
+  test("warns when the container socket is root on the machine", async () => {
+    vi.spyOn(authServices.settingsService, "getRunHost").mockResolvedValue({
+      kind: "container",
+      warning: "The container engine at /var/run/docker.sock is not rootless.",
+    });
+
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
+
+    const warning = await screen.findByRole("alert");
+    expect(warning.textContent).toContain("is not rootless");
+  });
+
+  test("shows no run host warning when the host has none or cannot say", async () => {
+    const getRunHost = vi
+      .spyOn(authServices.settingsService, "getRunHost")
+      .mockResolvedValue({ kind: "container", warning: null });
+
+    const { unmount } = render(<IldSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(getRunHost).toHaveBeenCalled());
+    expect(screen.queryByText("Run host")).toBeNull();
+    unmount();
+
+    getRunHost.mockRejectedValue(new Error("offline"));
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
+    await waitFor(() => expect(getRunHost).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Run host")).toBeNull();
+  });
 });

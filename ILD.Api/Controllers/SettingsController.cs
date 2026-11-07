@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Migrations;
@@ -28,6 +29,7 @@ public class SettingsController : ControllerBase
     private readonly INetworkNotifier _networkNotifier;
     private readonly AttachmentLimits _attachmentLimits;
     private readonly NetworkEnforcementStatus _enforcement;
+    private readonly IRunHost _runHost;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
@@ -60,7 +62,8 @@ public class SettingsController : ControllerBase
         IEgressPolicy egressPolicy,
         INetworkNotifier networkNotifier,
         AttachmentLimits attachmentLimits,
-        NetworkEnforcementStatus enforcement)
+        NetworkEnforcementStatus enforcement,
+        IRunHost runHost)
     {
         _store = store;
         _notifier = notifier;
@@ -71,6 +74,7 @@ public class SettingsController : ControllerBase
         _networkNotifier = networkNotifier;
         _attachmentLimits = attachmentLimits;
         _enforcement = enforcement;
+        _runHost = runHost;
     }
 
     public sealed class UpdateSettingRequest
@@ -140,6 +144,18 @@ public class SettingsController : ControllerBase
         maxBytesPerFile = _attachmentLimits.MaxBytesPerFile,
         maxFilesPerRequest = _attachmentLimits.MaxFilesPerRequest,
         maxTotalBytesPerWorkItem = _attachmentLimits.MaxTotalBytesPerWorkItem,
+    });
+
+    /// <summary>
+    /// Where loop runs execute (<c>ILD_RUN_HOST</c>), and a warning when that is set up in a way the operator should fix,
+    /// such as a container socket that is root on the machine. Read-only: the host is chosen by the environment, and the
+    /// warning is absent whenever the engine cannot say.
+    /// </summary>
+    [HttpGet("run-host")]
+    public async Task<IActionResult> GetRunHost(CancellationToken ct) => Ok(new
+    {
+        kind = _runHost.Kind.ToString().ToLowerInvariant(),
+        warning = _runHost is RoutingRunHost routing ? await routing.Isolated.WarningAsync(ct) : null,
     });
 
     [HttpGet("{key}")]

@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { GlobalVariableSettingKeys, SchedulerSettingKeys } from "../../../services/auth";
+import {
+  GlobalVariableSettingKeys,
+  SchedulerSettingKeys,
+  settingsService,
+} from "../../../services/auth";
 import { NumericSettingField, SettingRow, Switch, ToggleSettingField } from "../controls";
 import { useSchedulerState } from "../../../hooks/useSchedulerState";
 import ChatRetentionSettings from "./ChatRetentionSettings";
@@ -43,11 +47,20 @@ function SchedulerRunningField() {
  */
 export default function IldSettings() {
   const [version, setVersion] = useState("");
+  const [runHostWarning, setRunHostWarning] = useState("");
 
   useEffect(() => {
     void fetch("/api/v1/health")
       .then((res) => res.json() as Promise<{ version?: string }>)
       .then((data) => setVersion(data.version ?? ""))
+      .catch(() => {});
+  }, []);
+
+  // Nothing is shown when the host cannot say, or when the read fails: a guess here would only mislead.
+  useEffect(() => {
+    void settingsService
+      .getRunHost()
+      .then((host) => setRunHostWarning(host.warning ?? ""))
       .catch(() => {});
   }, []);
 
@@ -57,6 +70,17 @@ export default function IldSettings() {
         <h2>General</h2>
         <p>Scheduling, autonomy and retention for the loop engine.</p>
       </div>
+
+      {runHostWarning && (
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <h3 className="settings-card-title">Run host</h3>
+          </div>
+          <p className="settings-error" role="alert">
+            {runHostWarning}
+          </p>
+        </section>
+      )}
 
       <section className="settings-card">
         <div className="settings-card-header">

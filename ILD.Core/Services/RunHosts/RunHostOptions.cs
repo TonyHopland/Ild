@@ -8,6 +8,11 @@ public static class RunHostOptions
 {
     public const string SettingName = "ILD_RUN_HOST";
 
+    /// <summary>What a run's pod or container may use, for both hosts that isolate runs; the older <c>ILD_K8S_*</c> names still work for kubernetes.</summary>
+    public const string CpuLimitSetting = "ILD_RUN_CPU_LIMIT";
+
+    public const string MemoryLimitSetting = "ILD_RUN_MEMORY_LIMIT";
+
     /// <summary>The backend <paramref name="value"/> names; <see cref="RunHostKind.Local"/> when it is unset or blank.</summary>
     /// <exception cref="InvalidOperationException">The value is none of the three.</exception>
     public static RunHostKind Parse(string? value)
@@ -20,14 +25,5 @@ public static class RunHostOptions
             "kubernetes" => RunHostKind.Kubernetes,
             _ => throw new InvalidOperationException($"{SettingName} is '{value}'; it must be local, container or kubernetes."),
         };
-    }
-
-    /// <summary>The backend the configuration selects, failing for one that is not built yet (<c>container</c>).</summary>
-    public static RunHostKind Select(string? value)
-    {
-        var kind = Parse(value);
-        if (kind == RunHostKind.Container)
-            throw new InvalidOperationException($"{SettingName}={kind.ToString().ToLowerInvariant()} is not implemented yet; only local and kubernetes are.");
-        return kind;
     }
 }

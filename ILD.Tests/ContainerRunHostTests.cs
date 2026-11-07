@@ -1,0 +1,812 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json.Nodes;
+using ILD.Core.Services.Implementations;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
+using ILD.Core.Services.RunHosts.Isolated;
+using ILD.Tests.Fakes;
+using Porta.Pty;
+
+namespace ILD.Tests;
+
+public sealed class ContainerRunHostTests : IAsyncLifetime
+{
+    private const string Instance = "main";
+
+    private readonly Guid _run = Guid.NewGuid();
+    private readonly string _scratch = Path.Combine(Path.GetTempPath(), $"ild-container-{Guid.NewGuid():N}");
+    private readonly RecordingLogger<ContainerRunHost> _log = new();
+    private FakeDockerApi _api = null!;
+    private ContainerRunHost _host = null!;
+
+    public ValueTask InitializeAsync()
+    {
+        Directory.CreateDirectory(_scratch);
+        _api = FakeDockerApi.Start();
+        _host = NewHost(Options());
+        return ValueTask.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _host.Dispose();
+        await _api.DisposeAsync();
+        if (Directory.Exists(_scratch)) Directory.Delete(_scratch, recursive: true);
+    }
+
+    private ContainerRunHostOptions Options(string instance = Instance, string? ildContainer = null)
+        => ContainerRunHostOptions.From(name => name switch
+        {
+            "ILD_API_URL" => "http://ild.example:8080",
+            "ILD_CONTAINER_SOCKET" => _api.SocketPath,
+            "ILD_CONTAINER_RUNNER_IMAGE" => "registry.example/ild-runner:1",
+            "ILD_CONTAINER_INSTANCE" => instance,
+            "ILD_CONTAINER_ILD_CONTAINER" => ildContainer,
+            "ILD_RUN_CPU_LIMIT" => "2",
+            "ILD_RUN_MEMORY_LIMIT" => "512Mi",
+            "ILD_NETWORK_PROXY_PORT" => "3128",
+            "GIT_AUTHOR_NAME" => "Ada",
+            _ => null,
+        }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
+
+    private ContainerRunHost NewHost(ContainerRunHostOptions options)
+        => new(options, new ProcessRunner(), _log)
+        {
+            ReadyPollInterval = TimeSpan.FromMilliseconds(10),
+            ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
+        };
+
+    private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
+
+    private static string Name(Guid run) => ContainerRunHost.ObjectName(run);
+
+    private string MakeBaseRepository()
+    {
+        var path = Path.Combine(_scratch, "base");
+        Directory.CreateDirectory(path);
+        Git(path, "init", "-q", "-b", "main");
+        File.WriteAllText(Path.Combine(path, "a.txt"), "a");
+        Git(path, "add", "-A");
+        Git(path, "-c", "user.email=t@example.test", "-c", "user.name=T", "commit", "-q", "-m", "first");
+        Git(path, "remote", "add", "origin", "https://user:secret@forge.example/acme/app.git");
+        return path;
+    }
+
+    private static void Git(string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, RedirectStandardError = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        p.WaitForExit();
+        Assert.True(p.ExitCode == 0, p.StandardError.ReadToEnd());
+    }
+
+    private async Task<RunEnvironment> CreateRunAsync(ContainerRunHost? host = null)
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        return await (host ?? _host).CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+    }
+
+    private static System.Diagnostics.ProcessStartInfo Command(string workingDirectory, string file, params string[] args)
+    {
+        var psi = new ProcessStartInfo(file) { WorkingDirectory = workingDirectory, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        return psi;
+    }
+
+    // -- Create ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Create_makes_the_volume_then_the_network_then_the_container_each_with_the_run_labels()
+    {
+        var env = await CreateRunAsync();
+
+        Assert.Equal(WorkingDirectory, env.WorkingDirectory);
+        Assert.Equal([$"volumes/{Name(_run)}", $"networks/{Name(_run)}", $"containers/{Name(_run)}"], _api.Created);
+        foreach (var labels in new[]
+        {
+            _api.Network(Name(_run))!["Labels"]!,
+            _api.Container(Name(_run))!["Labels"]!,
+        })
+        {
+            Assert.Equal("ild", labels["app.kubernetes.io/managed-by"]!.GetValue<string>());
+            Assert.Equal(Instance, labels["ild/instance"]!.GetValue<string>());
+            Assert.Equal(_run.ToString("N"), labels["ild/run"]!.GetValue<string>());
+        }
+        Assert.True(_api.Network(Name(_run))!["Internal"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task Create_gives_the_container_no_privileges_the_chosen_limits_and_its_own_network_and_volume()
+    {
+        await CreateRunAsync();
+
+        var container = _api.Container(Name(_run))!;
+        var host = container["HostConfig"]!;
+        Assert.Equal("registry.example/ild-runner:1", container["Image"]!.GetValue<string>());
+        Assert.Equal("10001:10001", container["User"]!.GetValue<string>());
+        Assert.Equal(["/usr/bin/tini", "--"], container["Entrypoint"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Equal(["sleep", "infinity"], container["Cmd"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Equal(["ALL"], host["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Equal(["no-new-privileges"], host["SecurityOpt"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Equal(512L * 1024 * 1024, host["Memory"]!.GetValue<long>());
+        Assert.Equal(2_000_000_000L, host["NanoCpus"]!.GetValue<long>());
+        Assert.Equal(Name(_run), host["NetworkMode"]!.GetValue<string>());
+        Assert.Equal([$"{Name(_run)}:/ild-run:rw"], host["Binds"]!.AsArray().Select(c => c!.GetValue<string>()));
+        Assert.Contains("uid=10001", host["Tmpfs"]!["/run/ild"]!.GetValue<string>());
+        var env = container["Env"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
+        Assert.Contains($"HOME={RunPaths.HomeDirectory(_run)}", env);
+        Assert.Contains("GIT_AUTHOR_NAME=Ada", env);
+    }
+
+    [Fact]
+    public async Task Create_names_ild_by_the_network_gateway_when_ild_runs_on_the_host()
+    {
+        await CreateRunAsync();
+
+        var hosts = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Select(c => c!.GetValue<string>());
+        Assert.Single(hosts, h => h.StartsWith("ild.example:10.89.", StringComparison.Ordinal) && h.EndsWith(".1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Create_connects_ilds_own_container_to_the_run_network_and_names_it_by_its_address_there()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var host = NewHost(Options(ildContainer: "ild-main"));
+
+        await CreateRunAsync(host);
+
+        Assert.Equal([Name(_run)], _api.NetworksOf("ild-main"));
+        var hosts = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Select(c => c!.GetValue<string>());
+        Assert.Single(hosts, h => h.StartsWith("ild.example:10.89.", StringComparison.Ordinal) && h.EndsWith(".5", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Create_waits_for_the_container_to_run_before_putting_the_code_in()
+    {
+        _api.ContainerReadsBeforeRunning = 3;
+
+        await CreateRunAsync();
+
+        var firstExec = _api.Requests.FindIndex(r => r.EndsWith("/exec", StringComparison.Ordinal));
+        Assert.True(_api.Requests.Take(firstExec).Count(r => r == $"GET /v1.41/containers/{Name(_run)}/json") >= 4);
+    }
+
+    [Fact]
+    public async Task Create_puts_the_base_repository_in_as_a_bundle_with_the_remote_as_origin_and_checks_out_the_run_branch()
+    {
+        var stdin = new Dictionary<FakeDockerExec, byte[]>();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) stdin[e] = await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+
+        var clone = Assert.Single(_api.Execs, e => e.Joined.Contains("git clone"));
+        Assert.Equal(WorkingDirectory, clone.Command[^2]);
+        Assert.Equal("https://forge.example/acme/app.git", clone.Command[^1]);
+        Assert.StartsWith("# v2 git bundle", Encoding.ASCII.GetString(stdin[clone], 0, 15));
+        var checkout = Assert.Single(_api.Execs, e => e.Joined.Contains("git checkout"));
+        Assert.Equal(["ild/wi-1-run"], checkout.Command.TakeLast(1));
+    }
+
+    [Fact]
+    public async Task Create_takes_a_container_that_is_already_running_as_it_is()
+    {
+        await CreateRunAsync();
+        var created = _api.Created.ToList();
+        var execs = _api.Execs.Count;
+
+        var env = await _host.CreateAsync(new RunEnvironmentRequest(_run, Path.Combine(_scratch, "base"), "b"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(WorkingDirectory, env.WorkingDirectory);
+        Assert.Equal(created, _api.Created);
+        Assert.Equal(execs, _api.Execs.Count);
+    }
+
+    [Fact]
+    public async Task Create_that_fails_to_put_the_code_in_removes_everything_it_made_and_says_why()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var host = NewHost(Options(ildContainer: "ild-main"));
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.WriteStderrAsync("fatal: bad bundle\n");
+            await e.ExitAsync(e.Joined.Contains("git clone") ? 128 : 0);
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b"), TestContext.Current.CancellationToken));
+
+        Assert.Contains("fatal: bad bundle", ex.Message);
+        Assert.Equal(["ild-main"], _api.Containers());
+        Assert.Empty(_api.Volumes());
+        Assert.Empty(_api.Networks());
+        Assert.Empty(_api.NetworksOf("ild-main"));
+    }
+
+    [Fact]
+    public async Task Create_without_the_runner_image_on_the_machine_says_to_build_it_and_leaves_nothing()
+    {
+        _api.ImagePresent = false;
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b"), TestContext.Current.CancellationToken));
+
+        Assert.Contains("registry.example/ild-runner:1", ex.Message);
+        Assert.Contains("build or pull", ex.Message);
+        Assert.Empty(_api.Volumes());
+        Assert.Empty(_api.Networks());
+    }
+
+    // -- Exec --------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_command_streams_its_output_and_reports_its_exit_code_with_only_the_environment_the_caller_set()
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            await e.WriteStdoutAsync("hello\n");
+            await e.WriteStderrAsync("warn\n");
+            await e.ExitAsync(3);
+        };
+        var psi = Command(WorkingDirectory, "make-it", "a b");
+        psi.Environment["ILD_TEST_ONLY"] = "yes";
+
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("hello\n", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("warn\n", await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(3, process.ExitCode);
+        var exec = _api.Execs.Last();
+        Assert.Equal(Name(_run), exec.Container);
+        Assert.Contains("ILD_TEST_ONLY=yes", exec.Command);
+        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.DoesNotContain(exec.Command, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Equal(["make-it", "a b"], exec.Command.TakeLast(2));
+        Assert.Contains(WorkingDirectory, exec.Command);
+    }
+
+    [Fact]
+    public async Task Closing_the_input_of_a_command_ends_what_it_reads_to_the_end()
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            var input = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
+            await e.WriteStdoutAsync(input.ToUpperInvariant());
+            await e.ExitAsync(0);
+        };
+        var psi = Command(WorkingDirectory, "cat");
+        psi.RedirectStandardInput = true;
+
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        await process.StandardInput.WriteAsync("prompt text");
+        process.StandardInput.Close();
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("PROMPT TEXT", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(0, process.ExitCode);
+    }
+
+    [Fact]
+    public async Task A_dropped_stream_fails_the_command_instead_of_leaving_it_waiting()
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            await e.WriteStdoutAsync("partial");
+            await e.DropAsync();
+        };
+
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(0, process.ExitCode);
+        Assert.Equal("partial", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
+        Assert.Contains("connection to the run's container", await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Proxy_variables_that_name_ilds_loopback_name_ilds_host_name_for_the_container()
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "curl");
+        psi.Environment["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128";
+
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("HTTP_PROXY=http://scope:abc@ild.example:3128", _api.Execs.Last().Command);
+    }
+
+    [Fact]
+    public async Task A_command_for_a_container_that_is_gone_says_so_instead_of_hanging()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _host.StartCommandAsync(RunCommand.Routed(Command(WorkingDirectory, "ls"), _run), TestContext.Current.CancellationToken));
+
+        Assert.Contains("could not run a command in the container", ex.Message);
+    }
+
+    // -- Kill leftovers ----------------------------------------------------------
+
+    [Fact]
+    public async Task Kill_all_ends_what_still_runs_in_the_container_and_waits_for_it()
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            await e.WriteStdoutAsync("2\n");
+            await e.ExitAsync(0);
+        };
+
+        var killed = await _host.KillAllAsync(_run, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, killed);
+        var kill = _api.Execs.Last();
+        Assert.Equal(Name(_run), kill.Container);
+        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[2]);
+    }
+
+    [Fact]
+    public async Task Kill_all_for_a_run_with_no_container_asks_nothing_of_the_engine_and_kills_nothing()
+    {
+        var killed = await _host.KillAllAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, killed);
+        Assert.Empty(_api.Execs);
+    }
+
+    [Fact]
+    public async Task Killing_one_command_kills_its_process_group_by_the_name_it_was_started_under()
+    {
+        await CreateRunAsync();
+        var hold = new TaskCompletionSource();
+        _api.OnExec = async e =>
+        {
+            if (e.Joined.Contains("long-job")) await hold.Task;
+            else await e.ExitAsync(0);
+        };
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
+        var startedAs = Assert.Single(_api.Execs, e => e.Joined.Contains("long-job")).Command[5];
+
+        var killedOk = await Task.Run(() => process.TryKill(), TestContext.Current.CancellationToken);
+
+        Assert.True(killedOk);
+        var kill = _api.Execs.Last();
+        Assert.Equal(startedAs, kill.Command[^1]);
+        Assert.Contains("kill -s TERM", kill.Command[2]);
+        hold.SetResult();
+    }
+
+    // -- Terminal, files, preview ------------------------------------------------
+
+    [Fact]
+    public async Task A_terminal_is_a_tty_exec_whose_input_output_and_end_go_through_the_pty_interface()
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            await e.WriteStdoutAsync("ready$ ");
+            while (!e.StdinSoFar().Contains('x')) await Task.Delay(10);
+            await e.WriteStdoutAsync("got x");
+            await e.ExitAsync(5);
+        };
+        var exited = new TaskCompletionSource<int>();
+
+        using var pty = await _host.OpenTerminalAsync(
+            new PtyOptions { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 120, Rows = 30, Name = "t" }, TestContext.Current.CancellationToken);
+        pty.ProcessExited += (_, args) => exited.TrySetResult(args.ExitCode);
+        await pty.WriterStream.WriteAsync("x"u8.ToArray(), TestContext.Current.CancellationToken);
+        var read = await new StreamReader(pty.ReaderStream).ReadToEndAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("ready$ got x", read);
+        Assert.Equal(5, await exited.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        var exec = _api.Execs.Last();
+        Assert.True(exec.Tty);
+        Assert.Contains("120x30", exec.Resizes);
+    }
+
+    [Fact]
+    public async Task Files_are_read_and_written_by_commands_in_the_container()
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Joined.Contains("cat --")) await e.WriteStdoutAsync("{\"a\":1}");
+            await e.ExitAsync(0);
+        };
+        var path = $"{WorkingDirectory}/ild.config.json";
+
+        await using (var read = await _host.OpenReadAsync(path, TestContext.Current.CancellationToken))
+            Assert.Equal("{\"a\":1}", await new StreamReader(read!).ReadToEndAsync(TestContext.Current.CancellationToken));
+        await _host.WriteFileAsync(path, "new", TestContext.Current.CancellationToken);
+
+        var write = _api.Execs.Last();
+        Assert.Equal("new", Encoding.UTF8.GetString(await write.ReadStdinToEndAsync()));
+        Assert.Equal(path, write.Command[^2]);
+    }
+
+    [Fact]
+    public async Task A_bundle_comes_out_of_the_container_into_the_sink()
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            await e.WriteStdoutAsync("BUNDLE-BYTES");
+            await e.ExitAsync(0);
+        };
+        using var sink = new MemoryStream();
+
+        var result = await _host.PullBundleAsync(WorkingDirectory, "ild/wi-1-run", incremental: true, sink, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal("BUNDLE-BYTES", Encoding.UTF8.GetString(sink.ToArray()));
+        Assert.Contains("--remotes=origin", _api.Execs.Last().Command);
+    }
+
+    [Fact]
+    public async Task The_preview_proxy_is_pointed_at_the_containers_address_on_its_network()
+    {
+        await CreateRunAsync();
+
+        var target = await _host.PreviewTargetAsync(WorkingDirectory, 5173, TestContext.Current.CancellationToken);
+
+        Assert.Matches(@"^http://10\.89\.\d+\.2:5173/$", target.ToString());
+    }
+
+    [Fact]
+    public async Task The_preview_target_of_a_run_this_process_did_not_start_is_read_from_the_engine()
+    {
+        await CreateRunAsync();
+        using var restarted = NewHost(Options());
+
+        var target = await restarted.PreviewTargetAsync(WorkingDirectory, 3000, TestContext.Current.CancellationToken);
+
+        Assert.Matches(@"^http://10\.89\.\d+\.2:3000/$", target.ToString());
+    }
+
+    [Fact]
+    public void The_gateway_is_reached_at_the_name_ild_is_known_by()
+        => Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl(null));
+
+    // -- Delete and sweep --------------------------------------------------------
+
+    [Fact]
+    public async Task Delete_removes_the_container_then_the_volume_then_the_network()
+    {
+        var env = await CreateRunAsync();
+
+        await _host.DeleteAsync(env, TestContext.Current.CancellationToken);
+
+        Assert.Equal([$"containers/{Name(_run)}", $"volumes/{Name(_run)}", $"networks/{Name(_run)}"], _api.Deleted);
+    }
+
+    [Fact]
+    public async Task Delete_takes_ild_off_the_run_network_so_the_network_can_go()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var host = NewHost(Options(ildContainer: "ild-main"));
+        var env = await CreateRunAsync(host);
+
+        await host.DeleteAsync(env, TestContext.Current.CancellationToken);
+
+        Assert.Empty(_api.NetworksOf("ild-main"));
+        Assert.Empty(_api.Networks());
+    }
+
+    [Fact]
+    public async Task Delete_of_a_run_that_is_already_gone_is_not_an_error()
+    {
+        await _host.DeleteAsync(new RunEnvironment(Guid.NewGuid(), "/ild-run/x/repo"), TestContext.Current.CancellationToken);
+
+        Assert.Empty(_api.Deleted);
+    }
+
+    private void SeedRun(Guid run, string instance, bool container = true, string managedBy = "ild")
+    {
+        _api.Seed("volumes", Name(run), instance, run, managedBy);
+        _api.Seed("networks", Name(run), instance, run, managedBy);
+        if (container) _api.Seed("containers", Name(run), instance, run, managedBy);
+    }
+
+    [Fact]
+    public async Task The_sweeper_deletes_finished_and_missing_runs_and_keeps_live_ones_and_other_installs_objects()
+    {
+        var live = Guid.NewGuid();
+        var finished = Guid.NewGuid();
+        var orphan = Guid.NewGuid();
+        var otherInstance = Guid.NewGuid();
+        var notOurs = Guid.NewGuid();
+        SeedRun(live, Instance);
+        SeedRun(finished, Instance);
+        SeedRun(orphan, Instance, container: false);
+        SeedRun(otherInstance, "other");
+        SeedRun(notOurs, Instance, managedBy: "someone-else");
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }), TimeSpan.FromMinutes(1));
+
+        await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
+
+        foreach (var kept in new[] { live, otherInstance, notOurs })
+        {
+            Assert.Contains(Name(kept), _api.Containers());
+            Assert.Contains(Name(kept), _api.Volumes());
+            Assert.Contains(Name(kept), _api.Networks());
+        }
+        foreach (var gone in new[] { finished, orphan })
+        {
+            Assert.DoesNotContain(Name(gone), _api.Containers());
+            Assert.DoesNotContain(Name(gone), _api.Volumes());
+            Assert.DoesNotContain(Name(gone), _api.Networks());
+        }
+    }
+
+    [Fact]
+    public async Task The_sweeper_keeps_the_runs_that_have_not_ended_even_when_the_caller_does_not_call_them_live()
+    {
+        var failed = Guid.NewGuid();
+        SeedRun(failed, Instance);
+        var retaining = new ContainerRunHost(Options(), new ProcessRunner(), _log) { RetainedRuns = _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { failed }) };
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), retaining), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+
+        await sweeper.SweepAsync(retaining, TestContext.Current.CancellationToken);
+        retaining.Dispose();
+
+        Assert.Contains(Name(failed), _api.Containers());
+    }
+
+    [Fact]
+    public async Task A_killed_ild_leaves_nothing_behind_after_the_next_sweep()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var killed = NewHost(Options(ildContainer: "ild-main"));
+        await CreateRunAsync(killed);
+        Assert.NotEmpty(_api.Networks());
+
+        // The process died with the run mid-way: a new one knows of no run, and finds the objects by their labels.
+        using var restarted = NewHost(Options(ildContainer: "ild-main"));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), restarted), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        await sweeper.SweepAsync(restarted, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["ild-main"], _api.Containers());
+        Assert.Empty(_api.Volumes());
+        Assert.Empty(_api.Networks());
+        Assert.Empty(_api.NetworksOf("ild-main"));
+    }
+
+    [Fact]
+    public async Task A_sweep_while_the_engine_cannot_be_reached_lists_nothing_instead_of_failing_startup()
+    {
+        using var unreachable = NewHost(Options() with { Socket = Path.Combine(_scratch, "nothing.sock") });
+
+        var leftovers = await unreachable.ListLeftoversAsync(new HashSet<Guid>(), TestContext.Current.CancellationToken);
+
+        Assert.Empty(leftovers);
+    }
+
+    [Fact]
+    public async Task A_sweep_while_the_engine_errors_lists_nothing_and_says_so()
+    {
+        _api.Down = true;
+
+        var leftovers = await _host.ListLeftoversAsync(new HashSet<Guid>(), TestContext.Current.CancellationToken);
+
+        Assert.Empty(leftovers);
+        Assert.Contains(_log.Warnings, w => w.Contains("Could not list"));
+    }
+
+    [Fact]
+    public async Task The_routing_host_creates_loop_runs_in_containers_and_leaves_the_leftovers_of_both_hosts_to_their_own()
+    {
+        var routing = new RoutingRunHost(new FakeRunHost(), _host);
+        var env = await CreateRunAsync(_host);
+        var other = Guid.NewGuid();
+        SeedRun(other, Instance);
+
+        var leftovers = await routing.ListLeftoversAsync(new HashSet<Guid> { _run }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(RunHostKind.Container, routing.Kind);
+        Assert.Equal(WorkingDirectory, env.WorkingDirectory);
+        var leftover = Assert.Single(leftovers, l => l.Kind == ContainerRunHost.RunLeftoverKind);
+        Assert.Equal(other.ToString("N"), leftover.Location);
+        Assert.True(await routing.DeleteLeftoverAsync(leftover, TestContext.Current.CancellationToken));
+        Assert.DoesNotContain(Name(other), _api.Containers());
+    }
+
+    [Fact]
+    public async Task Chats_and_other_paths_stay_on_the_local_host_and_loop_runs_go_to_the_container()
+    {
+        await CreateRunAsync();
+        _api.Execs.Clear();
+        var local = new FakeRunHost().WithDirectory("/data/chat-sessions/c1");
+        var routing = new RoutingRunHost(local, _host);
+
+        Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/c1", TestContext.Current.CancellationToken));
+        Assert.Empty(_api.Execs);
+
+        await routing.DirectoryExistsAsync(WorkingDirectory, TestContext.Current.CancellationToken);
+        Assert.Single(_api.Execs);
+    }
+
+    // -- Socket ------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_rootful_podman_socket_is_warned_about_with_its_path()
+    {
+        _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":false}}}""");
+
+        var warning = await _host.WarningAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(_api.SocketPath, warning);
+        Assert.Contains("not rootless", warning);
+    }
+
+    [Fact]
+    public async Task A_rootful_docker_socket_is_warned_about()
+    {
+        _api.Info = JsonNode.Parse("""{"SecurityOptions":["name=seccomp,profile=builtin","name=cgroupns"]}""");
+
+        Assert.NotNull(await _host.WarningAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_rootless_socket_is_not_warned_about()
+    {
+        _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":true}}}""");
+        Assert.Null(await _host.WarningAsync(TestContext.Current.CancellationToken));
+
+        _api.LibpodInfo = null;
+        _api.Info = JsonNode.Parse("""{"SecurityOptions":["name=seccomp,profile=builtin","name=rootless"]}""");
+        Assert.Null(await _host.WarningAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_socket_that_cannot_say_is_not_warned_about()
+    {
+        Assert.Null(await _host.WarningAsync(TestContext.Current.CancellationToken));
+
+        _api.Info = JsonNode.Parse("""{"Name":"engine without security options"}""");
+        Assert.Null(await _host.WarningAsync(TestContext.Current.CancellationToken));
+
+        using var unreachable = NewHost(Options() with { Socket = Path.Combine(_scratch, "nothing.sock") });
+        Assert.Null(await unreachable.WarningAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task The_startup_check_logs_the_warning_for_a_rootful_socket_and_is_quiet_otherwise()
+    {
+        await _host.CheckAsync(TestContext.Current.CancellationToken);
+        Assert.Empty(_log.Warnings);
+
+        _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":false}}}""");
+        await _host.CheckAsync(TestContext.Current.CancellationToken);
+        Assert.Contains(_log.Warnings, w => w.Contains("not rootless"));
+    }
+
+    // -- Settings ----------------------------------------------------------------
+
+    [Theory]
+    [InlineData(null, "ILD_API_URL")]
+    [InlineData("http://localhost:5000", "host name")]
+    [InlineData("http://127.0.0.1:5000", "host name")]
+    [InlineData("http://10.0.0.5:5000", "host name")]
+    public void Settings_refuse_an_ild_address_the_run_cannot_be_given_a_name_for(string? apiUrl, string expected)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => ContainerRunHostOptions.From(name => name switch
+        {
+            "ILD_API_URL" => apiUrl,
+            "ILD_CONTAINER_SOCKET" => "/run/user/1000/podman/podman.sock",
+            "ILD_CONTAINER_RUNNER_IMAGE" => "img",
+            _ => null,
+        }));
+
+        Assert.Contains(expected, ex.Message);
+    }
+
+    [Theory]
+    [InlineData("ILD_CONTAINER_SOCKET")]
+    [InlineData("ILD_CONTAINER_RUNNER_IMAGE")]
+    public void Settings_require_the_socket_and_the_runner_image(string missing)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => ContainerRunHostOptions.From(name => name == missing ? null : name switch
+        {
+            "ILD_API_URL" => "http://ild:8080",
+            "ILD_CONTAINER_SOCKET" => "/run/podman.sock",
+            "ILD_CONTAINER_RUNNER_IMAGE" => "img",
+            _ => null,
+        }));
+
+        Assert.Contains(missing, ex.Message);
+    }
+
+    [Fact]
+    public void Settings_take_the_socket_as_a_path_or_a_unix_url_and_never_a_relative_path()
+    {
+        string? Setting(string socket, string name) => name switch
+        {
+            "ILD_API_URL" => "http://ild:8080",
+            "ILD_CONTAINER_SOCKET" => socket,
+            "ILD_CONTAINER_RUNNER_IMAGE" => "img",
+            _ => null,
+        };
+
+        Assert.Equal("/run/podman.sock", ContainerRunHostOptions.From(n => Setting("unix:///run/podman.sock", n)).Socket);
+        Assert.Contains("absolute", Assert.Throws<InvalidOperationException>(() => ContainerRunHostOptions.From(n => Setting("podman.sock", n))).Message);
+    }
+
+    [Fact]
+    public void Settings_default_to_the_limits_of_the_kubernetes_host_and_a_default_instance()
+    {
+        var options = ContainerRunHostOptions.From(name => name switch
+        {
+            "ILD_API_URL" => "http://ild:8080",
+            "ILD_CONTAINER_SOCKET" => "/run/podman.sock",
+            "ILD_CONTAINER_RUNNER_IMAGE" => "img",
+            _ => null,
+        });
+
+        Assert.Equal("default", options.Instance);
+        Assert.Equal(4_000_000_000L, options.NanoCpus);
+        Assert.Equal(8L * 1024 * 1024 * 1024, options.MemoryBytes);
+        Assert.Null(options.IldContainer);
+    }
+
+    [Theory]
+    [InlineData("4", 4_000_000_000L)]
+    [InlineData("1.5", 1_500_000_000L)]
+    [InlineData("500m", 500_000_000L)]
+    [InlineData("0", null)]
+    public void A_cpu_limit_is_read_as_a_kubernetes_quantity(string quantity, long? expected)
+        => Assert.Equal(expected, ContainerRunHostOptions.NanoCpusOf(quantity));
+
+    [Theory]
+    [InlineData("8Gi", 8L * 1024 * 1024 * 1024)]
+    [InlineData("512Mi", 512L * 1024 * 1024)]
+    [InlineData("1G", 1_000_000_000L)]
+    [InlineData("1048576", 1_048_576L)]
+    [InlineData("0", null)]
+    public void A_memory_limit_is_read_as_a_kubernetes_quantity(string quantity, long? expected)
+        => Assert.Equal(expected, ContainerRunHostOptions.BytesOf(quantity));
+
+    [Theory]
+    [InlineData("lots")]
+    [InlineData("-1")]
+    public void A_limit_that_is_not_a_quantity_is_refused_by_name(string quantity)
+    {
+        Assert.Contains("ILD_RUN_CPU_LIMIT", Assert.Throws<InvalidOperationException>(() => ContainerRunHostOptions.NanoCpusOf(quantity)).Message);
+        Assert.Contains("ILD_RUN_MEMORY_LIMIT", Assert.Throws<InvalidOperationException>(() => ContainerRunHostOptions.BytesOf(quantity)).Message);
+    }
+
+    [Fact]
+    public void The_kubernetes_host_reads_the_shared_limits_first_and_its_own_older_names_after()
+    {
+        string? Setting(string cpu, string name) => name switch
+        {
+            "ILD_API_URL" => "http://ild:8080",
+            "ILD_K8S_RUNNER_IMAGE" => "img",
+            "ILD_K8S_CPU_LIMIT" => "9",
+            "ILD_RUN_CPU_LIMIT" => cpu,
+            "ILD_K8S_MEMORY_LIMIT" => "3Gi",
+            _ => null,
+        };
+
+        var shared = ILD.Core.Services.RunHosts.Kubernetes.KubernetesRunHostOptions.From(n => Setting("2", n));
+        var older = ILD.Core.Services.RunHosts.Kubernetes.KubernetesRunHostOptions.From(n => Setting("", n));
+
+        Assert.Equal("2", shared.CpuLimit);
+        Assert.Equal("9", older.CpuLimit);
+        Assert.Equal("3Gi", shared.MemoryLimit);
+    }
+}
