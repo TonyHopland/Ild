@@ -337,6 +337,8 @@ The entrypoint will not join a group the agent's user is in, since that would ha
 3. Start it: `podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build`. The log says `Container engine socket /run/container.sock: ild can open it through group …`, and **Settings > General** shows no "Run host" warning.
 4. Tag the test work item `HIL`. A Develop run then stops at **Approve PR**, before the PR node pushes a branch and opens a pull request on the repository.
 
+Keep ILD's port the same outside its container as inside (`8080:8080` and the default `ILD_PREVIEW_PROXY_BASE=http://ild.localhost:8080`). A preview URL is used by your browser outside the container and by a chat's browser inside it, where `*.localhost` is ILD's container itself; mapped to another port outside (`8090:8080`), one of the two cannot load it. To move ILD to another port, move it inside too: `ASPNETCORE_URLS=http://+:8090`, `ILD_API_URL=http://ild:8090`, `8090:8090` and the proxy base on `8090`.
+
 The first run of a repository installs its toolchains and ILD's agents into the `ild-tools` volume before it starts, which takes from seconds to a few minutes; later runs reuse them. With a local model (LM Studio, Ollama) behind the provider, the agent nodes take as long as the model does.
 
 **Which socket.** The path is the socket's path on the machine the engine runs on:
