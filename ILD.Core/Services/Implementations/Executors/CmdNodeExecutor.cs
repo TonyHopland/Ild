@@ -2,6 +2,7 @@ using ILD.Data.Enums;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
@@ -26,8 +27,9 @@ public sealed class CmdNodeExecutor : INodeExecutor
             yield break;
         }
 
+        var host = ctx.Services.GetRunHost();
         var worktree = ctx.Run.WorktreePath;
-        if (string.IsNullOrEmpty(worktree) || !Directory.Exists(worktree))
+        if (string.IsNullOrEmpty(worktree) || !await host.DirectoryExistsAsync(worktree, ctx.CancellationToken))
         {
             yield return new NodeOutcome.NodeStarting(command);
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, "No worktree available for Cmd node");
@@ -38,7 +40,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
 
         var feeds = await ctx.Services.GetRequiredService<IPackageFeedResolver>()
             .ResolveAsync(await RunRepository.IdOfAsync(ctx.Run, workItems), ctx.CancellationToken);
-        var (ok, output, error) = await RunProcessAsync(command, worktree, feeds.Feeds, ctx);
+        var (ok, output, error) = await RunProcessAsync(host, command, worktree, feeds.Feeds, ctx);
         if (!ok)
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "command failed", output);
@@ -48,7 +50,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
     }
 
     private static async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
-        string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
+        IRunHost host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
         var err = new StringBuilder();
@@ -56,37 +58,34 @@ public sealed class CmdNodeExecutor : INodeExecutor
             packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
         var mode = await ctx.Services.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken);
         var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(mode, aiProviderId: null);
-        using var p = new Process
-        {
-            StartInfo = IsolateCommand(
-                ShellStartInfo(command, workingDirectory),
-                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, proxy, regid),
-            EnableRaisingEvents = true,
-        };
+        var psi = IsolateCommand(
+            ShellStartInfo(command, workingDirectory),
+            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, proxy, regid);
         foreach (var (name, value) in feeds.Environment)
-            p.StartInfo.Environment[name] = value;
+            psi.Environment[name] = value;
+        string Combined() => sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
+
+        IRunProcess p;
+        try
+        {
+            p = await host.StartCommandAsync(RunCommand.Routed(psi, ctx.Run.Id), ctx.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return (false, Combined(), ex.Message);
+        }
+
+        using var _ = p;
         // Forward the full stdout+stderr stream verbatim (newline included, ANSI
         // preserved) so the live view captures the complete output rather than
         // newline-stripped fragments.
-        p.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data is null) return;
-            sb.AppendLine(e.Data);
-            try { ctx.ProgressCallback?.Invoke(e.Data + "\n"); } catch { }
-        };
-        p.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data is null) return;
-            err.AppendLine(e.Data);
-            try { ctx.ProgressCallback?.Invoke(e.Data + "\n"); } catch { }
-        };
-        string Combined() => sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
+        var readers = Task.WhenAll(
+            PumpAsync(p.StandardOutput, sb, ctx.ProgressCallback),
+            PumpAsync(p.StandardError, err, ctx.ProgressCallback));
         try
         {
-            p.Start();
-            p.BeginOutputReadLine();
-            p.BeginErrorReadLine();
             await p.WaitForExitAsync(ctx.CancellationToken);
+            await readers.WaitAsync(ctx.CancellationToken);
         }
         catch (OperationCanceledException ex)
         {
@@ -107,6 +106,15 @@ public sealed class CmdNodeExecutor : INodeExecutor
         if (p.ExitCode != 0)
             return (false, Combined(), $"exit code {p.ExitCode}");
         return (true, Combined(), null);
+    }
+
+    private static async Task PumpAsync(StreamReader reader, StringBuilder into, Func<string, Task>? progress)
+    {
+        while (await reader.ReadLineAsync() is { } line)
+        {
+            lock (into) into.AppendLine(line);
+            try { progress?.Invoke(line + "\n"); } catch { }
+        }
     }
 
     internal static ProcessStartInfo ShellStartInfo(string command, string workingDirectory)
@@ -142,20 +150,10 @@ public sealed class CmdNodeExecutor : INodeExecutor
     private static readonly TimeSpan ReapGrace = TimeSpan.FromSeconds(5);
 
     /// <returns>Empty once the tree is gone; otherwise a clause naming why it is not.</returns>
-    private static async Task<string> ReapAsync(Process p)
+    private static async Task<string> ReapAsync(IRunProcess p)
     {
-        try
-        {
-            p.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException)
-        {
-            return "";
-        }
-        catch (Exception ex)
-        {
-            return $"; failed to kill the command's process tree: {ex.Message}";
-        }
+        if (!p.TryKill(out var failure))
+            return $"; failed to kill the command's process tree: {failure}";
 
         // Kill only signals. Returning before the tree is actually gone would hand
         // the caller a node that reads finished while the command is still holding

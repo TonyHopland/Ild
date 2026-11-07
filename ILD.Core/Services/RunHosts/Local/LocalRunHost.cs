@@ -1,0 +1,310 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.PackageFeeds;
+using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Porta.Pty;
+
+namespace ILD.Core.Services.RunHosts.Local;
+
+/// <summary>
+/// The run host for a run that lives on the machine ILD runs on: the agent's processes are children
+/// of the orchestrator that cross to the lower-trust agent uid (ADR-0014), and its files sit in the
+/// worktree and the scratch and agent-read roots of <see cref="AgentIsolation"/>. This is the only
+/// place that spawns a process, opens a PTY or reads the agent's files as the agent.
+/// </summary>
+public sealed class LocalRunHost : IRunHost
+{
+    /// <summary>The host of a caller built without DI — unit tests, tools — that has no repository manager to make worktrees with.</summary>
+    public static LocalRunHost Shared { get; } = new();
+
+    private readonly IProcessRunner? _runner;
+    private readonly IServiceProvider? _services;
+    private readonly IRepositoryManager? _repositories;
+    private readonly ProcessRunOptions _agentOptions;
+    private readonly AgentIdentity? _agent;
+    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<LocalRunProcess, byte>> _running = new();
+
+    /// <param name="runner">What bundles are moved with; the git and shell scripts of a clone run through it.</param>
+    /// <param name="services">Where <see cref="CreateAsync"/> and <see cref="DeleteAsync"/> find the repository manager, which uses this host.</param>
+    /// <param name="agent">Who the scripts run as; the configured agent user when null.</param>
+    /// <param name="repositories">The repository manager to make worktrees with, when it is not to be found through <paramref name="services"/>.</param>
+    public LocalRunHost(
+        IProcessRunner? runner = null, IServiceProvider? services = null, AgentIdentity? agent = null, IRepositoryManager? repositories = null)
+    {
+        _runner = runner;
+        _services = services;
+        _repositories = repositories;
+        agent ??= AgentIsolation.AgentUser is { } user
+            ? new AgentIdentity(user, AgentIsolation.AgentGroup ?? user, AgentIsolation.AgentHome ?? string.Empty)
+            : null;
+        _agent = agent;
+        _agentOptions = new ProcessRunOptions(AsAgent: agent, AgentScoped: true);
+    }
+
+    public RunHostKind Kind => RunHostKind.Local;
+
+    // -- Lifecycle ---------------------------------------------------------------
+
+    public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
+    {
+        var path = await Repositories().CreateWorktreeAsync(request.BasePath, request.BranchName);
+        return new RunEnvironment(request.OwnerId, path);
+    }
+
+    public async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
+    {
+        await KillAllAsync(environment.OwnerId, ct);
+        await Repositories().DestroyWorktreeAsync(environment.WorkingDirectory);
+    }
+
+    private IRepositoryManager Repositories()
+        => _repositories
+            ?? _services?.GetService<IRepositoryManager>()
+            ?? throw new InvalidOperationException("this run host was built without a repository manager, so it cannot make or remove worktrees");
+
+    // -- Commands ----------------------------------------------------------------
+
+    public Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
+    {
+        var psi = command.AsAgent ? RouteAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : command.Start;
+        EnsureRouted(psi);
+        var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null");
+        var tracked = new LocalRunProcess(process, Forget(command.OwnerId));
+        if (command.OwnerId != Guid.Empty)
+            _running.GetOrAdd(command.OwnerId, _ => new()).TryAdd(tracked, 0);
+        return Task.FromResult<IRunProcess>(tracked);
+    }
+
+    /// <summary>
+    /// A command its caller says it routed is checked to be: a builder that lost its route would otherwise
+    /// start as the orchestrator, with its secrets and capabilities (ADR-0014). Only where agent uid isolation is on.
+    /// </summary>
+    internal void EnsureRouted(ProcessStartInfo psi)
+    {
+        if (_agent is not null && !AgentIsolation.IsRouted(psi))
+            throw new InvalidOperationException($"refusing to start '{psi.FileName}' as the orchestrator: agent uid isolation is on and the command was not routed to the agent (ADR-0014)");
+    }
+
+    /// <summary>The launch of an agent CLI: <paramref name="psi"/> with the execution's environment, crossed to the agent uid.</summary>
+    internal static ProcessStartInfo RouteAgentLaunch(
+        ProcessStartInfo psi, Guid? providerId, ILD.Data.Enums.NetworkMode mode, IReadOnlyDictionary<string, string>? environment)
+    {
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+            psi.Environment[name] = value;
+        return AgentIsolation.Route(psi, providerId, mode);
+    }
+
+    private Action<LocalRunProcess> Forget(Guid ownerId) => process =>
+    {
+        if (_running.TryGetValue(ownerId, out var set))
+            set.TryRemove(process, out _);
+    };
+
+    // Long enough that only a tree stuck in the kernel (an uninterruptible write to a slow mount) outlasts
+    // it, short enough that a node being retried does not wait on it.
+    private static readonly TimeSpan KillGrace = TimeSpan.FromSeconds(5);
+
+    public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
+    {
+        if (!_running.TryGetValue(ownerId, out var set)) return 0;
+        var killed = 0;
+        foreach (var process in set.Keys.ToList())
+        {
+            if (process.HasExitedSafe()) continue;
+            process.TryKill();
+            killed++;
+            using var grace = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            grace.CancelAfter(KillGrace);
+            try { await process.WaitForExitAsync(grace.Token); }
+            catch (OperationCanceledException) { /* still alive after the grace: the next attempt sees it */ }
+        }
+        return killed;
+    }
+
+    // -- Terminal ----------------------------------------------------------------
+
+    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default)
+        => PtyProvider.SpawnAsync(options, ct);
+
+    public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)
+        => AgentIsolation.RouteCommand(fileName, arguments, providerId, mode);
+
+    // -- Bundles -----------------------------------------------------------------
+
+    // The bundle arrives on stdin; git cannot read one from a pipe, so it goes to a file in a scratch
+    // directory the agent makes and removes. An empty stdin is a remote with no branches yet.
+    private const string CloneScript = """
+        d=$(mktemp -d) || exit 1
+        trap 'rm -rf -- "$d"' EXIT
+        cat > "$d/in.bundle" || exit 1
+        if [ -s "$d/in.bundle" ]; then
+            git clone --quiet -- "$d/in.bundle" "$1" || exit 1
+            git -C "$1" config remote.origin.url "$2"
+        else
+            git init --quiet --initial-branch=main -- "$1" || exit 1
+            git -C "$1" remote add origin "$2"
+        fi
+        """;
+
+    // The bundle arrives on stdin and is written to a scratch directory of the agent's, because git
+    // cannot fetch from a pipe. Into a namespace of its own: nothing the clone has is touched here.
+    private const string FetchBundleScript = """
+        d=$(mktemp -d) || exit 1
+        trap 'rm -rf -- "$d"' EXIT
+        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin || exit 1
+        cat > "$d/in.bundle" || exit 1
+        git -C "$1" fetch --quiet --no-tags --no-write-fetch-head -- "$d/in.bundle" '+refs/heads/*:refs/ild-sync/*'
+        """;
+
+    public async Task<RunHostResult> PushBundleAsync(string targetPath, string originUrl, Stream bundle, CancellationToken ct = default)
+    {
+        var r = await Runner().RunAsync(
+            "/bin/sh", ["-c", CloneScript, "sh", Path.GetFullPath(targetPath), originUrl], "/", ct, null,
+            _agentOptions with { StandardInputFrom = bundle });
+        return new RunHostResult(r.ExitCode, r.StdErr);
+    }
+
+    public async Task<RunHostResult> FetchBundleAsync(string clonePath, Stream bundle, CancellationToken ct = default)
+    {
+        var r = await Runner().RunAsync(
+            "/bin/sh", ["-c", FetchBundleScript, "sh", Path.GetFullPath(clonePath)], "/", ct, null,
+            _agentOptions with { StandardInputFrom = bundle });
+        return new RunHostResult(r.ExitCode, r.StdErr);
+    }
+
+    public async Task<RunHostResult> PullBundleAsync(string clonePath, string branch, bool incremental, Stream sink, CancellationToken ct = default)
+    {
+        string[] bundle = ["bundle", "create", "--quiet", "-", $"refs/heads/{branch}"];
+        IReadOnlyList<string> args = ["-C", Path.GetFullPath(clonePath), .. bundle, .. incremental ? new[] { "--not", "--remotes=origin" } : []];
+        var r = await Runner().RunAsync("git", args, "/", ct, null, _agentOptions with { StandardOutputTo = sink });
+        return new RunHostResult(r.ExitCode, r.StdErr);
+    }
+
+    private IProcessRunner Runner()
+        => _runner ?? throw new InvalidOperationException("this run host was built without a process runner, so it cannot move bundles");
+
+    // -- Files -------------------------------------------------------------------
+
+    public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default)
+        => Task.FromResult<Stream?>(File.Exists(path) ? File.OpenRead(path) : null);
+
+    public string? ReadTextFile(string path) => File.Exists(path) ? File.ReadAllText(path) : null;
+
+    public Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default)
+    {
+        if (Directory.Exists(path)) return Task.FromResult<Stream?>(null);
+        try
+        {
+            // Opened rather than checked for first: the handle is the answer, so a file that goes between a
+            // check and the open cannot surface as an exception further down.
+            return Task.FromResult<Stream?>(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return Task.FromResult<Stream?>(null);
+        }
+    }
+
+    public Task<Stream> OpenFileForWriteAsync(string path, CancellationToken ct = default)
+        => Task.FromResult<Stream>(new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
+
+    public Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default)
+        => AgentWritableFiles.GetFileLengthAsync(path, ct);
+
+    public Task ReadFileRangeAsync(string path, long offset, long count, Func<Stream, Task> consume)
+        => AgentWritableFiles.ReadFileRangeAsync(path, offset, count, consume);
+
+    public Task WriteFileAsync(string path, Stream content, CancellationToken ct = default)
+        => AgentWritableFiles.WriteFileAsync(path, content, ct);
+
+    public Task WriteFileAsync(string path, string content, CancellationToken ct = default)
+        => AgentWritableFiles.WriteFileAsync(path, content, ct);
+
+    public Task WriteReadOnlyFileAsync(string path, string content, CancellationToken ct = default)
+        => AgentWritableFiles.WriteReadOnlyFileAsync(path, content, ct);
+
+    public Task CreateDirectoryAsync(string path, CancellationToken ct = default)
+        => AgentWritableFiles.CreateDirectoryAsync(path, ct);
+
+    public Task<bool> FileExistsAsync(string path, CancellationToken ct = default)
+        => AgentWritableFiles.FileExistsAsync(path, ct);
+
+    public Task<bool> DirectoryExistsAsync(string path, CancellationToken ct = default)
+        => Task.FromResult(Directory.Exists(path));
+
+    public Task<IReadOnlyList<(string Path, string FirstLine)>> ListFilesAsync(string directory, string namePattern, CancellationToken ct = default)
+        => AgentWritableFiles.ListFilesAsync(directory, namePattern, ct);
+
+    public Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default)
+        => AgentWritableFiles.DeleteAsync(paths, ct);
+
+    // -- Preview and gateway -----------------------------------------------------
+
+    public Uri PreviewTarget(int port) => new($"http://127.0.0.1:{port}");
+
+    public string GatewayApiUrl(string? configuredApiUrl) => configuredApiUrl ?? "http://localhost:5000";
+
+    // -- Sweep -------------------------------------------------------------------
+
+    internal const string McpConfigKind = "mcp-config";
+    internal const string PackageFeedConfigKind = "package-feed-config";
+    internal const string PiExtensionKind = "pi-extension";
+    internal const string LegacyPiExtensionsKind = "legacy-pi-extensions";
+
+    public Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)
+        => Task.FromResult(ListLeftovers(
+            liveIds, AgentIsolation.AgentReadRoot, AgentIsolation.ScratchRoot, Process.GetCurrentProcess().StartTime.ToUniversalTime(), null).Leftovers);
+
+    /// <summary>
+    /// The secret-bearing files a killed process left: MCP configs, package feed npm configs and pi
+    /// extensions written before <paramref name="startedUtc"/> (the extensions only for runs and chats not in
+    /// <paramref name="liveIds"/>), and the scratch root's legacy extensions, as one leftover. A listing that
+    /// fails is logged and the rest are listed; <c>ListedAll</c> is then false.
+    /// </summary>
+    internal static (IReadOnlyList<RunLeftover> Leftovers, bool ListedAll) ListLeftovers(
+        IReadOnlySet<Guid> liveIds, string agentReadRoot, string scratchRoot, DateTime startedUtc, ILogger? logger)
+    {
+        var leftovers = new List<RunLeftover>();
+        var listedAll = true;
+        void List(string kind, Func<IEnumerable<string>> list)
+        {
+            try
+            {
+                leftovers.AddRange(list().ToList().Select(p => new RunLeftover(kind, p)));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger?.LogWarning(ex, "Could not list the secret-bearing agent files a previous process left");
+                listedAll = false;
+            }
+        }
+
+        List(McpConfigKind, () => IldMcpServer.StaleConfigFiles(agentReadRoot, startedUtc));
+        List(PackageFeedConfigKind, () => PackageFeedCredentialFiles.StaleFiles(agentReadRoot, startedUtc));
+        List(PiExtensionKind, () => PiAdapter.StaleExtensions(agentReadRoot, liveIds, startedUtc));
+        leftovers.Add(new RunLeftover(LegacyPiExtensionsKind, scratchRoot));
+        return (leftovers, listedAll);
+    }
+
+    public async Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default)
+    {
+        switch (leftover.Kind)
+        {
+            case McpConfigKind:
+            case PackageFeedConfigKind:
+                File.Delete(leftover.Location);
+                return true;
+            case PiExtensionKind:
+                Directory.Delete(leftover.Location, recursive: true);
+                return true;
+            case LegacyPiExtensionsKind:
+                return await PiAdapter.SweepLegacyExtensionsAsync(leftover.Location, ct);
+            default:
+                throw new ArgumentException($"unknown leftover kind '{leftover.Kind}'", nameof(leftover));
+        }
+    }
+}

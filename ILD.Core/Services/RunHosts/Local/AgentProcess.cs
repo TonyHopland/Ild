@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using ILD.Core.Services.RunHosts;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -20,7 +20,7 @@ internal static class AgentProcess
     /// waited for before the cancellation is rethrown, so nothing it started is
     /// still writing once this returns.
     /// </summary>
-    public static async Task<AgentProcessResult> RunAsync(Process process, string? stdin, CancellationToken ct)
+    public static async Task<AgentProcessResult> RunAsync(IRunProcess process, string? stdin, CancellationToken ct)
     {
         var stdout = process.StandardOutput.ReadToEndAsync(ct);
         var stderr = process.StandardError.ReadToEndAsync(ct);
@@ -33,7 +33,7 @@ internal static class AgentProcess
         }
         catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+            process.TryKill();
             await process.WaitForExitAsync(CancellationToken.None);
             throw;
         }

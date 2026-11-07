@@ -152,7 +152,7 @@ public interface IRepositoryManager
     /// shared with the group once and the open retried; a second denial throws
     /// <see cref="ILD.Core.Services.Implementations.WorktreeFileUnreadableException"/>.
     /// </summary>
-    Task<FileStream?> OpenWorktreeFileAsync(string worktreePath, string relativePath);
+    Task<Stream?> OpenWorktreeFileAsync(string worktreePath, string relativePath);
 
     /// <summary>
     /// Replace a single worktree file's contents with <paramref name="content"/>

@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
@@ -578,7 +579,7 @@ public class LoopRunsController : ControllerBase
         // actively writing the worktree, so a concurrent shell would race it.
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             return BadRequest(new { error = "Terminal is not available while the run is still executing." });
-        if (string.IsNullOrWhiteSpace(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+        if (string.IsNullOrWhiteSpace(run.WorktreePath) || !await HttpContext.RequestServices.GetRunHost().DirectoryExistsAsync(run.WorktreePath, HttpContext.RequestAborted))
             return BadRequest(new { error = "Run has no live worktree." });
 
         // The worktree is the run's, so its shell gets the feeds the run's processes get.

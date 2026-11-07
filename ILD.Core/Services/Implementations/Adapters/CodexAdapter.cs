@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -149,7 +150,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Codex, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[codex-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
@@ -182,18 +183,18 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
             var resumeId = await ResumableSessionAsync(ctx.SessionId, sessionsDirectory, ctx.Cancel);
 
-            Process? proc;
+            IRunProcess? proc;
             try
             {
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
                 if (gateway is not null && codexHome is not null)
                 {
-                    await AgentWritableFiles.CreateDirectoryAsync(codexHome, ctx.Cancel);
-                    await AgentWritableFiles.WriteFileAsync(
+                    await RunHost.CreateDirectoryAsync(codexHome, ctx.Cancel);
+                    await RunHost.WriteFileAsync(
                         Path.Combine(codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, gateway.Token), ctx.Cancel);
                     ApplyGateway(psi, gateway, codexHome);
                 }
-                proc = StartAgentProcess(psi, ctx);
+                proc = await StartAgentProcessAsync(psi, ctx);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -613,8 +614,8 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     // The rollouts live in the shared credential store, which the agent can write,
     // so they are only listed, read and written as the agent (see AgentWritableFiles).
-    private static async Task<string?> FindRolloutAsync(string sessionsDirectory, string sessionId, CancellationToken ct)
-        => (await AgentWritableFiles.ListFilesAsync(sessionsDirectory, $"rollout-*-{sessionId}.jsonl", ct))
+    private async Task<string?> FindRolloutAsync(string sessionsDirectory, string sessionId, CancellationToken ct)
+        => (await RunHost.ListFilesAsync(sessionsDirectory, $"rollout-*-{sessionId}.jsonl", ct))
             .Select(file => file.Path)
             .Order(StringComparer.Ordinal)
             .LastOrDefault();

@@ -26,9 +26,11 @@ public class CmdNodeExecutorTests : IDisposable
     }
 
     private NodeExecutionContext Context(
-        string command, CancellationToken cancel = default, Func<string, Task>? progress = null)
+        string command, CancellationToken cancel = default, Func<string, Task>? progress = null, ILD.Core.Services.RunHosts.IRunHost? host = null)
     {
         var services = new ServiceCollection();
+        // Real-shell tests leave the host unset and get the local one.
+        if (host is not null) services.AddSingleton(host);
         services.AddSingleton(new Mock<IWorkItemManager>().Object);
         services.AddSingleton(NoPackageFeeds.Resolver);
         return new NodeExecutionContext(
@@ -67,7 +69,10 @@ public class CmdNodeExecutorTests : IDisposable
     [Fact]
     public async Task A_failing_command_fails_the_node_with_its_output()
     {
-        var outcomes = await RunAsync(Context("echo nope; echo bad >&2; exit 3", TestContext.Current.CancellationToken));
+        var host = new Fakes.FakeRunHost().WithDirectory(_worktree);
+        host.Script = _ => Fakes.FakeCommandScript.Prints("nope\n", "bad\n", code: 3);
+
+        var outcomes = await RunAsync(Context("echo nope; echo bad >&2; exit 3", TestContext.Current.CancellationToken, host: host));
 
         var fail = Assert.IsType<NodeOutcome.Fail>(Assert.Single(outcomes, o => o is NodeOutcome.Fail));
         Assert.Equal("exit code 3", fail.Reason);

@@ -1,5 +1,7 @@
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.PackageFeeds;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
@@ -54,61 +56,48 @@ public static class AgentRunFiles
     /// removed is logged and the sweep carries on, so it never leaves the rest, and
     /// their tokens, behind. Returns whether everything is gone.
     /// </summary>
-    public static Task<bool> SweepAtStartupAsync(IReadOnlySet<Guid> activeRunAndChatIds, ILogger logger, CancellationToken ct = default)
-        => SweepAtStartupAsync(
-            activeRunAndChatIds,
-            AgentIsolation.AgentReadRoot,
-            AgentIsolation.ScratchRoot,
-            System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(),
-            logger,
-            ct);
+    public static async Task<bool> SweepAtStartupAsync(
+        IRunHost host, IReadOnlySet<Guid> activeRunAndChatIds, ILogger logger, CancellationToken ct = default)
+        => await DeleteLeftoversAsync(host, await host.ListLeftoversAsync(activeRunAndChatIds, ct), listedAll: true, logger, ct);
 
-    /// <inheritdoc cref="SweepAtStartupAsync(IReadOnlySet{Guid}, ILogger, CancellationToken)"/>
+    /// <inheritdoc cref="SweepAtStartupAsync(IRunHost, IReadOnlySet{Guid}, ILogger, CancellationToken)"/>
     internal static async Task<bool> SweepAtStartupAsync(
         IReadOnlySet<Guid> activeRunAndChatIds, string agentReadRoot, string scratchRoot, DateTime startedUtc, ILogger logger, CancellationToken ct)
     {
-        var clean = DeleteEach(() => IldMcpServer.StaleConfigFiles(agentReadRoot, startedUtc), File.Delete, logger);
-        clean &= DeleteEach(() => PackageFeedCredentialFiles.StaleFiles(agentReadRoot, startedUtc), File.Delete, logger);
-        clean &= DeleteEach(() => PiAdapter.StaleExtensions(agentReadRoot, activeRunAndChatIds, startedUtc), path => Directory.Delete(path, recursive: true), logger);
-
-        try
-        {
-            if (await PiAdapter.SweepLegacyExtensionsAsync(scratchRoot, ct))
-                return clean;
-            logger.LogWarning("Could not remove every legacy pi ILD extension in the pi agent directories under {ScratchRoot}", scratchRoot);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-        {
-            logger.LogWarning(ex, "Could not sweep the legacy pi ILD extensions under {ScratchRoot}", scratchRoot);
-        }
-        return false;
+        var (leftovers, listedAll) = LocalRunHost.ListLeftovers(activeRunAndChatIds, agentReadRoot, scratchRoot, startedUtc, logger);
+        return await DeleteLeftoversAsync(LocalRunHost.Shared, leftovers, listedAll, logger, ct);
     }
 
-    private static bool DeleteEach(Func<IEnumerable<string>> list, Action<string> delete, ILogger logger)
+    private static async Task<bool> DeleteLeftoversAsync(
+        IRunHost host, IReadOnlyList<RunLeftover> leftovers, bool listedAll, ILogger logger, CancellationToken ct)
     {
-        List<string> paths;
-        try
-        {
-            paths = list().ToList();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            logger.LogWarning(ex, "Could not list the secret-bearing agent files a previous process left");
-            return false;
-        }
-
-        var clean = true;
-        foreach (var path in paths)
+        var clean = listedAll;
+        foreach (var leftover in leftovers.Where(l => l.Kind != LocalRunHost.LegacyPiExtensionsKind))
         {
             try
             {
-                delete(path);
+                await host.DeleteLeftoverAsync(leftover, ct);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                logger.LogWarning(ex, "Could not remove {Path}, which carries a secret; sweeping the rest", path);
+                logger.LogWarning(ex, "Could not remove {Path}, which carries a secret; sweeping the rest", leftover.Location);
                 clean = false;
             }
+        }
+
+        foreach (var legacy in leftovers.Where(l => l.Kind == LocalRunHost.LegacyPiExtensionsKind))
+        {
+            try
+            {
+                if (await host.DeleteLeftoverAsync(legacy, ct))
+                    return clean;
+                logger.LogWarning("Could not remove every legacy pi ILD extension in the pi agent directories under {ScratchRoot}", legacy.Location);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            {
+                logger.LogWarning(ex, "Could not sweep the legacy pi ILD extensions under {ScratchRoot}", legacy.Location);
+            }
+            return false;
         }
         return clean;
     }

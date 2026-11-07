@@ -1,4 +1,6 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Remote;
@@ -20,6 +22,7 @@ namespace ILD.Core.Services.Implementations;
 /// </summary>
 public class WorkItemManager : IWorkItemManager
 {
+    private readonly IRunHost _runHost;
     private readonly IRepositoryManager _repoManager;
     private readonly IProviderStore _providerStore;
     private readonly IEventLogService _eventLog;
@@ -55,8 +58,10 @@ public class WorkItemManager : IWorkItemManager
         ILogger<WorkItemManager>? logger = null,
         RepositoryParallelismHolds? repositoryHolds = null,
         IFinishedRunCleaner? finishedRunCleaner = null,
-        IHumanInputProposalStore? humanInputProposals = null)
+        IHumanInputProposalStore? humanInputProposals = null,
+        IRunHost? runHost = null)
     {
+        _runHost = runHost ?? LocalRunHost.Shared;
         _humanInputProposals = humanInputProposals;
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -69,7 +74,7 @@ public class WorkItemManager : IWorkItemManager
         _previewService = previewService ?? new NoopPreviewService();
         _scheduler = scheduler;
         _engine = engine;
-        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _previewService, _notifier);
+        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _previewService, _notifier, host: _runHost);
         _remoteProvider = remoteProvider;
         _logger = logger ?? NullLogger<WorkItemManager>.Instance;
         _repositoryHolds = repositoryHolds ?? new RepositoryParallelismHolds();
@@ -1293,7 +1298,7 @@ public class WorkItemManager : IWorkItemManager
         var wi = await GetWorkItemAsync(workItemId);
         if (wi is null)
             return (null, "Work item not found.");
-        if (string.IsNullOrWhiteSpace(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
+        if (string.IsNullOrWhiteSpace(wi.WorktreePath) || !await _runHost.DirectoryExistsAsync(wi.WorktreePath))
             return (null, "Work item does not currently have an active worktree.");
         if (wi.RunRepositoryId is null)
             return (null, "Work item has no associated repository.");
@@ -1320,7 +1325,7 @@ public class WorkItemManager : IWorkItemManager
         var branch = workItem.BranchName;
         var worktreePath = workItem.WorktreePath;
         if (string.IsNullOrWhiteSpace(branch)
-            || string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath)
+            || string.IsNullOrWhiteSpace(worktreePath) || !await _runHost.DirectoryExistsAsync(worktreePath)
             || workItem.RunRepositoryId is not { } repositoryId)
             return null;
 

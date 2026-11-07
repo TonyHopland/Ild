@@ -280,7 +280,7 @@ try
                     .ToHashSet();
                 var sweepLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
                     .CreateLogger(typeof(ILD.Core.Services.Implementations.AgentRunFiles));
-                if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(active, sweepLogger))
+                if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(scope.ServiceProvider.GetRequiredService<ILD.Core.Services.RunHosts.IRunHost>(), active, sweepLogger))
                     Log.Warning("Could not remove every token-bearing agent file the previous process left behind; see the warnings above");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

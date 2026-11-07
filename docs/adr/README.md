@@ -34,5 +34,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0029](./0029-backup-and-restore.md)                           | Backup and restore are two passphrase-encrypted app-level exports                     |
 | [0030](./0030-agents-suggest-human-input.md)                   | A human answers a parked Human node; agents only suggest the answer                   |
 | [0031](./0031-model-gateway.md)                                | The agent holds a placeholder; the ILD model gateway adds the real credential        |
+| [0032](./0032-run-host-interface.md)                                | Where a run's processes and files live is one interface, the run host              |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -80,7 +81,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[claude-code-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
@@ -111,12 +112,12 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 : await ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
 
             using var gateway = OpenGateway(ctx);
-            Process? proc;
+            IRunProcess? proc;
             try
             {
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
                 if (gateway is not null) ApplyGateway(psi, gateway, ctx.Provider);
-                proc = StartAgentProcess(psi, ctx);
+                proc = await StartAgentProcessAsync(psi, ctx);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -534,7 +535,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         // agent can write, so they are only checked, written and read as the agent
         // (see AgentWritableFiles), never by the orchestrator through a link.
         var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
-        if (path is null || await AgentWritableFiles.FileExistsAsync(path, ctx.Cancel)) return;
+        if (path is null || await RunHost.FileExistsAsync(path, ctx.Cancel)) return;
 
         try
         {

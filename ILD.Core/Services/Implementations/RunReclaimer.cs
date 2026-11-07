@@ -1,5 +1,7 @@
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -11,6 +13,7 @@ namespace ILD.Core.Services.Implementations;
 public sealed class RunReclaimer : IRunReclaimer
 {
     private readonly IRepositoryManager _repo;
+    private readonly IRunHost _host;
     private readonly IProviderStore _providers;
     private readonly IWorktreePreviewService _preview;
     private readonly IWorkItemNotifier _notifier;
@@ -23,9 +26,11 @@ public sealed class RunReclaimer : IRunReclaimer
         IWorktreePreviewService? preview = null,
         IWorkItemNotifier? notifier = null,
         IConfiguration? config = null,
-        ILogger<RunReclaimer>? log = null)
+        ILogger<RunReclaimer>? log = null,
+        IRunHost? host = null)
     {
         _repo = repo;
+        _host = host ?? new LocalRunHost(repositories: repo);
         _providers = providers;
         _preview = preview ?? new NoopPreviewService();
         _notifier = notifier ?? new NoopWorkItemNotifier();
@@ -61,7 +66,7 @@ public sealed class RunReclaimer : IRunReclaimer
             try { baseRepoPath = await _repo.ResolveBaseRepoPathAsync(run.WorktreePath); }
             catch (Exception ex) { _log?.LogDebug(ex, "Could not resolve base repo for run {RunId}", run.Id); }
 
-            try { await _repo.DestroyWorktreeAsync(run.WorktreePath); }
+            try { await _host.DeleteAsync(new RunEnvironment(run.Id, run.WorktreePath)); }
             catch (Exception ex) { _log?.LogWarning(ex, "Failed to destroy worktree for run {RunId} at {Path}", run.Id, run.WorktreePath); }
 
             // Something survived the destroy attempt: report failure so the caller

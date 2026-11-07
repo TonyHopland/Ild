@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Implementations.ModelGateway;
@@ -105,14 +106,14 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Copilot, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[copilot-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
             mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             using var gateway = OpenGateway(ctx);
-            Process? proc;
+            IRunProcess? proc;
             try
             {
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
@@ -122,7 +123,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                         return NodeExecutionResult.Fail(
                             $"[copilot-error] the model gateway has no HTTPS listener, which the Copilot CLI needs: set {GatewayTlsEndpoint.PortVariable} to a free loopback port.");
                 }
-                proc = StartAgentProcess(psi, ctx);
+                proc = await StartAgentProcessAsync(psi, ctx);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

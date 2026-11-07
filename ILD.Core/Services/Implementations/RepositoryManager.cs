@@ -3,6 +3,8 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Win32.SafeHandles;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
 
@@ -32,6 +34,7 @@ public class RepositoryManager : IRepositoryManager
     private static readonly string AskPassScriptPath = EnsureAskPassScript();
     private readonly ILogger<RepositoryManager>? _logger;
     private readonly IProcessRunner _runner;
+    private readonly IRunHost _host;
     private readonly string _worktreesRoot;
     private readonly AgentIdentity? _agent;
     private readonly GitMirror _mirrors;
@@ -49,7 +52,8 @@ public class RepositoryManager : IRepositoryManager
         string? worktreesRoot = null,
         AgentIdentity? agent = null,
         string? mirrorsRoot = null,
-        Func<string, string?>? readEnvironment = null)
+        Func<string, string?>? readEnvironment = null,
+        IRunHost? host = null)
     {
         _runner = runner;
         _readEnvironment = readEnvironment ?? Environment.GetEnvironmentVariable;
@@ -57,6 +61,7 @@ public class RepositoryManager : IRepositoryManager
         _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
         _agent = agent ?? ConfiguredAgent();
         _agentOptions = new ProcessRunOptions(AsAgent: _agent, AgentScoped: true);
+        _host = host ?? new LocalRunHost(runner, agent: _agent);
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
@@ -96,9 +101,7 @@ public class RepositoryManager : IRepositoryManager
             if (bundle is null) return (false, bundleError);
             await using (bundle)
             {
-                var r = await _runner.RunAsync(
-                    "/bin/sh", ["-c", CloneScript, "sh", target, WithoutUserInfo(cloneUrl)], "/", cancellationToken, null,
-                    _agentOptions with { StandardInputFrom = bundle.Bundle ?? Stream.Null });
+                var r = await _host.PushBundleAsync(target, WithoutUserInfo(cloneUrl), bundle.Bundle ?? Stream.Null, cancellationToken);
                 if (!r.Success)
                     _logger?.LogDebug("Cloning {Target} from the bundle exited {Code}: {Err}", target, r.ExitCode, r.StdErr);
                 return r.Success ? (true, null) : (false, r.StdErr);
@@ -106,28 +109,13 @@ public class RepositoryManager : IRepositoryManager
         }
     }
 
-    // The bundle arrives on stdin; git cannot read one from a pipe, so it goes to a file in a scratch
-    // directory the agent makes and removes. An empty stdin is a remote with no branches yet.
-    private const string CloneScript = """
-        d=$(mktemp -d) || exit 1
-        trap 'rm -rf -- "$d"' EXIT
-        cat > "$d/in.bundle" || exit 1
-        if [ -s "$d/in.bundle" ]; then
-            git clone --quiet -- "$d/in.bundle" "$1" || exit 1
-            git -C "$1" config remote.origin.url "$2"
-        else
-            git init --quiet --initial-branch=main -- "$1" || exit 1
-            git -C "$1" remote add origin "$2"
-        fi
-        """;
-
     public async Task<string> CreateWorktreeAsync(string repoPath, string branchName)
     {
         Directory.CreateDirectory(_worktreesRoot);
         var worktreePath = Path.GetFullPath(Path.Combine(_worktreesRoot, branchName));
         await RunAsync(repoPath, "worktree", "prune");
 
-        if (Directory.Exists(worktreePath))
+        if (await _host.DirectoryExistsAsync(worktreePath))
         {
             if (await ValidateWorktreeHealthAsync(worktreePath))
                 return worktreePath;
@@ -166,7 +154,7 @@ public class RepositoryManager : IRepositoryManager
         if (!AgentWritableFiles.EntryExists(worktreePath)) return;
 
         string? repoPath = null;
-        if (Directory.Exists(worktreePath) && new DirectoryInfo(worktreePath).LinkTarget is null)
+        if (await _host.DirectoryExistsAsync(worktreePath) && LinkTargetOf(worktreePath) is null)
         {
             // Only a real directory can be a worktree; anything else here just goes.
             // Only a worktree whose pointer is ours is handed to git; anything else is
@@ -209,7 +197,7 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<bool> ValidateWorktreeHealthAsync(string worktreePath)
     {
-        if (!Directory.Exists(worktreePath)) return false;
+        if (!await _host.DirectoryExistsAsync(worktreePath)) return false;
         var (code, _, _) = await RunAsync(worktreePath, "rev-parse", "--is-inside-work-tree");
         return code == 0;
     }
@@ -336,16 +324,6 @@ public class RepositoryManager : IRepositoryManager
         return null;
     }
 
-    // The bundle arrives on stdin and is written to a scratch directory of the agent's, because git
-    // cannot fetch from a pipe. Into a namespace of its own: nothing the clone has is touched here.
-    private const string FetchBundleScript = """
-        d=$(mktemp -d) || exit 1
-        trap 'rm -rf -- "$d"' EXIT
-        git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin || exit 1
-        cat > "$d/in.bundle" || exit 1
-        git -C "$1" fetch --quiet --no-tags --no-write-fetch-head -- "$d/in.bundle" '+refs/heads/*:refs/ild-sync/*'
-        """;
-
     private async Task<bool> FetchBundleAsync(string worktreePath, Stream bundle, CancellationToken ct)
     {
         if (TrustedRepositoryRoot(worktreePath) is null)
@@ -354,9 +332,7 @@ public class RepositoryManager : IRepositoryManager
             return false;
         }
 
-        var r = await _runner.RunAsync(
-            "/bin/sh", ["-c", FetchBundleScript, "sh", Path.GetFullPath(worktreePath)], "/", ct, null,
-            _agentOptions with { StandardInputFrom = bundle });
+        var r = await _host.FetchBundleAsync(worktreePath, bundle, ct);
         if (!r.Success)
             _logger?.LogDebug("Fetching the bundle into {Worktree} exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
         return r.Success;
@@ -492,13 +468,14 @@ public class RepositoryManager : IRepositoryManager
         {
             // The agent writes the bundle; what the remote receives is what the mirror
             // took from it, pushed by the orchestrator from a place the agent cannot write.
-            var bundle = new[] { "bundle", "create", "--quiet", "-", $"refs/heads/{branchName}" };
             var pushed = await mirror.PushAsync(
                 auth, branchName, sha,
                 async (incremental, sink) =>
                 {
-                    var r = await RunAsync(worktreePath, incremental ? [.. bundle, "--not", "--remotes=origin"] : bundle, cancellationToken, sink);
-                    return new ProcessResult(r.ExitCode, r.StdOut, r.StdErr);
+                    if (TrustedRepositoryRoot(worktreePath) is null)
+                        return new ProcessResult(RefusedExitCode, string.Empty, $"{worktreePath} is not a git clone or worktree created by ILD");
+                    var r = await _host.PullBundleAsync(worktreePath, branchName, incremental, sink, cancellationToken);
+                    return new ProcessResult(r.ExitCode, string.Empty, r.StdErr);
                 },
                 cancellationToken);
             if (!pushed.Ok)
@@ -580,8 +557,10 @@ public class RepositoryManager : IRepositoryManager
         var root = Path.GetFullPath(worktreePath);
         if (!full.StartsWith(root, StringComparison.Ordinal))
             return null;
-        if (!File.Exists(full)) return null;
-        return await File.ReadAllTextAsync(full);
+        await using var stream = await _host.OpenReadAsync(full);
+        if (stream is null) return null;
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return await reader.ReadToEndAsync();
     }
 
     public async Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath, string? defaultBranch = null, WorktreeDiffRange? range = null)
@@ -717,41 +696,21 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
-    private static async Task<byte[]?> ReadFileBytesAsync(string full)
+    private async Task<byte[]?> ReadFileBytesAsync(string full)
     {
-        if (Directory.Exists(full)) return null;
-        try
-        {
-            return await File.ReadAllBytesAsync(full);
-        }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
+        await using var stream = await _host.OpenFileForReadAsync(full);
+        if (stream is null) return null;
+        using var bytes = new MemoryStream();
+        await stream.CopyToAsync(bytes);
+        return bytes.ToArray();
     }
 
-    public async Task<FileStream?> OpenWorktreeFileAsync(string worktreePath, string relativePath)
+    public async Task<Stream?> OpenWorktreeFileAsync(string worktreePath, string relativePath)
     {
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
-        return await ReadRepairingAsync(worktreePath, relativePath, full, () => Task.FromResult(OpenFile(full)));
-    }
-
-    private static FileStream? OpenFile(string full)
-    {
-        if (Directory.Exists(full)) return null;
-        try
-        {
-            // Opened rather than checked for first, as the write is: the handle
-            // is the answer, so a file that goes between a check and the open
-            // cannot surface as an exception further down.
-            return new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
+        return await ReadRepairingAsync(worktreePath, relativePath, full, () => _host.OpenFileForReadAsync(full));
     }
 
     public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null, WorktreeDiffRange? range = null)
@@ -775,7 +734,7 @@ public class RepositoryManager : IRepositoryManager
             // opening for create rather than open would fill that gap by putting
             // the file back. A delete that beats this open is a refusal; one that
             // races the write takes the bytes with it, as it would for any writer.
-            await using var file = new FileStream(full, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+            await using var file = await _host.OpenFileForWriteAsync(full);
             if (await IsBinaryAsync(file))
                 return WorktreeFileWriteResult.NotText;
 
@@ -1008,49 +967,6 @@ public class RepositoryManager : IRepositoryManager
     }
 
     /// <summary>
-    /// <paramref name="path"/> with every link along it replaced by what it
-    /// points at, or null when it could not be resolved within
-    /// <see cref="MaxLinkHops"/>. Resolved a segment at a time, because a link
-    /// anywhere in the path leaves the rest of it somewhere else — a directory
-    /// link is as much a way out as a file one. A segment that does not exist
-    /// cannot be a link and is carried through as written, so this answers for
-    /// paths about to be created too.
-    /// <para>
-    /// Running out of hops is a refusal, not an answer: a path still holding a
-    /// link has not been followed to where it leads, and handing back where it
-    /// stopped would report a chain that ends outside the worktree as sitting
-    /// inside it — every hop but the last can be planted inside on purpose. The
-    /// budget spans the whole path and matches what Linux itself will follow, so
-    /// a chain this refuses is one the kernel would refuse to open anyway.
-    /// </para>
-    /// </summary>
-    private static string? ResolveLinks(string path)
-    {
-        var hops = 0;
-        var resolved = Path.GetPathRoot(path) ?? string.Empty;
-        foreach (var segment in path[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
-        {
-            resolved = Path.Combine(resolved, segment);
-            for (var target = LinkTargetOf(resolved); target != null; target = LinkTargetOf(resolved))
-            {
-                if (++hops > MaxLinkHops) return null;
-                resolved = Path.GetFullPath(target, Path.GetDirectoryName(resolved) ?? resolved);
-            }
-        }
-        return resolved;
-    }
-
-    /// <summary>What <paramref name="path"/> points at, or null if it is not a link.</summary>
-    private static string? LinkTargetOf(string path) =>
-        (Directory.Exists(path) ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path)).LinkTarget;
-
-    /// <summary>
-    /// Links followed across one path resolution, the same budget Linux spends
-    /// before it gives up with <c>ELOOP</c>.
-    /// </summary>
-    private const int MaxLinkHops = 40;
-
-    /// <summary>
     /// Ceiling on the bytes of one image inlined into a file-content response.
     /// The payload rides in the JSON body, so an unbounded asset would be paid
     /// for base64-inflated by a third on top of its own size; past this the file
@@ -1134,75 +1050,14 @@ public class RepositoryManager : IRepositoryManager
         await RunAsync(repoPath, "worktree", "prune");
     }
 
+    internal static string? TrustedRepositoryRoot(string path) => LocalWorktrees.TrustedRepositoryRoot(path);
+
+    private static string? ResolveLinks(string path) => LocalWorktrees.ResolveLinks(path);
+
+    private static string? LinkTargetOf(string path) => LocalWorktrees.LinkTargetOf(path);
+
     public Task<string?> ResolveBaseRepoPathAsync(string worktreePath)
         => Task.FromResult(TrustedRepositoryRoot(worktreePath));
-
-    /// <summary>
-    /// The repository that owns <paramref name="path"/>, when <c>path/.git</c> is something this
-    /// manager made: a real directory (a clone), or a regular file naming
-    /// <c>&lt;repo&gt;/.git/worktrees/&lt;name&gt;</c> where <c>&lt;repo&gt;/.git</c> is a real
-    /// directory and that worktree entry points back at <c>path/.git</c>. Null for anything else,
-    /// links included: the agent writes these paths, and a pointer it redirected would make git
-    /// open a repository, config and hooks of its choosing.
-    /// </summary>
-    internal static string? TrustedRepositoryRoot(string path)
-    {
-        var worktree = Path.GetFullPath(path);
-        var dotGit = Path.Combine(worktree, ".git");
-        if (LinkTargetOf(dotGit) is not null) return null;
-        if (Directory.Exists(dotGit)) return worktree;
-        if (!File.Exists(dotGit)) return null;
-
-        var pointer = ReadSmallText(dotGit);
-        const string prefix = "gitdir:";
-        if (pointer is null || !pointer.StartsWith(prefix, StringComparison.Ordinal)) return null;
-        var entry = pointer[prefix.Length..].Trim();
-        if (!Path.IsPathRooted(entry) || Path.GetFullPath(entry) != entry) return null;
-
-        var worktrees = Path.GetDirectoryName(entry);
-        var gitDir = worktrees is null ? null : Path.GetDirectoryName(worktrees);
-        if (worktrees is null || gitDir is null || Path.GetFileName(worktrees) != "worktrees" || Path.GetFileName(gitDir) != ".git") return null;
-        var repository = Path.GetDirectoryName(gitDir);
-        if (repository is null) return null;
-
-        if (LinkTargetOf(gitDir) is not null || !Directory.Exists(gitDir)) return null;
-        if (LinkTargetOf(worktrees) is not null || LinkTargetOf(entry) is not null || !Directory.Exists(entry)) return null;
-
-        var backlink = ReadSmallText(Path.Combine(entry, "gitdir"))?.Trim();
-        if (backlink is null || !Path.IsPathRooted(backlink)) return null;
-        return ResolveLinks(Path.GetFullPath(backlink)) == ResolveLinks(dotGit) ? repository : null;
-    }
-
-    private const int MaxPointerBytes = 4096;
-
-    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
-    private static extern int OpenFile(string pathname, int flags);
-
-    // O_RDONLY | O_NONBLOCK | O_CLOEXEC. Opened without waiting, so a pipe the agent put where the
-    // file should be reads as empty instead of blocking the orchestrator until something writes to it.
-    private static readonly int OpenNonBlocking = OperatingSystem.IsMacOS() ? 0x4 | 0x1000000 : 0x800 | 0x80000;
-
-    /// <summary>The first <see cref="MaxPointerBytes"/> of a regular file, or null for anything else.</summary>
-    private static string? ReadSmallText(string file)
-    {
-        try
-        {
-            if (Storage.FileStatus.IsSupported
-                && (Storage.FileStatus.TryGet(file, out var status) != 0 || status.Kind != Storage.FileKind.File))
-                return null;
-
-            var descriptor = OpenFile(file, OpenNonBlocking);
-            if (descriptor < 0) return null;
-            using var stream = new FileStream(new SafeFileHandle(descriptor, ownsHandle: true), FileAccess.Read, bufferSize: 0);
-            var buffer = new byte[MaxPointerBytes];
-            var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
-            return read == buffer.Length ? null : Encoding.UTF8.GetString(buffer, 0, read);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
 
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
         => RunAsync(cwd, args, CancellationToken.None);

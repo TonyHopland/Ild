@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -19,6 +20,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         var providerStore = sp.GetRequiredService<IProviderStore>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
+        var host = sp.GetRunHost();
 
         var wi = await workItems.GetWorkItemAsync(ctx.Run.WorkItemId);
         var repositoryId = RunRepository.IdOf(ctx.Run, wi);
@@ -45,14 +47,14 @@ public sealed class StartNodeExecutor : INodeExecutor
             System.Text.Json.JsonSerializer.Serialize(new { nodeType = "Start", message = "initialized" }));
 
         var hasHealthyWorktree = !string.IsNullOrEmpty(ctx.Run.WorktreePath)
-            && Directory.Exists(ctx.Run.WorktreePath)
+            && await host.DirectoryExistsAsync(ctx.Run.WorktreePath, ctx.CancellationToken)
             && await repoManager.ValidateWorktreeHealthAsync(ctx.Run.WorktreePath);
 
         string worktreePath;
         string branchName;
         if (!hasHealthyWorktree)
         {
-            var (ok, path, branch, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, ctx.Run, repo, wi, gitAuth);
+            var (ok, path, branch, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, host, ctx.Run, repo, wi, gitAuth);
             if (!ok)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "worktree setup failed");
@@ -125,7 +127,7 @@ public sealed class StartNodeExecutor : INodeExecutor
     }
 
     private static async Task<(bool Ok, string? Path, string? Branch, string? Error)> EnsureWorktreeAsync(
-        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager,
+        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager, IRunHost host,
         LoopRun run, Repository repo, WorkItemView wi, GitAuthOptions? gitAuth)
     {
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
@@ -140,7 +142,7 @@ public sealed class StartNodeExecutor : INodeExecutor
                 ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
             if (!baseOk) return (false, null, null, baseError);
 
-            path = await repoManager.CreateWorktreeAsync(basePath!, branch);
+            path = (await host.CreateAsync(new RunEnvironmentRequest(run.Id, basePath!, branch), ctx.CancellationToken)).WorkingDirectory;
             await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         }
         try

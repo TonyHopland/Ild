@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -102,7 +103,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         var target = RunBaseBranch.Resolve(ctx.Run, repo);
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
-        if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath))
+        if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && await sp.GetRunHost().DirectoryExistsAsync(ctx.Run.WorktreePath, ctx.CancellationToken))
         {
             string? prepError = null;
             var pushed = false;
