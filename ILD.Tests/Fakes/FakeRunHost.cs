@@ -23,9 +23,32 @@ internal sealed class FakeRunHost : IRunHost
     public List<RunCommand> Started { get; } = [];
     public List<FakeRunProcess> Killed { get; } = [];
     public List<Guid> KillAllCalls { get; } = [];
+
+    /// <summary>Runs as <c>KillAllAsync</c> is entered, for a test that checks what had happened by then.</summary>
+    public Action<Guid>? OnKillAll { get; set; }
+
+    /// <summary>Thrown by <c>KillAllAsync</c> when set: a host that cannot be reached.</summary>
+    public Exception? KillAllFailure { get; set; }
     public List<RunEnvironmentRequest> Created { get; } = [];
     public List<RunEnvironment> Deleted { get; } = [];
     public Func<RunEnvironmentRequest, string> WorkingDirectoryFor { get; set; } = request => Path.Combine("/fake-worktrees", request.BranchName);
+
+    private readonly ILD.Core.Services.Interfaces.IRepositoryManager? _repositories;
+    private readonly bool _seesDisk;
+
+    public FakeRunHost()
+    {
+    }
+
+    /// <summary>
+    /// A fake whose environments are made by <paramref name="repositories"/> (a mock the test already sets up and verifies) and
+    /// whose directories include those that really exist, for tests that stage a worktree on disk.
+    /// </summary>
+    public FakeRunHost(ILD.Core.Services.Interfaces.IRepositoryManager repositories)
+    {
+        _repositories = repositories;
+        _seesDisk = true;
+    }
 
     public RunHostKind Kind => RunHostKind.Local;
 
@@ -46,15 +69,15 @@ internal sealed class FakeRunHost : IRunHost
         lock (_gate) return _files.TryGetValue(path, out var bytes) ? Encoding.UTF8.GetString(bytes) : null;
     }
 
-    public Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
+    public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
     {
-        var path = WorkingDirectoryFor(request);
+        var path = _repositories is null ? WorkingDirectoryFor(request) : await _repositories.CreateWorktreeAsync(request.BasePath, request.BranchName);
         lock (_gate)
         {
             Created.Add(request);
             _directories.Add(path);
         }
-        return Task.FromResult(new RunEnvironment(request.OwnerId, path));
+        return new RunEnvironment(request.OwnerId, path);
     }
 
     public async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
@@ -84,6 +107,8 @@ internal sealed class FakeRunHost : IRunHost
         lock (_gate)
         {
             KillAllCalls.Add(ownerId);
+            OnKillAll?.Invoke(ownerId);
+            if (KillAllFailure is not null) throw KillAllFailure;
             mine = _running.Where(p => p.Command.OwnerId == ownerId && !p.HasExited).ToList();
         }
         foreach (var process in mine)
@@ -112,6 +137,11 @@ internal sealed class FakeRunHost : IRunHost
 
     public Task<RunHostResult> PullBundleAsync(string clonePath, string branch, bool incremental, Stream sink, CancellationToken ct = default)
         => Task.FromResult(new RunHostResult(0, string.Empty));
+
+    public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default)
+    {
+        lock (_gate) return Task.FromResult<Stream?>(_files.TryGetValue(path, out var bytes) ? new MemoryStream(bytes, writable: false) : null);
+    }
 
     public Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default)
     {
@@ -153,7 +183,7 @@ internal sealed class FakeRunHost : IRunHost
 
     public Task<bool> DirectoryExistsAsync(string path, CancellationToken ct = default)
     {
-        lock (_gate) return Task.FromResult(_directories.Contains(path));
+        lock (_gate) return Task.FromResult(_directories.Contains(path) || (_seesDisk && Directory.Exists(path)));
     }
 
     public Task<IReadOnlyList<(string Path, string FirstLine)>> ListFilesAsync(string directory, string namePattern, CancellationToken ct = default)

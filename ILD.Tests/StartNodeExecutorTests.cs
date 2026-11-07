@@ -72,6 +72,7 @@ public class StartNodeExecutorTests : IDisposable
         services.AddSingleton(workItems.Object);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(repoManager.Object);
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(new Fakes.FakeRunHost(repoManager.Object));
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataPath })
             .Build());

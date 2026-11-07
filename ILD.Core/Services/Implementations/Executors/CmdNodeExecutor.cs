@@ -68,7 +68,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         IRunProcess p;
         try
         {
-            p = await host.StartCommandAsync(new RunCommand(psi, ctx.Run.Id), ctx.CancellationToken);
+            p = await host.StartCommandAsync(RunCommand.Routed(psi, ctx.Run.Id), ctx.CancellationToken);
         }
         catch (Exception ex)
         {

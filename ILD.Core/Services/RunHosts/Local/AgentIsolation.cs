@@ -145,6 +145,9 @@ public static class AgentIsolation
     // class.
     private const string SetprivCommand = "/usr/bin/setpriv";
 
+    /// <summary>Whether <paramref name="psi"/> is a launch <see cref="Route(ProcessStartInfo, string?, string?, string?, string?, string?)"/> crossed to the agent.</summary>
+    internal static bool IsRouted(ProcessStartInfo psi) => psi.FileName == SetprivCommand;
+
     // Orchestrator-only secrets that must never reach the agent uid — the DB
     // connection strings, the encryption-at-rest key, the session-token pepper,
     // the bootstrap password, and the API tokens/keys the orchestrator uses to

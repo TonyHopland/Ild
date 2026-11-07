@@ -384,7 +384,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private async Task<AgentProcessResult> RunGitAsync(
         string folder, string ceilingDirectory, IReadOnlyList<string> arguments, CancellationToken ct)
     {
-        using var process = await _host.StartCommandAsync(new RunCommand(BuildStartInfo(
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(BuildStartInfo(
             [.. QuietGitOptions, "-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory)), ct);
         return await AgentProcess.RunAsync(process, stdin: null, ct);
     }

@@ -989,14 +989,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private async Task<LoadedPreviewConfig> LoadConfigAsync(string worktreePath, CancellationToken cancellationToken)
     {
         var configPath = Path.Combine(worktreePath, ConfigFileName);
-        if (await _host.GetFileLengthAsync(configPath, cancellationToken) is not { } configLength)
+        await using var stream = await _host.OpenReadAsync(configPath, cancellationToken);
+        if (stream is null)
         {
             return new LoadedPreviewConfig(false, worktreePath, configPath, null, $"No {ConfigFileName} found in worktree root.");
         }
 
-        IldWorkspaceConfig? config = null;
-        await _host.ReadFileRangeAsync(configPath, 0, configLength, async stream =>
-            config = await JsonSerializer.DeserializeAsync<IldWorkspaceConfig>(stream, _jsonOptions, cancellationToken));
+        var config = await JsonSerializer.DeserializeAsync<IldWorkspaceConfig>(stream, _jsonOptions, cancellationToken);
         if (config?.Preview?.Profiles == null || config.Preview.Profiles.Count == 0)
         {
             return new LoadedPreviewConfig(false, worktreePath, configPath, null, "ild.config.json does not define any preview profiles.");
@@ -1490,7 +1489,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             // the gate the pumps contend for.
             await writer.WriteLineAsync($"> {resolved.Command}");
 
-            var process = await _host.StartCommandAsync(new RunCommand(BuildPreviewProcess(resolved)), cancellationToken);
+            var process = await _host.StartCommandAsync(RunCommand.Routed(BuildPreviewProcess(resolved)), cancellationToken);
 
             // Subscribed before the check, so an exit that has already happened and
             // one still to come both let go (the lease ignores the second).
@@ -2322,7 +2321,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task<CommandResult> RunCommandAsync(ResolvedStep resolved, CancellationToken cancellationToken)
     {
-        using var process = await _host.StartCommandAsync(new RunCommand(BuildPreviewProcess(resolved)), cancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(BuildPreviewProcess(resolved)), cancellationToken);
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);

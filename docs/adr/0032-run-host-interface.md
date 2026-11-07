@@ -8,7 +8,7 @@ The orchestrator used to start the agent's processes, open its terminals, read i
 - **`local` is today's behaviour**, and the only host that exists: the agent's processes are children of the orchestrator that cross to the agent uid, and its files are the worktree and the scratch and agent-read roots. The code that spawns, routes through `setpriv`, opens the PTY or reads the agent's files as the agent lives under `RunHosts/Local` and nowhere else. A test scans the sources for it.
 - **The backend is an explicit setting**, `ILD_RUN_HOST` = `local` | `container` | `kubernetes`, default `local`. Nothing is detected from the environment. The two other values stop startup until they are built.
 - **A disconnect still halts the node** ([ADR-0017](./0017-shutdown-halts-the-in-flight-ai-node.md)). Before a halted node resumes or a node is retried, the engine asks the host to kill whatever is still running for that run.
-- **Files are read through the host, never by path**, so a host whose files are not on the orchestrator's disk works. What is still read by path is the local git layer (`RepositoryManager`), which moves behind the host with the backends that need it.
+- **Files are read through the host, never by path**, so a host whose files are not on the orchestrator's disk works. The one check that has to open a worktree's `.git` pointers itself, whether a path is a clone this orchestrator made, sits in `RunHosts/Local`.
 
 ## Considered options
 

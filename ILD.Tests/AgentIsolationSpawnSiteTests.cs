@@ -32,10 +32,6 @@ public class AgentIsolationSpawnSiteTests
         @"\b(?:Directory|File)\.(?:Exists|ReadAll\w+|Open\w*|Enumerate\w+|GetFiles|GetDirectories)\s*\([^;]*(?:[Ww]orktreePath|worktreePath|[Ww]orktree\b|AgentHome)",
         RegexOptions.Compiled);
 
-    // RepositoryManager is the local backend's git layer (its worktrees are made and trusted by reading their
-    // .git pointers); it moves behind the host with the container and kubernetes backends, which need their own.
-    private static readonly string[] LocalGitLayer = ["RepositoryManager.cs", "BaseRepoPath.cs", "Program.cs"];
-
     [Fact]
     public void No_process_spawn_PTY_or_setpriv_exists_outside_the_local_run_host()
     {
@@ -62,7 +58,6 @@ public class AgentIsolationSpawnSiteTests
     public void No_worktree_or_agent_home_is_read_by_path_outside_the_local_run_host()
     {
         var reads = SourceFiles()
-            .Where(f => !LocalGitLayer.Contains(Path.GetFileName(f)))
             .SelectMany(f =>
             {
                 var source = Redact(File.ReadAllText(f));
@@ -80,7 +75,7 @@ public class AgentIsolationSpawnSiteTests
     [InlineData("var pty = await PtyProvider.SpawnAsync(options, ct);", true)]
     [InlineData("var wrapped = new[] { \"/usr/bin/setpriv\" }; var s = setpriv;", true)]
     [InlineData("var psi = new ProcessStartInfo(\"git\");", false)]
-    [InlineData("await host.StartCommandAsync(new RunCommand(psi));", false)]
+    [InlineData("await host.StartCommandAsync(RunCommand.Routed(psi));", false)]
     public void The_scan_tells_a_spawn_from_a_description_of_one(string statement, bool spawn)
         => Assert.Equal(spawn, SpawnSite.IsMatch(Redact(statement)));
 

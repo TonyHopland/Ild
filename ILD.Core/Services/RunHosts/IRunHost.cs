@@ -63,6 +63,9 @@ public interface IRunHost
     /// <summary>The length of the regular file at <paramref name="path"/>; null when there is none.</summary>
     Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default);
 
+    /// <summary>The file at <paramref name="path"/> opened for reading, as the orchestrator would open it; null when there is no such file. For files the orchestrator wrote or owns, such as a worktree's <c>ild.config.json</c>.</summary>
+    Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default);
+
     /// <summary>Stream <paramref name="count"/> bytes of the file from <paramref name="offset"/> to <paramref name="consume"/>.</summary>
     Task ReadFileRangeAsync(string path, long offset, long count, Func<Stream, Task> consume);
 
@@ -127,18 +130,36 @@ public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string
 /// <see cref="Environment"/> set over what <see cref="Start"/> carries; any other command is started as
 /// the caller built it. <see cref="OwnerId"/> is the run or chat it belongs to, for <see cref="IRunHost.KillAllAsync"/>.
 /// </summary>
-public sealed record RunCommand(
-    ProcessStartInfo Start,
-    Guid OwnerId = default,
-    bool AsAgent = false,
-    Guid? ProviderId = null,
-    NetworkMode NetworkMode = NetworkMode.Off,
-    IReadOnlyDictionary<string, string>? Environment = null)
+public sealed record RunCommand
 {
-    /// <summary>An agent CLI launch.</summary>
+    private RunCommand(ProcessStartInfo start, Guid ownerId, bool asAgent, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment)
+    {
+        Start = start;
+        OwnerId = ownerId;
+        AsAgent = asAgent;
+        ProviderId = providerId;
+        NetworkMode = networkMode;
+        Environment = environment;
+    }
+
+    public ProcessStartInfo Start { get; }
+    public Guid OwnerId { get; }
+    public bool AsAgent { get; }
+    public Guid? ProviderId { get; }
+    public NetworkMode NetworkMode { get; }
+    public IReadOnlyDictionary<string, string>? Environment { get; }
+
+    /// <summary>An agent CLI launch: the host crosses it to the agent.</summary>
     public static RunCommand Agent(
         ProcessStartInfo start, Guid ownerId, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment)
-        => new(start, ownerId, AsAgent: true, providerId, networkMode, environment);
+        => new(start, ownerId, asAgent: true, providerId, networkMode, environment);
+
+    /// <summary>
+    /// A command the caller has already crossed to the agent with <c>AgentIsolation.Route</c> (a Cmd node, a preview, a git
+    /// command in a chat clone). The host refuses to start one that is not, when agent isolation is on (ADR-0014).
+    /// </summary>
+    public static RunCommand Routed(ProcessStartInfo routed, Guid ownerId = default)
+        => new(routed, ownerId, asAgent: false, providerId: null, NetworkMode.Off, environment: null);
 }
 
 /// <summary>The outcome of a command that moved code.</summary>

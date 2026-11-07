@@ -69,6 +69,10 @@ public sealed class LocalRunHost : IRunHost
     public Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
         var psi = command.AsAgent ? RouteAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : command.Start;
+        // A command its caller says it routed is checked to be: a builder that lost its route would otherwise
+        // start as the orchestrator, with its secrets and capabilities (ADR-0014).
+        if (AgentIsolation.AgentUser is not null && !AgentIsolation.IsRouted(psi))
+            throw new InvalidOperationException($"refusing to start '{psi.FileName}' as the orchestrator: agent uid isolation is on and the command was not routed to the agent (ADR-0014)");
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null");
         var tracked = new LocalRunProcess(process, Forget(command.OwnerId));
         if (command.OwnerId != Guid.Empty)
@@ -175,6 +179,9 @@ public sealed class LocalRunHost : IRunHost
         => _runner ?? throw new InvalidOperationException("this run host was built without a process runner, so it cannot move bundles");
 
     // -- Files -------------------------------------------------------------------
+
+    public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default)
+        => Task.FromResult<Stream?>(File.Exists(path) ? File.OpenRead(path) : null);
 
     public Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default)
         => AgentWritableFiles.GetFileLengthAsync(path, ct);
