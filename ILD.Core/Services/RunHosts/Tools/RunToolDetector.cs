@@ -19,7 +19,7 @@ public sealed record RunToolPlan(IReadOnlyList<RunTool> Tools, IReadOnlyList<str
 /// <item><c>ild.config.json</c>'s <c>run.tools</c> names tools outright, and wins over anything found for the same
 /// tool; <c>run.detect: false</c> turns finding off, so those are all the run gets.</item>
 /// <item>A project that pins its tools for mise (<c>mise.toml</c>, <c>.mise.toml</c>, <c>.tool-versions</c>) gets those.</item>
-/// <item>Otherwise each toolchain whose marker file is at the top of the repository, or one folder down, with the
+/// <item>Otherwise each toolchain whose marker file is at the top of the repository, or one or two folders down, with the
 /// version its own version file pins: <c>package.json</c> and <c>.nvmrc</c>, <c>global.json</c> or a project's target
 /// framework, <c>.python-version</c>, <c>go.mod</c>, <c>rust-toolchain.toml</c>.</item>
 /// </list>
@@ -139,14 +139,11 @@ public static partial class RunToolDetector
 
     private static IEnumerable<(RunTool Tool, string Reason)> FromMarkers(string root)
     {
+        // The top, then each folder one and two down (src/App/App.csproj, packages/web/package.json), nearest first.
+        var children = Subfolders(root);
         var folders = new List<string> { root };
-        try
-        {
-            folders.AddRange(Directory.EnumerateDirectories(root)
-                .Where(d => !Path.GetFileName(d).StartsWith('.') && !SkippedFolders.Contains(Path.GetFileName(d), StringComparer.OrdinalIgnoreCase))
-                .OrderBy(d => d, StringComparer.Ordinal));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        folders.AddRange(children);
+        folders.AddRange(children.SelectMany(Subfolders));
 
         string? First(params string[] patterns)
         {
@@ -215,7 +212,7 @@ public static partial class RunToolDetector
 
     /// <summary>
     /// .NET: <c>global.json</c>'s SDK version when there is one, else the newest major of the target frameworks the
-    /// projects name (<c>net10.0</c> → 10), for a solution or project file at the top or one folder down.
+    /// projects name (<c>net10.0</c> → 10), for a solution or project file at the top or one or two folders down.
     /// </summary>
     private static (RunTool Tool, string Reason)? DotnetFor(string root, IReadOnlyList<string> folders)
     {
@@ -272,6 +269,21 @@ public static partial class RunToolDetector
     }
 
     // -- Files -------------------------------------------------------------------
+
+    private static List<string> Subfolders(string folder)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(folder)
+                .Where(d => !Path.GetFileName(d).StartsWith('.') && !SkippedFolders.Contains(Path.GetFileName(d), StringComparer.OrdinalIgnoreCase))
+                .OrderBy(d => d, StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
 
     private static IEnumerable<string> SafeFiles(string folder, string pattern)
     {

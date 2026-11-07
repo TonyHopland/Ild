@@ -73,7 +73,7 @@ public sealed class ConfigTools
         "services[].publicUrl": "Optional. Override for the advertised public URL; may use ${PUBLIC_HOST} and ${PORT}.",
         "services[].rewriteHost": "Optional, default true. When ILD serves previews on wildcard subdomains, it replaces the Host header with the loopback address it forwards to, so host-checking dev servers (Vite, webpack-dev-server, Rails, Django) accept the request. Set false only for a service that must see the browser-facing hostname, and add the preview wildcard to that service's own allowed-hosts list instead.",
         "services[].env": "Optional. Environment variables for the service; values may use any template token.",
-        "run": "Optional. The toolchains a loop run gets when ILD runs it in a container or pod of its own. Without it ILD finds them: a project's mise.toml or .tool-versions, else package.json (+ .nvmrc), a .NET solution or project (+ global.json), pyproject.toml (+ .python-version), go.mod, Cargo.toml, pom.xml, at the top of the repository or one folder down.",
+        "run": "Optional. The toolchains a loop run gets when ILD runs it in a container or pod of its own. Without it ILD finds them: a project's mise.toml or .tool-versions, else package.json (+ .nvmrc), a .NET solution or project (+ global.json), pyproject.toml (+ .python-version), go.mod, Cargo.toml, pom.xml, at the top of the repository or one or two folders down.",
         "run.tools": "Optional. Toolchains as mise names them, a list ([\"node@22\", \"dotnet@10\", \"pnpm@9\"]) or a map ({\"node\": \"22\"}). Each wins over what was found for the same tool.",
         "run.detect": "Optional, default true. false: the run gets only run.tools."
       },

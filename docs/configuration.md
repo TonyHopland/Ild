@@ -103,7 +103,7 @@ Under `container` and `kubernetes`, a run's image has no language toolchain and 
 - **What a run needs** is read from ILD's checkout of the base branch, in this order:
   1. `run.tools` in [`ild.config.json`](#ildconfigjson)
   2. the project's `mise.toml` or `.tool-versions`
-  3. marker files at the top of the repository or one folder down:
+  3. marker files at the top of the repository or one or two folders down:
 
 | Marker | Toolchain | Version from |
 | --- | --- | --- |

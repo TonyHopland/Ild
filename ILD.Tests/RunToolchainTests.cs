@@ -58,6 +58,14 @@ public sealed class RunToolchainTests : IDisposable
     }
 
     [Fact]
+    public void A_project_two_folders_down_is_found_and_three_down_is_not()
+    {
+        Write("src/App/App.csproj", "<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+        Write("a/b/c/go.mod", "go 1.22");
+        Assert.Equal(["dotnet@10"], Detected());
+    }
+
+    [Fact]
     public void Global_json_pins_the_dotnet_sdk()
     {
         Write("App.csproj", "<Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
