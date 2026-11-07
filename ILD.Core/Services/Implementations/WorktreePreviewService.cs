@@ -453,6 +453,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                     row.Status = "starting";
                     row.HealthUrl = healthUrl;
                     row.PublicUrl = publicUrl;
+                    row.LocalUrl = ComposeLocalUrl(port);
                     row.LogFilePath = process.LogFilePath;
                     row.ProcessId = process.Process.Id;
                 });
@@ -1633,6 +1634,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             SuggestedPort = process.Service.SuggestedPort,
             HealthUrl = healthUrl,
             PublicUrl = publicUrl,
+            LocalUrl = ComposeLocalUrl(port),
             LogFilePath = process.LogFilePath,
             ProcessId = process.Process.Id,
             ExitCode = process.Process.HasExited ? process.Process.ExitCode : null,
@@ -1659,6 +1661,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         => ComposePublicUrl(
             ResolveOptionalTemplate(service.PublicUrl, runtime, service.Port),
             _proxyBase, runtime.WorkItemId, service.Name, runtime.PublicHost, port, singlePublicService);
+
+    /// <summary>The loopback address of a service's allocated port; null without one.</summary>
+    internal static string? ComposeLocalUrl(int? port)
+        => port is int allocated ? $"http://127.0.0.1:{allocated}" : null;
 
     /// <summary>The precedence of <see cref="BuildPublicUrl"/> over values already resolved.</summary>
     internal static string? ComposePublicUrl(
@@ -1782,6 +1788,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             row.Status = "stopped";
             row.HealthUrl = null;
             row.PublicUrl = null;
+            row.LocalUrl = null;
         }
     }
 
@@ -2443,6 +2450,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 SuggestedPort = row.SuggestedPort,
                 HealthUrl = row.HealthUrl,
                 PublicUrl = row.PublicUrl,
+                LocalUrl = row.LocalUrl,
                 LogFilePath = row.LogFilePath,
                 ProcessId = row.ProcessId,
                 ExitCode = row.ExitCode,

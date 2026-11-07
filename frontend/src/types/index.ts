@@ -295,6 +295,10 @@ export interface WorktreePreviewService {
   suggestedPort: number | null;
   healthUrl: string | null;
   publicUrl: string | null;
+  /** http://127.0.0.1:<port>, the address that works from inside the run. */
+  localUrl?: string | null;
+  /** The address the calling agent can open; set only on the agent API. */
+  agentUrl?: string | null;
   logFilePath: string | null;
   processId: number | null;
   exitCode: number | null;

@@ -180,4 +180,19 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
         listener.Stop();
         return port;
     }
+
+    [Fact]
+    public void The_local_url_is_the_loopback_address_of_the_allocated_port()
+        => Assert.Equal("http://127.0.0.1:5173", WorktreePreviewService.ComposeLocalUrl(5173));
+
+    [Fact]
+    public void Without_an_allocated_port_there_is_no_local_url()
+        => Assert.Null(WorktreePreviewService.ComposeLocalUrl(null));
+
+    [Fact]
+    public void The_local_url_stays_on_loopback_when_the_public_url_uses_the_proxy()
+    {
+        Assert.Equal("http://wi-7.ild.example:8080", PublicUrl("http://ild.example:8080"));
+        Assert.Equal("http://127.0.0.1:5173", WorktreePreviewService.ComposeLocalUrl(5173));
+    }
 }

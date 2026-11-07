@@ -407,6 +407,49 @@ public class AgentController : ControllerBase
             await cloner.CloneAsync(chatSessionId, repositoryId, request?.Branch, cancellationToken));
     }
 
+    /// <summary>
+    /// Fills <see cref="WorktreePreviewServiceResponse.AgentUrl"/> with the address
+    /// that works where the caller runs. A run on this work item shares the preview's
+    /// network namespace, so it gets the loopback address (a browser there resolves
+    /// <c>*.localhost</c> to itself, not to ILD); a chat, or a run on another work
+    /// item, gets the public one. Works on a copy: the service hands out a shared snapshot.
+    /// </summary>
+    private async Task<WorktreePreviewResponse> ForCallerAsync(string workItemId, WorktreePreviewResponse response)
+    {
+        var runId = CallerRunId();
+        var ownRun = runId is Guid id
+            && await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == id && r.WorkItemId == workItemId);
+
+        return new WorktreePreviewResponse
+        {
+            Configured = response.Configured,
+            State = response.State,
+            WorktreePath = response.WorktreePath,
+            ConfigPath = response.ConfigPath,
+            ProfileName = response.ProfileName,
+            PublicHost = response.PublicHost,
+            StateDirectory = response.StateDirectory,
+            Message = response.Message,
+            Install = response.Install,
+            Services = response.Services.Select(s => new WorktreePreviewServiceResponse
+            {
+                Name = s.Name,
+                PortAlias = s.PortAlias,
+                Status = s.Status,
+                Port = s.Port,
+                SuggestedPort = s.SuggestedPort,
+                HealthUrl = s.HealthUrl,
+                PublicUrl = s.PublicUrl,
+                LocalUrl = s.LocalUrl,
+                AgentUrl = ownRun ? s.LocalUrl ?? s.PublicUrl : s.PublicUrl,
+                LogFilePath = s.LogFilePath,
+                ProcessId = s.ProcessId,
+                ExitCode = s.ExitCode,
+                Error = s.Error,
+            }).ToList(),
+        };
+    }
+
     // -- Worktree preview controls (ADR-0011) ----------------------------------
     //
     // These mirror the human WorkItemsController preview surface so the chat agent
@@ -422,7 +465,7 @@ public class AgentController : ControllerBase
         if (error != null) return error;
         try
         {
-            return Ok(await _preview.GetStatusAsync(workItem!.WorktreePath!));
+            return Ok(await ForCallerAsync(id, await _preview.GetStatusAsync(workItem!.WorktreePath!)));
         }
         catch (InvalidOperationException ex)
         {
@@ -442,7 +485,7 @@ public class AgentController : ControllerBase
                 ? await _preview.BeginStartAsync(workItem!.WorktreePath!, options)
                 : await _preview.StartAsync(workItem!.WorktreePath!, options);
             await _notifier.PreviewStateChangedAsync(id);
-            return Ok(response);
+            return Ok(await ForCallerAsync(id, response));
         }
         catch (InvalidOperationException ex)
         {
@@ -459,7 +502,7 @@ public class AgentController : ControllerBase
         {
             var response = await _preview.StopAsync(workItem!.WorktreePath!);
             await _notifier.PreviewStateChangedAsync(id);
-            return Ok(response);
+            return Ok(await ForCallerAsync(id, response));
         }
         catch (InvalidOperationException ex)
         {
@@ -482,7 +525,7 @@ public class AgentController : ControllerBase
                 service,
                 await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
             await _notifier.PreviewStateChangedAsync(id);
-            return Ok(response);
+            return Ok(await ForCallerAsync(id, response));
         }
         catch (InvalidOperationException ex)
         {
@@ -502,7 +545,7 @@ public class AgentController : ControllerBase
         {
             var response = await _preview.StopServiceAsync(workItem!.WorktreePath!, service);
             await _notifier.PreviewStateChangedAsync(id);
-            return Ok(response);
+            return Ok(await ForCallerAsync(id, response));
         }
         catch (InvalidOperationException ex)
         {
