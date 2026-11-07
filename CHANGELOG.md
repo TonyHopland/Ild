@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **On Kubernetes, `ild-runner` is now the slim image, with no toolchains or coding agents of its own.** If you use it without `ILD_K8S_TOOLS_CLAIM`, runs get only what that image holds; set the claim, or switch `ILD_K8S_RUNNER_IMAGE` to `ild-runner-full` and set `ILD_RUN_TOOLCHAINS=off`.
 - **Coding agents no longer hold your Claude, Codex, Copilot or API credentials**; Claude subscriptions now use a long-lived token that the provider terminal creates once.
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
 

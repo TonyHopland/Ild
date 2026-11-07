@@ -87,7 +87,8 @@ jobs:
   # (never push) to close that gap.
   #
   # Only the batteries-included amd64 image, because it is the shipped artifact
-  # and it also catches the indirect breakages -- it COPYs each .csproj by name
+  # (the runner targets have their own job below) and it also catches the
+  # indirect breakages -- it COPYs each .csproj by name
   # and runs the pnpm install, so a new project or a lockfile change fails here
   # without anyone having touched the Dockerfile. The runtime-only base, the
   # WorkItem Server image, and arm64 can only break when Docker-related files
@@ -117,10 +118,47 @@ jobs:
           cache-from: type=gha,scope=ci-ild
           cache-to: type=gha,mode=max,scope=ci-ild
 
+  # The runner and runner-full stages are otherwise built only by publish.yml on
+  # a release tag, so a break in the mise apt repository, the self-contained MCP
+  # server publish or the Chrome download would surface only there. Build-only,
+  # amd64; arm64 stays release-only. Reads the ild scope for the shared stages
+  # but writes its own, so it never overwrites ci-ild.
+  runner-image-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: runner
+            build-args: ""
+          - target: runner-full
+            build-args: |
+              WITH_NODE=1
+              WITH_DOTNET_SDK=1
+              WITH_CHROME=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.target }} (amd64, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: false
+          build-args: ${{ matrix.build-args }}
+          cache-from: |
+            type=gha,scope=ci-ild
+            type=gha,scope=ci-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.target }}
+
   # Publish to GHCR only on a release tag, after the build is green. Merges to
   # main build and test but never publish.
   publish:
-    needs: [scripts, frontend, backend, image-build]
+    needs: [scripts, frontend, backend, image-build, runner-image-build]
     if: github.ref_type == 'tag'
     permissions:
       contents: read

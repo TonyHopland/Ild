@@ -18,6 +18,7 @@ namespace ILD.Tests;
 /// git bundle, and its git commands run in the clone, which is what sends them to the container. The container is a
 /// <see cref="FakeRunHost"/> here that answers git as a clone being made would; the base clone and the remote are real.
 /// </summary>
+[Collection(GitBundleScratchCollection.Name)]
 public sealed class ChatContainerCloneTests : IDisposable
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("ild-chat-container-clone-").FullName;
