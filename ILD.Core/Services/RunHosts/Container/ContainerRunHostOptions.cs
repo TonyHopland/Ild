@@ -15,6 +15,7 @@ public sealed record ContainerRunHostOptions
     public const string SweepIntervalSetting = "ILD_CONTAINER_SWEEP_INTERVAL_MINUTES";
     public const string ReadyTimeoutSetting = "ILD_CONTAINER_READY_TIMEOUT_SECONDS";
     public const string EgressProxyPortSetting = "ILD_NETWORK_PROXY_PORT";
+    public const string ToolsVolumeSetting = "ILD_CONTAINER_TOOLS_VOLUME";
 
     private static readonly string[] GitIdentitySettings = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 
@@ -46,6 +47,12 @@ public sealed record ContainerRunHostOptions
 
     /// <summary>ILD's address as the run reaches it (<c>ILD_API_URL</c>): a host name the run's container is given the address of ILD for.</summary>
     public string IldUrl { get; init; } = string.Empty;
+
+    /// <summary>Whether runs get toolchains and agents from the store (<see cref="RunHostOptions.ToolchainsSetting"/>).</summary>
+    public bool Toolchains { get; init; } = true;
+
+    /// <summary>The named volume that holds the toolchain store, shared by every run and ILD on the engine.</summary>
+    public string ToolsVolume { get; init; } = "ild-tools";
 
     /// <summary>The host name in <see cref="IldUrl"/>.</summary>
     public string IldHost => new Uri(IldUrl).Host;
@@ -84,6 +91,8 @@ public sealed record ContainerRunHostOptions
             ReadyTimeout = TimeSpan.FromSeconds(PositiveInt(Value(ReadyTimeoutSetting), ReadyTimeoutSetting) ?? 120),
             GitIdentity = GitIdentitySettings.Select(name => (name, value: Value(name))).Where(e => e.value is not null).ToDictionary(e => e.name, e => e.value!),
             IldUrl = ildUrl,
+            Toolchains = RunHostOptions.ToolchainsOn(Value(RunHostOptions.ToolchainsSetting)),
+            ToolsVolume = Value(ToolsVolumeSetting) ?? defaults.ToolsVolume,
         };
     }
 

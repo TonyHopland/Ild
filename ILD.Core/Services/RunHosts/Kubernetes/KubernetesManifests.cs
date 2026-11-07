@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Tools;
 using k8s.Models;
 
 namespace ILD.Core.Services.RunHosts.Kubernetes;
@@ -12,6 +13,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     private const string WorkVolume = "work";
     private const string StateVolume = "state";
     private const string RunnerContainer = "runner";
+    private const string ToolsVolume = "tools";
 
     private IDictionary<string, string> Labels(Guid ownerId) => new Dictionary<string, string>
     {
@@ -107,7 +109,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         };
     }
 
-    public V1Pod Pod(Guid ownerId, V1OwnerReference owner)
+    public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null)
     {
         var root = KubernetesNames.RunRoot(ownerId);
         return new V1Pod
@@ -152,7 +154,12 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         Image = options.RunnerImage,
                         Command = ["/usr/bin/tini", "--", "sleep", "infinity"],
                         WorkingDir = root,
-                        Env = [new V1EnvVar { Name = "HOME", Value = KubernetesNames.HomeDirectory(ownerId) }, .. options.GitIdentity.Select(e => new V1EnvVar { Name = e.Key, Value = e.Value })],
+                        Env =
+                        [
+                            new V1EnvVar { Name = "HOME", Value = KubernetesNames.HomeDirectory(ownerId) },
+                            .. options.GitIdentity.Select(e => new V1EnvVar { Name = e.Key, Value = e.Value }),
+                            .. (tools?.For(KubernetesNames.HomeDirectory(ownerId)) ?? []).Select(EnvVar),
+                        ],
                         SecurityContext = new V1SecurityContext
                         {
                             AllowPrivilegeEscalation = false,
@@ -167,6 +174,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         [
                             new V1VolumeMount { Name = WorkVolume, MountPath = root },
                             new V1VolumeMount { Name = StateVolume, MountPath = KubernetesNames.StateDirectory },
+                            .. (tools is { Path.Count: > 0 } && options.ToolsClaim is not null
+                                ? [new V1VolumeMount { Name = ToolsVolume, MountPath = RunToolStore.Root, ReadOnlyProperty = true }]
+                                : Array.Empty<V1VolumeMount>()),
                         ],
                     },
                 ],
@@ -174,8 +184,69 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 [
                     new V1Volume { Name = WorkVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = KubernetesNames.ObjectName(ownerId) } },
                     new V1Volume { Name = StateVolume, EmptyDir = new V1EmptyDirVolumeSource { Medium = "Memory", SizeLimit = new ResourceQuantity("64Mi") } },
+                    .. (tools is { Path.Count: > 0 } && options.ToolsClaim is { } claim
+                        ? [new V1Volume { Name = ToolsVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = claim, ReadOnlyProperty = true } }]
+                        : Array.Empty<V1Volume>()),
                 ],
             },
         };
+    }
+
+    /// <summary>
+    /// A short-lived pod of the runner image with the store's claim mounted writable, which ILD runs the store's install
+    /// script in. It carries no run label: no run's NetworkPolicy selects it, so it can download, and the sweep never
+    /// takes it for a run's.
+    /// </summary>
+    public V1Pod ToolsInstaller(string name) => new()
+    {
+        Metadata = new V1ObjectMeta
+        {
+            Name = name,
+            NamespaceProperty = namespaceName,
+            Labels = new Dictionary<string, string>
+            {
+                [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
+                [KubernetesNames.InstanceLabel] = options.Instance,
+                ["ild/role"] = "tools",
+            },
+        },
+        Spec = new V1PodSpec
+        {
+            AutomountServiceAccountToken = false,
+            EnableServiceLinks = false,
+            RestartPolicy = "Never",
+            TerminationGracePeriodSeconds = 0,
+            SecurityContext = new V1PodSecurityContext
+            {
+                RunAsNonRoot = true,
+                RunAsUser = RunnerUid,
+                RunAsGroup = RunnerUid,
+                FsGroup = RunnerUid,
+                SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" },
+            },
+            Containers =
+            [
+                new V1Container
+                {
+                    Name = RunnerContainer,
+                    Image = options.RunnerImage,
+                    Command = ["/usr/bin/tini", "--", "sleep", "infinity"],
+                    Env = [.. RunToolStore.InstallerEnvironment.Select(EnvVar)],
+                    SecurityContext = new V1SecurityContext
+                    {
+                        AllowPrivilegeEscalation = false,
+                        Capabilities = new V1Capabilities { Drop = ["ALL"] },
+                    },
+                    VolumeMounts = [new V1VolumeMount { Name = ToolsVolume, MountPath = RunToolStore.Root }],
+                },
+            ],
+            Volumes = [new V1Volume { Name = ToolsVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = options.ToolsClaim } }],
+        },
+    };
+
+    private static V1EnvVar EnvVar(string assignment)
+    {
+        var split = assignment.IndexOf('=');
+        return new V1EnvVar { Name = assignment[..split], Value = assignment[(split + 1)..] };
     }
 }

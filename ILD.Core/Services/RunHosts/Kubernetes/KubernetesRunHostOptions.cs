@@ -19,6 +19,7 @@ public sealed record KubernetesRunHostOptions
     public const string SweepIntervalSetting = "ILD_K8S_SWEEP_INTERVAL_MINUTES";
     public const string ReadyTimeoutSetting = "ILD_K8S_READY_TIMEOUT_SECONDS";
     public const string KubeconfigSetting = "ILD_K8S_KUBECONFIG";
+    public const string ToolsClaimSetting = "ILD_K8S_TOOLS_CLAIM";
 
     private static readonly string[] GitIdentitySettings = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 
@@ -61,6 +62,18 @@ public sealed record KubernetesRunHostOptions
     /// <summary>ILD's address as the run's pods reach it (<c>ILD_API_URL</c>): ILD's Service, never a loopback address.</summary>
     public string IldUrl { get; init; } = string.Empty;
 
+    /// <summary>Whether runs get toolchains and agents from the store (<see cref="RunHostOptions.ToolchainsSetting"/>).</summary>
+    public bool Toolchains { get; init; } = true;
+
+    /// <summary>
+    /// The ReadWriteMany claim, in the run namespace, that holds the toolchain store; null when there is none, and runs
+    /// then have only what the runner image has.
+    /// </summary>
+    public string? ToolsClaim { get; init; }
+
+    /// <summary>Whether runs mount the store: toolchains on and a claim to hold it.</summary>
+    public bool UsesToolStore => Toolchains && ToolsClaim is not null;
+
     public static KubernetesRunHostOptions From(Func<string, string?> setting)
     {
         string? Value(string name) => string.IsNullOrWhiteSpace(setting(name)) ? null : setting(name)!.Trim();
@@ -93,6 +106,8 @@ public sealed record KubernetesRunHostOptions
             GitIdentity = GitIdentitySettings.Select(name => (name, value: Value(name))).Where(e => e.value is not null).ToDictionary(e => e.name, e => e.value!),
             Kubeconfig = Value(KubeconfigSetting),
             IldUrl = ildUrl,
+            Toolchains = RunHostOptions.ToolchainsOn(Value(RunHostOptions.ToolchainsSetting)),
+            ToolsClaim = Value(ToolsClaimSetting),
         };
     }
 

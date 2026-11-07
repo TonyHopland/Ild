@@ -13,6 +13,25 @@ public static class RunHostOptions
 
     public const string MemoryLimitSetting = "ILD_RUN_MEMORY_LIMIT";
 
+    /// <summary>
+    /// Whether runs get their toolchains and agents from the shared store (<c>on</c>, the default) or only what the
+    /// runner image has (<c>off</c>, for a full runner image).
+    /// </summary>
+    public const string ToolchainsSetting = "ILD_RUN_TOOLCHAINS";
+
+    /// <summary><see cref="ToolchainsSetting"/>: on when unset.</summary>
+    /// <exception cref="InvalidOperationException">The value is neither on nor off.</exception>
+    public static bool ToolchainsOn(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "on" or "true" or "1" => true,
+            "off" or "false" or "0" => false,
+            _ => throw new InvalidOperationException($"{ToolchainsSetting} is '{value}'; it must be on or off."),
+        };
+    }
+
     /// <summary>The backend <paramref name="value"/> names; <see cref="RunHostKind.Local"/> when it is unset or blank.</summary>
     /// <exception cref="InvalidOperationException">The value is none of the three.</exception>
     public static RunHostKind Parse(string? value)

@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.RunHosts.Kubernetes;
+using ILD.Core.Services.RunHosts.Tools;
 using ILD.Data.Enums;
 using ILD.Tests.Fakes;
 using k8s.Models;
@@ -34,30 +36,32 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         if (Directory.Exists(_scratch)) Directory.Delete(_scratch, recursive: true);
     }
 
-    private static KubernetesRunHostOptions Options(string instance = Instance) => KubernetesRunHostOptions.From(name => name switch
+    private static KubernetesRunHostOptions Options(string instance = Instance, string? toolsClaim = null) => KubernetesRunHostOptions.From(name => name switch
     {
         "ILD_API_URL" => "http://ild.example:8080",
         "ILD_K8S_RUNNER_IMAGE" => "registry.example/ild-runner:1",
         "ILD_K8S_INSTANCE" => instance,
         "ILD_K8S_STORAGE_CLASS" => "run-scratch",
+        "ILD_K8S_TOOLS_CLAIM" => toolsClaim,
         "ILD_NETWORK_PROXY_PORT" => "3128",
         "GIT_AUTHOR_NAME" => "Ada",
         _ => null,
     }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
-    private KubernetesRunHost NewHost(KubernetesRunHostOptions options)
-        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10) };
+    private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null)
+        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [] };
 
     private string WorkingDirectory => KubernetesNames.WorkingDirectory(_run);
 
     private static string Name(Guid run) => KubernetesNames.ObjectName(run);
 
-    private string MakeBaseRepository()
+    private string MakeBaseRepository(params (string Path, string Content)[] files)
     {
         var path = Path.Combine(_scratch, "base");
         Directory.CreateDirectory(path);
         Git(path, "init", "-q", "-b", "main");
         File.WriteAllText(Path.Combine(path, "a.txt"), "a");
+        foreach (var (file, content) in files) File.WriteAllText(Path.Combine(path, file), content);
         Git(path, "add", "-A");
         Git(path, "-c", "user.email=t@example.test", "-c", "user.name=T", "commit", "-q", "-m", "first");
         Git(path, "remote", "add", "origin", "https://user:secret@forge.example/acme/app.git");
@@ -245,6 +249,62 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Contains("fatal: bad bundle", ex.Message);
         Assert.Empty(_api.Names("pods"));
         Assert.Empty(_api.Names("secrets"));
+    }
+
+    // -- Toolchains --------------------------------------------------------------
+
+    [Fact]
+    public async Task With_a_tools_claim_the_store_is_filled_by_an_installer_pod_and_mounted_read_only_in_the_run()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
+        var installs = new List<(string Pod, IReadOnlyList<string> Command)>();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Pod.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                lock (installs) installs.Add((e.Pod, e.Command));
+                var installer = _api.Get<V1Pod>("pods", e.Pod)!;
+                Assert.Equal("ild-tools", installer.Spec.Volumes.Single().PersistentVolumeClaim.ClaimName);
+                Assert.Null(installer.Spec.Volumes.Single().PersistentVolumeClaim.ReadOnlyProperty);
+                Assert.False(installer.Metadata.Labels.ContainsKey(KubernetesNames.RunLabel));
+                await e.WriteStdoutAsync("""
+                    {"kind":"tool","spec":"node@24","version":"24.11.0","path":["/opt/ild-tools/mise/installs/node/24.11.0/bin"],"env":{}}
+                    {"kind":"agent","key":"pi","version":"1.5.0","path":["/opt/ild-tools/agents/pi/1.5.0/wrap"]}
+
+                    """);
+            }
+            await e.ExitAsync(0);
+        };
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+
+        var (pod, command) = Assert.Single(installs);
+        Assert.Equal(["agentnode=node@24", "tool=node@24", "agent=pi|@earendil-works/pi-coding-agent|1.5.0|pi"], command.TakeLast(3));
+        Assert.Contains($"pods/{pod}", _api.Deleted);
+
+        var run = _api.Get<V1Pod>("pods", Name(_run))!;
+        var claim = run.Spec.Volumes.Single(v => v.PersistentVolumeClaim?.ClaimName == "ild-tools");
+        Assert.True(claim.PersistentVolumeClaim.ReadOnlyProperty);
+        var mount = run.Spec.Containers.Single().VolumeMounts.Single(m => m.Name == claim.Name);
+        Assert.Equal(RunToolStore.Root, mount.MountPath);
+        Assert.True(mount.ReadOnlyProperty);
+        var path = run.Spec.Containers.Single().Env.Single(e => e.Name == "PATH").Value;
+        Assert.StartsWith("/opt/ild-tools/mise/installs/node/24.11.0/bin:/opt/ild-tools/agents/pi/1.5.0/wrap:", path);
+    }
+
+    [Fact]
+    public async Task Without_a_tools_claim_a_run_has_only_its_image_and_the_startup_check_says_so()
+    {
+        var host = NewHost(Options(), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+        await host.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(_api.Created, c => c.StartsWith("pods/ild-tools-", StringComparison.Ordinal));
+        var run = _api.Get<V1Pod>("pods", Name(_run))!;
+        Assert.DoesNotContain(run.Spec.Containers.Single().Env, e => e.Name == "PATH");
+        Assert.Contains(_log.Warnings, w => w.Contains("ILD_K8S_TOOLS_CLAIM"));
     }
 
     // -- Exec --------------------------------------------------------------------

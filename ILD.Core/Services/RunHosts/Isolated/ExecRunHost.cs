@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts.Tools;
 using Microsoft.Extensions.Logging;
 using Porta.Pty;
 
@@ -103,10 +104,33 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     public abstract Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default);
 
+    // The run's home, with the .local/bin npm install -g writes to. When the run's Node has corepack, its shims go there
+    // too, so pnpm and yarn are the versions a project's packageManager pins. A Node without corepack is no failure.
+    private const string HomeScript = """
+        mkdir -p -- "$1/.local/bin" || exit 1
+        if command -v corepack >/dev/null 2>&1; then corepack enable --install-directory "$1/.local/bin" >/dev/null 2>&1 || true; fi
+        """;
+
+    /// <summary>
+    /// Install the toolchains and agents a run needs into the shared store through <paramref name="installer"/>, a
+    /// container or pod of the runner image that mounts the store writable, and return what the run's commands get.
+    /// </summary>
+    protected async Task<RunToolEnvironment> InstallToolsAsync(Guid installer, IReadOnlyList<RunTool> tools, IReadOnlyList<RunAgent> agents, CancellationToken ct)
+    {
+        var result = await RunScriptAsync(installer, RunToolStore.InstallScript, RunToolStore.Arguments(tools, agents), ct);
+        if (!result.Success)
+        {
+            var asked = string.Join(", ", tools.Select(t => t.ToString()).Concat(agents.Select(a => $"{a.Agent.Key}@{a.Version}")));
+            var tail = string.Join('\n', result.StdErr.Trim().Split('\n').TakeLast(15));
+            throw new InvalidOperationException($"could not install the run's toolchains ({asked}) in the toolchain store: {tail}");
+        }
+        return RunToolStore.Parse(result.StdOut);
+    }
+
     /// <summary>Make the environment ready to work in: the run's home and the code the base repository has.</summary>
     protected async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
     {
-        var home = await RunScriptAsync(owner, "mkdir -p -- \"$1\"", [RunPaths.HomeDirectory(owner)], ct);
+        var home = await RunScriptAsync(owner, HomeScript, [RunPaths.HomeDirectory(owner)], ct);
         if (!home.Success)
             throw new InvalidOperationException($"could not make the run's home in its {Noun}: {home.StdErr.Trim()}");
         await PopulateAsync(owner, request, RunPaths.WorkingDirectory(owner), ct);
@@ -201,6 +225,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         {
             if (value is null || secrets.Contains(name)) continue;
             if (own.Contains(name) && (string?)own[name] == value) continue;
+            // ILD's directories mean nothing in the run, whose PATH is its toolchains', set when it was made.
+            if (name == "PATH") continue;
             environment[name] = value;
         }
         foreach (var (name, value) in command.Environment ?? new Dictionary<string, string>())

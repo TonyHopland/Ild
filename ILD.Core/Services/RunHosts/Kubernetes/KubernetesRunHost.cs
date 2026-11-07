@@ -2,7 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.RunHosts.Isolated;
+using ILD.Core.Services.RunHosts.Tools;
 using k8s;
 using k8s.Autorest;
 using k8s.Models;
@@ -24,6 +26,11 @@ public sealed class KubernetesRunHost : ExecRunHost
     private readonly KubernetesManifests _manifests;
     private readonly ConcurrentDictionary<Guid, string> _podAddresses = new();
 
+    // What the store gave each set of toolchains and agents asked for, and the pods exec'd into that are not a run's.
+    private readonly ConcurrentDictionary<string, RunToolEnvironment> _tools = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _toolsGate = new(1, 1);
+    private readonly ConcurrentDictionary<Guid, string> _execNames = new();
+
     public KubernetesRunHost(
         IKubernetes client, KubernetesRunHostOptions options, string namespaceName, IProcessRunner runner, ILogger? logger = null)
         : base(runner, logger)
@@ -36,6 +43,9 @@ public sealed class KubernetesRunHost : ExecRunHost
 
     /// <summary>How often a starting pod is looked at.</summary>
     internal TimeSpan ReadyPollInterval { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>The agent CLIs a run gets: those ILD has installed, at their versions. Replaced in tests.</summary>
+    internal Func<IReadOnlyList<RunAgent>> Agents { get; init; } = () => RunAgent.Installed(ManagedAgentInstall.ResolveDataRoot());
 
     public override RunHostKind Kind => RunHostKind.Kubernetes;
 
@@ -58,13 +68,14 @@ public sealed class KubernetesRunHost : ExecRunHost
         if (await IsHealthyAsync(owner, ct))
             return new RunEnvironment(owner, workingDirectory);
 
+        var tools = await ToolsForAsync(request, ct);
         var secret = await CreateOwnerAsync(owner, ct);
         try
         {
             var reference = KubernetesManifests.OwnerReference(secret);
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.Claim(owner, reference), _namespace, cancellationToken: ct));
             await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.Policy(owner, reference), _namespace, cancellationToken: ct));
-            await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.Pod(owner, reference), _namespace, cancellationToken: ct));
+            await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.Pod(owner, reference, tools), _namespace, cancellationToken: ct));
             var pod = await WaitReadyAsync(owner, ct);
             _podAddresses[owner] = pod.Status.PodIP;
 
@@ -156,7 +167,77 @@ public sealed class KubernetesRunHost : ExecRunHost
         return condition?.Message ?? pod.Status?.Reason ?? pod.Status?.Phase ?? "no status";
     }
 
-    public override Task CheckAsync(CancellationToken ct = default) => CheckStorageAsync(ct);
+    public override async Task CheckAsync(CancellationToken ct = default)
+    {
+        await CheckStorageAsync(ct);
+        if (_options.Toolchains && _options.ToolsClaim is null)
+            Logger?.LogWarning(
+                "{Claim} is not set, so runs get no toolchains or agents from the store and have only what the runner image {Image} has. " +
+                "Set it to a ReadWriteMany claim for the store, or run the full runner image (ild-runner-full) with {Toolchains}=off",
+                KubernetesRunHostOptions.ToolsClaimSetting, _options.RunnerImage, RunHostOptions.ToolchainsSetting);
+    }
+
+    // -- Toolchains --------------------------------------------------------------
+
+    /// <summary>
+    /// What the run's commands get from the toolchain store, installed into it first when it lacks them; null when the
+    /// runs mount no store (toolchains off, or no claim to hold it), so the run has only what the runner image has.
+    /// </summary>
+    private async Task<RunToolEnvironment?> ToolsForAsync(RunEnvironmentRequest request, CancellationToken ct)
+    {
+        if (!_options.UsesToolStore) return null;
+
+        var plan = RunToolDetector.Resolve(request.BasePath);
+        var agents = Agents();
+        var key = string.Join('\n', RunToolStore.Arguments(plan.Tools, agents));
+        if (key.Length == 0) return RunToolEnvironment.None;
+        if (_tools.TryGetValue(key, out var known)) return known;
+
+        await _toolsGate.WaitAsync(ct);
+        try
+        {
+            if (_tools.TryGetValue(key, out known)) return known;
+            Logger?.LogInformation("Run {Run} gets {Plan}, and the agents {Agents}, from the toolchain store {Claim}",
+                request.OwnerId, plan, string.Join(", ", agents.Select(a => $"{a.Agent.Key}@{a.Version}")), _options.ToolsClaim);
+
+            var installer = Guid.NewGuid();
+            var name = $"ild-tools-{installer:N}";
+            _execNames[installer] = name;
+            try
+            {
+                await _client.CoreV1.CreateNamespacedPodAsync(_manifests.ToolsInstaller(name), _namespace, cancellationToken: ct);
+                await WaitInstallerReadyAsync(name, ct);
+                var environment = await InstallToolsAsync(installer, plan.Tools, agents, ct);
+                Logger?.LogInformation("Run {Run} has {Installed}", request.OwnerId, string.Join(", ", environment.Installed));
+                return _tools[key] = environment;
+            }
+            finally
+            {
+                _execNames.TryRemove(installer, out _);
+                await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(
+                    name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: CancellationToken.None));
+            }
+        }
+        finally
+        {
+            _toolsGate.Release();
+        }
+    }
+
+    private async Task WaitInstallerReadyAsync(string name, CancellationToken ct)
+    {
+        var started = Stopwatch.StartNew();
+        while (true)
+        {
+            var pod = await _client.CoreV1.ReadNamespacedPodAsync(name, _namespace, cancellationToken: ct);
+            if (IsReady(pod)) return;
+            if (pod.Status?.Phase is "Failed" or "Succeeded")
+                throw new InvalidOperationException($"the toolchain installer {name} ended before it was ready: {WhyNotReady(pod)}");
+            if (started.Elapsed > _options.ReadyTimeout)
+                throw new InvalidOperationException($"the toolchain installer {name} was not ready after {_options.ReadyTimeout.TotalSeconds:0} s: {WhyNotReady(pod)}");
+            await Task.Delay(ReadyPollInterval, ct);
+        }
+    }
 
     // -- Preview -----------------------------------------------------------------
 
@@ -186,7 +267,7 @@ public sealed class KubernetesRunHost : ExecRunHost
     }
 
     protected override async Task<IExecStream> OpenExecStreamAsync(Guid owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
-        => await PodExec.OpenAsync(_client, _namespace, KubernetesNames.ObjectName(owner), command, stdin, tty, ct);
+        => await PodExec.OpenAsync(_client, _namespace, _execNames.TryGetValue(owner, out var other) ? other : KubernetesNames.ObjectName(owner), command, stdin, tty, ct);
 
     // -- Sweep -------------------------------------------------------------------
 

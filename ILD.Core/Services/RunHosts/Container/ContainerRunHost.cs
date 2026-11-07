@@ -4,7 +4,9 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json.Nodes;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.RunHosts.Isolated;
+using ILD.Core.Services.RunHosts.Tools;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.RunHosts.Container;
@@ -27,12 +29,21 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     private string? _warning;
     private bool? _podman;
 
+    // What the store gave each set of toolchains and agents asked for, so a run like one before starts without an installer.
+    private readonly ConcurrentDictionary<string, RunToolEnvironment> _tools = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _toolsGate = new(1, 1);
+    // Containers that are not a run's, exec'd into by an id of their own: the store's installers.
+    private readonly ConcurrentDictionary<Guid, string> _execNames = new();
+
     public ContainerRunHost(ContainerRunHostOptions options, IProcessRunner runner, ILogger? logger = null)
         : base(runner, logger)
     {
         _options = options;
         _api = new DockerApiClient(options.Socket);
     }
+
+    /// <summary>The agent CLIs a run gets: those ILD has installed, at their versions. Replaced in tests.</summary>
+    internal Func<IReadOnlyList<RunAgent>> Agents { get; init; } = () => RunAgent.Installed(ManagedAgentInstall.ResolveDataRoot());
 
     /// <summary>How often a starting container is looked at.</summary>
     internal TimeSpan ReadyPollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
@@ -76,10 +87,11 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         try
         {
             var name = ObjectName(owner);
+            var tools = await ToolsForAsync(request, ct);
             await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
             await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = Labels(owner) }, ct));
             var ild = await IldAddressAsync(owner, ct);
-            await CreateContainerAsync(owner, ild, ct);
+            await CreateContainerAsync(owner, ild, tools, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             _addresses[owner] = await WaitReadyAsync(owner, ct);
 
@@ -171,7 +183,7 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
             ?? throw new InvalidOperationException($"the network of run {owner:N} has no gateway address, so the run cannot reach ILD");
     }
 
-    private async Task CreateContainerAsync(Guid owner, string ildAddress, CancellationToken ct)
+    private async Task CreateContainerAsync(Guid owner, string ildAddress, RunToolEnvironment? tools, CancellationToken ct)
     {
         var name = ObjectName(owner);
         var memory = _options.MemoryBytes ?? 0;
@@ -184,11 +196,16 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
             // The volume's root, which the image gives the runner. An engine makes a missing working directory as root
             // (Podman does), and the runner could then not make the run's own directory in it: the runner makes that.
             WorkingDir = RunPaths.RunsRoot,
-            Env = new[] { $"HOME={RunPaths.HomeDirectory(owner)}" }.Concat(_options.GitIdentity.Select(e => $"{e.Key}={e.Value}")).ToArray(),
+            Env = new[] { $"HOME={RunPaths.HomeDirectory(owner)}" }
+                .Concat(_options.GitIdentity.Select(e => $"{e.Key}={e.Value}"))
+                .Concat(tools?.For(RunPaths.HomeDirectory(owner)) ?? [])
+                .ToArray(),
             Labels = Labels(owner),
             HostConfig = new
             {
-                Binds = new[] { $"{name}:{RunPaths.RunsRoot}:rw" },
+                Binds = tools is { Path.Count: > 0 }
+                    ? [$"{name}:{RunPaths.RunsRoot}:rw", $"{_options.ToolsVolume}:{RunToolStore.Root}:ro"]
+                    : new[] { $"{name}:{RunPaths.RunsRoot}:rw" },
                 Tmpfs = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{await StateOwnerOptionAsync(ct)}" },
                 CapDrop = new[] { "ALL" },
                 SecurityOpt = new[] { "no-new-privileges" },
@@ -211,6 +228,112 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
         {
             throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
+        }
+    }
+
+    // -- Toolchains --------------------------------------------------------------
+
+    private IDictionary<string, string> ToolsLabels() => new Dictionary<string, string>
+    {
+        [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+        ["ild/role"] = "tools",
+    };
+
+    /// <summary>
+    /// What the run's commands get from the toolchain store: the toolchains its repository needs and the agents ILD has
+    /// installed, installed into the store first when it lacks them. Null when toolchains are off, so the run has only
+    /// what the runner image has.
+    /// </summary>
+    private async Task<RunToolEnvironment?> ToolsForAsync(RunEnvironmentRequest request, CancellationToken ct)
+    {
+        if (!_options.Toolchains) return null;
+
+        var plan = RunToolDetector.Resolve(request.BasePath);
+        var agents = Agents();
+        var key = string.Join('\n', RunToolStore.Arguments(plan.Tools, agents));
+        // Nothing to give: the run does not mount the store, but still gets its home's .local/bin and npm prefix.
+        if (key.Length == 0) return RunToolEnvironment.None;
+        if (_tools.TryGetValue(key, out var known)) return known;
+
+        await _toolsGate.WaitAsync(ct);
+        try
+        {
+            if (_tools.TryGetValue(key, out known)) return known;
+            await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = _options.ToolsVolume, Labels = ToolsLabels() }, ct));
+
+            Logger?.LogInformation("Run {Run} gets {Plan}, and the agents {Agents}, from the toolchain store {Volume}",
+                request.OwnerId, plan, string.Join(", ", agents.Select(a => $"{a.Agent.Key}@{a.Version}")), _options.ToolsVolume);
+            var environment = await WithInstallerAsync(installer => InstallToolsAsync(installer, plan.Tools, agents, ct), ct);
+            Logger?.LogInformation("Run {Run} has {Installed}", request.OwnerId, string.Join(", ", environment.Installed));
+            return _tools[key] = environment;
+        }
+        finally
+        {
+            _toolsGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// A short-lived container of the runner image with the store mounted writable and the engine's default network, so
+    /// mise and npm can download; removed when <paramref name="work"/> ends. It carries no run label, so the sweep never
+    /// takes it for a run's.
+    /// </summary>
+    private async Task<T> WithInstallerAsync<T>(Func<Guid, Task<T>> work, CancellationToken ct)
+    {
+        var installer = Guid.NewGuid();
+        var name = $"ild-tools-{installer:N}";
+        _execNames[installer] = name;
+        try
+        {
+            var labels = ToolsLabels();
+            labels[RunPaths.InstanceLabel] = _options.Instance;
+            try
+            {
+                await _api.PostAsync($"/containers/create?name={Escaped(name)}", new
+                {
+                    Image = _options.RunnerImage,
+                    Entrypoint = new[] { "/usr/bin/tini", "--" },
+                    Cmd = new[] { "sleep", "infinity" },
+                    User = $"{RunnerUid}:{RunnerUid}",
+                    Env = RunToolStore.InstallerEnvironment,
+                    Labels = labels,
+                    HostConfig = new
+                    {
+                        Binds = new[] { $"{_options.ToolsVolume}:{RunToolStore.Root}:rw" },
+                        CapDrop = new[] { "ALL" },
+                        SecurityOpt = new[] { "no-new-privileges" },
+                        RestartPolicy = new { Name = "no" },
+                    },
+                }, ct);
+            }
+            catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
+            {
+                throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
+            }
+            await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
+            await WaitRunningAsync(name, ct);
+            return await work(installer);
+        }
+        finally
+        {
+            _execNames.TryRemove(installer, out _);
+            await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true", null, CancellationToken.None));
+        }
+    }
+
+    private async Task WaitRunningAsync(string name, CancellationToken ct)
+    {
+        var started = Stopwatch.StartNew();
+        while (true)
+        {
+            var container = await _api.GetAsync($"/containers/{Escaped(name)}/json", ct)
+                ?? throw new InvalidOperationException($"the toolchain installer {name} is gone");
+            if (container["State"]?["Running"]?.GetValue<bool>() == true) return;
+            if (container["State"]?["Status"]?.GetValue<string>() is "exited" or "dead")
+                throw new InvalidOperationException($"the toolchain installer {name} ended before it was ready: {WhyNotReady(container)}");
+            if (started.Elapsed > _options.ReadyTimeout)
+                throw new InvalidOperationException($"the toolchain installer {name} was not ready after {_options.ReadyTimeout.TotalSeconds:0} s: {WhyNotReady(container)}");
+            await Task.Delay(ReadyPollInterval, ct);
         }
     }
 
@@ -254,7 +377,7 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         => await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct, HttpStatusCode.NotFound) is not null;
 
     protected override async Task<IExecStream> OpenExecStreamAsync(Guid owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
-        => await DockerExec.OpenAsync(_api, ObjectName(owner), command, stdin, tty, ExitStatusTimeout, ct);
+        => await DockerExec.OpenAsync(_api, _execNames.TryGetValue(owner, out var other) ? other : ObjectName(owner), command, stdin, tty, ExitStatusTimeout, ct);
 
     // -- Preview -----------------------------------------------------------------
 
@@ -381,5 +504,9 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
         return null;
     }
 
-    public void Dispose() => _api.Dispose();
+    public void Dispose()
+    {
+        _api.Dispose();
+        _toolsGate.Dispose();
+    }
 }

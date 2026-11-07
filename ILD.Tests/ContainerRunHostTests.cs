@@ -4,7 +4,9 @@ using System.Text.Json.Nodes;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Container;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.RunHosts.Isolated;
+using ILD.Core.Services.RunHosts.Tools;
 using ILD.Tests.Fakes;
 using Porta.Pty;
 
@@ -50,23 +52,29 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             _ => null,
         }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
-    private ContainerRunHost NewHost(ContainerRunHostOptions options)
+    private ContainerRunHost NewHost(ContainerRunHostOptions options, IReadOnlyList<RunAgent>? agents = null)
         => new(options, new ProcessRunner(), _log)
         {
             ReadyPollInterval = TimeSpan.FromMilliseconds(10),
             ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
+            Agents = () => agents ?? [],
         };
 
     private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
 
     private static string Name(Guid run) => ContainerRunHost.ObjectName(run);
 
-    private string MakeBaseRepository()
+    private string MakeBaseRepository(string folder = "base", params (string Path, string Content)[] files)
     {
-        var path = Path.Combine(_scratch, "base");
+        var path = Path.Combine(_scratch, folder);
         Directory.CreateDirectory(path);
         Git(path, "init", "-q", "-b", "main");
         File.WriteAllText(Path.Combine(path, "a.txt"), "a");
+        foreach (var (file, content) in files)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(path, file))!);
+            File.WriteAllText(Path.Combine(path, file), content);
+        }
         Git(path, "add", "-A");
         Git(path, "-c", "user.email=t@example.test", "-c", "user.name=T", "commit", "-q", "-m", "first");
         Git(path, "remote", "add", "origin", "https://user:secret@forge.example/acme/app.git");
@@ -651,6 +659,173 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         await routing.DirectoryExistsAsync(WorkingDirectory, TestContext.Current.CancellationToken);
         Assert.Single(_api.Execs);
+    }
+
+    // -- Toolchains --------------------------------------------------------------
+
+    private static readonly RunAgent Claude = new(ManagedAgentCatalog.ClaudeCode, "2.1.0");
+
+    private const string NodeLine = """{"kind":"tool","spec":"node@20","version":"20.19.1","path":["/opt/ild-tools/mise/installs/node/20.19.1/bin"],"env":{}}""";
+    private const string ClaudeLine = """{"kind":"agent","key":"claude-code","version":"2.1.0","path":["/opt/ild-tools/agents/claude-code/2.1.0/wrap"]}""";
+
+    // Answers the store's installer with what the real script prints, and the run's own commands with success.
+    private List<IReadOnlyList<string>> AnswerInstaller(params string[] lines)
+    {
+        var installs = new List<IReadOnlyList<string>>();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                lock (installs) installs.Add(e.Command);
+                Assert.True(_api.Container(e.Container) is not null, "the installer runs while it exists");
+                await e.WriteStdoutAsync(string.Join('\n', lines) + "\n");
+            }
+            await e.ExitAsync(0);
+        };
+        return installs;
+    }
+
+    private Task<RunEnvironment> CreateRunAsync(ContainerRunHost host, Guid run, string basePath)
+        => host.CreateAsync(new RunEnvironmentRequest(run, basePath, "ild/wi-1-run"), TestContext.Current.CancellationToken);
+
+    [Fact]
+    public async Task Create_installs_the_repositorys_toolchains_and_ilds_agents_into_the_store_and_mounts_it_read_only()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var installs = AnswerInstaller(NodeLine, ClaudeLine);
+        var repo = MakeBaseRepository("base", ("package.json", "{}"), (".nvmrc", "v20\n"));
+
+        await CreateRunAsync(host, _run, repo);
+
+        var install = Assert.Single(installs);
+        Assert.Equal(["agentnode=node@24", "tool=node@20", "agent=claude-code|@anthropic-ai/claude-code|2.1.0|claude"], install.TakeLast(3));
+        var installer = _api.Created.Single(c => c.StartsWith("containers/ild-tools-", StringComparison.Ordinal));
+        Assert.DoesNotContain(installer["containers/".Length..], _api.Containers());
+        Assert.Contains("volumes/ild-tools", _api.Created);
+
+        var container = _api.Container(Name(_run))!;
+        Assert.Contains("ild-tools:/opt/ild-tools:ro", container["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+        var env = container["Env"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
+        var home = RunPaths.HomeDirectory(_run);
+        Assert.Contains($"PATH=/opt/ild-tools/mise/installs/node/20.19.1/bin:/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:{RunToolEnvironment.ImagePath}", env);
+        Assert.Contains($"NPM_CONFIG_PREFIX={home}/.local", env);
+    }
+
+    [Fact]
+    public async Task The_installer_mounts_the_store_writable_as_the_runner_with_no_privileges_and_no_run_label()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        string? seen = null;
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                var config = _api.Container(e.Container)!;
+                seen = config.ToJsonString();
+                Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
+                Assert.Equal(["ild-tools:/opt/ild-tools:rw"], config["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+                Assert.Equal(["ALL"], config["HostConfig"]!["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
+                Assert.Null(config["HostConfig"]!["NetworkMode"]);
+                Assert.Null(config["Labels"]![RunPaths.RunLabel]);
+                Assert.Contains("MISE_DATA_DIR=/opt/ild-tools/mise", config["Env"]!.AsArray().Select(v => v!.GetValue<string>()));
+                await e.WriteStdoutAsync(ClaudeLine + "\n");
+            }
+            await e.ExitAsync(0);
+        };
+
+        await CreateRunAsync(host, _run, MakeBaseRepository());
+
+        Assert.NotNull(seen);
+    }
+
+    [Fact]
+    public async Task A_second_run_that_needs_the_same_gets_it_without_an_installer()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var installs = AnswerInstaller(NodeLine, ClaudeLine);
+        var repo = MakeBaseRepository("base", ("package.json", "{}"), (".nvmrc", "20"));
+
+        await CreateRunAsync(host, _run, repo);
+        var other = Guid.NewGuid();
+        await CreateRunAsync(host, other, repo);
+
+        Assert.Single(installs);
+        Assert.Contains("ild-tools:/opt/ild-tools:ro", _api.Container(Name(other))!["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task An_install_that_fails_fails_the_run_saying_what_and_why_and_leaves_no_container()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                await e.WriteStderrAsync("mise ERROR no version of node matches 99\n");
+                await e.ExitAsync(1);
+                return;
+            }
+            await e.ExitAsync(0);
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateRunAsync(host, _run, MakeBaseRepository("base", ("package.json", "{}"), (".nvmrc", "99"))));
+
+        Assert.Contains("node@99", ex.Message);
+        Assert.Contains("no version of node matches 99", ex.Message);
+        Assert.Empty(_api.Containers());
+        Assert.Equal(["ild-tools"], _api.Volumes());
+    }
+
+    [Fact]
+    public async Task With_toolchains_off_a_run_has_only_its_image_no_store_and_no_path_of_ilds()
+    {
+        var options = Options() with { Toolchains = false };
+        using var host = NewHost(options, [Claude]);
+        var installs = AnswerInstaller(NodeLine, ClaudeLine);
+
+        await CreateRunAsync(host, _run, MakeBaseRepository("base", ("package.json", "{}")));
+
+        Assert.Empty(installs);
+        Assert.DoesNotContain("ild-tools", _api.Volumes());
+        var env = _api.Container(Name(_run))!["Env"]!.AsArray().Select(e => e!.GetValue<string>());
+        Assert.DoesNotContain(env, e => e.StartsWith("PATH=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_run_that_needs_nothing_from_the_store_does_not_touch_it_but_can_still_install_globally()
+    {
+        var installs = AnswerInstaller();
+
+        await CreateRunAsync(_host, _run, MakeBaseRepository());
+
+        Assert.Empty(installs);
+        Assert.DoesNotContain("ild-tools", _api.Volumes());
+        var env = _api.Container(Name(_run))!["Env"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
+        Assert.Contains($"NPM_CONFIG_PREFIX={RunPaths.HomeDirectory(_run)}/.local", env);
+        Assert.Contains($"PATH={RunPaths.HomeDirectory(_run)}/.local/bin:{RunToolEnvironment.ImagePath}", env);
+    }
+
+    [Fact]
+    public async Task A_command_never_carries_ilds_own_path_into_the_run()
+    {
+        await CreateRunAsync();
+        var commands = new List<string>();
+        _api.OnExec = async e =>
+        {
+            lock (commands) commands.Add(e.Joined);
+            await e.ExitAsync(0);
+        };
+        var psi = Command(WorkingDirectory, "npm", "test");
+        psi.Environment["PATH"] = "/ild/side/bin:/usr/bin";
+
+        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(commands, c => c.Contains("npm test", StringComparison.Ordinal));
+        Assert.DoesNotContain(commands, c => c.Contains("/ild/side/bin", StringComparison.Ordinal));
     }
 
     // -- Socket ------------------------------------------------------------------
