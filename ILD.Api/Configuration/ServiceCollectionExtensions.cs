@@ -74,11 +74,11 @@ public static class ServiceCollectionExtensions
             EgressProxyOptions.BindAddress = System.Net.IPAddress.Any;
             return KubernetesRunHostFactory.Create(local, name => config[name], runner, sp.GetRequiredService<ILoggerFactory>(), RetainedRuns(sp));
         });
-        services.AddHostedService(sp => new KubernetesSweeper(
+        services.AddHostedService(sp => new RunHostSweeper(
             sp.GetRequiredService<IRunHost>(),
             RetainedRuns(sp),
-            sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Kubernetes.SweepInterval : TimeSpan.FromMinutes(10),
-            sp.GetService<ILogger<KubernetesSweeper>>()));
+            sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.SweepInterval : TimeSpan.FromMinutes(10),
+            sp.GetService<ILogger<RunHostSweeper>>()));
         services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, GitHubRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, AzureDevOpsRemoteGitProviderAdapter>();

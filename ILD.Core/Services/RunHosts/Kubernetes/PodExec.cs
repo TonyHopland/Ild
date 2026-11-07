@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using ILD.Core.Services.RunHosts.Isolated;
 using k8s;
 using k8s.Models;
 
@@ -10,7 +11,7 @@ namespace ILD.Core.Services.RunHosts.Kubernetes;
 /// the status the API reports when it ends. The v5 channel protocol is used because it can close stdin, which a command
 /// that reads its input to the end (<c>cat</c>, a CLI taking its prompt on stdin) needs.
 /// </summary>
-internal sealed class PodExec : IDisposable
+internal sealed class PodExec : IExecStream
 {
     private const string Protocol = "v5.channel.k8s.io";
 

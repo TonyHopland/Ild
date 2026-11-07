@@ -1,17 +1,17 @@
 using Porta.Pty;
 
-namespace ILD.Core.Services.RunHosts.Kubernetes;
+namespace ILD.Core.Services.RunHosts.Isolated;
 
-/// <summary>A terminal in a pod (an exec with a TTY) behind the interface the terminal bridge reads and writes.</summary>
-internal sealed class KubernetesPty : IPtyConnection
+/// <summary>A terminal in a run (an exec with a TTY) behind the interface the terminal bridge reads and writes.</summary>
+internal sealed class ExecPty : IPtyConnection
 {
-    private readonly PodExec _exec;
+    private readonly IExecStream _exec;
     private readonly ByteChannelStream _output = new();
     private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly OutputStream _input;
     private int _exitRaised;
 
-    public KubernetesPty(PodExec exec)
+    public ExecPty(IExecStream exec)
     {
         _exec = exec;
         _input = new OutputStream(exec);
@@ -56,14 +56,14 @@ internal sealed class KubernetesPty : IPtyConnection
         }
 
         var status = await _exec.Status;
-        var code = status ?? KubernetesRunProcess.ConnectionLostExitCode;
+        var code = status ?? ExecRunProcess.ConnectionLostExitCode;
         _exited.TrySetResult(code);
         _output.Complete();
         if (Interlocked.Exchange(ref _exitRaised, 1) == 0)
             ProcessExited?.Invoke(this, ExitedWith(code));
     }
 
-    private sealed class OutputStream(PodExec exec) : Stream
+    private sealed class OutputStream(IExecStream exec) : Stream
     {
         public override void Write(byte[] buffer, int offset, int count)
             => exec.WriteStdinAsync(buffer.AsMemory(offset, count), CancellationToken.None).GetAwaiter().GetResult();

@@ -1,25 +1,27 @@
 using System.Text;
 
-namespace ILD.Core.Services.RunHosts.Kubernetes;
+namespace ILD.Core.Services.RunHosts.Isolated;
 
-/// <summary>A command running in a pod, over one exec stream. A stream that ends without an exit status is a command that failed.</summary>
-internal sealed class KubernetesRunProcess : IRunProcess
+/// <summary>A command running in a run's pod or container, over one exec stream. A stream that ends without an exit status is a command that failed.</summary>
+internal sealed class ExecRunProcess : IRunProcess
 {
-    /// <summary>What <see cref="ExitCode"/> is when the stream to the pod ended before the command reported how it did.</summary>
+    /// <summary>What <see cref="ExitCode"/> is when the stream to the run ended before the command reported how it did.</summary>
     internal const int ConnectionLostExitCode = -1;
 
     private static int _nextId;
 
-    private readonly PodExec _exec;
+    private readonly IExecStream _exec;
+    private readonly string _where;
     private readonly Func<string, CancellationToken, Task<bool>> _kill;
     private readonly ByteChannelStream _stdout = new();
     private readonly ByteChannelStream _stderr = new();
     private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _exitCode;
 
-    public KubernetesRunProcess(PodExec exec, string commandId, bool redirectInput, Func<string, CancellationToken, Task<bool>> kill)
+    public ExecRunProcess(IExecStream exec, string where, string commandId, bool redirectInput, Func<string, CancellationToken, Task<bool>> kill)
     {
         _exec = exec;
+        _where = where;
         CommandId = commandId;
         _kill = kill;
         Id = Interlocked.Increment(ref _nextId);
@@ -31,7 +33,7 @@ internal sealed class KubernetesRunProcess : IRunProcess
         _ = Task.Run(PumpAsync);
     }
 
-    /// <summary>The name the command records its process group under in the pod.</summary>
+    /// <summary>The name the command records its process group under in the run.</summary>
     public string CommandId { get; }
 
     public int Id { get; }
@@ -54,7 +56,7 @@ internal sealed class KubernetesRunProcess : IRunProcess
         {
             using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             if (_kill(CommandId, limit.Token).GetAwaiter().GetResult()) return true;
-            failure = "the pod did not confirm that the command was gone";
+            failure = $"the {_where} did not confirm that the command was gone";
         }
         catch (Exception ex)
         {
@@ -71,7 +73,7 @@ internal sealed class KubernetesRunProcess : IRunProcess
         await Task.WhenAll(stdout, stderr);
 
         if (status is null)
-            _stderr.Append(Encoding.UTF8.GetBytes("the connection to the run's pod ended before the command did\n"));
+            _stderr.Append(Encoding.UTF8.GetBytes($"the connection to the run's {_where} ended before the command did\n"));
         _exitCode = status ?? ConnectionLostExitCode;
         _stdout.Complete();
         _stderr.Complete();
@@ -95,7 +97,7 @@ internal sealed class KubernetesRunProcess : IRunProcess
 
     public void Dispose() => _exec.Dispose();
 
-    private sealed class StdinStream(PodExec exec) : Stream
+    private sealed class StdinStream(IExecStream exec) : Stream
     {
         public override void Write(byte[] buffer, int offset, int count)
             => exec.WriteStdinAsync(buffer.AsMemory(offset, count), CancellationToken.None).GetAwaiter().GetResult();
