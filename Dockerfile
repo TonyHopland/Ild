@@ -405,8 +405,9 @@ CMD ["dotnet", "ILD.Api.dll"]
 # starts out writable by it (a volume takes the ownership of the image directory).
 FROM ${RUNNER_BASE} AS runner
 ARG RUNNER_UID=10001
-# Empty takes the newest mise in its apt repository.
-ARG MISE_VERSION=
+# Pinned like Node and npm, so a new mise release cannot change the image without
+# a commit. Override it to build another version from the apt repository.
+ARG MISE_VERSION=2026.11.4
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash tini git ca-certificates curl wget gnupg xz-utils unzip zip jq ripgrep build-essential \
