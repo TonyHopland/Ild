@@ -271,13 +271,7 @@ try
             // chats keep their pi extension.
             try
             {
-                var active = (await dbContext.LoopRuns
-                        .Where(r => r.Status == ILD.Data.Enums.LoopRunStatus.Running
-                            || r.Status == ILD.Data.Enums.LoopRunStatus.WaitingHuman)
-                        .Select(r => r.Id)
-                        .ToListAsync())
-                    .Concat(await dbContext.ChatSessions.Select(c => c.Id).ToListAsync())
-                    .ToHashSet();
+                var active = await ILD.Api.Services.LiveRunIds.GetAsync(dbContext, CancellationToken.None);
                 var sweepLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
                     .CreateLogger(typeof(ILD.Core.Services.Implementations.AgentRunFiles));
                 if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(scope.ServiceProvider.GetRequiredService<ILD.Core.Services.RunHosts.IRunHost>(), active, sweepLogger))

@@ -227,7 +227,14 @@ internal sealed class FakeRunHost : IRunHost
         return Task.FromResult(true);
     }
 
-    public Uri PreviewTarget(int port) => new($"http://fake-run-host:{port}");
+    public Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
+        => Task.FromResult(new Uri($"http://fake-run-host:{port}"));
+
+    public Task<bool> IsRunCloneAsync(string path, CancellationToken ct = default)
+        => Task.FromResult(ILD.Core.Services.Implementations.LocalWorktrees.TrustedRepositoryRoot(path) is not null);
+
+    public Task<RunHostOutput> RunToolAsync(string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default)
+        => throw new NotSupportedException("the fake host runs no tools");
 
     public string GatewayApiUrl(string? configuredApiUrl) => configuredApiUrl ?? "http://fake-ild";
 

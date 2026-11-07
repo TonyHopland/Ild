@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ild-run-host
+  namespace: ild-runs
+subjects:
+  - kind: ServiceAccount
+    name: ild
+    namespace: ild
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ild-run-host

@@ -135,6 +135,9 @@ public sealed record PreviewTarget(
     bool RewriteHost,
     string Message)
 {
+    /// <summary>The worktree of the run the preview belongs to, which tells the run host where the service is.</summary>
+    public string WorktreePath { get; init; } = string.Empty;
+
     public bool IsResolved => Outcome == PreviewTargetOutcome.Resolved;
 
     public static PreviewTarget Resolved(int port, string serviceName, bool rewriteHost)

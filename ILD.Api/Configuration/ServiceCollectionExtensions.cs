@@ -10,6 +10,7 @@ using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Remote;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Kubernetes;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Middleware;
 using ILD.Api.Services;
@@ -55,12 +56,27 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
-        // Chosen by the setting and never detected; the other two backends fail at startup until they exist.
+        // Chosen by the setting and never detected; the container backend fails at startup until it exists.
         services.AddSingleton<IRunHost>(sp =>
         {
-            RunHostOptions.Select(sp.GetRequiredService<IConfiguration>()[RunHostOptions.SettingName]);
-            return new LocalRunHost(sp.GetRequiredService<IProcessRunner>(), sp);
+            var config = sp.GetRequiredService<IConfiguration>();
+            var kind = RunHostOptions.Select(config[RunHostOptions.SettingName]);
+            var runner = sp.GetRequiredService<IProcessRunner>();
+            var local = new LocalRunHost(runner, sp);
+            if (kind != RunHostKind.Kubernetes) return local;
+
+            EgressProxyOptions.BindAddress = System.Net.IPAddress.Any;
+            return KubernetesRunHostFactory.Create(local, name => config[name], runner, sp.GetRequiredService<ILoggerFactory>());
         });
+        services.AddHostedService(sp => new KubernetesSweeper(
+            sp.GetRequiredService<IRunHost>(),
+            async ct =>
+            {
+                using var scope = sp.CreateScope();
+                return await LiveRunIds.GetAsync(scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>(), ct);
+            },
+            sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Kubernetes.SweepInterval : TimeSpan.FromMinutes(10),
+            sp.GetService<ILogger<KubernetesSweeper>>()));
         services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, GitHubRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, AzureDevOpsRemoteGitProviderAdapter>();

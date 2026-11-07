@@ -883,7 +883,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 p.Service.Name, p.Service.Public, p.Service.RewriteHost, p.IsRunning, p.Service.Port,
                 runtime.Ports.TryGetValue(p.Service.Port, out var port) ? port : 0))
             .ToList();
-        return SelectPreviewTarget(workItemId, serviceName, rows);
+        return SelectPreviewTarget(workItemId, serviceName, rows) with { WorktreePath = workItem.WorktreePath };
     }
 
     /// <summary>Splits a preview hostname's leading label into its work item id and optional service name.</summary>

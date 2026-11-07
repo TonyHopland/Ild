@@ -148,13 +148,12 @@ public class RunHostSeamTests
 
     [Theory]
     [InlineData("container")]
-    [InlineData("kubernetes")]
     public void A_backend_that_is_not_built_yet_stops_startup(string value)
         => Assert.Contains("not implemented yet", Assert.Throws<InvalidOperationException>(() => RunHostOptions.Select(value)).Message);
 
     [Fact]
-    public void The_local_host_points_the_preview_proxy_at_loopback()
-        => Assert.Equal("http://127.0.0.1:5173/", new LocalRunHost().PreviewTarget(5173).ToString());
+    public async Task The_local_host_points_the_preview_proxy_at_loopback()
+        => Assert.Equal("http://127.0.0.1:5173/", (await new LocalRunHost().PreviewTargetAsync("/w", 5173, TestContext.Current.CancellationToken)).ToString());
 }
 
 public class LocalRunHostTrackingTests

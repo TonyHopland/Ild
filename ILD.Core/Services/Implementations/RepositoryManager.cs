@@ -210,7 +210,7 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        if (auth is null || string.IsNullOrWhiteSpace(auth.RemoteUrl) || TrustedRepositoryRoot(worktreePath) is null)
+        if (auth is null || string.IsNullOrWhiteSpace(auth.RemoteUrl) || !await _host.IsRunCloneAsync(worktreePath, cancellationToken))
             return false;
 
         var (mirror, _) = await _mirrors.OpenAsync(auth.RemoteUrl, cancellationToken);
@@ -298,8 +298,8 @@ public class RepositoryManager : IRepositoryManager
 
     private async Task ClearSyncRefsAsync(string worktreePath)
     {
-        if (TrustedRepositoryRoot(worktreePath) is null) return;
-        await _runner.RunAsync("/bin/sh", ["-c", ClearSyncRefsScript, "sh", Path.GetFullPath(worktreePath)], "/", CancellationToken.None, null, _agentOptions);
+        if (!await _host.IsRunCloneAsync(worktreePath)) return;
+        await _host.RunToolAsync(worktreePath, "/bin/sh", ["-c", ClearSyncRefsScript, "sh", Path.GetFullPath(worktreePath)]);
     }
 
     /// <summary>The mirror bundled for the clone, with the bundle already fetched into it: a narrow one first, then everything.</summary>
@@ -326,7 +326,7 @@ public class RepositoryManager : IRepositoryManager
 
     private async Task<bool> FetchBundleAsync(string worktreePath, Stream bundle, CancellationToken ct)
     {
-        if (TrustedRepositoryRoot(worktreePath) is null)
+        if (!await _host.IsRunCloneAsync(worktreePath, ct))
         {
             _logger?.LogWarning("Refused fetching into {Directory}: its .git is not a clone or worktree of ours", worktreePath);
             return false;
@@ -420,7 +420,7 @@ public class RepositoryManager : IRepositoryManager
     /// </summary>
     private async Task EnsureSecretExcludesAsync(string worktreePath)
     {
-        if (TrustedRepositoryRoot(worktreePath) is null) return;
+        if (!await _host.IsRunCloneAsync(worktreePath)) return;
 
         // Run as the agent: the exclude file lives where the agent can replace it with
         // a link, and the orchestrator must never open a path it chose. A link is left
@@ -438,8 +438,8 @@ public class RepositoryManager : IRepositoryManager
             """;
         try
         {
-            var result = await _runner.RunAsync(
-                "/bin/sh", ["-c", script, "sh", Path.GetFullPath(worktreePath), .. SecretExcludePatterns], "/", CancellationToken.None, null, _agentOptions);
+            var result = await _host.RunToolAsync(
+                worktreePath, "/bin/sh", ["-c", script, "sh", Path.GetFullPath(worktreePath), .. SecretExcludePatterns]);
             if (!result.Success)
                 _logger?.LogDebug("Failed to write secret excludes for {Worktree}: {Error}", worktreePath, result.StdErr);
         }
@@ -472,7 +472,7 @@ public class RepositoryManager : IRepositoryManager
                 auth, branchName, sha,
                 async (incremental, sink) =>
                 {
-                    if (TrustedRepositoryRoot(worktreePath) is null)
+                    if (!await _host.IsRunCloneAsync(worktreePath, cancellationToken))
                         return new ProcessResult(RefusedExitCode, string.Empty, $"{worktreePath} is not a git clone or worktree created by ILD");
                     var r = await _host.PullBundleAsync(worktreePath, branchName, incremental, sink, cancellationToken);
                     return new ProcessResult(r.ExitCode, string.Empty, r.StdErr);
@@ -504,7 +504,7 @@ public class RepositoryManager : IRepositoryManager
         var (code, stdout, _) = await RunAsync(worktreePath, ["rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}^{{commit}}"], ct);
         var remoteSha = code == 0 && IsCommitSha(stdout.Trim()) ? stdout.Trim() : new string('0', sha.Length);
 
-        if (TrustedRepositoryRoot(worktreePath) is null)
+        if (!await _host.IsRunCloneAsync(worktreePath, ct))
             return $"{worktreePath} is not a git clone or worktree created by ILD";
 
         // The line goes in through stdin, so no file exists anywhere. git reopens its stdin by path
@@ -514,9 +514,9 @@ public class RepositoryManager : IRepositoryManager
             cat | exec git -C "$1" hook run --ignore-missing --to-stdin=/dev/stdin pre-push -- origin "$2"
             """;
         using var line = new MemoryStream(Encoding.UTF8.GetBytes($"{reference} {sha} {reference} {remoteSha}\n"));
-        var result = await _runner.RunAsync(
-            "/bin/sh", ["-c", script, "sh", Path.GetFullPath(worktreePath), WithoutUserInfo(auth.RemoteUrl)],
-            "/", ct, null, _agentOptions with { StandardInputFrom = line });
+        var result = await _host.RunToolAsync(
+            worktreePath, "/bin/sh", ["-c", script, "sh", Path.GetFullPath(worktreePath), WithoutUserInfo(auth.RemoteUrl)],
+            new RunToolStreams(StandardInputFrom: line), ct);
         if (result.Success) return null;
 
         var output = (string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr).Trim();
@@ -1095,14 +1095,14 @@ public class RepositoryManager : IRepositoryManager
 
     private async Task<bool> ShareAsync(string worktreePath, IReadOnlyList<string> relativePaths, CancellationToken ct)
     {
-        if (TrustedRepositoryRoot(worktreePath) is null)
+        if (!await _host.IsRunCloneAsync(worktreePath, ct))
         {
             _logger?.LogWarning("Refused sharing {Directory}: its .git is not a clone or worktree of ours", worktreePath);
             return false;
         }
 
-        var r = await _runner.RunAsync(
-            "/bin/bash", ["-c", ShareScript, "bash", Path.GetFullPath(worktreePath), .. relativePaths], "/", ct, null, _agentOptions);
+        var r = await _host.RunToolAsync(
+            worktreePath, "/bin/bash", ["-c", ShareScript, "bash", Path.GetFullPath(worktreePath), .. relativePaths], ct: ct);
         if (!r.Success)
             _logger?.LogWarning("Sharing {Directory} with the orchestrator exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
         return r.Success;
@@ -1143,22 +1143,21 @@ public class RepositoryManager : IRepositoryManager
     private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(
         string cwd, IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null, Stream? stdinFrom = null)
     {
-        if (TrustedRepositoryRoot(cwd) is null)
+        if (!await _host.IsRunCloneAsync(cwd, ct))
         {
             _logger?.LogWarning("Refused git {Args} in {Directory}: its .git is not a clone or worktree of ours", string.Join(' ', args), cwd);
             return (RefusedExitCode, string.Empty, $"{cwd} is not a git clone or worktree created by ILD");
         }
 
-        return await AgentGitAsync(["-C", Path.GetFullPath(cwd), .. args], ct, stdoutTo, stdinFrom);
+        return await AgentGitAsync(cwd, ["-C", Path.GetFullPath(cwd), .. args], ct, stdoutTo, stdinFrom);
     }
 
     private async Task<(int ExitCode, string StdOut, string StdErr)> AgentGitAsync(
-        IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null, Stream? stdinFrom = null)
+        string runPath, IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null, Stream? stdinFrom = null)
     {
         // From "/" and addressing the directory with -C: the orchestrator never enters
         // one the agent owns.
-        var options = _agentOptions with { StandardOutputTo = stdoutTo, StandardInputFrom = stdinFrom };
-        var r = await _runner.RunAsync("git", args, "/", ct, null, options);
+        var r = await _host.RunToolAsync(runPath, "git", args, new RunToolStreams(stdinFrom, stdoutTo), ct);
         if (!r.Success)
             _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), r.ExitCode, r.StdErr);
         return (r.ExitCode, r.StdOut, r.StdErr);

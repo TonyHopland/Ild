@@ -14,6 +14,9 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
 {
     public static readonly IPAddress ListenAddress = IPAddress.Loopback;
 
+    /// <summary>What the proxy binds. Loopback, except where the agent runs in a pod and reaches the proxy at ILD's address.</summary>
+    public static IPAddress BindAddress { get; set; } = IPAddress.Loopback;
+
     public static readonly EgressProxyOptions Disabled = new(false, 0);
 
     /// <summary>

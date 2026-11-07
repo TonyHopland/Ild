@@ -137,7 +137,7 @@ public sealed class LocalRunHost : IRunHost
 
     // The bundle arrives on stdin; git cannot read one from a pipe, so it goes to a file in a scratch
     // directory the agent makes and removes. An empty stdin is a remote with no branches yet.
-    private const string CloneScript = """
+    internal const string CloneScript = """
         d=$(mktemp -d) || exit 1
         trap 'rm -rf -- "$d"' EXIT
         cat > "$d/in.bundle" || exit 1
@@ -152,7 +152,7 @@ public sealed class LocalRunHost : IRunHost
 
     // The bundle arrives on stdin and is written to a scratch directory of the agent's, because git
     // cannot fetch from a pipe. Into a namespace of its own: nothing the clone has is touched here.
-    private const string FetchBundleScript = """
+    internal const string FetchBundleScript = """
         d=$(mktemp -d) || exit 1
         trap 'rm -rf -- "$d"' EXIT
         git -C "$1" for-each-ref --format='delete %(refname)' refs/ild-sync | git -C "$1" update-ref --stdin || exit 1
@@ -186,6 +186,20 @@ public sealed class LocalRunHost : IRunHost
 
     private IProcessRunner Runner()
         => _runner ?? throw new InvalidOperationException("this run host was built without a process runner, so it cannot move bundles");
+
+    // -- Tools -------------------------------------------------------------------
+
+    public Task<bool> IsRunCloneAsync(string path, CancellationToken ct = default)
+        => Task.FromResult(LocalWorktrees.TrustedRepositoryRoot(path) is not null);
+
+    // From "/" and with the directory addressed by the caller's own arguments: the orchestrator never enters one the agent owns.
+    public async Task<RunHostOutput> RunToolAsync(
+        string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default)
+    {
+        var options = _agentOptions with { StandardInputFrom = streams?.StandardInputFrom, StandardOutputTo = streams?.StandardOutputTo };
+        var r = await Runner().RunAsync(fileName, arguments, "/", ct, null, options);
+        return new RunHostOutput(r.ExitCode, r.StdOut, r.StdErr);
+    }
 
     // -- Files -------------------------------------------------------------------
 
@@ -244,7 +258,8 @@ public sealed class LocalRunHost : IRunHost
 
     // -- Preview and gateway -----------------------------------------------------
 
-    public Uri PreviewTarget(int port) => new($"http://127.0.0.1:{port}");
+    public Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
+        => Task.FromResult(new Uri($"http://127.0.0.1:{port}"));
 
     public string GatewayApiUrl(string? configuredApiUrl) => configuredApiUrl ?? "http://localhost:5000";
 

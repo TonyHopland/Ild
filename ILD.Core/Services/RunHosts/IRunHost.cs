@@ -58,6 +58,20 @@ public interface IRunHost
     /// <summary>Write the bundle of <paramref name="branch"/> from the clone at <paramref name="clonePath"/> to <paramref name="sink"/>; <paramref name="incremental"/> leaves out what the remote already has.</summary>
     Task<RunHostResult> PullBundleAsync(string clonePath, string branch, bool incremental, Stream sink, CancellationToken ct = default);
 
+    // -- Tools -------------------------------------------------------------------
+
+    /// <summary>
+    /// Whether <paramref name=path/> is a clone this host made or trusts, so git may be run in it. The orchestrator
+    /// refuses to run git in a directory whose <c>.git</c> it cannot vouch for.
+    /// </summary>
+    Task<bool> IsRunCloneAsync(string path, CancellationToken ct = default);
+
+    /// <summary>
+    /// Run a short command as the agent would, in the run that holds <paramref name=runPath/> (a path in that run),
+    /// and wait for it. <paramref name="streams"/> redirects stdin and stdout to streams; otherwise both are collected.
+    /// </summary>
+    Task<RunHostOutput> RunToolAsync(string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default);
+
     // -- Files -------------------------------------------------------------------
 
     /// <summary>
@@ -106,8 +120,8 @@ public interface IRunHost
 
     // -- Preview and gateway -----------------------------------------------------
 
-    /// <summary>Where the preview proxy forwards to reach a service listening on <paramref name="port"/> in the run.</summary>
-    Uri PreviewTarget(int port);
+    /// <summary>Where the preview proxy forwards to reach a service listening on <paramref name="port"/> in the run whose working directory is <paramref name="workingDirectory"/>.</summary>
+    Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default);
 
     /// <summary>The base address of ILD that the run's CLI is given for the model gateway; <paramref name="configuredApiUrl"/> is the operator's setting, null when unset.</summary>
     string GatewayApiUrl(string? configuredApiUrl);
@@ -179,6 +193,15 @@ public sealed record RunHostResult(int ExitCode, string StdErr)
 {
     public bool Success => ExitCode == 0;
 }
+
+/// <summary>What a short command printed and how it ended.</summary>
+public sealed record RunHostOutput(int ExitCode, string StdOut, string StdErr)
+{
+    public bool Success => ExitCode == 0;
+}
+
+/// <summary>Streams a short command reads its stdin from and writes its stdout to instead of the collected text.</summary>
+public sealed record RunToolStreams(Stream? StandardInputFrom = null, Stream? StandardOutputTo = null);
 
 /// <summary>Something a run left in a host, named so it can be shown and deleted.</summary>
 public sealed record RunLeftover(string Kind, string Location);

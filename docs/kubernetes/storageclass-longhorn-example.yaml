@@ -1,0 +1,13 @@
+# Optional, and an operator's choice: a Longhorn class for run scratch, where a volume needs no copies and
+# should sit on the node the pod runs on. ILD does not know about Longhorn; set it with ILD_K8S_STORAGE_CLASS.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ild-run-scratch
+provisioner: driver.longhorn.io
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  numberOfReplicas: "1"
+  dataLocality: best-effort
