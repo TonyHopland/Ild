@@ -132,18 +132,8 @@ internal sealed class FakeRunHost : IRunHost
         return Task.FromResult(new RunHostResult(0, string.Empty));
     }
 
-    /// <summary>The bundles fetched into clones, with the clone each went to.</summary>
-    public List<(string ClonePath, byte[] Bundle)> FetchedBundles { get; } = [];
-
-    public RunHostResult FetchBundleResult { get; set; } = new(0, string.Empty);
-
-    public async Task<RunHostResult> FetchBundleAsync(string clonePath, Stream bundle, CancellationToken ct = default)
-    {
-        using var copy = new MemoryStream();
-        await bundle.CopyToAsync(copy, ct);
-        lock (_gate) FetchedBundles.Add((clonePath, copy.ToArray()));
-        return FetchBundleResult;
-    }
+    public Task<RunHostResult> FetchBundleAsync(string clonePath, Stream bundle, CancellationToken ct = default)
+        => Task.FromResult(new RunHostResult(0, string.Empty));
 
     public Task<RunHostResult> PullBundleAsync(string clonePath, string branch, bool incremental, Stream sink, CancellationToken ct = default)
         => Task.FromResult(new RunHostResult(0, string.Empty));
@@ -179,11 +169,18 @@ internal sealed class FakeRunHost : IRunHost
         await consume(new MemoryStream(bytes, (int)offset, (int)count, writable: false));
     }
 
+    /// <summary>Every stream written to a file, kept after the file is deleted.</summary>
+    public List<(string Path, byte[] Content)> WrittenStreams { get; } = [];
+
     public async Task WriteFileAsync(string path, Stream content, CancellationToken ct = default)
     {
         using var copy = new MemoryStream();
         await content.CopyToAsync(copy, ct);
-        lock (_gate) _files[path] = copy.ToArray();
+        lock (_gate)
+        {
+            _files[path] = copy.ToArray();
+            WrittenStreams.Add((path, copy.ToArray()));
+        }
     }
 
     public Task WriteFileAsync(string path, string content, CancellationToken ct = default)

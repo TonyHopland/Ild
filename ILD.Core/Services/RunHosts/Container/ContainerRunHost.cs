@@ -375,8 +375,9 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
             : "no status";
     }
 
+    // A chat container that is stopped has nothing running to kill, and asking would start it again.
     protected override async Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
-        => await _api.GetAsync($"/containers/{Escaped(owner.Chat ? ChatName : ObjectName(owner.Id))}/json", ct, HttpStatusCode.NotFound) is not null;
+        => owner.Chat ? await ChatContainerRunningAsync(ct) : await _api.GetAsync($"/containers/{Escaped(owner.Chat ? ChatName : ObjectName(owner.Id))}/json", ct, HttpStatusCode.NotFound) is not null;
 
     protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
         => await DockerExec.OpenAsync(

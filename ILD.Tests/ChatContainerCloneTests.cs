@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
@@ -119,13 +120,14 @@ public sealed class ChatContainerCloneTests : IDisposable
             Assert.Equal(_chat, c.OwnerId);
             Assert.DoesNotContain(c.Start.ArgumentList, a => a.StartsWith(Path.Combine(_dir, "data"), StringComparison.Ordinal));
         });
-        var (clonePath, bundle) = Assert.Single(_host.FetchedBundles);
-        Assert.Equal(folder, clonePath);
+        var (bundlePath, bundle) = Assert.Single(_host.WrittenStreams);
+        Assert.Matches($"^{Regex.Escape(Scratch)}/\\.ild/sync-[0-9a-f]{{32}}\\.bundle$", bundlePath);
         Assert.StartsWith("# v2 git bundle", Encoding.ASCII.GetString(bundle, 0, 15));
-        Assert.Contains("refs/heads/ild-chat-sync/", Encoding.ASCII.GetString(bundle));
+        Assert.Contains("refs/remotes/origin/main", Encoding.ASCII.GetString(bundle));
+        Assert.False(await _host.FileExistsAsync(bundlePath, Ct), "the bundle stays in the chat's folder");
         var fetch = Assert.Single(_host.Started, c => GitArguments(c) is ["fetch", ..]);
-        Assert.Matches(@"^\+refs/ild-sync/ild-chat-sync/[0-9a-f]{32}:refs/remotes/origin/main$", GitArguments(fetch)[^1]);
-        Assert.Equal(".", GitArguments(fetch)[^2]);
+        Assert.Equal("+refs/remotes/origin/main:refs/remotes/origin/main", GitArguments(fetch)[^1]);
+        Assert.Equal(bundlePath, GitArguments(fetch)[^2]);
         Assert.Contains(_host.Started, c => GitArguments(c) is ["init", "-q"]);
     }
 
@@ -143,7 +145,7 @@ public sealed class ChatContainerCloneTests : IDisposable
     }
 
     [Fact]
-    public async Task The_temporary_branch_the_bundle_was_made_from_is_gone_from_the_base_clone_afterwards()
+    public async Task A_runs_bundle_of_the_base_clone_carries_nothing_of_a_chat_clone_made_from_it()
     {
         var (repo, _) = await SeedAsync();
         AnswerGit();
@@ -151,7 +153,10 @@ public sealed class ChatContainerCloneTests : IDisposable
         await Cloner().CloneAsync(_chat, repo.Id.ToString(), branch: null, Ct);
 
         var basePath = BaseRepoPath.Existing(repo, Config)!;
-        Assert.Equal(string.Empty, GitOutput(basePath, "for-each-ref", "refs/heads/ild-chat-sync"));
+        var bundle = Path.Combine(_dir, "run.bundle");
+        GitOutput(basePath, "bundle", "create", "--quiet", bundle, "--all");
+        Assert.DoesNotContain("ild-chat", GitOutput(basePath, "bundle", "list-heads", bundle));
+        Assert.DoesNotContain("ild-chat", GitOutput(basePath, "for-each-ref"));
     }
 
     [Fact]
@@ -174,7 +179,7 @@ public sealed class ChatContainerCloneTests : IDisposable
         Assert.Equal(ChatRepositoryCloneOutcome.Updated, result.Outcome);
         Assert.DoesNotContain(_host.Started, c => GitArguments(c) is ["init", ..]);
         Assert.Contains(_host.Started, c => GitArguments(c) is ["merge", "-q", "--ff-only", "refs/remotes/origin/main"]);
-        Assert.Single(_host.FetchedBundles);
+        Assert.Single(_host.WrittenStreams);
     }
 
     [Fact]
@@ -191,21 +196,20 @@ public sealed class ChatContainerCloneTests : IDisposable
         var result = await Cloner().CloneAsync(_chat, repo.Id.ToString(), branch: null, Ct);
 
         Assert.Equal(ChatRepositoryCloneOutcome.CloneFailed, result.Outcome);
-        Assert.Empty(_host.FetchedBundles);
+        Assert.Empty(_host.WrittenStreams);
     }
 
     [Fact]
-    public async Task A_bundle_the_container_cannot_take_fails_the_clone_with_what_it_said()
+    public async Task A_bundle_git_in_the_container_cannot_fetch_fails_the_clone_with_what_it_said_and_leaves_none_behind()
     {
         var (repo, _) = await SeedAsync();
-        AnswerGit();
-        _host.FetchBundleResult = new RunHostResult(128, "fatal: the bundle is corrupt");
+        AnswerGit(args => args is ["fetch", ..] ? FakeCommandScript.Prints("", "fatal: the bundle is corrupt", 128) : null);
 
         var result = await Cloner().CloneAsync(_chat, repo.Id.ToString(), branch: null, Ct);
 
         Assert.Equal(ChatRepositoryCloneOutcome.CloneFailed, result.Outcome);
         Assert.Contains("the bundle is corrupt", result.Message);
-        Assert.Equal(string.Empty, GitOutput(BaseRepoPath.Existing(repo, Config)!, "for-each-ref", "refs/heads/ild-chat-sync"));
+        Assert.False(await _host.FileExistsAsync(Assert.Single(_host.WrittenStreams).Path, Ct));
     }
 
     private static string GitOutput(string cwd, params string[] args)

@@ -1298,4 +1298,16 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(ChatContainer, _api.Execs.Last().Container);
         Assert.Contains(RunPaths.ChatRoot(chat), _api.Execs.Last().Command);
     }
+
+    [Fact]
+    public async Task Kill_all_does_not_start_a_stopped_chat_container()
+    {
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        _api.Stop(ChatContainer);
+        var created = _api.Created.Count;
+
+        Assert.Equal(0, await _host.KillAllAsync(Guid.NewGuid(), TestContext.Current.CancellationToken));
+
+        Assert.Equal(created, _api.Created.Count);
+    }
 }

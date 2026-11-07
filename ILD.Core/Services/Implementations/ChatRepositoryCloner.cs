@@ -224,7 +224,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         await CheckedAsync(Git("config", "--local", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"), relativePath);
 
         var fetch = inChatContainer
-            ? await FetchIntoChatContainerAsync(basePath, branch, folder, remoteRef, Git, ct)
+            ? await FetchIntoChatContainerAsync(basePath, job.ScratchPath, remoteRef, Git, ct)
             : await Git("fetch", "-q", "--no-tags", basePath, $"+{remoteRef}:{remoteRef}");
         if (fetch.ExitCode != 0)
             throw new CloneFailedException(
@@ -261,42 +261,34 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 
     /// <summary>
     /// Bring the branch of ILD's own clone into the chat's clone in the chat container, which cannot see this disk: the
-    /// branch is bundled under a temporary branch of the base clone (the container fetches only branches from a bundle),
-    /// fetched from the bundle, and moved to the remote-tracking ref the way a fetch from the base clone would.
+    /// remote-tracking ref is bundled as it is (nothing is written into the base clone, which runs bundle whole), the
+    /// bundle is put in the chat's folder, and git there fetches from it with an explicit refspec.
     /// </summary>
     private async Task<AgentProcessResult> FetchIntoChatContainerAsync(
-        string basePath, string branch, string folder, string remoteRef, Func<string[], Task<AgentProcessResult>> git, CancellationToken ct)
+        string basePath, string scratchPath, string remoteRef, Func<string[], Task<AgentProcessResult>> git, CancellationToken ct)
     {
-        var sync = $"ild-chat-sync/{Guid.NewGuid():N}";
-        var syncRef = $"refs/heads/{sync}";
         var bundlePath = Path.Combine(Path.GetTempPath(), $"ild-chat-{Guid.NewGuid():N}.bundle");
+        var inChat = $"{scratchPath}/.ild/sync-{Guid.NewGuid():N}.bundle";
         try
         {
-            var made = await _runner.RunAsync("git", ["-C", basePath, "update-ref", syncRef, $"refs/remotes/origin/{branch}"], "/", ct);
-            if (!made.Success)
-                return new AgentProcessResult(made.ExitCode, made.StdOut, made.StdErr);
-
             await using (var sink = new FileStream(bundlePath, FileMode.CreateNew, FileAccess.Write))
             {
                 var created = await _runner.RunAsync(
-                    "git", ["-C", basePath, "bundle", "create", "--quiet", "-", syncRef], "/", ct, null, new ProcessRunOptions(StandardOutputTo: sink));
+                    "git", ["-C", basePath, "bundle", "create", "--quiet", "-", remoteRef], "/", ct, null, new ProcessRunOptions(StandardOutputTo: sink));
                 if (!created.Success)
                     return new AgentProcessResult(created.ExitCode, created.StdOut, created.StdErr);
             }
 
-            await using var bundle = new FileStream(bundlePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous);
-            var fetched = await _host.FetchBundleAsync(folder, bundle, ct);
-            if (!fetched.Success)
-                return new AgentProcessResult(fetched.ExitCode, string.Empty, fetched.StdErr);
-            return await git(["fetch", "-q", "--no-tags", ".", $"+refs/ild-sync/{sync}:{remoteRef}"]);
+            await using (var bundle = new FileStream(bundlePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous))
+                await _host.WriteFileAsync(inChat, bundle, ct);
+            return await git(["fetch", "-q", "--no-tags", inChat, $"+{remoteRef}:{remoteRef}"]);
         }
         finally
         {
             File.Delete(bundlePath);
-            await _runner.RunAsync("git", ["-C", basePath, "update-ref", "-d", syncRef], "/", CancellationToken.None);
+            await _host.DeleteAsync([inChat], CancellationToken.None);
         }
     }
-
     /// <summary>
     /// Switch to <paramref name="branch"/>, creating it at its remote head or
     /// moving it forward to that head; a local branch is never moved back or
