@@ -420,34 +420,10 @@ public class AgentController : ControllerBase
         var ownRun = runId is Guid id
             && await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == id && r.WorkItemId == workItemId);
 
-        return new WorktreePreviewResponse
-        {
-            Configured = response.Configured,
-            State = response.State,
-            WorktreePath = response.WorktreePath,
-            ConfigPath = response.ConfigPath,
-            ProfileName = response.ProfileName,
-            PublicHost = response.PublicHost,
-            StateDirectory = response.StateDirectory,
-            Message = response.Message,
-            Install = response.Install,
-            Services = response.Services.Select(s => new WorktreePreviewServiceResponse
-            {
-                Name = s.Name,
-                PortAlias = s.PortAlias,
-                Status = s.Status,
-                Port = s.Port,
-                SuggestedPort = s.SuggestedPort,
-                HealthUrl = s.HealthUrl,
-                PublicUrl = s.PublicUrl,
-                LocalUrl = s.LocalUrl,
-                AgentUrl = ownRun ? s.LocalUrl ?? s.PublicUrl : s.PublicUrl,
-                LogFilePath = s.LogFilePath,
-                ProcessId = s.ProcessId,
-                ExitCode = s.ExitCode,
-                Error = s.Error,
-            }).ToList(),
-        };
+        var copy = response.Clone();
+        foreach (var service in copy.Services)
+            service.AgentUrl = ownRun ? service.LocalUrl ?? service.PublicUrl : service.PublicUrl;
+        return copy;
     }
 
     // -- Worktree preview controls (ADR-0011) ----------------------------------

@@ -2424,39 +2424,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             lock (_writers)
             {
-                var next = Copy(_snapshot);
+                var next = _snapshot.Clone();
                 change(next);
                 _snapshot = next;
             }
         }
-
-        private static WorktreePreviewResponse Copy(WorktreePreviewResponse source) => new()
-        {
-            Configured = source.Configured,
-            State = source.State,
-            WorktreePath = source.WorktreePath,
-            ConfigPath = source.ConfigPath,
-            ProfileName = source.ProfileName,
-            PublicHost = source.PublicHost,
-            StateDirectory = source.StateDirectory,
-            Message = source.Message,
-            Install = source.Install,
-            Services = source.Services.Select(row => new WorktreePreviewServiceResponse
-            {
-                Name = row.Name,
-                PortAlias = row.PortAlias,
-                Status = row.Status,
-                Port = row.Port,
-                SuggestedPort = row.SuggestedPort,
-                HealthUrl = row.HealthUrl,
-                PublicUrl = row.PublicUrl,
-                LocalUrl = row.LocalUrl,
-                LogFilePath = row.LogFilePath,
-                ProcessId = row.ProcessId,
-                ExitCode = row.ExitCode,
-                Error = row.Error,
-            }).ToList(),
-        };
     }
 
     private sealed record LoadedPreviewConfig(bool Configured, string WorktreePath, string ConfigPath, IldWorkspaceConfig? Config, string? Message);

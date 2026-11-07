@@ -29,6 +29,21 @@ public sealed class WorktreePreviewResponse
     /// <summary>The install step running now; null unless <see cref="State"/> is "installing".</summary>
     public WorktreePreviewInstallProgress? Install { get; set; }
     public List<WorktreePreviewServiceResponse> Services { get; set; } = new();
+
+    /// <summary>A deep-enough copy: new response and service rows, so changing one leaves the original (a shared snapshot) alone.</summary>
+    public WorktreePreviewResponse Clone() => new()
+    {
+        Configured = Configured,
+        State = State,
+        WorktreePath = WorktreePath,
+        ConfigPath = ConfigPath,
+        ProfileName = ProfileName,
+        PublicHost = PublicHost,
+        StateDirectory = StateDirectory,
+        Message = Message,
+        Install = Install,
+        Services = Services.Select(row => row.Clone()).ToList(),
+    };
 }
 
 /// <summary>The install step a start is on: 1-based <see cref="Index"/> of <see cref="Total"/>, and its command as written in <c>ild.config.json</c>.</summary>
@@ -81,4 +96,6 @@ public sealed class WorktreePreviewServiceResponse
     public int? ProcessId { get; set; }
     public int? ExitCode { get; set; }
     public string? Error { get; set; }
+
+    public WorktreePreviewServiceResponse Clone() => (WorktreePreviewServiceResponse)MemberwiseClone();
 }

@@ -190,9 +190,17 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
         => Assert.Null(WorktreePreviewService.ComposeLocalUrl(null));
 
     [Fact]
-    public void The_local_url_stays_on_loopback_when_the_public_url_uses_the_proxy()
+    public async Task A_started_preview_keeps_the_local_url_on_loopback_when_a_proxy_base_is_set()
     {
-        Assert.Equal("http://wi-7.ild.example:8080", PublicUrl("http://ild.example:8080"));
-        Assert.Equal("http://127.0.0.1:5173", WorktreePreviewService.ComposeLocalUrl(5173));
+        WriteConfig();
+        var service = BuildService("http://ild.example:8080");
+
+        var response = await service.StartAsync(
+            _worktree,
+            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
+
+        var app = response.Services.Single(s => s.Name == "app");
+        Assert.Equal($"http://127.0.0.1:{app.Port}", app.LocalUrl);
+        Assert.Equal("http://wi-7.ild.example:8080", app.PublicUrl);
     }
 }
