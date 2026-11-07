@@ -405,17 +405,21 @@ CMD ["dotnet", "ILD.Api.dll"]
 # starts out writable by it (a volume takes the ownership of the image directory).
 FROM ${RUNNER_BASE} AS runner
 ARG RUNNER_UID=10001
-# Pinned like Node and npm, so a new mise release cannot change the image without
-# a commit. Override it to build another version from the apt repository.
+# Pinned like Node and npm, so a new mise release cannot change the image without a commit. mise's apt repository
+# lists only its newest version, so apt cannot hold a pin: the .deb for the pinned version is downloaded from the
+# repository's pool and checked against the SHA-256 below, one per architecture. To bump, change the version and both sums.
 ARG MISE_VERSION=2026.11.4
+ARG MISE_SHA256_AMD64=207ae03669918b4cc98ff505526f16568cbe0a4b5e6c9da97029600f6f3dbefd
+ARG MISE_SHA256_ARM64=841f105cc4d415437630b07a7f81f0e3d3ace2298295e3bbd69ef2dd3b656177
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash tini git ca-certificates curl wget gnupg xz-utils unzip zip jq ripgrep build-essential \
       libicu74 libatomic1 zlib1g procps less openssh-client && \
-    install -dm 755 /etc/apt/keyrings && \
-    wget -qO - https://mise.jdx.dev/gpg-key.pub | gpg --dearmor > /etc/apt/keyrings/mise-archive-keyring.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.gpg] https://mise.jdx.dev/deb stable main" > /etc/apt/sources.list.d/mise.list && \
-    apt-get update && apt-get install -y --no-install-recommends "mise${MISE_VERSION:+=$MISE_VERSION}" && \
+    arch="$(dpkg --print-architecture)" && \
+    case "$arch" in amd64) mise_sha="$MISE_SHA256_AMD64" ;; arm64) mise_sha="$MISE_SHA256_ARM64" ;; *) echo "no mise package for $arch" >&2; exit 1 ;; esac && \
+    wget -qO /tmp/mise.deb "https://mise.jdx.dev/deb/pool/main/mise_${MISE_VERSION}_${arch}.deb" && \
+    echo "$mise_sha  /tmp/mise.deb" | sha256sum -c - && \
+    apt-get install -y --no-install-recommends /tmp/mise.deb && rm /tmp/mise.deb && \
     rm -rf /var/lib/apt/lists/* && \
     (getent group ${RUNNER_UID} >/dev/null || groupadd --gid ${RUNNER_UID} runner) && \
     (getent passwd ${RUNNER_UID} >/dev/null || useradd --uid ${RUNNER_UID} --gid ${RUNNER_UID} --no-create-home --home-dir /tmp --shell /bin/bash runner) && \

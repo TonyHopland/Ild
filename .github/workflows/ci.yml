@@ -86,9 +86,9 @@ jobs:
   # so a broken one fails the tag rather than the PR that broke it. Build here
   # (never push) to close that gap.
   #
-  # Only the batteries-included amd64 image (the runner targets have their own job
-  # below), because it is the shipped artifact
-  # and it also catches the indirect breakages -- it COPYs each .csproj by name
+  # Only the batteries-included amd64 image, because it is the shipped artifact
+  # (the runner targets have their own job below) and it also catches the
+  # indirect breakages -- it COPYs each .csproj by name
   # and runs the pnpm install, so a new project or a lockfile change fails here
   # without anyone having touched the Dockerfile. The runtime-only base, the
   # WorkItem Server image, and arm64 can only break when Docker-related files
