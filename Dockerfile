@@ -397,7 +397,7 @@ ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
 CMD ["dotnet", "ILD.Api.dll"]
 
 # The slim image a loop run's pod or container runs under (docs/adr/0035-run-toolchains.md): an OS, the tools every
-# project uses (git, a shell, a compiler, curl, jq, ripgrep) and mise. No language toolchain and no coding agent: ILD
+# project uses (git, a shell, a compiler, curl, jq, ripgrep), Chrome and mise. No language toolchain and no coding agent: ILD
 # installs the ones a repository needs, at the versions it picks, into a shared store the run mounts read-only, so a
 # node project does not carry a .NET SDK. The same image installs them: ILD runs mise in it against the store.
 # The MCP server is the self-contained build, at the path the agent's MCP config names. tini is the init, which reaps
@@ -420,6 +420,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     (getent passwd ${RUNNER_UID} >/dev/null || useradd --uid ${RUNNER_UID} --gid ${RUNNER_UID} --no-create-home --home-dir /tmp --shell /bin/bash runner) && \
     git config --system --add safe.directory '*' && \
     mkdir -p /app /ild-run /opt/ild-tools && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /opt/ild-tools && chmod 0755 /ild-run
+# Chrome, for the chrome-devtools MCP server agents drive a browser with: it needs system libraries the store cannot
+# provide, so it is part of the image, at /opt/google/chrome/chrome where Puppeteer's stable channel looks. As in the
+# ILD image (see WITH_CHROME there): amd64 and arm64 only, recommends left out, fonts-liberation added back.
+# RUNNER_WITH_CHROME=0 builds the image without it.
+ARG RUNNER_WITH_CHROME=1
+RUN if [ "$RUNNER_WITH_CHROME" = "1" ]; then \
+      arch="$(dpkg --print-architecture)"; \
+      case "$arch" in \
+        amd64|arm64) \
+          apt-get update && \
+          wget -q -O /tmp/google-chrome.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_${arch}.deb" && \
+          apt-get install -y --no-install-recommends /tmp/google-chrome.deb fonts-liberation && \
+          rm -f /tmp/google-chrome.deb && rm -rf /var/lib/apt/lists/* ;; \
+        *) echo "Skipping Chrome: no upstream package for $arch" >&2 ;; \
+      esac; \
+    fi
 COPY --from=build --chown=${RUNNER_UID}:${RUNNER_UID} /app/mcp-server-runner/ /app/
 ENV HOME=/tmp
 USER ${RUNNER_UID}

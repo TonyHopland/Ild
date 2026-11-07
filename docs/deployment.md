@@ -459,10 +459,10 @@ CI also builds and pushes these images to GHCR (see [ADR-0012](./adr/0012-ghcr-i
 
 - `ghcr.io/tonyhopland/ild` — batteries-included app plus the bundled MCP server
 - `ghcr.io/tonyhopland/ild-workitem-server` — the WorkItem Server
-- `ghcr.io/tonyhopland/ild-runner` — the slim image of a run's container or pod: an OS, the tools every project uses and mise, with no toolchain or agent ([ADR-0035](./adr/0035-run-toolchains.md))
+- `ghcr.io/tonyhopland/ild-runner` — the slim image of a run's container or pod: an OS, the tools every project uses, Chrome and mise, with no toolchain or agent ([ADR-0035](./adr/0035-run-toolchains.md))
 - `ghcr.io/tonyhopland/ild-runner-full` — the previous runner: Node, the .NET SDK, Chrome and three agent CLIs baked in, for a cluster without a store (`ILD_RUN_TOOLCHAINS=off`)
 
-A project that needs system packages beyond the slim runner (a browser for end-to-end tests, a database client) builds its own runner image `FROM ghcr.io/tonyhopland/ild-runner` and points `ILD_CONTAINER_RUNNER_IMAGE` or `ILD_K8S_RUNNER_IMAGE` at it.
+A project that needs system packages beyond the slim runner (a database client, system libraries a native module links against) builds its own runner image `FROM ghcr.io/tonyhopland/ild-runner` and points `ILD_CONTAINER_RUNNER_IMAGE` or `ILD_K8S_RUNNER_IMAGE` at it.
 
 A `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for all of them (amd64 + arm64, each built on a native runner and joined into one multi-arch manifest); pushes to `main` build and test but publish nothing. The compose stack still builds locally with `--build` — it does not pull these images.
 

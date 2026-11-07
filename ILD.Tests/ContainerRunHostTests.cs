@@ -665,6 +665,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
     private static readonly RunAgent Claude = new(ManagedAgentCatalog.ClaudeCode, "2.1.0");
 
+    private const string AgentNodeLine = """{"kind":"agentnode","spec":"node@24","version":"24.22.2","path":["/opt/ild-tools/mise/installs/node/24/bin"],"env":{}}""";
     private const string NodeLine = """{"kind":"tool","spec":"node@20","version":"20.19.1","path":["/opt/ild-tools/mise/installs/node/20.19.1/bin"],"env":{}}""";
     private const string ClaudeLine = """{"kind":"agent","key":"claude-code","version":"2.1.0","path":["/opt/ild-tools/agents/claude-code/2.1.0/wrap"]}""";
 
@@ -693,7 +694,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task Create_installs_the_repositorys_toolchains_and_ilds_agents_into_the_store_and_mounts_it_read_only()
     {
         using var host = NewHost(Options(), [Claude]);
-        var installs = AnswerInstaller(NodeLine, ClaudeLine);
+        var installs = AnswerInstaller(AgentNodeLine, NodeLine, ClaudeLine);
         var repo = MakeBaseRepository("base", ("package.json", "{}"), (".nvmrc", "v20\n"));
 
         await CreateRunAsync(host, _run, repo);
@@ -708,7 +709,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains("ild-tools:/opt/ild-tools:ro", container["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
         var env = container["Env"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
         var home = RunPaths.HomeDirectory(_run);
-        Assert.Contains($"PATH=/opt/ild-tools/mise/installs/node/20.19.1/bin:/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:{RunToolEnvironment.ImagePath}", env);
+        Assert.Contains($"PATH=/opt/ild-tools/mise/installs/node/20.19.1/bin:/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}", env);
         Assert.Contains($"NPM_CONFIG_PREFIX={home}/.local", env);
     }
 

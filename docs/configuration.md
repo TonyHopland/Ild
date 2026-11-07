@@ -115,7 +115,8 @@ Under `container` and `kubernetes`, a run's image has no language toolchain and 
 | `Cargo.toml` | rust | `rust-toolchain.toml`'s channel, else stable |
 | `pom.xml`, `build.gradle(.kts)` | java | `.java-version`, else 21 |
 
-- **Agents** are the CLIs ILD has a current install of, at that install's version: what **Settings** shows, after the update cooldown and any rollback. Each one starts on a Node of its own, whatever Node the project pins.
+- **Agents** are the CLIs ILD has a current install of, at that install's version: what **Settings** shows, after the update cooldown and any rollback. Each one starts on a Node of its own, whatever Node the project pins. That Node is also last on the run's `PATH`, so `npx` starts the [custom MCP servers](#custom-mcp-servers-json) a provider names in every run, while a Node project's own Node comes first.
+- **Chrome** is in the runner image, at `/opt/google/chrome/chrome`, for the chrome-devtools MCP server.
 - **The first run that needs a version** installs it into the store, in a short-lived installer of the runner image that has the engine's default network (a pod with no NetworkPolicy on Kubernetes). It downloads from the toolchains' own sites, GitHub and the npm registry. Later runs that need the same start without it. If an install fails, the run fails with the installer's last lines.
 - **`npm install -g`** and `cargo install` go into the run's home (`$HOME/.local`), which is on `PATH`. When the run's Node has corepack, `pnpm` and `yarn` are its shims, at the version the project's `packageManager` pins.
 - **The store is never pruned.** Remove the volume (`docker volume rm ild-tools`) or empty the claim to start over.
@@ -1116,9 +1117,11 @@ support: a generated, read-only extension registers the server for the run, and
 the node's tools appear to Pi as `mcp__ild__<tool>`. Pi does not attach custom
 MCP servers and does not expose this field.
 
-> The `chrome-devtools` example above requires Chrome in the ILD image
-> (`WITH_CHROME`) and Node/npm (`WITH_NODE`). `--no-sandbox` is required because
-> agents run as a non-root user.
+> The `chrome-devtools` example above requires Chrome and Node/npm where the agent
+> runs: in the ILD image `WITH_CHROME` and `WITH_NODE`; in a run's container or pod,
+> the runner image has Chrome and the run has the agents' Node on `PATH`
+> ([Run toolchains](#run-toolchains)). `--no-sandbox` is required because agents
+> run as a non-root user.
 
 ### Extra CLI arguments
 

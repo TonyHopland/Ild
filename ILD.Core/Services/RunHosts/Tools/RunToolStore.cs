@@ -3,9 +3,10 @@ using System.Text.Json.Nodes;
 
 namespace ILD.Core.Services.RunHosts.Tools;
 
-/// <summary>What a run's commands get from the store: the directories to put first on <c>PATH</c>, and the variables a
-/// toolchain needs (<c>DOTNET_ROOT</c>, <c>JAVA_HOME</c>).</summary>
-public sealed record RunToolEnvironment(IReadOnlyList<string> Path, IReadOnlyDictionary<string, string> Variables, IReadOnlyList<string> Installed)
+/// <summary>What a run's commands get from the store: the directories to put first on <c>PATH</c>, the ones to put
+/// last (<see cref="Fallback"/>), and the variables a toolchain needs (<c>DOTNET_ROOT</c>, <c>JAVA_HOME</c>).</summary>
+public sealed record RunToolEnvironment(
+    IReadOnlyList<string> Path, IReadOnlyDictionary<string, string> Variables, IReadOnlyList<string> Installed, IReadOnlyList<string>? Fallback = null)
 {
     public static readonly RunToolEnvironment None = new([], new Dictionary<string, string>(), []);
 
@@ -15,12 +16,13 @@ public sealed record RunToolEnvironment(IReadOnlyList<string> Path, IReadOnlyDic
     /// <summary>
     /// The environment every command in the run starts with: the toolchains first on <c>PATH</c>, then the agents, then
     /// <c>$HOME/.local/bin</c>, where <c>npm install -g</c> puts what the agent installs (the store is read-only), then
-    /// the image's own.
+    /// the <see cref="Fallback"/>: the agents' own Node, so <c>npx</c> starts the MCP servers a provider names in every
+    /// run, while a project's own Node comes first. Then the image's own.
     /// </summary>
     public IReadOnlyList<string> For(string home)
     {
         var local = $"{home}/.local";
-        var path = string.Join(':', Path.Append($"{local}/bin").Append(ImagePath).Distinct(StringComparer.Ordinal));
+        var path = string.Join(':', Path.Append($"{local}/bin").Concat(Fallback ?? []).Append(ImagePath).Distinct(StringComparer.Ordinal));
         return
         [
             $"PATH={path}",
@@ -136,7 +138,7 @@ public static class RunToolStore
         agent_node=""
         for arg in "$@"; do
           case "$arg" in
-            agentnode=*) spec="${arg#agentnode=}"; ensure_tool "$spec"; agent_node="$(jq -r '.path[0]' "$(manifest_for "$spec")")" ;;
+            agentnode=*) spec="${arg#agentnode=}"; ensure_tool "$spec"; agent_node="$(jq -r '.path[0]' "$(manifest_for "$spec")")"; jq -c '. + {kind: "agentnode"}' "$(manifest_for "$spec")" ;;
             tool=*) spec="${arg#tool=}"; ensure_tool "$spec"; jq -c '. + {kind: "tool"}' "$(manifest_for "$spec")" ;;
             agent=*) IFS='|' read -r key package version bin <<< "${arg#agent=}"; ensure_agent "$key" "$package" "$version" "$bin" ;;
           esac
@@ -148,6 +150,7 @@ public static class RunToolStore
     {
         var tools = new List<(string Spec, List<string> Path, Dictionary<string, string> Env, string Version)>();
         var agents = new List<(string Key, List<string> Path, string Version)>();
+        var fallback = new List<string>();
         foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             JsonNode? item;
@@ -168,6 +171,9 @@ public static class RunToolStore
                 case "agent":
                     agents.Add((item["key"]?.GetValue<string>() ?? "?", path, version));
                     break;
+                case "agentnode":
+                    fallback.AddRange(path);
+                    break;
             }
         }
 
@@ -175,9 +181,11 @@ public static class RunToolStore
         foreach (var tool in tools)
             foreach (var (name, value) in tool.Env)
                 variables.TryAdd(name, value);
+        var first = tools.SelectMany(t => t.Path).Concat(agents.SelectMany(a => a.Path)).Distinct(StringComparer.Ordinal).ToList();
         return new RunToolEnvironment(
-            tools.SelectMany(t => t.Path).Concat(agents.SelectMany(a => a.Path)).Distinct(StringComparer.Ordinal).ToList(),
+            first,
             variables,
-            tools.Select(t => $"{t.Spec.Split('@')[0]}@{t.Version}").Concat(agents.Select(a => $"{a.Key}@{a.Version}")).ToList());
+            tools.Select(t => $"{t.Spec.Split('@')[0]}@{t.Version}").Concat(agents.Select(a => $"{a.Key}@{a.Version}")).ToList(),
+            fallback.Except(first, StringComparer.Ordinal).ToList());
     }
 }

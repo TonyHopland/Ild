@@ -119,8 +119,10 @@ public sealed class RunToolStoreScriptTests : IDisposable
         Assert.True(first.ExitCode == 0, first.StdErr);
         Assert.Equal(first.StdOut, second.StdOut);
         Assert.Equal(["node@24", "npm @earendil-works/pi-coding-agent@1.5.0"], Installs());
-        var line = JsonNode.Parse(first.StdOut.Trim())!;
-        Assert.Equal("agent", line["kind"]!.GetValue<string>());
+        var lines = first.StdOut.Trim().Split('\n').Select(l => JsonNode.Parse(l)!).ToList();
+        Assert.Equal(["agentnode", "agent"], lines.Select(l => l["kind"]!.GetValue<string>()));
+        Assert.Equal([$"{Root}/mise/installs/node/24.0/bin"], lines[0]["path"]!.AsArray().Select(p => p!.GetValue<string>()));
+        var line = lines[1];
         var wrap = Path.Combine(Root, "agents", "pi", "1.5.0", "wrap");
         Assert.Equal([wrap], line["path"]!.AsArray().Select(p => p!.GetValue<string>()));
         var wrapper = File.ReadAllText(Path.Combine(wrap, "pi"));

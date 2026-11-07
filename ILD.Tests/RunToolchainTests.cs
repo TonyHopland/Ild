@@ -199,6 +199,37 @@ public sealed class RunToolchainTests : IDisposable
     }
 
     [Fact]
+    public void The_agents_node_goes_last_so_npx_works_in_every_run_and_a_projects_node_still_wins()
+    {
+        var output = """
+            {"kind":"agentnode","spec":"node@24","version":"24.22.2","path":["/opt/ild-tools/mise/installs/node/24/bin"],"env":{}}
+            {"kind":"tool","spec":"python@3.12","version":"3.12.16","path":["/opt/ild-tools/mise/installs/python/3.12/bin"],"env":{}}
+            {"kind":"agent","key":"pi","version":"1.5.0","path":["/opt/ild-tools/agents/pi/1.5.0/wrap"]}
+            """;
+
+        var environment = RunToolStore.Parse(output);
+
+        Assert.Equal(["/opt/ild-tools/mise/installs/node/24/bin"], environment.Fallback);
+        Assert.Equal(["python@3.12.16", "pi@1.5.0"], environment.Installed);
+        Assert.Equal(
+            "PATH=/opt/ild-tools/mise/installs/python/3.12/bin:/opt/ild-tools/agents/pi/1.5.0/wrap:/h/.local/bin:"
+            + $"/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}",
+            environment.For("/h")[0]);
+    }
+
+    [Fact]
+    public void A_project_on_the_agents_node_version_has_it_once_and_first()
+    {
+        var environment = RunToolStore.Parse("""
+            {"kind":"agentnode","spec":"node@24","version":"24.22.2","path":["/opt/ild-tools/mise/installs/node/24/bin"],"env":{}}
+            {"kind":"tool","spec":"node@24","version":"24.22.2","path":["/opt/ild-tools/mise/installs/node/24/bin"],"env":{}}
+            """);
+
+        Assert.Empty(environment.Fallback!);
+        Assert.StartsWith("PATH=/opt/ild-tools/mise/installs/node/24/bin:/h/.local/bin:", environment.For("/h")[0]);
+    }
+
+    [Fact]
     public void A_path_outside_the_store_is_never_put_on_a_runs_path()
     {
         var environment = RunToolStore.Parse("""{"kind":"tool","spec":"node@20","version":"20","path":["/usr/evil/bin","/opt/ild-tools/mise/installs/node/20/bin"],"env":{}}""");
