@@ -473,19 +473,19 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             }
         }
 
-        failures.AddRange(await Task.WhenAll(launched.Select(l => AwaitHealthAsync(l.Service, l.Process, l.HealthUrl, progress, cancellationToken))));
+        failures.AddRange(await Task.WhenAll(launched.Select(l => AwaitHealthAsync(l.Service, l.Process, l.HealthUrl, runtime.WorktreePath, progress, cancellationToken))));
         return failures.FirstOrDefault(failure => failure != null);
     }
 
     private async Task<Exception?> AwaitHealthAsync(
-        PreviewServiceConfig service, ManagedPreviewProcess process, string healthUrl, StartProgress progress, CancellationToken cancellationToken)
+        PreviewServiceConfig service, ManagedPreviewProcess process, string healthUrl, string worktreePath, StartProgress progress, CancellationToken cancellationToken)
     {
         await ReportServiceAsync(progress, service.Name, row => row.Status = "waitingForHealth");
 
         Exception? failure = null;
         try
         {
-            await WaitForHealthAsync(service.Name, healthUrl, cancellationToken, process);
+            await WaitForHealthAsync(service.Name, healthUrl, worktreePath, cancellationToken, process);
         }
         catch (InvalidOperationException ex)
         {
@@ -605,7 +605,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 throw;
             }
 
-            await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), cancellationToken);
+            await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), runtime.WorktreePath, cancellationToken);
 
             return BuildResponse(loaded, runtime);
         }
@@ -1861,15 +1861,17 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// A process that must stay up while it is probed: once it has exited and a probe has
     /// still failed, the wait ends at once rather than at the timeout.
     /// </param>
-    private async Task WaitForHealthAsync(string serviceName, string healthUrl, CancellationToken cancellationToken, ManagedPreviewProcess? watched = null)
+    private async Task WaitForHealthAsync(
+        string serviceName, string healthUrl, string worktreePath, CancellationToken cancellationToken, ManagedPreviewProcess? watched = null)
     {
         using var client = _httpClientFactory.CreateClient();
+        var probed = await ReachableHealthUrlAsync(_host, healthUrl, worktreePath, cancellationToken);
         for (var attempt = 0; attempt < 60; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                using var response = await client.GetAsync(healthUrl, cancellationToken);
+                using var response = await client.GetAsync(probed, cancellationToken);
                 if (response.IsSuccessStatusCode)
                     return;
             }
@@ -1886,7 +1888,26 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
         }
 
-        throw new InvalidOperationException($"Preview service '{serviceName}' did not become healthy at {healthUrl}.");
+        throw new InvalidOperationException(
+            $"Preview service '{serviceName}' did not become healthy at {healthUrl}{(probed == healthUrl ? "" : $" (reached at {probed})")}.");
+    }
+
+    /// <summary>
+    /// Where ILD reaches <paramref name="healthUrl"/>. A service's health URL names its own machine's loopback
+    /// (<c>http://127.0.0.1:${PORT}/health</c>), which is ILD's only when the preview runs on ILD's machine. A preview in a
+    /// run's pod or container is reached where the preview proxy reaches it, at the address the run host gives for the
+    /// port; any other host is probed as written.
+    /// </summary>
+    internal static async Task<string> ReachableHealthUrlAsync(IRunHost host, string healthUrl, string worktreePath, CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(healthUrl, UriKind.Absolute, out var uri)
+            || !(uri.IsLoopback || uri.Host is "0.0.0.0" or "[::]"))
+            return healthUrl;
+
+        var target = await host.PreviewTargetAsync(worktreePath, uri.Port, cancellationToken);
+        return target.Host == uri.Host && target.Port == uri.Port
+            ? healthUrl
+            : new UriBuilder(uri) { Host = target.Host, Port = target.Port }.Uri.ToString();
     }
 
     /// <summary>
