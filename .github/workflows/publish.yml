@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [ild, ild-runner, ild-workitem-server]
+        image: [ild, ild-runner, ild-runner-full, ild-workitem-server]
         arch: [amd64, arm64]
         # Per-image and per-arch attributes, folded into all four combinations.
         include:
@@ -40,10 +40,17 @@ jobs:
               WITH_DOTNET_SDK=1
               WITH_CHROME=1
               WITH_CERTS=0
-          # The pod image of the kubernetes run host: the ild image's toolchains and the agent CLIs, without ILD.
+          # The slim image of a run's pod or container: an OS and mise, no toolchains or agents. ILD installs those
+          # per repository into a shared store the run mounts (docs/adr/0035-run-toolchains.md).
           - image: ild-runner
             dockerfile: Dockerfile
             target: runner
+            extra_build_args: ""
+          # The previous runner: the ild image's toolchains and three agent CLIs baked in, for a Kubernetes cluster
+          # without a shared toolchain store.
+          - image: ild-runner-full
+            dockerfile: Dockerfile
+            target: runner-full
             extra_build_args: |
               WITH_NODE=1
               WITH_DOTNET_SDK=1
@@ -133,7 +140,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [ild, ild-runner, ild-workitem-server]
+        image: [ild, ild-runner, ild-runner-full, ild-workitem-server]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4

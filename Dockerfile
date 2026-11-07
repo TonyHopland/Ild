@@ -1,5 +1,7 @@
 ARG NODE_VERSION=26-alpine
 ARG DOTNET_VERSION=10.0
+# The base of the slim runner image (the `runner` target).
+ARG RUNNER_BASE=ubuntu:24.04
 # Selects the final stage's base image (see the final-base-* stages below).
 # Declared here, before the first FROM, so it can be used in a FROM line.
 ARG WITH_DOTNET_SDK=0
@@ -62,6 +64,14 @@ RUN dotnet publish -c Release -o /app/publish --no-restore ${VERSION:+-p:Version
 # Build the MCP server so it can be shipped alongside ILD.Api
 WORKDIR /src/ILD.McpServer
 RUN dotnet publish -c Release -o /app/mcp-server --no-restore ${VERSION:+-p:Version=$VERSION}
+
+# The same server for the slim runner image, self-contained: a run has no .NET of ILD's, and the one its project
+# brings may be too old to run the server, or absent. Started through its apphost, /app/ild-mcp-server, the path
+# the agent's MCP config names in both images.
+ARG TARGETARCH
+RUN rid="linux-$( [ "${TARGETARCH:-amd64}" = "arm64" ] && echo arm64 || echo x64 )" && \
+    dotnet publish -c Release -r "$rid" --self-contained -p:PublishSingleFile=true \
+      -o /app/mcp-server-runner ${VERSION:+-p:Version=$VERSION}
 
 # The final stage's base is picked by WITH_DOTNET_SDK: work-item execution that
 # builds .NET repos needs the SDK, so in that case we start from the official
@@ -386,13 +396,42 @@ EXPOSE 8080
 ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
 CMD ["dotnet", "ILD.Api.dll"]
 
-# The image a loop run's pod runs under ILD_RUN_HOST=kubernetes (docs/adr/0033-kubernetes-run-host.md): what the
-# ILD image provides for the agent, without ILD. The coding agents the ILD image installs on demand onto /data are
-# baked in here, since a pod has no data volume of ILD's, and are found on PATH by name. The MCP server stays, at the
-# path the agent's MCP config names. tini is the pod's init, which reaps what a killed command leaves behind. /ild-run is the runner's, so
-# the named volume a container run host mounts there starts out writable by it (a volume takes the ownership of the image directory).
-# Built with the same WITH_* arguments as the ILD image. Declared before the last stage so the default target stays ILD.
-FROM final AS runner
+# The slim image a loop run's pod or container runs under (docs/adr/0035-run-toolchains.md): an OS, the tools every
+# project uses (git, a shell, a compiler, curl, jq, ripgrep) and mise. No language toolchain and no coding agent: ILD
+# installs the ones a repository needs, at the versions it picks, into a shared store the run mounts read-only, so a
+# node project does not carry a .NET SDK. The same image installs them: ILD runs mise in it against the store.
+# The MCP server is the self-contained build, at the path the agent's MCP config names. tini is the init, which reaps
+# what a killed command leaves behind. /ild-run is the runner's, so the named volume a container run host mounts there
+# starts out writable by it (a volume takes the ownership of the image directory).
+FROM ${RUNNER_BASE} AS runner
+ARG RUNNER_UID=10001
+# Empty takes the newest mise in its apt repository.
+ARG MISE_VERSION=
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash tini git ca-certificates curl wget gnupg xz-utils unzip zip jq ripgrep build-essential \
+      libicu74 libatomic1 zlib1g procps less openssh-client && \
+    install -dm 755 /etc/apt/keyrings && \
+    wget -qO - https://mise.jdx.dev/gpg-key.pub | gpg --dearmor > /etc/apt/keyrings/mise-archive-keyring.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.gpg] https://mise.jdx.dev/deb stable main" > /etc/apt/sources.list.d/mise.list && \
+    apt-get update && apt-get install -y --no-install-recommends "mise${MISE_VERSION:+=$MISE_VERSION}" && \
+    rm -rf /var/lib/apt/lists/* && \
+    (getent group ${RUNNER_UID} >/dev/null || groupadd --gid ${RUNNER_UID} runner) && \
+    (getent passwd ${RUNNER_UID} >/dev/null || useradd --uid ${RUNNER_UID} --gid ${RUNNER_UID} --no-create-home --home-dir /tmp --shell /bin/bash runner) && \
+    git config --system --add safe.directory '*' && \
+    mkdir -p /app /ild-run /opt/ild-tools && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /opt/ild-tools && chmod 0755 /ild-run
+COPY --from=build --chown=${RUNNER_UID}:${RUNNER_UID} /app/mcp-server-runner/ /app/
+ENV HOME=/tmp
+USER ${RUNNER_UID}
+WORKDIR /app
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]
+
+# The previous runner: what the ILD image provides for the agent, without ILD, with three coding agents baked in. For a
+# Kubernetes cluster that has no shared toolchain store (ILD_K8S_TOOLS_CLAIM unset), where a run cannot be given
+# toolchains at run time. Built with the same WITH_* arguments as the ILD image. Declared before the last stage so the
+# default target stays ILD.
+FROM final AS runner-full
 ARG RUNNER_UID=10001
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends tini bash && \
