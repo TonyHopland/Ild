@@ -453,6 +453,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                     row.Status = "starting";
                     row.HealthUrl = healthUrl;
                     row.PublicUrl = publicUrl;
+                    row.LocalUrl = ComposeLocalUrl(port);
                     row.LogFilePath = process.LogFilePath;
                     row.ProcessId = process.Process.Id;
                 });
@@ -1633,6 +1634,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             SuggestedPort = process.Service.SuggestedPort,
             HealthUrl = healthUrl,
             PublicUrl = publicUrl,
+            LocalUrl = ComposeLocalUrl(port),
             LogFilePath = process.LogFilePath,
             ProcessId = process.Process.Id,
             ExitCode = process.Process.HasExited ? process.Process.ExitCode : null,
@@ -1659,6 +1661,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         => ComposePublicUrl(
             ResolveOptionalTemplate(service.PublicUrl, runtime, service.Port),
             _proxyBase, runtime.WorkItemId, service.Name, runtime.PublicHost, port, singlePublicService);
+
+    /// <summary>The loopback address of a service's allocated port; null without one.</summary>
+    internal static string? ComposeLocalUrl(int? port)
+        => port is int allocated ? $"http://127.0.0.1:{allocated}" : null;
 
     /// <summary>The precedence of <see cref="BuildPublicUrl"/> over values already resolved.</summary>
     internal static string? ComposePublicUrl(
@@ -1782,6 +1788,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             row.Status = "stopped";
             row.HealthUrl = null;
             row.PublicUrl = null;
+            row.LocalUrl = null;
         }
     }
 
@@ -2417,38 +2424,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             lock (_writers)
             {
-                var next = Copy(_snapshot);
+                var next = _snapshot.Clone();
                 change(next);
                 _snapshot = next;
             }
         }
-
-        private static WorktreePreviewResponse Copy(WorktreePreviewResponse source) => new()
-        {
-            Configured = source.Configured,
-            State = source.State,
-            WorktreePath = source.WorktreePath,
-            ConfigPath = source.ConfigPath,
-            ProfileName = source.ProfileName,
-            PublicHost = source.PublicHost,
-            StateDirectory = source.StateDirectory,
-            Message = source.Message,
-            Install = source.Install,
-            Services = source.Services.Select(row => new WorktreePreviewServiceResponse
-            {
-                Name = row.Name,
-                PortAlias = row.PortAlias,
-                Status = row.Status,
-                Port = row.Port,
-                SuggestedPort = row.SuggestedPort,
-                HealthUrl = row.HealthUrl,
-                PublicUrl = row.PublicUrl,
-                LogFilePath = row.LogFilePath,
-                ProcessId = row.ProcessId,
-                ExitCode = row.ExitCode,
-                Error = row.Error,
-            }).ToList(),
-        };
     }
 
     private sealed record LoadedPreviewConfig(bool Configured, string WorktreePath, string ConfigPath, IldWorkspaceConfig? Config, string? Message);

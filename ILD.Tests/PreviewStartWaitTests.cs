@@ -77,7 +77,7 @@ public class PreviewStartWaitTests
     {
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(m => m.GetWorkItemAsync(id)).ReturnsAsync(new WorkItemView { Id = id, WorktreePath = WorktreePath });
-        return new AgentController(
+        var controller = new AgentController(
             workItems.Object,
             new Mock<ILoopTemplateManager>().Object,
             db.LoopRuns,
@@ -89,6 +89,8 @@ public class PreviewStartWaitTests
             new Mock<IChatNotifier>().Object,
             TestActors.Instance,
             new Mock<IWorkItemNotifier>().Object);
+        controller.ControllerContext = new ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() };
+        return controller;
     }
 
     private static WorkItemsController BuildUser(string id, Mock<IWorktreePreviewService> preview, TestDb db)
