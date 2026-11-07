@@ -68,15 +68,37 @@ public sealed class LocalRunHost : IRunHost
 
     // -- Commands ----------------------------------------------------------------
 
-    public Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
+    public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
         var psi = command.AsAgent ? RouteAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : command.Start;
         EnsureRouted(psi);
-        var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null");
+        var process = await StartAsync(psi, ct);
         var tracked = new LocalRunProcess(process, Forget(command.OwnerId));
         if (command.OwnerId != Guid.Empty)
             _running.GetOrAdd(command.OwnerId, _ => new()).TryAdd(tracked, 0);
-        return Task.FromResult<IRunProcess>(tracked);
+        return tracked;
+    }
+
+    // Linux refuses to run a file that some process still has open for writing, and a child forked by another thread
+    // holds a copy of every descriptor until it execs, so a binary written a moment ago can be refused for a few
+    // milliseconds whoever wrote it: a CLI just installed, a script just made.
+    private const int TextFileBusy = 26;
+    private static readonly TimeSpan BusyRetryDelay = TimeSpan.FromMilliseconds(25);
+    private const int BusyRetries = 40;
+
+    internal static async Task<Process> StartAsync(ProcessStartInfo psi, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null");
+            }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == TextFileBusy && attempt < BusyRetries)
+            {
+                await Task.Delay(BusyRetryDelay, ct);
+            }
+        }
     }
 
     /// <summary>

@@ -228,3 +228,37 @@ public class LocalRunHostTrackingTests
         new LocalRunHost().EnsureRouted(new ProcessStartInfo("/bin/true"));
     }
 }
+
+public class LocalRunHostBusyBinaryTests
+{
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task A_binary_that_is_still_open_for_writing_is_started_once_it_is_closed()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ild-busy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var script = Path.Combine(directory, "tool.sh");
+        try
+        {
+            var writer = new FileStream(script, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+            await writer.WriteAsync("#!/bin/sh\necho started\n"u8.ToArray(), TestContext.Current.CancellationToken);
+            await writer.FlushAsync(TestContext.Current.CancellationToken);
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var release = Task.Run(async () =>
+            {
+                await Task.Delay(150, TestContext.Current.CancellationToken);
+                await writer.DisposeAsync();
+            }, TestContext.Current.CancellationToken);
+
+            var result = await new ProcessRunner().RunAsync(script, [], directory, TestContext.Current.CancellationToken);
+            await release;
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal("started", result.StdOut.Trim());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}
