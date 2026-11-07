@@ -21,7 +21,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_WORKITEM_SERVER_URL`                    | URL used to auto-seed the global WorkItem Server connection                                                                |
 | `ILD_WORKITEM_SERVER_API_KEY`                | API key used to auto-seed the global WorkItem Server connection                                                            |
 | `ILD_API_URL`                                | Base URL agents and the MCP server use to call back into the ILD API                                                       |
-| `ILD_RUN_HOST`                               | Where runs live: `local` (default, the agent uid split described below) or `kubernetes` (a pod per loop run; see [Kubernetes run host](#kubernetes-run-host)). `container` is an accepted name but refuses to start until it is built; the host is never detected |
+| `ILD_RUN_HOST`                               | Where runs live: `local` (default, the agent uid split described below) `container` (a container per loop run on this machine; see [Container run host](#container-run-host)) or `kubernetes` (a pod per loop run; see [Kubernetes run host](#kubernetes-run-host)). The host is never detected |
 | `ILD_ALLOWED_ORIGINS`                        | Comma-separated CORS origins allowed to call the ILD API                                                                   |
 | `ILD_PREVIEW_PROXY_BASE`                     | Origin worktree previews are served under, e.g. `http://ild.localhost:8080`. Unset ⇒ preview proxying is off               |
 | `ILD_PREVIEW_PUBLIC_HOST`                    | Host used to build direct preview URLs when no proxy base is set (default `127.0.0.1`)                                     |
@@ -59,7 +59,7 @@ Nothing in ILD is specific to a CNI or a storage backend. The cluster needs Kube
 | `ILD_K8S_STORAGE_CLASS` | StorageClass of a run's volume (`ReadWriteOnce`). Unset: the cluster's default class. At startup ILD warns if the class's `reclaimPolicy` is not `Delete`, because a kept volume outlives its run |
 | `ILD_K8S_STORAGE_SIZE` | Size of a run's volume (default `10Gi`) |
 | `ILD_K8S_CPU_REQUEST` / `ILD_K8S_MEMORY_REQUEST` | What a pod asks the scheduler for (default `100m` / `256Mi`). Low on purpose, so runs that wait do not fill the scheduler's view of the cluster |
-| `ILD_K8S_CPU_LIMIT` / `ILD_K8S_MEMORY_LIMIT` | What a pod may use (default `4` / `8Gi`). Requests below limits make the pods Burstable. Run concurrency is the cap that protects the nodes from memory overload |
+| `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT` (older names `ILD_K8S_CPU_LIMIT` / `ILD_K8S_MEMORY_LIMIT`) | What a pod may use (default `4` / `8Gi`). Requests below limits make the pods Burstable. Run concurrency is the cap that protects the nodes from memory overload |
 | `ILD_K8S_ILD_POD_SELECTOR` | Comma-separated `key=value` labels of ILD's own pods (default `app.kubernetes.io/name=ild`). The run's network policy lets the pod reach only pods with these labels, and be reached only by them |
 | `ILD_NETWORK_PROXY_PORT` | As elsewhere. Under `kubernetes` the egress proxy listens on all interfaces, and the pod's network policy allows that port |
 | `ILD_K8S_SWEEP_INTERVAL_MINUTES` | How often the sweeper removes the objects of finished or missing runs (default `10`); it also runs once at startup |
@@ -74,6 +74,24 @@ What a run's pod gets:
 - **Git.** Code goes in and out as bundles over exec. The pod never holds the git credential or the mirror. It has no `.gitconfig`: set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` on ILD and they are set on every pod, so commits have an author.
 - **Models.** The agent CLIs reach the model through ILD's gateway with a placeholder credential. A provider that needs a read-only copy of its credential is not supported in a pod yet.
 - **Agent CLIs** are run by name from the pod image's `PATH`, not from the ILD data volume.
+
+## Container run host
+
+With `ILD_RUN_HOST=container`, each **loop run** gets a container, a volume and a network of its own on the machine ILD runs on, through the Docker-compatible API of Docker or Podman. Chats and scheduled jobs stay on the `local` host. Choosing between the hosts, socket trust and setup (ILD on the host, ILD in a container) are in [Container run host](deployment.md#container-run-host); the decisions are in [ADR-0034](adr/0034-container-run-host.md).
+
+| Variable | Meaning |
+| --- | --- |
+| `ILD_CONTAINER_SOCKET` | **Required.** The path of the engine's unix socket (a `unix://` prefix is accepted). Never detected: whoever holds the socket controls every container on the host, so rootless Podman is the supported setup |
+| `ILD_CONTAINER_RUNNER_IMAGE` | **Required.** The container image: the agent CLIs and toolchains, without ILD. The published `ild-runner` image, or one you build from the `runner` target of the Dockerfile. It must already be on the host |
+| `ILD_API_URL` | **Required.** ILD's address as the run's container reaches it. Its host must be a name (not `localhost`, not an IP address): each container is given that name for ILD's address on its network. The container reaches the model gateway and the MCP endpoint there |
+| `ILD_CONTAINER_ILD_CONTAINER` | The name of ILD's own container, when ILD runs in one. ILD connects itself to each run's network and the run reaches it at its address there. Unset: ILD runs on the host and the run reaches it at the network's gateway |
+| `ILD_CONTAINER_INSTANCE` | Names this ILD install, default `default`. Every object is labelled `ild/instance=<it>` and the sweeper only touches its own, so two installs can share an engine if they set different names |
+| `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT` | What a run's container may use (default `4` / `8Gi`); Kubernetes quantities such as `500m`, `1.5`, `512Mi`. `0` means no limit, for a rootless engine where the cgroup controller is not delegated. The `kubernetes` host reads the same two settings, and its older `ILD_K8S_CPU_LIMIT` / `ILD_K8S_MEMORY_LIMIT` when they are unset |
+| `ILD_NETWORK_PROXY_PORT` | As elsewhere. Under `container` the egress proxy listens on all interfaces, since the run reaches it over its network |
+| `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES` | How often the sweeper removes the objects of finished or missing runs (default `10`); it also runs once at startup |
+| `ILD_CONTAINER_READY_TIMEOUT_SECONDS` | How long a starting run waits for its container to run (default `120`) |
+
+What a run gets: a named volume, an `internal` network that reaches only ILD, and a container (uid 10001, all capabilities dropped, `no-new-privileges`, default seccomp) from the runner image, all labelled `app.kubernetes.io/managed-by=ild`, `ild/instance` and `ild/run`. As with a pod, code goes in and out as bundles over exec, the container never holds the git credential, and the model is reached through ILD's gateway with a placeholder credential. Set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` on ILD so commits have an author.
 
 ## Agent telemetry
 

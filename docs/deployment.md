@@ -205,6 +205,21 @@ Services that need the browser-facing hostname to build those URLs themselves ca
 set `"rewriteHost": false` (see [Configuration](./configuration.md#service-fields))
 and add the preview wildcard to their own allowed-hosts list.
 
+## Choosing a run host
+
+`ILD_RUN_HOST` decides where a loop run's agent, commands and files live. It is always set explicitly and never detected; unset means `local`. Chats, scheduled jobs and the provider sign-in terminal always stay on the machine ILD runs on.
+
+| | `local` (default) | `container` | `kubernetes` |
+| --- | --- | --- | --- |
+| A run is | A worktree on ILD's disk, its processes children of ILD under a lower-trust uid ([ADR-0014](adr/0014-agent-uid-isolation.md)) | A container, a volume and a network on the same machine, through the Docker-compatible API ([ADR-0034](adr/0034-container-run-host.md)) | A pod and a volume claim, spread across nodes ([ADR-0033](adr/0033-kubernetes-run-host.md)) |
+| Needs | Nothing | A rootless Podman (or rootless Docker) socket and the runner image | A cluster, RBAC, a CNI that enforces NetworkPolicy |
+| Isolates the agent from ILD | By uid: it cannot read ILD's secrets, but shares the kernel, the filesystem tree and the network of ILD's container | By container: its own filesystem, process and network namespaces, no capabilities, no route but to ILD | The same, by pod and network policy |
+| Isolates runs from each other | By uid only: they share one uid and the worktree root | Yes: a volume, a container and a network each | Yes |
+| Spreads load | No | No: one machine | Yes |
+| Trust you hand over | None | Whoever holds the socket controls every container on the host | The service account's Role in the run namespace |
+
+Pick `local` for a single-user install where the agent may see the machine. Pick `container` when you want per-run isolation on one machine. Pick `kubernetes` when you already run a cluster and want runs spread over it. Moving between them only affects new runs; a run keeps the host it started on until it is cleaned up.
+
 ## Kubernetes run host
 
 `ILD_RUN_HOST=kubernetes` runs each loop run in a pod of its own, so runs are isolated from ILD and from each other and the scheduler spreads them across nodes. It makes no assumption about the cluster's CNI or storage backend. Every setting is in [Configuration](configuration.md#kubernetes-run-host); the decisions are in [ADR-0033](adr/0033-kubernetes-run-host.md).
@@ -239,6 +254,63 @@ and add the preview wildcard to their own allowed-hosts list.
 ### Cleanup
 
 Deleting a run's Secret deletes its pod, volume claim and network policy through their owner references. A sweeper runs at startup and every `ILD_K8S_SWEEP_INTERVAL_MINUTES`, and deletes the labelled objects of runs that are finished or no longer exist; it only touches objects whose `ild/instance` is its own. An ILD that is killed mid-run therefore leaves nothing behind after its next start.
+
+## Container run host
+
+`ILD_RUN_HOST=container` gives each loop run a container of its own on the machine ILD runs on. It talks to Docker or Podman through the Docker-compatible REST API on a unix socket, so one implementation covers both. It does not spread load, but it isolates a run from ILD and from other runs the way a pod does. Every setting is in [Configuration](configuration.md#container-run-host); the decisions are in [ADR-0034](adr/0034-container-run-host.md); the live check is [`run-hosts/container-verification.md`](run-hosts/container-verification.md).
+
+### Socket trust
+
+Whoever holds the socket controls every container on the host: it can start a privileged container that mounts the host's root. So **the socket you give ILD is a trust decision, and ILD never looks for one**; `ILD_CONTAINER_SOCKET` has no default.
+
+- **Rootless Podman is the supported setup.** Its socket is your user account's: a container it starts has no more reach than the account that runs it. Enable it with `systemctl --user enable --now podman.socket`; the socket is `$XDG_RUNTIME_DIR/podman/podman.sock`.
+- **A rootful Docker or Podman socket is root-equivalent on the host**, and so is ILD, and so is anything that gets code execution in ILD. Use it only on a machine you would give ILD root on. ILD asks the engine whether it is rootless (Podman's `/libpod/info`, else Docker's `/info`) and shows a warning in **Settings > General** and in its log when it is not. If the engine does not say, ILD shows nothing rather than guess; this paragraph is then the warning.
+
+### What a run gets
+
+- A named volume for its files, an `internal` network of its own, and a container from the runner image started with `sleep infinity` as uid 10001, all capabilities dropped, `no-new-privileges`, the engine's default seccomp profile, and the CPU and memory limits of `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT`. The three are made at Start and deleted at Cleanup; the container stays up while a Human node waits, so previews keep working.
+- The network is `internal`, so the container cannot reach the internet or the host's other networks. It reaches ILD, and only ILD: the model gateway, the MCP endpoint and the egress proxy. Anything else the agent connects to goes through the egress proxy and its limits, which listens on all interfaces under this host.
+- The container is given the host name in `ILD_API_URL` as ILD's address on its own network. The code goes in and out as bundles over exec, so the container never holds the git credential or the mirror.
+- Every object is labelled `app.kubernetes.io/managed-by=ild`, `ild/instance=<ILD_CONTAINER_INSTANCE>` and `ild/run=<run id>`. There are no owner references on a single host, so Cleanup deletes the container, the volume and the network explicitly, and the sweeper (once at startup, then every `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`) deletes the labelled objects of runs that are finished or gone. It only touches its own instance. An ILD that is killed mid-run leaves nothing behind after its next start.
+
+### ILD on the host
+
+Run ILD as a normal process and point it at the socket:
+
+```sh
+ILD_RUN_HOST=container
+ILD_CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
+ILD_CONTAINER_RUNNER_IMAGE=ghcr.io/tonyhopland/ild-runner:latest
+ILD_API_URL=http://$(hostname):8080
+ASPNETCORE_URLS=http://0.0.0.0:8080
+```
+
+- Build or pull the runner image first (`podman pull`, or `podman build --target runner -t ild-runner .`); ILD does not pull it and says so when it is missing.
+- `ILD_API_URL` must name ILD by a host name that is not `localhost` and not an IP address, and that resolves on this machine too (the machine's name, or an `/etc/hosts` entry): each run's container is given that name for ILD's address on its network, which is the network's gateway, that is, the host.
+- ILD must listen on an address the run's network can reach, not only on loopback, and the host's firewall must let the run network's subnet reach ILD's port and the egress proxy port (`ILD_NETWORK_PROXY_PORT`).
+- The preview proxy forwards to the container's address on its network, so ILD must be able to route to it. With rootful Docker or Podman it can. A rootless Podman's networks live in a user namespace the host does not route into; run ILD in a container (below) in that case.
+
+### ILD in a container
+
+Mount the socket into ILD's container and tell ILD its own container's name. ILD then connects itself to each run's network and the run reaches it at its address there; nothing is needed from the host's network. As a compose override:
+
+```yaml
+# docker-compose.container-runs.yml
+#   docker compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d
+services:
+  ild:
+    environment:
+      - ILD_RUN_HOST=container
+      - ILD_CONTAINER_SOCKET=/run/container.sock
+      - ILD_CONTAINER_RUNNER_IMAGE=ghcr.io/tonyhopland/ild-runner:latest
+      - ILD_CONTAINER_ILD_CONTAINER=ild # this service's container_name
+      - ILD_API_URL=http://ild:8080
+    volumes:
+      # Rootless Podman: ${XDG_RUNTIME_DIR}/podman/podman.sock. Rootful engines: see Socket trust above.
+      - ${ILD_CONTAINER_SOCKET_HOST:?Set ILD_CONTAINER_SOCKET_HOST to the engine socket on the host}:/run/container.sock
+```
+
+ILD's process must be able to open the socket: ILD drops to uid 10001 after its entrypoint, so the socket needs to be accessible to that uid inside the container (with rootless Podman, the socket's owner is `root` inside a container run by the same user, and a `group_add` or a looser mode on the socket may be needed). The runner image must be on the host the socket belongs to.
 
 ## Agent network limits (`NET_ADMIN`)
 
