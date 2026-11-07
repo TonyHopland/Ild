@@ -1,3 +1,4 @@
+using ILD.Tests.Fakes;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Network;
@@ -194,10 +195,10 @@ public sealed class ChatServiceTests : IDisposable
     /// freshly-created worktree directory, so the Chat Context can resolve and
     /// grant it. Returns the worktree path (cleaned up on Dispose with the root).
     /// </summary>
-    private async Task<string> SeedActiveRunAsync(string workItemId, LoopRunStatus status = LoopRunStatus.Running)
+    private async Task<string> SeedActiveRunAsync(string workItemId, LoopRunStatus status = LoopRunStatus.Running, string? path = null, string? branch = null)
     {
-        var worktreePath = Path.Combine(_scratchRoot, "worktrees", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(worktreePath);
+        var worktreePath = path ?? Path.Combine(_scratchRoot, "worktrees", Guid.NewGuid().ToString("N"));
+        if (path is null) Directory.CreateDirectory(worktreePath);
 
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"t-{Guid.NewGuid():N}" };
         _db.Context.LoopTemplates.Add(template);
@@ -216,6 +217,7 @@ public sealed class ChatServiceTests : IDisposable
             LoopTemplateVersionId = version.Id,
             Status = status,
             WorktreePath = worktreePath,
+            BranchName = branch,
             StartedAt = DateTime.UtcNow,
         });
         await _db.Context.SaveChangesAsync();
@@ -471,6 +473,54 @@ public sealed class ChatServiceTests : IDisposable
         Assert.NotNull(adapter.LastContext!.AdditionalAllowedDirectories);
         Assert.Contains(worktreePath, adapter.LastContext.AdditionalAllowedDirectories!);
         Assert.Contains(worktreePath, adapter.LastContext.Prompt);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExecuteTurnAsync_leaves_out_a_run_worktree_the_chat_cannot_reach(bool containerRun)
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var runHost = new FakeRunHost();
+        var svc = new ChatService(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: runHost);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" }, TestContext.Current.CancellationToken);
+        string worktreePath;
+        if (containerRun)
+        {
+            worktreePath = $"/ild-run/{Guid.NewGuid():N}/repo";
+        }
+        else
+        {
+            worktreePath = Path.Combine(_scratchRoot, "worktrees", Guid.NewGuid().ToString("N"));
+            var session = _db.Context.ChatSessions.Single();
+            session.ScratchPath = $"/ild-chat/{Guid.NewGuid():N}";
+            await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+        runHost.WithDirectory(worktreePath);
+        await SeedActiveRunAsync("wi-99", path: worktreePath, branch: "ild/wi-99-run");
+
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
+
+        Assert.Null(adapter.LastContext!.AdditionalAllowedDirectories);
+        Assert.DoesNotContain(worktreePath, adapter.LastContext.Prompt);
+        Assert.Contains("isolated container", adapter.LastContext.Prompt);
+        Assert.Contains("ild/wi-99-run", adapter.LastContext.Prompt);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_names_no_branch_when_the_unreachable_run_has_none()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" }, TestContext.Current.CancellationToken);
+        await SeedActiveRunAsync("wi-99", path: $"/ild-run/{Guid.NewGuid():N}/repo");
+
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
+
+        Assert.Contains("isolated container", adapter.LastContext!.Prompt);
+        Assert.DoesNotContain("clone_repository", adapter.LastContext.Prompt);
     }
 
     [Fact]
