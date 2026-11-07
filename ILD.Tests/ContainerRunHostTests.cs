@@ -686,15 +686,38 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_socket_that_cannot_say_is_not_warned_about()
+    public async Task An_engine_that_answers_but_cannot_say_whether_it_is_rootless_is_not_warned_about()
     {
         Assert.Null(await _host.WarningAsync(TestContext.Current.CancellationToken));
 
         _api.Info = JsonNode.Parse("""{"Name":"engine without security options"}""");
         Assert.Null(await _host.WarningAsync(TestContext.Current.CancellationToken));
+    }
 
-        using var unreachable = NewHost(Options() with { Socket = Path.Combine(_scratch, "nothing.sock") });
-        Assert.Null(await unreachable.WarningAsync(TestContext.Current.CancellationToken));
+    [Fact]
+    public async Task A_socket_ild_cannot_reach_is_warned_about_with_its_path_and_why()
+    {
+        var path = Path.Combine(_scratch, "nothing.sock");
+        using var unreachable = NewHost(Options() with { Socket = path });
+
+        var warning = await unreachable.WarningAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(warning);
+        Assert.Contains(path, warning);
+        Assert.Contains("cannot reach", warning);
+        Assert.DoesNotContain("docker:80", warning);
+    }
+
+    [Fact]
+    public async Task The_unreachable_warning_goes_once_the_socket_answers()
+    {
+        var path = Path.Combine(_scratch, "later.sock");
+        using var host = NewHost(Options() with { Socket = path });
+        Assert.NotNull(await host.WarningAsync(TestContext.Current.CancellationToken));
+
+        File.CreateSymbolicLink(path, _api.SocketPath);
+
+        Assert.Null(await host.WarningAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -706,6 +729,16 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":false}}}""");
         await _host.CheckAsync(TestContext.Current.CancellationToken);
         Assert.Contains(_log.Warnings, w => w.Contains("not rootless"));
+    }
+
+    [Fact]
+    public async Task The_startup_check_logs_a_socket_it_cannot_reach()
+    {
+        using var unreachable = NewHost(Options() with { Socket = Path.Combine(_scratch, "nothing.sock") });
+
+        await unreachable.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(_log.Warnings, w => w.Contains("cannot reach"));
     }
 
     // -- Settings ----------------------------------------------------------------

@@ -331,26 +331,42 @@ public sealed class ContainerRunHost : ExecRunHost, IDisposable
     }
 
     /// <summary>
-    /// Says so when the socket is rootful: whoever holds it controls every container on the host, which is root there.
-    /// Asks Podman's own info first, then Docker's; says nothing when neither answers or neither tells.
+    /// Says so when ILD cannot reach the engine, since no run can start then, and when the socket is rootful: whoever
+    /// holds it controls every container on the host, which is root there. Asks Podman's own info first, then Docker's;
+    /// says nothing about rootless when the engine answers but neither tells.
     /// </summary>
     public override async Task<string?> WarningAsync(CancellationToken ct = default)
     {
         if (_warning is not null) return _warning;
+        // A socket that stalls must not hold the settings page for the HTTP client's own five minutes.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            // A socket that stalls must not hold the settings page for the HTTP client's own five minutes.
-            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            limit.CancelAfter(TimeSpan.FromSeconds(5));
             var rootless = await IsRootlessAsync(limit.Token);
             if (rootless != false) return null;
             return _warning = $"The container engine at {_options.Socket} is not rootless, so whoever holds that socket is root on this machine. Use rootless Podman (or rootless Docker) for runs.";
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested && (ex is DockerApiException or HttpRequestException or IOException or SocketException or System.Text.Json.JsonException or OperationCanceledException))
+        // Not kept: the socket may come back, and then the warning goes.
+        catch (Exception ex) when (!ct.IsCancellationRequested && (ex is HttpRequestException or IOException or SocketException or OperationCanceledException))
+        {
+            var reason = ex is OperationCanceledException ? "it did not answer within five seconds" : ReasonOf(ex);
+            return $"ILD cannot reach the container engine at {_options.Socket} ({reason}), so no run can start. Check that the engine's socket is mounted there and that ILD's user can open it.";
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested && (ex is DockerApiException or System.Text.Json.JsonException))
         {
             Logger?.LogInformation("Could not ask the container engine at {Socket} whether it is rootless ({Reason}); not warning", _options.Socket, ex.Message);
             return null;
         }
+    }
+
+    // What the socket said: "Permission denied", not the HTTP client's "Permission denied (docker:80)".
+    private static string ReasonOf(Exception ex)
+    {
+        for (var inner = ex; inner is not null; inner = inner.InnerException)
+            if (inner is SocketException socket)
+                return socket.Message;
+        return ex.Message;
     }
 
     private async Task<bool?> IsRootlessAsync(CancellationToken ct)
