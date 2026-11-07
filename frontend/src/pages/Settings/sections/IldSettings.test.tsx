@@ -201,8 +201,8 @@ describe("Ild settings", () => {
 
     render(<IldSettings />, { wrapper: WorkItemHubProvider });
 
-    const warning = await screen.findByRole("alert");
-    expect(warning.textContent).toContain("is not rootless");
+    const warning = await screen.findByText(/is not rootless/);
+    expect(warning.getAttribute("role")).toBe("alert");
   });
 
   test("shows no run host warning when the host has none or cannot say", async () => {
