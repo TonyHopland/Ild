@@ -1,0 +1,23 @@
+# Optional: ILD reads StorageClasses at startup to warn when the class of the run volumes keeps a volume
+# after its claim is gone. Without this, ILD logs that it could not check and carries on.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ild-read-storageclasses
+rules:
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ild-read-storageclasses
+subjects:
+  - kind: ServiceAccount
+    name: ild
+    namespace: ild
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ild-read-storageclasses

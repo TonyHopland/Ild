@@ -22,12 +22,12 @@ public static class RunHostOptions
         };
     }
 
-    /// <summary>The backend the configuration selects, failing for one that is not built yet.</summary>
+    /// <summary>The backend the configuration selects, failing for one that is not built yet (<c>container</c>).</summary>
     public static RunHostKind Select(string? value)
     {
         var kind = Parse(value);
-        if (kind != RunHostKind.Local)
-            throw new InvalidOperationException($"{SettingName}={kind.ToString().ToLowerInvariant()} is not implemented yet; only local is.");
+        if (kind == RunHostKind.Container)
+            throw new InvalidOperationException($"{SettingName}={kind.ToString().ToLowerInvariant()} is not implemented yet; only local and kubernetes are.");
         return kind;
     }
 }

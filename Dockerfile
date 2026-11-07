@@ -385,3 +385,27 @@ RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 EXPOSE 8080
 ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
 CMD ["dotnet", "ILD.Api.dll"]
+
+# The image a loop run's pod runs under ILD_RUN_HOST=kubernetes (docs/adr/0033-kubernetes-run-host.md): what the
+# ILD image provides for the agent, without ILD. The coding agents the ILD image installs on demand onto /data are
+# baked in here, since a pod has no data volume of ILD's, and are found on PATH by name. The MCP server stays, at the
+# path the agent's MCP config names. tini is the pod's init, which reaps what a killed command leaves behind.
+# Built with the same WITH_* arguments as the ILD image. Declared before the last stage so the default target stays ILD.
+FROM final AS runner
+ARG RUNNER_UID=10001
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends tini bash && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm install -g --prefix /usr/local --cache /tmp/npm-install-cache --no-audit --no-fund \
+      @anthropic-ai/claude-code opencode-ai @earendil-works/pi-coding-agent && \
+    rm -rf /tmp/npm-install-cache /root/.npm && \
+    rm -rf /app && mkdir -p /app /ild-run && chmod 0755 /ild-run
+COPY --from=build --chown=${RUNNER_UID}:${RUNNER_UID} /app/mcp-server/ /app/
+ENV HOME=/tmp
+USER ${RUNNER_UID}
+WORKDIR /app
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]
+
+# The default target: what `docker build .` makes.
+FROM final AS ild

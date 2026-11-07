@@ -148,6 +148,15 @@ public static class AgentIsolation
     /// <summary>Whether <paramref name="psi"/> is a launch <see cref="Route(ProcessStartInfo, string?, string?, string?, string?, string?)"/> crossed to the agent.</summary>
     internal static bool IsRouted(ProcessStartInfo psi) => psi.FileName == SetprivCommand;
 
+    /// <summary>The command a routed launch runs under <c>setpriv</c>, for a host that crosses nothing to another uid; null when <paramref name="psi"/> is not routed.</summary>
+    internal static (string FileName, IReadOnlyList<string> Arguments)? Unrouted(ProcessStartInfo psi)
+    {
+        if (!IsRouted(psi)) return null;
+        var arguments = psi.ArgumentList.ToList();
+        var terminator = arguments.IndexOf("--");
+        return terminator < 0 || terminator + 1 >= arguments.Count ? null : (arguments[terminator + 1], arguments[(terminator + 2)..]);
+    }
+
     // Orchestrator-only secrets that must never reach the agent uid — the DB
     // connection strings, the encryption-at-rest key, the session-token pepper,
     // the bootstrap password, and the API tokens/keys the orchestrator uses to

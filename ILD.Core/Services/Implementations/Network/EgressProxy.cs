@@ -75,7 +75,7 @@ public sealed class EgressProxy : BackgroundService
             return;
         }
 
-        var listener = new TcpListener(EgressProxyOptions.ListenAddress, _options.Port);
+        var listener = new TcpListener(EgressProxyOptions.BindAddress, _options.Port);
         try
         {
             listener.Start();
@@ -83,14 +83,14 @@ public sealed class EgressProxy : BackgroundService
         catch (SocketException ex)
         {
             _logger.LogError(ex, "Egress proxy could not listen on {Address}:{Port}; agent launches will point at a port nothing answers",
-                EgressProxyOptions.ListenAddress, _options.Port);
+                EgressProxyOptions.BindAddress, _options.Port);
             _bound.TrySetException(ex);
             return;
         }
 
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         _bound.TrySetResult(port);
-        _logger.LogInformation("Egress proxy listening on {Address}:{Port}", EgressProxyOptions.ListenAddress, port);
+        _logger.LogInformation("Egress proxy listening on {Address}:{Port}", EgressProxyOptions.BindAddress, port);
 
         _policy.Changed += OnPolicyChanged;
         try

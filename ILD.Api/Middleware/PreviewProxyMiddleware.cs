@@ -113,10 +113,11 @@ public sealed class PreviewProxyMiddleware
         context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
         var host = context.RequestServices.GetService<IRunHost>() ?? LocalRunHost.Shared;
+        var previewTarget = await host.PreviewTargetAsync(target.WorktreePath, target.Port, context.RequestAborted);
         var transformer = new PreviewProxyTransformer(target.Port, target.RewriteHost, _proxyBase.Scheme);
         var error = await _forwarder.SendAsync(
             context,
-            host.PreviewTarget(target.Port).GetLeftPart(UriPartial.Authority),
+            previewTarget.GetLeftPart(UriPartial.Authority),
             Client,
             RequestConfig,
             transformer);
@@ -126,7 +127,7 @@ public sealed class PreviewProxyMiddleware
             _logger.LogWarning(
                 context.GetForwarderErrorFeature()?.Exception,
                 "Preview {HostLabel} -> {Target} ({Service}) did not answer: {Error}",
-                hostLabel, host.PreviewTarget(target.Port), target.ServiceName, error);
+                hostLabel, previewTarget, target.ServiceName, error);
 
             await WriteNotFoundAsync(context);
         }

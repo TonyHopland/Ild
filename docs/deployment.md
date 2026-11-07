@@ -205,6 +205,41 @@ Services that need the browser-facing hostname to build those URLs themselves ca
 set `"rewriteHost": false` (see [Configuration](./configuration.md#service-fields))
 and add the preview wildcard to their own allowed-hosts list.
 
+## Kubernetes run host
+
+`ILD_RUN_HOST=kubernetes` runs each loop run in a pod of its own, so runs are isolated from ILD and from each other and the scheduler spreads them across nodes. It makes no assumption about the cluster's CNI or storage backend. Every setting is in [Configuration](configuration.md#kubernetes-run-host); the decisions are in [ADR-0033](adr/0033-kubernetes-run-host.md).
+
+### Prerequisites
+
+- Kubernetes 1.30 or later, and a CNI that enforces NetworkPolicy. Without enforcement the pods start and work, but nothing keeps them off the rest of the cluster.
+- A StorageClass that can provision `ReadWriteOnce` volumes: the cluster's default class, or the one you name in `ILD_K8S_STORAGE_CLASS`. Prefer a class with `reclaimPolicy: Delete`; ILD warns at startup if it is not.
+- ILD's pods reachable from the run namespace at the Service in `ILD_API_URL`, on its HTTP port and on the egress proxy port (`ILD_NETWORK_PROXY_PORT`). If the namespace ILD runs in denies ingress by default, allow the run pods (label `app.kubernetes.io/managed-by=ild`, in the run namespace) to those two ports.
+
+### Setup
+
+1. Pick a namespace for the run objects. The examples use `ild-runs`, and ILD in `ild`.
+2. Apply the manifests in [`docs/kubernetes`](kubernetes/): the ServiceAccount, the Role with its RoleBinding (pods, pods/exec, volume claims, Secrets and network policies in the run namespace, and nothing else), and optionally the ClusterRole that lets ILD read StorageClasses for the reclaim-policy warning.
+3. Set `serviceAccountName: ild` on the ILD Deployment, and:
+
+   ```yaml
+   env:
+     - { name: ILD_RUN_HOST, value: kubernetes }
+     - { name: ILD_API_URL, value: "http://ild.ild.svc:8080" }
+     - { name: ILD_K8S_NAMESPACE, value: ild-runs }
+     - { name: ILD_K8S_RUNNER_IMAGE, value: "ghcr.io/tonyhopland/ild-runner:latest" }
+   ```
+
+   The runner image is published with the same tags as the ILD image; pin the version ILD runs. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have.
+4. The preview proxy forwards to the pod's address, so ILD must be able to reach pod IPs, as any pod in the cluster can.
+
+### Storage
+
+`ILD_K8S_STORAGE_CLASS` and `ILD_K8S_STORAGE_SIZE` decide the volume of each run; unset, the cluster's default class is used. For run scratch, a class that keeps one copy next to the pod is enough, since a run's code is also on the remote. On Longhorn, [`storageclass-longhorn-example.yaml`](kubernetes/storageclass-longhorn-example.yaml) is such a class (`numberOfReplicas: 1`, `dataLocality: best-effort`). It is an operator's choice; ILD has no Longhorn-specific behaviour.
+
+### Cleanup
+
+Deleting a run's Secret deletes its pod, volume claim and network policy through their owner references. A sweeper runs at startup and every `ILD_K8S_SWEEP_INTERVAL_MINUTES`, and deletes the labelled objects of runs that are finished or no longer exist; it only touches objects whose `ild/instance` is its own. An ILD that is killed mid-run therefore leaves nothing behind after its next start.
+
 ## Agent network limits (`NET_ADMIN`)
 
 The coding agent's network access can be limited from Settings (see

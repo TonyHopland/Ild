@@ -101,8 +101,8 @@ public sealed class ProcessRunner : IProcessRunner
     {
         _logger?.LogDebug("exec {File} {Args} cwd={Cwd}", fileName, string.Join(' ', args), workingDirectory);
 
-        using var proc = Process.Start(
-            BuildStartInfo(fileName, args, workingDirectory, environmentVariables, options, AgentIsolation.AgentUser, null))!;
+        using var proc = await RunHosts.Local.LocalRunHost.StartAsync(
+            BuildStartInfo(fileName, args, workingDirectory, environmentVariables, options, AgentIsolation.AgentUser, null), ct);
         var stdoutTask = options?.StandardOutputTo is { } sink
             ? CopyStandardOutputAsync(proc, sink, ct)
             : proc.StandardOutput.ReadToEndAsync(ct);
