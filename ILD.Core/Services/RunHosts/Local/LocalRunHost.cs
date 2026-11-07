@@ -25,6 +25,7 @@ public sealed class LocalRunHost : IRunHost
     private readonly IServiceProvider? _services;
     private readonly IRepositoryManager? _repositories;
     private readonly ProcessRunOptions _agentOptions;
+    private readonly AgentIdentity? _agent;
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<LocalRunProcess, byte>> _running = new();
 
     /// <param name="runner">What bundles are moved with; the git and shell scripts of a clone run through it.</param>
@@ -40,6 +41,7 @@ public sealed class LocalRunHost : IRunHost
         agent ??= AgentIsolation.AgentUser is { } user
             ? new AgentIdentity(user, AgentIsolation.AgentGroup ?? user, AgentIsolation.AgentHome ?? string.Empty)
             : null;
+        _agent = agent;
         _agentOptions = new ProcessRunOptions(AsAgent: agent, AgentScoped: true);
     }
 
@@ -69,15 +71,22 @@ public sealed class LocalRunHost : IRunHost
     public Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
         var psi = command.AsAgent ? RouteAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : command.Start;
-        // A command its caller says it routed is checked to be: a builder that lost its route would otherwise
-        // start as the orchestrator, with its secrets and capabilities (ADR-0014).
-        if (AgentIsolation.AgentUser is not null && !AgentIsolation.IsRouted(psi))
-            throw new InvalidOperationException($"refusing to start '{psi.FileName}' as the orchestrator: agent uid isolation is on and the command was not routed to the agent (ADR-0014)");
+        EnsureRouted(psi);
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null");
         var tracked = new LocalRunProcess(process, Forget(command.OwnerId));
         if (command.OwnerId != Guid.Empty)
             _running.GetOrAdd(command.OwnerId, _ => new()).TryAdd(tracked, 0);
         return Task.FromResult<IRunProcess>(tracked);
+    }
+
+    /// <summary>
+    /// A command its caller says it routed is checked to be: a builder that lost its route would otherwise
+    /// start as the orchestrator, with its secrets and capabilities (ADR-0014). Only where agent uid isolation is on.
+    /// </summary>
+    internal void EnsureRouted(ProcessStartInfo psi)
+    {
+        if (_agent is not null && !AgentIsolation.IsRouted(psi))
+            throw new InvalidOperationException($"refusing to start '{psi.FileName}' as the orchestrator: agent uid isolation is on and the command was not routed to the agent (ADR-0014)");
     }
 
     /// <summary>The launch of an agent CLI: <paramref name="psi"/> with the execution's environment, crossed to the agent uid.</summary>
@@ -182,6 +191,26 @@ public sealed class LocalRunHost : IRunHost
 
     public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default)
         => Task.FromResult<Stream?>(File.Exists(path) ? File.OpenRead(path) : null);
+
+    public string? ReadTextFile(string path) => File.Exists(path) ? File.ReadAllText(path) : null;
+
+    public Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default)
+    {
+        if (Directory.Exists(path)) return Task.FromResult<Stream?>(null);
+        try
+        {
+            // Opened rather than checked for first: the handle is the answer, so a file that goes between a
+            // check and the open cannot surface as an exception further down.
+            return Task.FromResult<Stream?>(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return Task.FromResult<Stream?>(null);
+        }
+    }
+
+    public Task<Stream> OpenFileForWriteAsync(string path, CancellationToken ct = default)
+        => Task.FromResult<Stream>(new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
 
     public Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default)
         => AgentWritableFiles.GetFileLengthAsync(path, ct);

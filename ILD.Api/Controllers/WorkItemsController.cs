@@ -647,7 +647,7 @@ public class WorkItemsController : ControllerBase
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
-        FileStream? stream;
+        Stream? stream;
         try
         {
             stream = await _repositoryManager.OpenWorktreeFileAsync(workItem!.WorktreePath!, path);
@@ -658,7 +658,7 @@ public class WorkItemsController : ControllerBase
         }
         if (stream == null)
             return NotFound(new { error = "File not found in worktree." });
-        return File(stream, "application/octet-stream", Path.GetFileName(stream.Name));
+        return File(stream, "application/octet-stream", Path.GetFileName(Path.GetFullPath(Path.Combine(workItem.WorktreePath!, path)).TrimEnd(Path.DirectorySeparatorChar)));
     }
 
     // Writes land in the worktree and stop there — git is left alone, so an edit

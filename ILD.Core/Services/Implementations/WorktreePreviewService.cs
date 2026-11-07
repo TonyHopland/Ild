@@ -1008,9 +1008,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     // or replaced without re-serializing the strongly-typed model (which would drop
     // fields the model does not surface). Tolerates comments and trailing commas, the
     // same as the strongly-typed loader.
-    private static async Task<JsonNode?> LoadConfigNodeAsync(string configPath, CancellationToken cancellationToken)
+    private async Task<JsonNode?> LoadConfigNodeAsync(string configPath, CancellationToken cancellationToken)
     {
-        await using var stream = File.OpenRead(configPath);
+        await using var stream = await _host.OpenReadAsync(configPath, cancellationToken)
+            ?? throw new FileNotFoundException(configPath);
         return await JsonNode.ParseAsync(
             stream,
             nodeOptions: null,
@@ -2204,7 +2205,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             try
             {
-                await AgentWritableFiles.CreateDirectoryAsync(full, cancellationToken);
+                await _host.CreateDirectoryAsync(full, cancellationToken);
             }
             catch (IOException ex)
             {
@@ -2220,7 +2221,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException($"Preview cwd '{resolved}' escapes the worktree/state directory boundary.");
         }
 
-        Directory.CreateDirectory(full);
+        await _host.CreateDirectoryAsync(full, cancellationToken);
         return full;
     }
 

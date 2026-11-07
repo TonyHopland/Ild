@@ -557,8 +557,10 @@ public class RepositoryManager : IRepositoryManager
         var root = Path.GetFullPath(worktreePath);
         if (!full.StartsWith(root, StringComparison.Ordinal))
             return null;
-        if (!File.Exists(full)) return null;
-        return await File.ReadAllTextAsync(full);
+        await using var stream = await _host.OpenReadAsync(full);
+        if (stream is null) return null;
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return await reader.ReadToEndAsync();
     }
 
     public async Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath, string? defaultBranch = null, WorktreeDiffRange? range = null)
@@ -694,41 +696,21 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
-    private static async Task<byte[]?> ReadFileBytesAsync(string full)
+    private async Task<byte[]?> ReadFileBytesAsync(string full)
     {
-        if (Directory.Exists(full)) return null;
-        try
-        {
-            return await File.ReadAllBytesAsync(full);
-        }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
+        await using var stream = await _host.OpenFileForReadAsync(full);
+        if (stream is null) return null;
+        using var bytes = new MemoryStream();
+        await stream.CopyToAsync(bytes);
+        return bytes.ToArray();
     }
 
-    public async Task<FileStream?> OpenWorktreeFileAsync(string worktreePath, string relativePath)
+    public async Task<Stream?> OpenWorktreeFileAsync(string worktreePath, string relativePath)
     {
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
-        return await ReadRepairingAsync(worktreePath, relativePath, full, () => Task.FromResult(OpenFile(full)));
-    }
-
-    private static FileStream? OpenFile(string full)
-    {
-        if (Directory.Exists(full)) return null;
-        try
-        {
-            // Opened rather than checked for first, as the write is: the handle
-            // is the answer, so a file that goes between a check and the open
-            // cannot surface as an exception further down.
-            return new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
+        return await ReadRepairingAsync(worktreePath, relativePath, full, () => _host.OpenFileForReadAsync(full));
     }
 
     public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null, WorktreeDiffRange? range = null)
@@ -752,7 +734,7 @@ public class RepositoryManager : IRepositoryManager
             // opening for create rather than open would fill that gap by putting
             // the file back. A delete that beats this open is a refusal; one that
             // races the write takes the bytes with it, as it would for any writer.
-            await using var file = new FileStream(full, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+            await using var file = await _host.OpenFileForWriteAsync(full);
             if (await IsBinaryAsync(file))
                 return WorktreeFileWriteResult.NotText;
 

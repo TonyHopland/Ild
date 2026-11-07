@@ -201,13 +201,31 @@ public class LocalRunHostTrackingTests
         Assert.True(exitedWhenRemoved, "the command was still running when the worktree was removed");
     }
 
-    [Fact]
-    public async Task A_command_that_was_not_routed_is_refused_when_agent_isolation_is_on()
-    {
-        Assert.SkipWhen(AgentIsolation.AgentUser is null, "agent uid isolation is off in this process");
-        var host = new LocalRunHost();
+    private static readonly AgentIdentity Agent = new("agent", "agent", "/home/agent");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => host.StartCommandAsync(RunCommand.Routed(new ProcessStartInfo("/bin/true")), TestContext.Current.CancellationToken));
+    [Fact]
+    public void A_command_that_was_not_routed_is_refused_when_agent_isolation_is_on()
+    {
+        var host = new LocalRunHost(agent: Agent);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => host.EnsureRouted(new ProcessStartInfo("/bin/true")));
+        Assert.Contains("ADR-0014", ex.Message);
+    }
+
+    [Fact]
+    public void A_command_routed_to_the_agent_is_accepted_when_agent_isolation_is_on()
+    {
+        var host = new LocalRunHost(agent: Agent);
+        var routed = AgentIsolation.Route(new ProcessStartInfo("/bin/true"), "agent", "agent", "/home/agent");
+
+        host.EnsureRouted(routed);
+    }
+
+    [Fact]
+    public void Without_agent_isolation_a_command_is_started_as_built()
+    {
+        // The test process is single-uid (TestEnvironmentBaseline); a host built without an agent follows the process.
+        Assert.Null(AgentIsolation.AgentUser);
+        new LocalRunHost().EnsureRouted(new ProcessStartInfo("/bin/true"));
     }
 }

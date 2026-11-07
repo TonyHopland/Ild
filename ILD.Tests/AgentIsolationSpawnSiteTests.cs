@@ -32,6 +32,25 @@ public class AgentIsolationSpawnSiteTests
         @"\b(?:Directory|File)\.(?:Exists|ReadAll\w+|Open\w*|Enumerate\w+|GetFiles|GetDirectories)\s*\([^;]*(?:[Ww]orktreePath|worktreePath|[Ww]orktree\b|AgentHome)",
         RegexOptions.Compiled);
 
+    // A path derived from a worktree path and held in a variable (`var full = Resolve(worktreePath, p)`) is still
+    // a worktree path when it reaches a file call.
+    private static readonly Regex DerivedPath = new(@"\b(?:var|string)\s+(?<name>\w+)\s*=\s*[^;]*(?:[Ww]orktreePath|worktreePath)[^;]*;", RegexOptions.Compiled);
+    private static readonly Regex FileCall = new(@"\b(?:(?:Directory|File)\.\w+|new\s+FileStream)\s*\([^;]*;", RegexOptions.Compiled);
+
+    /// <summary>Offsets in <paramref name="redacted"/> where a worktree path, spelled out or held in a variable derived from one, is read.</summary>
+    private static IEnumerable<int> WorktreeReadOffsets(string redacted)
+    {
+        foreach (Match m in WorktreeRead.Matches(redacted)) yield return m.Index;
+
+        var derived = DerivedPath.Matches(redacted).Select(m => m.Groups["name"].Value).Distinct().ToList();
+        if (derived.Count == 0) yield break;
+        foreach (Match call in FileCall.Matches(redacted))
+        {
+            if (derived.Any(name => Regex.IsMatch(call.Value, $@"\b{Regex.Escape(name)}\b")))
+                yield return call.Index;
+        }
+    }
+
     [Fact]
     public void No_process_spawn_PTY_or_setpriv_exists_outside_the_local_run_host()
     {
@@ -61,7 +80,7 @@ public class AgentIsolationSpawnSiteTests
             .SelectMany(f =>
             {
                 var source = Redact(File.ReadAllText(f));
-                return WorktreeRead.Matches(source).Select(m => $"{Path.GetFileName(f)}:{LineOf(source, m.Index)}");
+                return WorktreeReadOffsets(source).Select(i => $"{Path.GetFileName(f)}:{LineOf(source, i)}");
             })
             .ToList();
 
@@ -83,9 +102,12 @@ public class AgentIsolationSpawnSiteTests
     [InlineData("if (!Directory.Exists(run.WorktreePath)) return;", true)]
     [InlineData("var text = File.ReadAllText(Path.Combine(worktreePath, \"a\"));", true)]
     [InlineData("Directory.Exists(logDirectory);", false)]
+    [InlineData("var full = ResolveSafePath(worktreePath, p); var b = await File.ReadAllBytesAsync(full);", true)]
+    [InlineData("var full = ResolveSafePath(worktreePath, p); return new FileStream(full, FileMode.Open);", true)]
+    [InlineData("var full = Path.Combine(logDirectory, p); var b = await File.ReadAllBytesAsync(full);", false)]
     [InlineData("await host.DirectoryExistsAsync(worktreePath, ct);", false)]
     public void The_scan_tells_a_worktree_read_from_another_file_check(string statement, bool read)
-        => Assert.Equal(read, WorktreeRead.IsMatch(Redact(statement)));
+        => Assert.Equal(read, WorktreeReadOffsets(Redact(statement)).Any());
 
     [Fact]
     public void A_spawn_named_only_in_a_message_is_not_a_spawn()

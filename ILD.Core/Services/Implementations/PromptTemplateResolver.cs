@@ -1,9 +1,15 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 
 namespace ILD.Core.Services.Implementations;
 
 public sealed class PromptTemplateResolver : IPromptTemplateResolver
 {
+    private readonly IRunHost _host;
+
+    public PromptTemplateResolver(IRunHost? host = null) => _host = host ?? LocalRunHost.Shared;
+
     public string Render(string template, PromptContext context)
     {
         if (string.IsNullOrEmpty(template)) return template ?? "";
@@ -31,7 +37,7 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
             {
                 var rel = key.Substring(PromptPlaceholderRegistry.WorkTreeFilePrefix.Length);
                 var full = string.IsNullOrEmpty(context.WorktreePath) ? null : Path.Combine(context.WorktreePath, rel);
-                return full != null && File.Exists(full) ? File.ReadAllText(full) : "";
+                return full is null ? "" : _host.ReadTextFile(full) ?? "";
             }
             if (key.StartsWith(PromptPlaceholderRegistry.VariablePrefix, StringComparison.OrdinalIgnoreCase))
             {

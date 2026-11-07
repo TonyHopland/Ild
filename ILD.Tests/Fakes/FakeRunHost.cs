@@ -143,6 +143,20 @@ internal sealed class FakeRunHost : IRunHost
         lock (_gate) return Task.FromResult<Stream?>(_files.TryGetValue(path, out var bytes) ? new MemoryStream(bytes, writable: false) : null);
     }
 
+    public string? ReadTextFile(string path) => ReadText(path);
+
+    public Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default) => OpenReadAsync(path, ct);
+
+    public Task<Stream> OpenFileForWriteAsync(string path, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (!_files.TryGetValue(path, out var bytes)) throw new FileNotFoundException(path);
+            var stream = new WriteBackStream(bytes, content => { lock (_gate) _files[path] = content; });
+            return Task.FromResult<Stream>(stream);
+        }
+    }
+
     public Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default)
     {
         lock (_gate) return Task.FromResult<long?>(_files.TryGetValue(path, out var bytes) ? bytes.Length : null);
@@ -281,5 +295,24 @@ internal sealed class FakeRunProcess : IRunProcess
 
     public void Dispose()
     {
+    }
+}
+
+/// <summary>A readable, writable in-memory file that stores what it holds back on dispose.</summary>
+internal sealed class WriteBackStream : MemoryStream
+{
+    private readonly Action<byte[]> _store;
+
+    public WriteBackStream(byte[] initial, Action<byte[]> store)
+    {
+        _store = store;
+        Write(initial);
+        Position = 0;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _store(ToArray());
+        base.Dispose(disposing);
     }
 }
