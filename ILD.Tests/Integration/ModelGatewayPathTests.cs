@@ -80,6 +80,8 @@ public class ModelGatewayPathTests : IAsyncLifetime
     [InlineData("opencode", "/gateway/upstream/models/%252e%252e/admin", "/v1")]
     [InlineData("opencode", "/gateway/upstream/models/.%252e/%252e%252e/admin", "/v1")]
     [InlineData("opencode", "/gateway/upstream/admin", "/v1")]
+    [InlineData("opencode", "/gateway/upstream/v1/v1/messages", "")]
+    [InlineData("opencode", "/gateway/upstream/v1/admin", "")]
     public async Task A_path_that_escapes_or_is_not_allowed_is_refused_without_contacting_the_upstream(string type, string path, string basePath)
     {
         _source.BaseUrl = _upstream.Urls.First() + basePath;
@@ -97,6 +99,9 @@ public class ModelGatewayPathTests : IAsyncLifetime
     [InlineData("claude", "/gateway/anthropic/v1/messages", "", "/v1/messages")]
     [InlineData("claude", "/gateway/anthropic/v1/messages/count_tokens", "", "/v1/messages/count_tokens")]
     [InlineData("opencode", "/gateway/upstream/chat/completions", "/v1", "/v1/chat/completions")]
+    [InlineData("opencode", "/gateway/upstream/v1/messages", "", "/v1/messages")]
+    [InlineData("opencode", "/gateway/upstream/v1/chat/completions", "", "/v1/chat/completions")]
+    [InlineData("opencode", "/gateway/upstream/v1beta/models/gemini:streamGenerateContent", "", "/v1beta/models/gemini:streamGenerateContent")]
     public async Task An_allowed_path_on_each_route_still_reaches_the_upstream(string type, string path, string basePath, string upstreamPath)
     {
         _source.BaseUrl = _upstream.Urls.First() + basePath;

@@ -173,7 +173,19 @@ public sealed partial class ModelGatewayMiddleware
             ["chat/completions", "completions", "responses", "messages", "messages/count_tokens", "models", "models/"],
     };
 
+    // An upstream provider's base URL may or may not end in the API version, so the inference paths are also
+    // accepted under one version segment (Pi's anthropic-messages API sends v1/messages to a bare host).
+    private static readonly string[] UpstreamVersions = ["v1/", "v1beta/"];
+
     private static bool IsAllowedPath(string route, string rest)
+    {
+        if (IsAllowedUnder(route, rest)) return true;
+        if (route != GatewayRoutes.Upstream) return false;
+        var version = UpstreamVersions.FirstOrDefault(v => rest.StartsWith(v, StringComparison.Ordinal));
+        return version is not null && IsAllowedUnder(route, rest[version.Length..]);
+    }
+
+    private static bool IsAllowedUnder(string route, string rest)
         => AllowedPaths.TryGetValue(route, out var allowed)
             && allowed.Any(entry => entry.EndsWith('/')
                 ? rest.StartsWith(entry, StringComparison.Ordinal)
