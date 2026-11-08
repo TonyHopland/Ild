@@ -26,7 +26,7 @@ const MODES: { value: NetworkMode; label: string; help: string }[] = [
   {
     value: "off",
     label: "Off",
-    help: "Agents connect directly to any host and port, with no proxy. Only connections through a forward are logged, and neither list is in effect.",
+    help: "Neither list is in effect. Agents in a run's or chat's container still reach the network only through the proxy, which lets everything through and logs it.",
   },
   {
     value: "monitor",
@@ -405,7 +405,8 @@ export default function NetworkSettings() {
   const ruleFor = (host: string) => entries.find((e) => coversHost(e.host, host));
 
   const activeMode = MODES.find((m) => m.value === mode);
-  const offUnavailable = status?.offAvailable === false;
+  // Agents run in containers or pods (enforced) unless ILD itself runs under dotnet run.
+  const contained = status?.enforcement === "enforced";
   const filtering = mode === "whitelist" || mode === "blacklist";
   const inEffect = entries.filter(
     (e) => (e.listKind === "Whitelist" ? "whitelist" : "blacklist") === mode,
@@ -426,13 +427,15 @@ export default function NetworkSettings() {
       {mode === "off" && (
         <div className="net-banner">
           <strong>Network mode is Off.</strong>{" "}
-          {offUnavailable ? (
-            <>{status.reason} Switch to Monitor to give agents the proxy back.</>
+          {contained ? (
+            <>
+              Agents launched in it can reach any host the proxy can, including your LAN and cloud
+              metadata. Their connections are still logged.
+            </>
           ) : (
             <>
-              Agents launched in it can reach any host, including your LAN and cloud metadata, and
-              only their connections through a forward are logged.
-              {status?.enforcement === "enforced" && <> {status.reason}</>}
+              Agents launched in it connect directly to any host, with no proxy, and only their
+              connections through a forward are logged.
             </>
           )}
         </div>
@@ -450,10 +453,6 @@ export default function NetworkSettings() {
               {activeMode?.help} Switching to or from Off applies to the next agent launch; running
               agents keep the network they started with. A change between Monitor, Whitelist and
               Blacklist, or to a list, applies to the next connection; nothing needs a restart.
-              {status && status.enforcement !== "enforced" && (
-                <> Without the firewall, Off and Monitor differ only in logging.</>
-              )}
-              {offUnavailable && mode !== "off" && <> {status.reason}</>}
               {filtering && (
                 <>
                   {" "}
@@ -471,7 +470,6 @@ export default function NetworkSettings() {
             options={MODES.map((m) => ({
               value: m.value,
               label: m.label,
-              disabled: m.value === "off" && offUnavailable && mode !== "off",
             }))}
           />
         </SettingRow>
@@ -480,7 +478,7 @@ export default function NetworkSettings() {
       <ConfirmModal
         isOpen={confirmingOff}
         title="Turn the network proxy off?"
-        message="Agents launched from now on connect directly: agents can reach any host, including your LAN and cloud metadata, and only connections through a forward are logged. Agents already running keep the network they started with."
+        message="Agents launched from now on are not filtered: they can reach any host, including your LAN and cloud metadata. Agents already running keep the network they started with."
         confirmText="Turn off"
         onCancel={() => setConfirmingOff(false)}
         onConfirm={() => {
@@ -500,7 +498,9 @@ export default function NetworkSettings() {
         )}
         {mode === "off" && (
           <p className="settings-card-note">
-            Agents bypass the proxy, so no rule is in effect and only forwards are logged.
+            {contained
+              ? "Off filters nothing, so no rule is in effect. Every destination is still logged."
+              : "Agents bypass the proxy, so no rule is in effect and only forwards are logged."}
           </p>
         )}
         <div className="net-toolbar">

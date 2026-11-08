@@ -766,40 +766,6 @@ describe("Network modes", () => {
 
   const pressed = (name: string) => modeButton(name).getAttribute("aria-pressed") === "true";
 
-  const offUnavailable: NetworkStatus = {
-    ...enforced,
-    offAvailable: false,
-    reason:
-      "nftables rules drop everything uid 10002 sends except loopback, and its DNS is blocked. Network mode Off is unavailable: the group 'ild-net-open' does not exist; agents launched in it have no network.",
-  };
-  const times = (text: string, part: string) => text.split(part).length - 1;
-
-  test("Off cannot be chosen where it is unavailable, and says why once", async () => {
-    mockServices(offUnavailable, "monitor");
-    const put = vi.spyOn(services.settingsService, "put");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Monitor")).toBe(true));
-
-    expect(modeButton("Off").hasAttribute("disabled")).toBe(true);
-    const card = modeCard().textContent!;
-    expect(card).toContain("the group 'ild-net-open' does not exist");
-    expect(times(card, "Off is unavailable")).toBe(1);
-    fireEvent.click(modeButton("Off"));
-    expect(confirmation()).toBeNull();
-    expect(put).not.toHaveBeenCalled();
-  });
-
-  test("a stored Off that is unavailable warns, once, that its agents have no network", async () => {
-    mockServices(offUnavailable, "off");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Off")).toBe(true));
-
-    expect(times(document.body.textContent!, "have no network")).toBe(1);
-    expect(screen.getByText(/switch to Monitor/i)).toBeTruthy();
-    expect(offWarning()).toHaveLength(0);
-    expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
-  });
-
   test("offers Off, Monitor, Whitelist and Blacklist", async () => {
     mockServices();
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
@@ -836,7 +802,7 @@ describe("Network modes", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain(
-      "agents can reach any host, including your LAN and cloud metadata, and only connections through a forward are logged",
+      "they can reach any host, including your LAN and cloud metadata",
     );
     expect(put).not.toHaveBeenCalled();
 
@@ -924,19 +890,6 @@ describe("Network modes", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  test("the Off warning carries the firewall's own word on whether Off can reach the network", async () => {
-    const offUnavailable = {
-      ...enforced,
-      reason:
-        "Network mode Off is unavailable: it needs no-new-privileges; agents launched in it have no network.",
-    };
-    mockServices(offUnavailable, "off");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-
-    const banner = (await screen.findByText(/Network mode is Off/)).closest("div")!;
-    expect(banner.textContent).toMatch(/Off is unavailable/);
-  });
-
   test.each(["OFF", " Off "])(
     "a mode stored as %j is read as Off, as the backend reads it",
     async (stored) => {
@@ -967,19 +920,6 @@ describe("Network modes", () => {
     expect(card).toMatch(/next connection/i);
   });
 
-  test("without the firewall it says Off and Monitor differ only in logging", async () => {
-    mockServices(advisory, "monitor");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Monitor")).toBe(true));
-    expect(modeCard().textContent).toMatch(/differ only in logging/i);
-    cleanup();
-
-    mockServices(enforced, "monitor");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Monitor")).toBe(true));
-    expect(modeCard().textContent).not.toMatch(/differ only in logging/i);
-  });
-
   test.each(["monitor", "off"])(
     "%s shows no rule in effect and no rule marked as ignored",
     async (mode) => {
@@ -993,9 +933,24 @@ describe("Network modes", () => {
       expect(modeCard().textContent).not.toMatch(/\d+ rules? (is|are) in effect/i);
       const note = screen.getByText("Rules", { selector: "h3" }).closest("section")!.textContent!;
       expect(note).toMatch(/no rule is in effect/i);
-      expect(note).toMatch(mode === "off" ? /only forwards are logged/i : /logged/i);
+      expect(note).toMatch(/logged/i);
     },
   );
+
+  test("Off says agents in containers still go through the proxy, and under dotnet run that they bypass it", async () => {
+    mockServices(enforced, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    const contained = (await screen.findByText(/Network mode is Off/)).closest("div")!;
+    expect(contained.textContent).toMatch(/still logged/i);
+    expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
+    cleanup();
+
+    mockServices(advisory, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    const local = (await screen.findByText(/Network mode is Off/)).closest("div")!;
+    expect(local.textContent).toMatch(/connect directly/i);
+    expect(screen.getByText(/only forwards are logged/i)).toBeTruthy();
+  });
 });
 
 describe("Editing a network forward", () => {
