@@ -110,16 +110,22 @@ public sealed class PreviewProxyBase
         label = string.Empty;
         if (!Enabled || string.IsNullOrEmpty(requestHost))
             return false;
+        return TryGetLabel(requestHost, Host, out label) || TryGetLabel(requestHost, AgentHost, out label);
+    }
+
+    private static bool TryGetLabel(string requestHost, string host, out string label)
+    {
+        label = string.Empty;
 
         // A label needs at least one character plus the separating dot.
-        var labelLength = requestHost.Length - Host.Length - 1;
+        var labelLength = requestHost.Length - host.Length - 1;
         if (labelLength <= 0)
             return false;
 
         if (requestHost[labelLength] != '.')
             return false;
 
-        if (string.Compare(requestHost, labelLength + 1, Host, 0, Host.Length, StringComparison.OrdinalIgnoreCase) != 0)
+        if (string.Compare(requestHost, labelLength + 1, host, 0, host.Length, StringComparison.OrdinalIgnoreCase) != 0)
             return false;
 
         label = requestHost[..labelLength];
@@ -131,4 +137,19 @@ public sealed class PreviewProxyBase
         => Port is int port
             ? $"{Scheme}://{label}.{Host}:{port}"
             : $"{Scheme}://{label}.{Host}";
+
+    /// <summary>
+    /// The domain of the preview hostnames agents are given, <c>wi-12.preview.ild</c>. An agent reaches it through
+    /// ILD's egress proxy, which every agent is launched with: the proxy hands such a request to ILD's own web port,
+    /// where this class recognises it as a preview. So it needs no DNS where the agent runs, and works the same in
+    /// ILD's container, a run's or chat's container and a pod, where <c>*.localhost</c> is the agent's own machine.
+    /// <c>.ild</c> is no public domain, so a client that does not use the proxy fails rather than reaching anything.
+    /// </summary>
+    public const string AgentHost = "preview.ild";
+
+    /// <summary>Whether <paramref name="host"/> is a preview hostname for agents, <c>&lt;label&gt;.preview.ild</c>.</summary>
+    public static bool IsAgentHost(string? host) => host is not null && TryGetLabel(host, AgentHost, out _);
+
+    /// <summary>The address an agent opens a preview at, through the egress proxy: <c>http://wi-12.preview.ild/</c>.</summary>
+    public static string BuildAgentUrl(string label) => $"http://{label}.{AgentHost}/";
 }

@@ -7,6 +7,7 @@ using ILD.Api.Authentication;
 using ILD.Api.Configuration;
 using ILD.Api.Contracts;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -411,8 +412,8 @@ public class AgentController : ControllerBase
     /// Fills <see cref="WorktreePreviewServiceResponse.AgentUrl"/> with the address
     /// that works where the caller runs. A run on this work item shares the preview's
     /// network namespace, so it gets the loopback address (a browser there resolves
-    /// <c>*.localhost</c> to itself, not to ILD); a chat, or a run on another work
-    /// item, gets the public one. Works on a copy: the service hands out a shared snapshot.
+    /// <c>*.localhost</c> to itself, not to ILD); a chat, or a run on another work item, gets the
+    /// agents' hostname (<see cref="AgentPreviewUrl"/>). Works on a copy: the service hands out a shared snapshot.
     /// </summary>
     private async Task<WorktreePreviewResponse> ForCallerAsync(string workItemId, WorktreePreviewResponse response)
     {
@@ -420,11 +421,24 @@ public class AgentController : ControllerBase
         var ownRun = runId is Guid id
             && await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == id && r.WorkItemId == workItemId);
 
+        var proxyBase = HttpContext?.RequestServices?.GetService<PreviewProxyBase>() ?? PreviewProxyBase.Disabled;
+        var egress = HttpContext?.RequestServices?.GetService<EgressProxyOptions>() ?? EgressProxyOptions.Disabled;
         var copy = response.Clone();
         foreach (var service in copy.Services)
-            service.AgentUrl = ownRun ? service.LocalUrl ?? service.PublicUrl : service.PublicUrl;
+            service.AgentUrl = ownRun ? service.LocalUrl ?? service.PublicUrl : AgentPreviewUrl(service.PublicUrl, proxyBase, egress);
         return copy;
     }
+
+    /// <summary>
+    /// The address an agent outside the work item's run opens <paramref name="publicUrl"/> at. A preview the proxy
+    /// serves is given by its agents' hostname (<c>http://wi-12.preview.ild/</c>), which the agent's egress proxy hands
+    /// to ILD: the public one is often <c>*.localhost</c>, which in a chat's or run's container is that container. Any
+    /// other public URL, and any when there is no egress proxy to carry the agents' hostname, is given as it is.
+    /// </summary>
+    internal static string? AgentPreviewUrl(string? publicUrl, PreviewProxyBase proxyBase, EgressProxyOptions egress)
+        => egress.Enabled && Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri) && proxyBase.TryGetHostLabel(uri.Host, out var label)
+            ? PreviewProxyBase.BuildAgentUrl(label)
+            : publicUrl;
 
     // -- Worktree preview controls (ADR-0011) ----------------------------------
     //

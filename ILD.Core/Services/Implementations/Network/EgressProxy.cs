@@ -144,6 +144,23 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
 
+                // An agents' preview hostname is ILD's own preview proxy, not a host on the network: handed to ILD's
+                // web port on loopback, with its Host header, under no network policy, since it leaves ILD for nowhere.
+                if (Interfaces.PreviewProxyBase.IsAgentHost(request.Host))
+                {
+                    if (request.Kind != RequestKind.Http || _options.WebPort is not int webPort)
+                    {
+                        await WriteResponseAsync(stream, "400 Bad Request",
+                            request.Kind != RequestKind.Http
+                                ? $"{request.Host} is a worktree preview: open it over plain http://, not https://."
+                                : $"{request.Host} is a worktree preview, but ILD listens on no plain-HTTP port the proxy can hand it to.",
+                            stoppingToken).ConfigureAwait(false);
+                        return;
+                    }
+                    await RelayAsync(stream, request with { Port = webPort }, [IPAddress.Loopback], head.Value, stoppingToken).ConfigureAwait(false);
+                    return;
+                }
+
                 var snapshot = await _policy.GetAsync(stoppingToken).ConfigureAwait(false);
                 var decision = snapshot.Decide(request.Host, request.AiProviderId);
 

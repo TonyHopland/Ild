@@ -798,6 +798,62 @@ public sealed class EgressProxyTests : IAsyncLifetime
         return response[(end + 4)..];
     }
 
+    // -- Agents' preview hostnames ------------------------------------------------
+
+    /// <summary>A proxy whose web port, ILD's own, is the test's upstream.</summary>
+    private async Task<int> StartProxyWithWebPortAsync()
+    {
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { WebPort = _upstreamPort }, _policy, _log, NullLogger<EgressProxy>.Instance);
+        _extraProxies.Add(proxy);
+        await proxy.StartAsync(CancellationToken.None);
+        return await proxy.BoundPort.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task A_preview_hostname_goes_to_ilds_web_port_whatever_the_network_policy_blocks()
+    {
+        await SetModeAsync(NetworkMode.Whitelist);
+        var port = await StartProxyWithWebPortAsync();
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes("GET http://wi-12.preview.ild/page?x=1 HTTP/1.1\r\nHost: wi-12.preview.ild\r\n\r\n"), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 200 OK", response);
+        Assert.Contains("X-Saw: GET /page?x=1 HTTP/1.1", response);
+        Assert.DoesNotContain(_log.Entries, e => e.Host.Contains("preview.ild", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_preview_hostname_over_https_is_refused_saying_to_use_http()
+    {
+        var port = await StartProxyWithWebPortAsync();
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes("CONNECT wi-12.preview.ild:443 HTTP/1.1\r\nHost: wi-12.preview.ild:443\r\n\r\n"), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 400", response);
+        Assert.Contains("plain http://", response);
+    }
+
+    [Fact]
+    public async Task A_preview_hostname_with_no_web_port_is_refused_and_never_resolved()
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes("GET http://wi-12.preview.ild/ HTTP/1.1\r\nHost: wi-12.preview.ild\r\n\r\n"), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 400", response);
+        Assert.Contains("no plain-HTTP port", response);
+    }
+
     /// <summary>
     /// An upstream that records every byte each connection sends it, until that
     /// connection closes, while a per-test script decides what to answer.

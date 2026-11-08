@@ -134,6 +134,15 @@ browsers resolve `*.localhost` to loopback themselves. The UI itself stays on
 `http://localhost:8080`; only `<label>.ild.localhost` hostnames are proxied, and
 the apex `ild.localhost` is not one of them.
 
+### Previews for agents
+
+An agent does not get the address above. In a chat's or run's container (or pod) `*.localhost` is that container, not ILD, and a `*.kube`-style name may not resolve there. `get_preview` gives an agent:
+
+- **In the work item's own run:** the service's own address, `http://127.0.0.1:<port>`, since the preview runs beside it.
+- **Anywhere else** (a chat, another work item's run, an agent in ILD's container): `http://wi-<workItemId>.preview.ild/`. Every agent is launched with ILD's egress proxy in `HTTP_PROXY`, and the proxy hands any `*.preview.ild` request to ILD's own web port, where it is served as the preview it names. It needs no DNS where the agent runs and works the same with every run host. The network policy does not apply to it, since it never leaves ILD; it is served only when `ILD_PREVIEW_PROXY_BASE` is set, and only over plain `http://`.
+
+It works for clients that leave the name to the proxy: browsers (the chrome-devtools MCP server's Chrome included), curl, git, Python. Node's built-in `fetch` with `NODE_USE_ENV_PROXY` looks the name up itself first and fails on it, as on any name that does not resolve where it runs; use the Chrome tools, curl, or Node with an explicit proxy agent there. The egress proxy needs to know ILD's web port: the first `http://` address in `ASPNETCORE_URLS`, else `ASPNETCORE_HTTP_PORTS`.
+
 ### Security
 
 **A running proxied preview is unauthenticated.** The proxy runs ahead of ILD's

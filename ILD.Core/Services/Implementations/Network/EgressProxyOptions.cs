@@ -27,8 +27,39 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
     /// </summary>
     public const string ScopeUser = "provider";
 
+    /// <summary>
+    /// ILD's own plain-HTTP port on loopback, where the proxy hands a request for an agents' preview hostname
+    /// (<see cref="Interfaces.PreviewProxyBase.AgentHost"/>); null when ILD listens on no plain-HTTP port it can name.
+    /// </summary>
+    public int? WebPort { get; init; }
+
     public static EgressProxyOptions FromEnvironment()
-        => Parse(Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar));
+        => Parse(Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar)) with
+        {
+            WebPort = ParseWebPort(Environment.GetEnvironmentVariable("ASPNETCORE_URLS"), Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS")),
+        };
+
+    /// <summary>
+    /// The port of the first <c>http://</c> address in <c>ASPNETCORE_URLS</c> (<c>http://+:8080;https://…</c>), else the
+    /// first of <c>ASPNETCORE_HTTP_PORTS</c>, which ASP.NET Core reads only when the first is unset.
+    /// </summary>
+    internal static int? ParseWebPort(string? urls, string? httpPorts)
+    {
+        foreach (var url in (urls ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) continue;
+            var authority = url["http://".Length..].Split('/', 2)[0];
+            var colon = authority.LastIndexOf(':');
+            return colon >= 0 && colon > authority.LastIndexOf(']') && int.TryParse(authority[(colon + 1)..], out var port) && port is > 0 and <= 65535
+                ? port
+                : 80;
+        }
+        if (!string.IsNullOrWhiteSpace(urls)) return null;
+        foreach (var value in (httpPorts ?? string.Empty).Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (int.TryParse(value, out var port) && port is > 0 and <= 65535)
+                return port;
+        return null;
+    }
 
     public static EgressProxyOptions Parse(string? configuredPort)
         => int.TryParse(configuredPort?.Trim(), out var port) && port > 0 && port <= 65535
