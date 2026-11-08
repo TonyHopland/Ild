@@ -1,11 +1,14 @@
 using ILD.Api.Controllers;
 using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -86,6 +89,98 @@ public class LoopRunsControllerTests
         Assert.IsType<BadRequestObjectResult>(result);
         reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
         Assert.Equal("ild/wi-1-run-a", run.BranchName);
+    }
+
+    private static LoopRunsController EditorController(LoopRun? run, Mock<IRunHost> host)
+    {
+        var store = new Mock<ILoopRunStore>();
+        if (run is not null) store.Setup(s => s.GetByIdAsync(run.Id)).ReturnsAsync(run);
+        var controller = BuildController(store, new Mock<IRunReclaimer>());
+        controller.HttpContext.RequestServices = new ServiceCollection().AddSingleton(host.Object).BuildServiceProvider();
+        return controller;
+    }
+
+    private static Mock<IRunHost> EditorHost(RunHostKind kind, bool worktreeExists = true)
+    {
+        var host = new Mock<IRunHost>();
+        host.SetupGet(h => h.Kind).Returns(kind);
+        host.Setup(h => h.DirectoryExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(worktreeExists);
+        return host;
+    }
+
+    private static LoopRun ContainerRun(LoopRunStatus status = LoopRunStatus.WaitingHuman)
+    {
+        var id = Guid.NewGuid();
+        return new LoopRun { Id = id, WorkItemId = "wi-1", Status = status, WorktreePath = RunPaths.WorkingDirectory(id) };
+    }
+
+    [Fact]
+    public async Task OpenInEditor_names_the_run_container_and_its_worktree_after_checking_the_worktree_there()
+    {
+        var run = ContainerRun();
+        var host = EditorHost(RunHostKind.Container);
+
+        var result = await EditorController(run, host).OpenInEditor(run.Id.ToString());
+
+        var payload = Assert.IsType<OkObjectResult>(result).Value!;
+        Assert.Equal($"ild-run-{run.Id:N}", payload.GetType().GetProperty("containerName")!.GetValue(payload));
+        Assert.Equal($"/ild-run/{run.Id:N}/repo", payload.GetType().GetProperty("folder")!.GetValue(payload));
+        host.Verify(h => h.DirectoryExistsAsync(run.WorktreePath!, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenInEditor_is_not_found_for_an_unknown_run()
+    {
+        var result = await EditorController(null, EditorHost(RunHostKind.Container)).OpenInEditor(Guid.NewGuid().ToString());
+
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task OpenInEditor_refuses_a_run_that_is_still_executing()
+    {
+        var run = ContainerRun(LoopRunStatus.Running);
+        var host = EditorHost(RunHostKind.Container);
+
+        var result = await EditorController(run, host).OpenInEditor(run.Id.ToString());
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        host.Verify(h => h.DirectoryExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenInEditor_refuses_a_run_whose_worktree_is_gone()
+    {
+        var run = ContainerRun();
+
+        var result = await EditorController(run, EditorHost(RunHostKind.Container, worktreeExists: false)).OpenInEditor(run.Id.ToString());
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Theory]
+    [InlineData(RunHostKind.Local)]
+    [InlineData(RunHostKind.Kubernetes)]
+    public async Task OpenInEditor_conflicts_on_a_host_without_Docker_or_Podman_containers(RunHostKind kind)
+    {
+        var run = ContainerRun();
+        var host = EditorHost(kind);
+
+        var result = await EditorController(run, host).OpenInEditor(run.Id.ToString());
+
+        Assert.IsType<ConflictObjectResult>(result);
+        host.Verify(h => h.DirectoryExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenInEditor_conflicts_for_a_worktree_kept_on_this_disk_from_before_the_host_was_switched()
+    {
+        var run = ContainerRun();
+        run.WorktreePath = "/tmp/wt/run-a";
+
+        var result = await EditorController(run, EditorHost(RunHostKind.Container)).OpenInEditor(run.Id.ToString());
+
+        Assert.IsType<ConflictObjectResult>(result);
     }
 
     private static LoopRunsController BuildController(

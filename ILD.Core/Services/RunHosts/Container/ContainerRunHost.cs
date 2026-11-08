@@ -69,7 +69,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     protected override int EgressProxyPort => _options.EgressProxyPort;
 
     /// <summary>What a run's container, volume and network are called.</summary>
-    internal static string ObjectName(Guid ownerId) => $"ild-run-{ownerId:N}";
+    public static string ObjectName(Guid ownerId) => $"ild-run-{ownerId:N}";
 
     private static string Escaped(string name) => Uri.EscapeDataString(name);
 

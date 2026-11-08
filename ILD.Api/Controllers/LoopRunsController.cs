@@ -6,6 +6,8 @@ using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
@@ -589,5 +591,29 @@ public class LoopRunsController : ControllerBase
         await _shellSessions.RunAsync(
             socket, run.WorktreePath, run.Id.ToString("N"), cols, rows, feeds.Feeds, HttpContext.RequestAborted);
         return new EmptyResult();
+    }
+
+    /// <summary>
+    /// The container and folder an editor on the engine's machine attaches to for the run's worktree. Only a run in a
+    /// Docker or Podman container has one; checking the worktree starts a stopped container again, which an editor
+    /// needs to attach.
+    /// </summary>
+    [HttpPost("{id}/editor")]
+    public async Task<IActionResult> OpenInEditor(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var run = await _loopRunStore.GetByIdAsync(guid);
+        if (run is null) return NotFound();
+        if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
+            return BadRequest(new { error = "The editor is not available while the run is still executing." });
+        var host = HttpContext.RequestServices.GetRunHost();
+        if (host.Kind != RunHostKind.Container || RunPaths.OwnerOf(run.WorktreePath) is not { } owner)
+            return Conflict(new { error = "Only a run in a Docker or Podman container can be opened in an editor." });
+        if (!await host.DirectoryExistsAsync(run.WorktreePath!, HttpContext.RequestAborted))
+            return BadRequest(new { error = "Run has no live worktree." });
+
+        return Ok(new { containerName = ContainerRunHost.ObjectName(owner), folder = run.WorktreePath });
     }
 }
