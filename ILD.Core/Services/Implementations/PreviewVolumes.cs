@@ -57,7 +57,7 @@ public static class PreviewVolumes
     /// The folder of each of <paramref name="declared"/>, by name in any case, created
     /// before anything runs: with Keep preview data on, the repository's folder that
     /// every work item shares; otherwise, and without a repository, one under
-    /// <paramref name="stateDirectory"/>. Created as the agent, since the preview's own
+    /// <paramref name="stateDirectory"/>. Created without following links, since the preview's own
     /// steps write there.
     /// </summary>
     public static async Task<IReadOnlyDictionary<string, string>> CreateFoldersAsync(

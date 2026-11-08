@@ -132,20 +132,6 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         }
     }
 
-    [Theory]
-    [InlineData("copilot")]
-    [InlineData("claude-code")]
-    public void An_untrusted_config_directory_still_throws_and_is_not_turned_into_a_warning(string type)
-    {
-        if (!OperatingSystem.IsLinux()) return;
-        StageGroupWritableConfigDirectory();
-        var logger = new RecordingLogger();
-
-        Assert.Throws<InvalidOperationException>(
-            () => WriteConfig(type, Provider(type, withCustomServer: true), IldOff, logger));
-        Assert.Empty(logger.Warnings);
-    }
-
     [Fact]
     public async Task Copilot_runs_without_its_mcp_config_when_the_write_fails_and_logs_why()
     {
@@ -211,25 +197,6 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         Assert.Empty(logger.Warnings);
     }
 
-    [Theory]
-    [InlineData("copilot")]
-    [InlineData("claude-code")]
-    public async Task An_untrusted_config_directory_still_fails_the_run_without_launching_the_cli(string type)
-    {
-        if (!OperatingSystem.IsLinux()) return;
-        StageGroupWritableConfigDirectory();
-        var worktree = CreateWorktree();
-        IAgentAdapter adapter = type == "copilot"
-            ? new CopilotAdapter(new RecordingLogger<CopilotAdapter>(), _environment)
-            : new ClaudeCodeAdapter(new RecordingLogger<ClaudeCodeAdapter>(), _environment);
-
-        var result = await adapter.ExecuteAsync(Context(type, worktree, WriteRecordingCli(worktree)));
-
-        Assert.False(result.Success);
-        Assert.Contains(_configDir, result.Error);
-        Assert.False(File.Exists(Path.Combine(worktree, "argv.txt")), "the CLI was launched");
-    }
-
     [Fact]
     public async Task The_registered_adapters_log_a_failed_write_to_the_application_log()
     {
@@ -281,15 +248,6 @@ public sealed class McpConfigWriteFailureTests : IDisposable
     {
         Directory.CreateDirectory(_configDir);
         File.SetUnixFileMode(_configDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
-    }
-
-    [UnsupportedOSPlatform("windows")]
-    private void StageGroupWritableConfigDirectory()
-    {
-        Directory.CreateDirectory(_configDir);
-        File.SetUnixFileMode(_configDir,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
-            | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute);
     }
 
     private static AiProvider Provider(string type, bool withCustomServer, string? binaryPath = null)

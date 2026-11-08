@@ -324,7 +324,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "make-it", "a b");
         psi.Environment["ILD_TEST_ONLY"] = "yes";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("hello\n", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
@@ -352,7 +352,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "cat");
         psi.RedirectStandardInput = true;
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.StandardInput.WriteAsync("prompt text");
         process.StandardInput.Close();
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
@@ -371,7 +371,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             await e.DropAsync();
         };
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.NotEqual(0, process.ExitCode);
@@ -398,27 +398,13 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_launch_routed_for_the_local_uid_split_is_unwrapped_for_the_pod()
-    {
-        await CreateRunAsync();
-        var psi = Command(WorkingDirectory, "/usr/bin/setpriv", "--reuid=agent", "--regid=agent", "--init-groups", "--", "dotnet", "build");
-
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var command = _api.Execs.Last().Command;
-        Assert.DoesNotContain("/usr/bin/setpriv", command);
-        Assert.Equal(["dotnet", "build"], command.TakeLast(2));
-    }
-
-    [Fact]
     public async Task Proxy_variables_that_name_ilds_loopback_name_ilds_address_for_the_pod()
     {
         await CreateRunAsync();
         var psi = Command(WorkingDirectory, "curl");
         psi.Environment["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("HTTP_PROXY=http://scope:abc@ild.example:3128", _api.Execs.Last().Command);
@@ -497,7 +483,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             if (e.Joined.Contains("long-job")) await hold.Task;
             else await e.ExitAsync(0);
         };
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
         var startedAs = Assert.Single(_api.Execs, e => e.Joined.Contains("long-job")).Command[5];
 
         var killedOk = await Task.Run(() => process.TryKill(), TestContext.Current.CancellationToken);
@@ -685,7 +671,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/c1", TestContext.Current.CancellationToken));
         Assert.Empty(_api.Execs);
 
-        var chatCommand = RunCommand.Routed(Command("/data/chat-sessions/c1", "git", "status"), chat);
+        var chatCommand = RunCommand.Prepared(Command("/data/chat-sessions/c1", "git", "status"), chat);
         using var chatProcess = await routing.StartCommandAsync(chatCommand, TestContext.Current.CancellationToken);
         Assert.Same(chatCommand, Assert.Single(local.Started));
         Assert.Empty(_api.Execs);
@@ -713,7 +699,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         var path = await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", TestContext.Current.CancellationToken);
         using var process = await routing.StartCommandAsync(
-            RunCommand.Routed(Command(ChatFolder(chat), "git", "status"), chat), TestContext.Current.CancellationToken);
+            RunCommand.Prepared(Command(ChatFolder(chat), "git", "status"), chat), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.True(_host.HostsChats);
@@ -870,7 +856,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         await host.AddChatToolsAsync(ChatFolder(chat), MakeBaseRepository(("package.json", "{}"), (".nvmrc", "v20\n")), TestContext.Current.CancellationToken);
         Assert.Contains(_api.Created, c => c.StartsWith("pods/ild-tools-", StringComparison.Ordinal));
 
-        using var process = await host.StartCommandAsync(RunCommand.Routed(Command(ChatFolder(chat), "node", "-v"), chat), TestContext.Current.CancellationToken);
+        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "node", "-v"), chat), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var exec = _api.Execs.Last();

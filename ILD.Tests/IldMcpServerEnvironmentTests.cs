@@ -85,13 +85,4 @@ public sealed class IldMcpServerEnvironmentTests : IDisposable
         Assert.False(File.Exists(path));
         Assert.True(File.Exists(other));
     }
-
-    [Fact]
-    public void A_supplied_agent_user_without_a_read_root_refuses_the_default_root()
-    {
-        var environment = new TestProcessEnvironment { { AgentIsolation.AgentUserEnvVar, "agent" } };
-
-        Assert.Throws<InvalidOperationException>(() =>
-            IldMcpServer.TryWriteConfigFile("test", Guid.NewGuid(), new { }, NullLogger.Instance, environment: environment));
-    }
 }

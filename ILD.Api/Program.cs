@@ -168,10 +168,6 @@ try
     var logNotifier = app.Services.GetRequiredService<ILD.Api.Configuration.SignalRLogNotifier>();
     logBuffer.Appended = entry => _ = logNotifier.LogEntryAppendedAsync(entry);
 
-    // Refuse to start, rather than fail the first agent launch, when the files
-    // carrying the ILD API token would have no root the agent cannot write.
-    ILD.Core.Services.Implementations.AgentIsolation.EnsureAgentReadRoot();
-
     // What a restore that died with the previous process left behind: an upload, or a backup half written.
     try
     {
@@ -250,14 +246,8 @@ try
             if (payloadsInlined > 0)
                 Log.Information("Inlined {Count} offloaded event-log payload(s) into the database", payloadsInlined);
 
-            var agentUser = ILD.Core.Services.Implementations.AgentIsolation.AgentUser;
-
             if (ILD.Data.Security.SecretProtector.IsEnabled)
                 Log.Information("Secret encryption-at-rest is enabled (ILD_SECRET_KEY set)");
-            else if (agentUser is not null)
-                Log.Warning(
-                    "ILD_SECRET_KEY is not set while agent uid isolation is on ({AgentUser}) — provider API keys and webhook secrets sit in the database in plaintext, and the agent is a lower-trust user reaching the same database. Set it.",
-                    agentUser);
             else
                 Log.Warning("ILD_SECRET_KEY is not set — provider API keys and webhook secrets are stored in plaintext. Set it to enable encryption-at-rest.");
 

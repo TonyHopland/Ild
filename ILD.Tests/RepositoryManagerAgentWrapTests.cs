@@ -4,9 +4,9 @@ using ILD.Core.Services.Interfaces;
 namespace ILD.Tests;
 
 /// <summary>
-/// In a uid-isolated deployment (ADR-0014) every git call that acts on an agent-writable
-/// repository is launched as <c>setpriv --reuid=&lt;agent&gt; ... -- git</c>, and the
-/// orchestrator's own git (mirrors, ls-remote) never crosses to another uid. The
+/// Every git call that acts on an agent-writable repository is agent-scoped (none of the
+/// orchestrator's secrets or git credentials), and the orchestrator's own git (mirrors,
+/// ls-remote) runs from a clean environment. The
 /// <see cref="AuditingRunner"/> checks the start info each call would get; the inner
 /// runner answers every command with success, so no git runs.
 /// </summary>
@@ -23,7 +23,7 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
 
     private readonly string _tmp = Directory.CreateTempSubdirectory("ild-agent-wrap-").FullName;
     private readonly string _clone;
-    private readonly AuditingRunner _runner = new(isolated: true, inner: new SucceedingRunner());
+    private readonly AuditingRunner _runner = new(inner: new SucceedingRunner());
 
     public RepositoryManagerAgentWrapTests()
     {
@@ -40,10 +40,10 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
     }
 
     private RepositoryManager NewManager()
-        => new(_runner, null, Path.Combine(_tmp, "wt"), _runner.ManagerAgent, Path.Combine(_tmp, "mirrors"));
+        => new(_runner, null, Path.Combine(_tmp, "wt"), Path.Combine(_tmp, "mirrors"));
 
     [Fact]
-    public async Task Every_git_call_on_a_clone_or_worktree_is_launched_as_the_agent()
+    public async Task Every_git_call_on_a_clone_or_worktree_is_agent_scoped()
     {
         var manager = NewManager();
         var ct = TestContext.Current.CancellationToken;
@@ -77,7 +77,7 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
     }
 
     [Fact]
-    public async Task The_orchestrators_own_git_never_crosses_to_the_agent_uid()
+    public async Task The_orchestrators_own_git_is_never_agent_scoped()
     {
         var manager = NewManager();
         var ct = TestContext.Current.CancellationToken;
@@ -90,53 +90,5 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
         var calls = _runner.Calls;
         Assert.True(calls.Count >= 3, "each operation runs git");
         Assert.All(calls, call => Assert.True(call.Orchestrator));
-    }
-
-    private sealed class RecordingRunner(int exitCode) : IProcessRunner
-    {
-        public List<(string File, IReadOnlyList<string> Args, string? Cwd, ProcessRunOptions? Options)> Calls { get; } = new();
-
-        public Task<ProcessResult> RunAsync(
-            string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default,
-            IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
-        {
-            Calls.Add((fileName, args.ToList(), workingDirectory, options));
-            return Task.FromResult(new ProcessResult(exitCode, string.Empty, exitCode == 0 ? string.Empty : "find: denied"));
-        }
-    }
-
-    [Theory]
-    [InlineData(0, true)]
-    [InlineData(1, false)]
-    public async Task Sharing_a_worktree_runs_as_the_agent_from_the_filesystem_root_and_reports_failure_without_throwing(int exitCode, bool expected)
-    {
-        var inner = new RecordingRunner(exitCode);
-        var runner = new AuditingRunner(isolated: true, inner: inner);
-        runner.Forbid(_clone);
-        var manager = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"));
-
-        var ok = await manager.ShareWorktreeWithOrchestratorAsync(_clone, TestContext.Current.CancellationToken);
-
-        Assert.Equal(expected, ok);
-        runner.AssertClean();
-        var call = Assert.Single(inner.Calls);
-        Assert.Equal("/", call.Cwd);
-        Assert.True(call.Options?.AgentScoped);
-        Assert.NotEqual("git", call.File);
-    }
-
-    [Fact]
-    public async Task Sharing_a_directory_that_is_not_a_clone_or_worktree_starts_no_process()
-    {
-        var inner = new RecordingRunner(0);
-        var runner = new AuditingRunner(isolated: true, inner: inner);
-        var manager = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"));
-        var stray = Path.Combine(_tmp, "stray");
-        Directory.CreateDirectory(stray);
-
-        var ok = await manager.ShareWorktreeWithOrchestratorAsync(stray, TestContext.Current.CancellationToken);
-
-        Assert.False(ok);
-        Assert.Empty(inner.Calls);
     }
 }

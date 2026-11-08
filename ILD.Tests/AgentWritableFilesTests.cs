@@ -7,8 +7,6 @@ namespace ILD.Tests;
 /// <see cref="AgentWritableFiles"/> touches paths the agent can write, so whatever
 /// the agent planted there — a link, a directory, a read-only folder — must be
 /// replaced or cleared, never followed, and must never make the operation fail.
-/// Here the "agent" is the test user, since uid isolation is off in tests; the
-/// crossing itself is checked on the start info it builds.
 /// </summary>
 public sealed class AgentWritableFilesTests : IDisposable
 {
@@ -24,24 +22,6 @@ public sealed class AgentWritableFilesTests : IDisposable
             }
         }
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
-    }
-
-    [Fact]
-    public void Commands_cross_to_the_agent_uid_when_isolation_is_on()
-    {
-        var psi = AgentWritableFiles.BuildStartInfo("true", ["/some/path"], "agent", "agent", "/home/agent");
-
-        Assert.Equal("/usr/bin/setpriv", psi.FileName);
-        Assert.Contains("/bin/sh", psi.ArgumentList);
-        Assert.Contains("/some/path", psi.ArgumentList);
-    }
-
-    [Fact]
-    public void Commands_run_directly_when_isolation_is_off()
-    {
-        var psi = AgentWritableFiles.BuildStartInfo("true", ["/some/path"], agentUser: null, agentGroup: null, agentHome: null);
-
-        Assert.Equal("/bin/sh", psi.FileName);
     }
 
     [Fact]

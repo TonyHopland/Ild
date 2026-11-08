@@ -20,14 +20,13 @@ public sealed class SettingsControllerTests : IDisposable
     private readonly Mock<IEgressPolicy> _policy = new();
     private readonly Mock<INetworkNotifier> _networkNotifier = new();
     private IRunHost _runHost = new FakeRunHost();
-    private NetworkEnforcementStatus _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "agent-open");
 
     public void Dispose() => _db.Dispose();
 
     private SettingsController Build()
         => new(_db.Settings, _notifier.Object, _scheduler.Object, _schedulerSettings.Object,
             _prPoller.Object, _policy.Object, _networkNotifier.Object,
-            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _enforcement, _runHost);
+            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _runHost);
 
     private static string RunHostJson(IActionResult result)
         => System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(result).Value!);
@@ -302,24 +301,6 @@ public sealed class SettingsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Off_is_refused_and_nothing_stored_when_the_firewall_would_leave_an_off_agent_without_network()
-    {
-        _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", "no open group");
-
-        var result = await Put(AppSettingKeys.NetworkMode, "off");
-
-        var json = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<BadRequestObjectResult>(result).Value);
-        Assert.Contains("no open group", json);
-        Assert.Null(await Stored(AppSettingKeys.NetworkMode));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
-        Assert.Equal("monitor", StatedValue(await Put(AppSettingKeys.NetworkMode, "monitor")));
-    }
-
-    [Fact]
-    public async Task Off_is_accepted_without_an_open_group_when_the_firewall_is_not_enforced()
-    {
-        _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "advisory", null);
-
-        Assert.Equal("off", StatedValue(await Put(AppSettingKeys.NetworkMode, "off")));
-    }
+    public async Task Off_is_accepted()
+        => Assert.Equal("off", StatedValue(await Put(AppSettingKeys.NetworkMode, "off")));
 }

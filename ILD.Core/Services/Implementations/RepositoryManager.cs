@@ -15,10 +15,10 @@ namespace ILD.Core.Services.Implementations;
 /// All operations are best-effort; non-zero exit codes return false (or empty for queries).
 ///
 /// <para>
-/// Everything git does in a clone or worktree runs as the agent user (ADR-0014):
-/// those directories, their config, hooks and attributes are the agent's to write, so
-/// whatever they make git execute must only ever have the agent's privileges. The
-/// orchestrator runs git only in its own per-remote mirror (<see cref="GitMirror"/>)
+/// Everything git does in a clone or worktree runs agent-scoped: those directories,
+/// their config, hooks and attributes are the agent's to write, so git there gets none
+/// of the orchestrator's secrets or credentials. The orchestrator runs git with its own
+/// credentials only in its own per-remote mirror (<see cref="GitMirror"/>)
 /// and for <c>ls-remote</c>, each with a clean configuration and an environment
 /// built from scratch (plus the orchestrator's own proxy variables). The remote's
 /// URL always comes from the caller, never from the clone's config.
@@ -36,21 +36,15 @@ public class RepositoryManager : IRepositoryManager
     private readonly IProcessRunner _runner;
     private readonly IRunHost _host;
     private readonly string _worktreesRoot;
-    private readonly AgentIdentity? _agent;
     private readonly GitMirror _mirrors;
     private readonly ProcessRunOptions _agentOptions;
     private readonly Func<string, string?> _readEnvironment;
 
-    /// <param name="agent">
-    /// Who git runs as in clones and worktrees; null reads <see cref="AgentIsolation"/>'s configuration,
-    /// and git then runs as the orchestrator itself when no agent user is configured.
-    /// </param>
     /// <param name="mirrorsRoot">Where the per-remote mirrors live.</param>
     public RepositoryManager(
         IProcessRunner runner,
         ILogger<RepositoryManager>? logger = null,
         string? worktreesRoot = null,
-        AgentIdentity? agent = null,
         string? mirrorsRoot = null,
         Func<string, string?>? readEnvironment = null,
         IRunHost? host = null)
@@ -59,9 +53,8 @@ public class RepositoryManager : IRepositoryManager
         _readEnvironment = readEnvironment ?? Environment.GetEnvironmentVariable;
         _logger = logger;
         _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
-        _agent = agent ?? ConfiguredAgent();
-        _agentOptions = new ProcessRunOptions(AsAgent: _agent, AgentScoped: true);
-        _host = host ?? new LocalRunHost(runner, agent: _agent);
+        _agentOptions = new ProcessRunOptions(AgentScoped: true);
+        _host = host ?? new LocalRunHost(runner);
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
@@ -77,14 +70,9 @@ public class RepositoryManager : IRepositoryManager
     /// <summary>Where the mirrors live for a deployment configured by <paramref name="config"/>.</summary>
     public static string MirrorRoot(IConfiguration? config) => BaseRepoPath.MirrorRoot(config);
 
-    private static AgentIdentity? ConfiguredAgent()
-        => AgentIsolation.AgentUser is { } user
-            ? new AgentIdentity(user, AgentIsolation.AgentGroup ?? user, AgentIsolation.AgentHome ?? string.Empty)
-            : null;
-
     public async Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        // git makes the folders above the clone, as the agent, so the agent owns what it writes into.
+        // git makes the folders above the clone.
         var target = Path.GetFullPath(targetPath);
 
         var remote = (auth ?? new GitAuthOptions(cloneUrl, null)) with { RemoteUrl = cloneUrl };
@@ -167,17 +155,14 @@ public class RepositoryManager : IRepositoryManager
 
         if (AgentWritableFiles.EntryExists(worktreePath))
         {
-            // The agent writes the worktree, so what git left is cleared as the agent:
+            // The agent writes the worktree, so what git left is cleared without trusting it:
             // its read-only folders are opened first, and a link is unlinked, never
-            // followed. Nothing falls back to deleting it as the orchestrator: that
-            // fails on exactly what this exists for — what the agent owns and left
-            // read-only — so it would only bury the reason. What is left instead is
-            // reported, since a worktree nobody removes holds its disk forever.
+            // followed. What is left is reported, since a worktree nobody removes holds its disk forever.
             string? failure = null;
             try
             {
                 if (!await AgentWritableFiles.DeleteAsync([worktreePath]))
-                    failure = "the agent could not clear everything in it";
+                    failure = "not everything in it could be cleared";
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
             {
@@ -422,7 +407,7 @@ public class RepositoryManager : IRepositoryManager
     {
         if (!await _host.IsRunCloneAsync(worktreePath)) return;
 
-        // Run as the agent: the exclude file lives where the agent can replace it with
+        // In a shell of its own: the exclude file lives where the agent can replace it with
         // a link, and the orchestrator must never open a path it chose. A link is left
         // alone, so nothing is written through it.
         var script = """
@@ -491,7 +476,7 @@ public class RepositoryManager : IRepositoryManager
     private const int HookOutputTail = 2000;
 
     /// <summary>
-    /// The worktree's <c>pre-push</c> hook, run as the agent before anything is sent, as <c>git push</c>
+    /// The worktree's <c>pre-push</c> hook, run agent-scoped before anything is sent, as <c>git push</c>
     /// would run it: with <c>origin</c> and the remote URL as arguments and the ref being pushed on stdin.
     /// The push happens from the mirror, where no clone's hooks run, so this is the only place the hook
     /// gets to object. Null when the hook accepts or there is none; otherwise why it did not. The hook has
@@ -632,7 +617,7 @@ public class RepositoryManager : IRepositoryManager
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
-        var bytes = await ReadRepairingAsync(worktreePath, relativePath, full, () => ReadFileBytesAsync(full));
+        var bytes = await ReadOrExplainAsync(relativePath, () => ReadFileBytesAsync(full));
 
         var baseRef = range?.From ?? await ResolveDiffBaseAsync(worktreePath, defaultBranch);
         var revisions = DiffRevisions(baseRef, range);
@@ -710,7 +695,7 @@ public class RepositoryManager : IRepositoryManager
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
-        return await ReadRepairingAsync(worktreePath, relativePath, full, () => _host.OpenFileForReadAsync(full));
+        return await ReadOrExplainAsync(relativePath, () => _host.OpenFileForReadAsync(full));
     }
 
     public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null, WorktreeDiffRange? range = null)
@@ -1062,58 +1047,8 @@ public class RepositoryManager : IRepositoryManager
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
         => RunAsync(cwd, args, CancellationToken.None);
 
-    // One agent-side process, so what is listed, what is checked and what is changed are the same
-    // moment, and the orchestrator never walks the agent's tree. With no paths after the worktree it
-    // lists what the Files tab can show: changes since the fork point (committed or not; a file made
-    // and committed in one node shows as clean in `git status`), plus untracked files. When the fork
-    // point does not resolve it falls back to the untracked files alone. Ignored files are never shown
-    // or committed, so they are left alone. Each path and every directory above it (never `.git`, never
-    // the worktree itself) is kept only if the agent owns it and it lacks group access, and find does not
-    // follow links, so symlinks are skipped.
-    private const string ShareScript = """
-        cd -- "$1" || exit 1
-        shift
-        {
-            if [ $# -gt 0 ]; then
-                printf '%s\0' "$@"
-            else
-                base=$(git merge-base HEAD origin/HEAD 2>/dev/null)
-                [ -n "$base" ] && git diff --name-only --diff-filter=d -z "$base" --
-                git ls-files --others --exclude-standard -z
-            fi
-        } | while IFS= read -r -d '' p; do
-            p=${p%/}
-            case "/$p/" in */.git/*) continue ;; esac
-            printf '%s\0' "./$p"
-            d=$p
-            while [[ $d == */* ]]; do d=${d%/*}; printf '%s\0' "./$d"; done
-        done | sort -zu | xargs -0 -r sh -c 'find -P "$@" -maxdepth 0 -user "$(id -u)" \( \( -type d ! -perm -g=rwx \) -o \( -type f ! -perm -g=rw \) \) -exec chmod g+rwX {} +' sh
-        """;
-
-    public Task<bool> ShareWorktreeWithOrchestratorAsync(string worktreePath, CancellationToken ct = default)
-        => ShareAsync(worktreePath, [], ct);
-
-    private async Task<bool> ShareAsync(string worktreePath, IReadOnlyList<string> relativePaths, CancellationToken ct)
-    {
-        if (!await _host.IsRunCloneAsync(worktreePath, ct))
-        {
-            _logger?.LogWarning("Refused sharing {Directory}: its .git is not a clone or worktree of ours", worktreePath);
-            return false;
-        }
-
-        var r = await _host.RunToolAsync(
-            worktreePath, "/bin/bash", ["-c", ShareScript, "bash", Path.GetFullPath(worktreePath), .. relativePaths], ct: ct);
-        if (!r.Success)
-            _logger?.LogWarning("Sharing {Directory} with the orchestrator exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
-        return r.Success;
-    }
-
-    /// <summary>
-    /// Runs <paramref name="read"/> and, when the orchestrator is denied, gives the group access to
-    /// that one file and the directories above it, as the agent, and reads once more. A second denial
-    /// is the answer: <see cref="WorktreeFileUnreadableException"/>.
-    /// </summary>
-    private async Task<T?> ReadRepairingAsync<T>(string worktreePath, string relativePath, string full, Func<Task<T?>> read)
+    /// <summary>Runs <paramref name="read"/>; a denial is <see cref="WorktreeFileUnreadableException"/>.</summary>
+    private static async Task<T?> ReadOrExplainAsync<T>(string relativePath, Func<Task<T?>> read)
         where T : class
     {
         try
@@ -1122,22 +1057,12 @@ public class RepositoryManager : IRepositoryManager
         }
         catch (UnauthorizedAccessException)
         {
-            var root = ResolveLinks(Path.GetFullPath(worktreePath));
-            if (root is not null)
-                await ShareAsync(worktreePath, [Path.GetRelativePath(root, full)], CancellationToken.None);
-            try
-            {
-                return await read();
-            }
-            catch (UnauthorizedAccessException)
-            {
-                throw new WorktreeFileUnreadableException($"{relativePath} can't be read: permission denied");
-            }
+            throw new WorktreeFileUnreadableException($"{relativePath} can't be read: permission denied");
         }
     }
 
     /// <summary>
-    /// <c>git -C <paramref name="cwd"/></c> as the agent. Refused, without starting git, for a directory
+    /// <c>git -C <paramref name="cwd"/></c>, agent-scoped. Refused, without starting git, for a directory
     /// whose <c>.git</c> pointer is not one <see cref="TrustedRepositoryRoot"/> accepts.
     /// </summary>
     private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(
@@ -1272,10 +1197,9 @@ public class RepositoryManager : IRepositoryManager
     /// repository token. It lives under the orchestrator-private root, never a
     /// fixed path in world-writable <c>/tmp</c>: this script is executed by the
     /// orchestrator with <c>ILD_GIT_PASSWORD</c> in its environment, so a version
-    /// planted by the (now separately-uid'd) agent would be both arbitrary code as
-    /// the orchestrator and credential exfiltration — and the "only write it if it
-    /// is missing" guard below is exactly what would trust the planted copy. See
-    /// <see cref="AgentIsolation.PrivateRoot"/> and ADR-0014.
+    /// planted by someone else would be both arbitrary code as the orchestrator and
+    /// credential exfiltration — and the "only write it if it is missing" guard below
+    /// is exactly what would trust the planted copy. See <see cref="AgentIsolation.PrivateRoot"/>.
     /// </summary>
     private static string EnsureAskPassScript()
     {

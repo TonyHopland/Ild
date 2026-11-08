@@ -37,13 +37,13 @@ public class RepositoryManagerMirrorTests : IDisposable
         Assert.True(violations.Count == 0, "git isolation violated:\n" + string.Join("\n", violations));
     }
 
-    private (RepositoryManager Mgr, AuditingRunner Runner) NewManager(bool isolated, IProcessRunner? inner = null)
+    private (RepositoryManager Mgr, AuditingRunner Runner) NewManager(IProcessRunner? inner = null)
     {
-        var runner = new AuditingRunner(isolated, inner: inner);
+        var runner = new AuditingRunner(inner: inner);
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         _runners.Add(runner);
-        return (new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors), runner);
+        return (new RepositoryManager(runner, null, _worktrees, _mirrors), runner);
     }
 
     private static GitAuthOptions Auth(string remote) => new(remote, "tok-" + Guid.NewGuid().ToString("N"), "Forgejo");
@@ -68,12 +68,10 @@ public class RepositoryManagerMirrorTests : IDisposable
         return wt;
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Clone_gives_an_independent_copy_and_push_leaves_the_clone_tracking_the_remote(bool isolated)
+    [Fact]
+    public async Task Clone_gives_an_independent_copy_and_push_leaves_the_clone_tracking_the_remote()
     {
-        var (mgr, runner) = NewManager(isolated);
+        var (mgr, runner) = NewManager();
         var (remote, basePath, auth) = await ClonedAsync(mgr);
 
         Assert.False(File.Exists(Path.Combine(basePath, ".git", "objects", "info", "alternates")));
@@ -106,12 +104,10 @@ public class RepositoryManagerMirrorTests : IDisposable
         Assert.Empty(AuditingRunner.BundleFilesUnderPrivateRoot().Except(bundlesBefore));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task The_mirror_is_reused_per_remote_is_closed_to_the_agent_and_remembers_no_remote(bool isolated)
+    [Fact]
+    public async Task The_mirror_is_reused_per_remote_is_closed_to_the_agent_and_remembers_no_remote()
     {
-        var (mgr, _) = NewManager(isolated);
+        var (mgr, _) = NewManager();
         var (remote, basePath, auth) = await ClonedAsync(mgr);
         var mirror = Assert.Single(Directory.GetDirectories(_mirrors));
         var mirrorInode = Inode(mirror);
@@ -143,12 +139,10 @@ public class RepositoryManagerMirrorTests : IDisposable
         Assert.Equal(2, Directory.GetDirectories(_mirrors).Length);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Fetch_and_push_use_the_callers_remote_not_the_one_the_clones_config_names(bool isolated)
+    [Fact]
+    public async Task Fetch_and_push_use_the_callers_remote_not_the_one_the_clones_config_names()
     {
-        var (mgr, _) = NewManager(isolated);
+        var (mgr, _) = NewManager();
         var (remote, basePath, auth) = await ClonedAsync(mgr);
         var planted = GitCli.MakeRemote(_tmp, "planted");
         GitCli.Run(planted, "branch", "planted-branch", "main");
@@ -182,13 +176,11 @@ public class RepositoryManagerMirrorTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, "fails")]
-    [InlineData(true, "fails")]
-    [InlineData(false, "is-cancelled")]
-    [InlineData(true, "is-cancelled")]
-    public async Task A_push_that_fails_or_is_cancelled_leaves_no_bundle_behind(bool isolated, string how)
+    [InlineData("fails")]
+    [InlineData("is-cancelled")]
+    public async Task A_push_that_fails_or_is_cancelled_leaves_no_bundle_behind(string how)
     {
-        var (mgr, _) = NewManager(isolated, how == "is-cancelled" ? new CancelOnPushRunner(new ProcessRunner()) : null);
+        var (mgr, _) = NewManager(how == "is-cancelled" ? new CancelOnPushRunner(new ProcessRunner()) : null);
         var (_, basePath, auth) = await ClonedAsync(mgr);
         var wt = await CommittedWorktreeAsync(mgr, basePath, "ild/wi-12-run-1");
         var before = AuditingRunner.BundleFilesUnderPrivateRoot();
@@ -211,19 +203,14 @@ public class RepositoryManagerMirrorTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, "symlink")]
-    [InlineData(false, "relative-gitdir")]
-    [InlineData(false, "gitdir-outside-worktrees")]
-    [InlineData(false, "repo-git-is-a-link")]
-    [InlineData(false, "backlink-names-another-path")]
-    [InlineData(true, "symlink")]
-    [InlineData(true, "relative-gitdir")]
-    [InlineData(true, "gitdir-outside-worktrees")]
-    [InlineData(true, "repo-git-is-a-link")]
-    [InlineData(true, "backlink-names-another-path")]
-    public async Task A_worktree_whose_git_pointer_cannot_be_trusted_is_refused_without_running_git_in_it(bool isolated, string tampering)
+    [InlineData("symlink")]
+    [InlineData("relative-gitdir")]
+    [InlineData("gitdir-outside-worktrees")]
+    [InlineData("repo-git-is-a-link")]
+    [InlineData("backlink-names-another-path")]
+    public async Task A_worktree_whose_git_pointer_cannot_be_trusted_is_refused_without_running_git_in_it(string tampering)
     {
-        var (mgr, runner) = NewManager(isolated);
+        var (mgr, runner) = NewManager();
         var (_, basePath, auth) = await ClonedAsync(mgr);
         var wt = await CommittedWorktreeAsync(mgr, basePath, "ild/wi-13-run-1");
         var pointer = Path.Combine(wt, ".git");
@@ -274,12 +261,10 @@ public class RepositoryManagerMirrorTests : IDisposable
         Assert.True(await mgr.ValidateWorktreeHealthAsync(rebuilt));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_valid_worktree_and_a_plain_base_repo_are_accepted(bool isolated)
+    [Fact]
+    public async Task A_valid_worktree_and_a_plain_base_repo_are_accepted()
     {
-        var (mgr, _) = NewManager(isolated);
+        var (mgr, _) = NewManager();
         var (_, basePath, _) = await ClonedAsync(mgr);
         var wt = await CommittedWorktreeAsync(mgr, basePath, "ild/wi-14-run-1");
 
@@ -288,12 +273,10 @@ public class RepositoryManagerMirrorTests : IDisposable
         Assert.NotNull(await mgr.GetHeadCommitAsync(basePath));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_symlinked_exclude_file_is_not_written_through_and_the_commit_still_goes_ahead(bool isolated)
+    [Fact]
+    public async Task A_symlinked_exclude_file_is_not_written_through_and_the_commit_still_goes_ahead()
     {
-        var (mgr, _) = NewManager(isolated);
+        var (mgr, _) = NewManager();
         var (_, basePath, _) = await ClonedAsync(mgr);
         var info = Directory.CreateDirectory(Path.Combine(basePath, ".git", "info")).FullName;
         var exclude = Path.Combine(info, "exclude");

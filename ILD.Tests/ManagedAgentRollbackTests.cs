@@ -23,7 +23,7 @@ public sealed class ManagedAgentRollbackTests : IDisposable
     public ManagedAgentRollbackTests()
     {
         Directory.CreateDirectory(_dataRoot);
-        _service = new ManagedAgentService(new HttpClient(new OfflineRegistry()), _npm, _dataRoot, logger: null, agentUser: null, usage: _usage);
+        _service = new ManagedAgentService(new HttpClient(new OfflineRegistry()), _npm, _dataRoot, logger: null, usage: _usage);
     }
 
     public void Dispose()

@@ -17,11 +17,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// <see cref="IChatRepositoryCloner"/>. The work splits along the uid boundary
-/// (ADR-0014): the orchestrator clones or fetches ILD's own base clone of the
-/// repository with the remote provider's credentials, exactly as a run's Start
-/// node does, and never touches the chat's folder; everything in the chat's
-/// scratch folder is git running as the agent, with no credentials, filling the
+/// <see cref="IChatRepositoryCloner"/>. The orchestrator clones or fetches ILD's
+/// own base clone of the repository with the remote provider's credentials,
+/// exactly as a run's Start node does, and never touches the chat's folder;
+/// everything in the chat's scratch folder is git with no credentials, filling the
 /// chat's clone from that base clone over the local disk. A chat that lives in the
 /// chat container (<see cref="RunPaths.ChatsRoot"/>) cannot see that disk: its
 /// branch goes in as a git bundle, as a run's code does.
@@ -189,7 +188,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private static ChatRepositoryCloneResult ChatDeleted()
         => Refused(ChatRepositoryCloneOutcome.UnknownChat, "The chat was deleted.");
 
-    /// <summary>Clone into, or update, the chat's folder for the repository, as the agent.</summary>
+    /// <summary>Clone into, or update, the chat's folder for the repository.</summary>
     private async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)
     {
         var reposDir = Path.Combine(job.ScratchPath, ReposFolder);
@@ -406,15 +405,14 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     }
 
     /// <summary>
-    /// The git command <paramref name="arguments"/> as the agent: from <c>/</c>,
+    /// The git command <paramref name="arguments"/> in a chat's clone: from <c>/</c>,
     /// addressing the clone with <c>-C</c> (the orchestrator never enters a folder
     /// the agent owns), with none of the orchestrator's secrets or git
     /// credentials in its environment, and never looking for a repository above
     /// <paramref name="ceilingDirectory"/>.
     /// </summary>
     internal static ProcessStartInfo BuildStartInfo(
-        IReadOnlyList<string> arguments, string? agentUser, string? agentGroup, string? agentHome, string? ceilingDirectory = null,
-        string workingDirectory = "/")
+        IReadOnlyList<string> arguments, string? ceilingDirectory = null, string workingDirectory = "/")
     {
         var psi = new ProcessStartInfo("git")
         {
@@ -434,7 +432,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         if (ceilingDirectory is not null)
             psi.Environment["GIT_CEILING_DIRECTORIES"] = ceilingDirectory;
 
-        return AgentIsolation.Route(psi, agentUser, agentGroup, agentHome);
+        return AgentIsolation.ApplyLaunchEnvironment(psi, egressProxy: null);
     }
 
     // Hooks in the clone are off, so a failing post-checkout or post-merge hook
@@ -446,8 +444,8 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     {
         // In the chat container the clone is the working directory, which is what routes the command there; on this disk
         // the orchestrator never enters it.
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(BuildStartInfo(
-            [.. QuietGitOptions, "-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory,
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(BuildStartInfo(
+            [.. QuietGitOptions, "-C", folder, .. arguments], ceilingDirectory,
             inChatContainer ? folder : "/"), inChatContainer ? chatId : default), ct);
         return await AgentProcess.RunAsync(process, stdin: null, ct);
     }

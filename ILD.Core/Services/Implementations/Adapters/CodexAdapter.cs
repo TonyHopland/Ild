@@ -26,7 +26,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// passed as <c>-m</c> when set; blank leaves the CLI's own default.
 ///
 /// Codex runs with <c>--dangerously-bypass-approvals-and-sandbox</c>: it cannot
-/// prompt headlessly, and the agent uid and the egress proxy (ADR-0014, ADR-0019)
+/// prompt headlessly, and the run host and the egress proxy (ADR-0019)
 /// are the sandbox. Of the per-node tool allowlist only <c>ild</c> applies.
 ///
 /// MCP servers are configured per launch with <c>-c mcp_servers.&lt;name&gt;=…</c>
@@ -452,7 +452,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             if (customServers.Count == 0)
                 return servers;
 
-            var (proxyUrl, _) = AgentIsolation.ResolveLaunchNetwork(mode, environment.Get(AgentIsolation.EgressProxyPortEnvVar), null, provider.Id);
+            var proxyUrl = AgentIsolation.ResolveLaunchProxy(mode, environment.Get(AgentIsolation.EgressProxyPortEnvVar), provider.Id);
             foreach (var server in customServers)
             {
                 if (!ConfigKeyName.IsMatch(server.Name) || dll is null)
@@ -612,17 +612,15 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     private static bool IsSessionId(string? sessionId) => sessionId is not null && SessionIdPattern.IsMatch(sessionId);
 
-    // codex keeps its sessions under the HOME it runs with, which under uid
-    // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
+    // codex keeps its sessions under the HOME it runs with, which on this machine is ours.
     private string? UserCodexHome()
     {
-        var home = AgentIsolation.ResolveChildHome(AgentIsolation.AgentUser, AgentIsolation.AgentHome)
-            ?? EnvironmentVariables.Get("HOME");
+        var home = EnvironmentVariables.Get("HOME");
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".codex");
     }
 
     // The rollouts live in the shared credential store, which the agent can write,
-    // so they are only listed, read and written as the agent (see AgentWritableFiles).
+    // so they are only listed, read and written through the run host (see AgentWritableFiles).
     private async Task<string?> FindRolloutAsync(string sessionsDirectory, string sessionId, CancellationToken ct)
         => (await RunHost.ListFilesAsync(sessionsDirectory, $"rollout-*-{sessionId}.jsonl", ct))
             .Select(file => file.Path)

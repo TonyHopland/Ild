@@ -34,14 +34,13 @@ public static class NuGetCredentialProvider
 
     private static string? Locate(IProcessEnvironment environment, Version sdk)
     {
-        var agentUser = environment.Get(AgentIsolation.AgentUserEnvVar);
         var configured = environment.Get("NUGET_NETCORE_PLUGIN_PATHS") ?? environment.Get("NUGET_PLUGIN_PATHS");
         if (!string.IsNullOrWhiteSpace(configured))
         {
             return configured
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault(path => Path.GetFileName(path) is PluginFile or ToolCommand
-                    && UsableByRunProcesses(path, agentUser, executable: Path.GetFileName(path) == ToolCommand));
+                    && File.Exists(path));
         }
 
         if (sdk >= PathLookupSdk)
@@ -49,30 +48,16 @@ public static class NuGetCredentialProvider
             var onPath = (environment.Get("PATH") ?? string.Empty)
                 .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
                 .Select(directory => Path.Combine(directory, ToolCommand))
-                .FirstOrDefault(path => UsableByRunProcesses(path, agentUser, executable: true));
+                .FirstOrDefault(File.Exists);
             if (onPath is not null)
                 return onPath;
         }
 
-        var home = AgentIsolation.ResolveChildHome(agentUser, environment.Get(AgentIsolation.AgentHomeEnvVar))
-            ?? environment.Get("HOME");
+        var home = environment.Get("HOME");
         if (string.IsNullOrWhiteSpace(home))
             return null;
         var plugin = Path.Combine(home, ".nuget", "plugins", "netcore", "CredentialProvider.Microsoft", PluginFile);
-        return UsableByRunProcesses(plugin, agentUser, executable: false) ? plugin : null;
-    }
-
-    // Under uid isolation the run processes are another uid, and this process can
-    // only vouch for a file that everyone may read (and run, for the command), as
-    // the image's copy and an installer's copy in the agent's home allow.
-    private static bool UsableByRunProcesses(string path, string? agentUser, bool executable)
-    {
-        if (!File.Exists(path))
-            return false;
-        if (string.IsNullOrWhiteSpace(agentUser) || OperatingSystem.IsWindows())
-            return true;
-        var mode = File.GetUnixFileMode(path);
-        return mode.HasFlag(UnixFileMode.OtherRead) && (!executable || mode.HasFlag(UnixFileMode.OtherExecute));
+        return File.Exists(plugin) ? plugin : null;
     }
 
     /// <summary>

@@ -17,16 +17,13 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
-/// The launch seams that read the process-wide proxy port and open group follow the
-/// network mode (ADR-0019): in Off no proxy variable and, under uid isolation, the
-/// open group for <c>--regid</c>; in every other mode the launch is as before.
-/// Runs alone because it sets those variables in the real process environment.
+/// The launch seams that read the process-wide proxy port follow the network mode
+/// (ADR-0019): in Off no proxy variable; in every other mode the provider-scoped proxy.
+/// Runs alone because it sets that variable in the real process environment.
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
 public sealed class NetworkModeLaunchSeamTests : IDisposable
 {
-    private const string OpenGroup = "ild-net-open";
-
     private static readonly string[] ProxyKeys =
         { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY" };
 
@@ -38,8 +35,6 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         Directory.CreateDirectory(_worktree);
         foreach (var key in ProxyKeys) Set(key, null);
         Set(AgentIsolation.EgressProxyPortEnvVar, "3128");
-        Set(AgentIsolation.NetworkOpenGroupEnvVar, OpenGroup);
-        Set(AgentIsolation.AgentUserEnvVar, null);
     }
 
     public void Dispose()
@@ -55,13 +50,6 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         Environment.SetEnvironmentVariable(name, value);
     }
 
-    private void IsolateAs(string user, string group)
-    {
-        Set(AgentIsolation.AgentUserEnvVar, user);
-        Set(AgentIsolation.AgentGroupEnvVar, group);
-        Set(AgentIsolation.AgentHomeEnvVar, "/home/agent");
-    }
-
     private static AgentExecutionContext Execution(NetworkMode mode) => new(
         new AiProvider { Id = Guid.NewGuid(), Name = "p", Type = "claude-code", BaseUrl = "http://localhost", Model = "m", Parallelism = 1 },
         "prompt",
@@ -74,29 +62,20 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     [InlineData(NetworkMode.Monitor)]
     [InlineData(NetworkMode.Whitelist)]
     [InlineData(NetworkMode.Blacklist)]
-    public void An_adapter_launch_in_a_proxied_mode_is_what_it_was_before_Off_existed(NetworkMode mode)
+    public void An_adapter_launch_in_a_proxied_mode_gets_the_provider_scoped_proxy(NetworkMode mode)
     {
-        IsolateAs("agent", "agent-primary");
+        var psi = CliAgentAdapterBase.PrepareForExecution(new ProcessStartInfo("claude"), Execution(mode));
 
-        var psi = CliAgentAdapterBase.RouteForExecution(new ProcessStartInfo("claude"), Execution(mode));
-
-        Assert.Contains("--regid=agent-primary", psi.ArgumentList);
-        Assert.DoesNotContain($"--regid={OpenGroup}", psi.ArgumentList);
         Assert.StartsWith("http://provider:", psi.Environment["HTTPS_PROXY"]);
         Assert.EndsWith("@127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
         Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
     }
 
     [Fact]
-    public void An_adapter_launch_in_Off_runs_under_the_open_group_with_no_proxy_variable()
+    public void An_adapter_launch_in_Off_has_no_proxy_variable()
     {
-        IsolateAs("agent", "agent-primary");
+        var psi = CliAgentAdapterBase.PrepareForExecution(new ProcessStartInfo("claude"), Execution(NetworkMode.Off));
 
-        var psi = CliAgentAdapterBase.RouteForExecution(new ProcessStartInfo("claude"), Execution(NetworkMode.Off));
-
-        Assert.Contains($"--regid={OpenGroup}", psi.ArgumentList);
-        Assert.Contains("--init-groups", psi.ArgumentList);
-        Assert.DoesNotContain("--regid=agent-primary", psi.ArgumentList);
         foreach (var key in ProxyKeys)
             Assert.False(psi.Environment.ContainsKey(key), $"{key} set for an Off launch");
     }
@@ -106,7 +85,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     {
         var ctx = Execution(NetworkMode.Off) with { Environment = new Dictionary<string, string> { ["FEED_TOKEN"] = "t" } };
 
-        var psi = CliAgentAdapterBase.RouteForExecution(new ProcessStartInfo("claude"), ctx);
+        var psi = CliAgentAdapterBase.PrepareForExecution(new ProcessStartInfo("claude"), ctx);
 
         Assert.Equal("t", psi.Environment["FEED_TOKEN"]);
     }

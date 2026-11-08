@@ -8,12 +8,9 @@ namespace ILD.Core.Services.Implementations;
 
 /// <summary>
 /// File operations on paths the agent can write, such as pi's agent and session
-/// directories in shared scratch. They run as the agent uid (ADR-0014): a link
-/// the agent planted then only leads where the agent could already go, and
-/// anything it planted there, read-only or not, can be cleared, because the agent
-/// owns it. The orchestrator itself never opens, writes or deletes through these
-/// paths. With uid isolation off the commands run as the orchestrator, which is
-/// then the only uid there is.
+/// directories in scratch. Whatever the agent left there — a link, a directory, a
+/// read-only folder — is replaced or cleared, never followed, and never makes the
+/// operation fail.
 /// </summary>
 public static class AgentWritableFiles
 {
@@ -79,7 +76,7 @@ public static class AgentWritableFiles
         try
         {
             using (var process = Process.Start(BuildStartInfo(
-                       """set -C && exec cat > "$1" """, [temporary], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
+                       """set -C && exec cat > "$1" """, [temporary]))
                    ?? throw new IOException("could not start /bin/sh"))
             {
                 var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
@@ -133,8 +130,7 @@ public static class AgentWritableFiles
         ArgumentOutOfRangeException.ThrowIfNegative(count);
         using var process = Process.Start(BuildStartInfo(
                 """[ -f "$1" ] && [ ! -L "$1" ] || exit 3; tail -c "+$2" -- "$1" | head -c "$3" """,
-                [path, (offset + 1).ToString(CultureInfo.InvariantCulture), count.ToString(CultureInfo.InvariantCulture)],
-                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
+                [path, (offset + 1).ToString(CultureInfo.InvariantCulture), count.ToString(CultureInfo.InvariantCulture)]))
             ?? throw new IOException("could not start /bin/sh");
         process.StandardInput.Close();
         var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
@@ -154,7 +150,7 @@ public static class AgentWritableFiles
         finally
         {
             // A consumer that stopped early leaves head writing to a pipe nobody reads;
-            // closing it ends head and tail without having to signal the agent's processes.
+            // closing it ends head and tail without having to signal them.
             process.StandardOutput.Dispose();
             await process.WaitForExitAsync(CancellationToken.None);
             await stderr;
@@ -243,18 +239,6 @@ public static class AgentWritableFiles
         return (result.ExitCode == 0, kibibytes * 1024);
     }
 
-    /// <summary>Whether the agent sees anything at <paramref name="path"/>; a link counts, dangling or not.</summary>
-    public static async Task<bool> EntryExistsAsAgentAsync(string path, CancellationToken ct = default)
-        => (await RunAsync("""[ -e "$1" ] || [ -L "$1" ]""", [path], stdin: null, ct)).ExitCode == 0;
-
-    /// <summary>The numeric uid the agent's commands run as.</summary>
-    public static async Task<string?> GetUidAsync(CancellationToken ct = default)
-    {
-        var result = await RunAsync("exec id -u", [], stdin: null, ct);
-        var uid = result.Stdout.Trim();
-        return result.ExitCode == 0 && uid.Length > 0 && uid.All(char.IsAsciiDigit) ? uid : null;
-    }
-
     /// <summary>
     /// For every directory directly below <paramref name="directory"/>, not a link,
     /// with at least one <c>*.jsonl</c> file and nothing in it modified within the
@@ -322,13 +306,7 @@ public static class AgentWritableFiles
             throw new IOException($"'{arguments[0]}': {result.Stderr.Trim()} (exit {result.ExitCode})");
     }
 
-    /// <summary>
-    /// The shell running <paramref name="script"/>, crossed to the agent uid.
-    /// Explicit parameters so the crossing is testable without setting the
-    /// process-global <c>ILD_AGENT_*</c> variables.
-    /// </summary>
-    internal static ProcessStartInfo BuildStartInfo(
-        string script, IReadOnlyList<string> arguments, string? agentUser, string? agentGroup, string? agentHome)
+    private static ProcessStartInfo BuildStartInfo(string script, IReadOnlyList<string> arguments)
     {
         var psi = new ProcessStartInfo("/bin/sh")
         {
@@ -345,14 +323,14 @@ public static class AgentWritableFiles
         foreach (var argument in arguments)
             psi.ArgumentList.Add(argument);
 
-        return AgentIsolation.Route(psi, agentUser, agentGroup, agentHome);
+        return psi;
     }
 
     private static async Task<AgentProcessResult> RunAsync(
         string script, IReadOnlyList<string> arguments, string? stdin, CancellationToken ct)
     {
         using var process = new LocalRunProcess(
-            Process.Start(BuildStartInfo(script, arguments, AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
+            Process.Start(BuildStartInfo(script, arguments))
                 ?? throw new IOException("could not start /bin/sh"),
             static _ => { });
         return await AgentProcess.RunAsync(process, stdin, ct);

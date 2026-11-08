@@ -69,7 +69,6 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
         var environment = new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } }.WithRealPath();
         var service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            agentUser: null, agentGroup: null, agentHome: null,
             environment: environment, notifier: _notifier.Object);
         _services.Add(service);
         return service;

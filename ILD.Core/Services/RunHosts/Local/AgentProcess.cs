@@ -5,12 +5,7 @@ namespace ILD.Core.Services.Implementations;
 /// <summary>What a process run through <see cref="AgentProcess.RunAsync"/> ended with.</summary>
 internal sealed record AgentProcessResult(int ExitCode, string Stdout, string Stderr);
 
-/// <summary>
-/// Runs a process started as the agent uid to its end. The caller starts it,
-/// through a builder that routes it to the agent, so the crossing stays visible
-/// where the process is spawned (ADR-0014, AgentIsolationSpawnSiteTests), and
-/// hands it over here.
-/// </summary>
+/// <summary>Runs a process its caller started to its end.</summary>
 internal static class AgentProcess
 {
     /// <summary>

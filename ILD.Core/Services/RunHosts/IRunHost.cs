@@ -44,7 +44,7 @@ public interface IRunHost
     /// <summary>Open an interactive terminal (a PTY) running <paramref name="options"/>.</summary>
     Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default);
 
-    /// <summary>The command line that runs <paramref name="fileName"/> as the agent would, for a terminal to start (the provider sign-in terminal), with the egress rules of <paramref name="providerId"/> under <paramref name="mode"/>.</summary>
+    /// <summary>The command line that runs <paramref name="fileName"/> as an agent launch would, for a terminal to start (the provider sign-in terminal), with the egress rules of <paramref name="providerId"/> under <paramref name="mode"/>.</summary>
     AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, NetworkMode mode);
 
     // -- Bundles -----------------------------------------------------------------
@@ -67,7 +67,7 @@ public interface IRunHost
     Task<bool> IsRunCloneAsync(string path, CancellationToken ct = default);
 
     /// <summary>
-    /// Run a short command as the agent would, in the run that holds <paramref name=runPath/> (a path in that run),
+    /// Run a short agent-scoped command in the run that holds <paramref name=runPath/> (a path in that run),
     /// and wait for it. <paramref name="streams"/> redirects stdin and stdout to streams; otherwise both are collected.
     /// </summary>
     Task<RunHostOutput> RunToolAsync(string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default);
@@ -166,8 +166,8 @@ public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string
 
 /// <summary>
 /// A command to start. <see cref="Start"/> carries the program, arguments, working directory,
-/// environment and which streams are redirected. An agent CLI launch (<see cref="Agent"/>) is crossed
-/// to the agent by the host, with the provider's egress rules under <see cref="NetworkMode"/> and
+/// environment and which streams are redirected. An agent CLI launch (<see cref="Agent"/>) is started
+/// by the host with the provider's egress rules under <see cref="NetworkMode"/> and
 /// <see cref="Environment"/> set over what <see cref="Start"/> carries; any other command is started as
 /// the caller built it. <see cref="OwnerId"/> is the run or chat it belongs to, for <see cref="IRunHost.KillAllAsync"/>.
 /// </summary>
@@ -190,17 +190,17 @@ public sealed record RunCommand
     public NetworkMode NetworkMode { get; }
     public IReadOnlyDictionary<string, string>? Environment { get; }
 
-    /// <summary>An agent CLI launch: the host crosses it to the agent.</summary>
+    /// <summary>An agent CLI launch: the host gives it the provider's egress rules and environment.</summary>
     public static RunCommand Agent(
         ProcessStartInfo start, Guid ownerId, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment)
         => new(start, ownerId, asAgent: true, providerId, networkMode, environment);
 
     /// <summary>
-    /// A command the caller has already crossed to the agent with <c>AgentIsolation.Route</c> (a Cmd node, a preview, a git
-    /// command in a chat clone). The host refuses to start one that is not, when agent isolation is on (ADR-0014).
+    /// A command the caller has already given its environment and proxy (a Cmd node, a preview, a git command in a
+    /// chat clone), started as it is.
     /// </summary>
-    public static RunCommand Routed(ProcessStartInfo routed, Guid ownerId = default)
-        => new(routed, ownerId, asAgent: false, providerId: null, NetworkMode.Off, environment: null);
+    public static RunCommand Prepared(ProcessStartInfo prepared, Guid ownerId = default)
+        => new(prepared, ownerId, asAgent: false, providerId: null, NetworkMode.Off, environment: null);
 }
 
 /// <summary>The outcome of a command that moved code.</summary>
@@ -234,8 +234,7 @@ public interface IRunProcess : IDisposable
 
     /// <summary>
     /// Kill the command and everything it started. Never throws; unlike a blind kill it says whether
-    /// it worked, because an agent that could not be killed goes on writing the worktree
-    /// (under uid isolation, <c>kill(2)</c> fails with <c>EPERM</c> without <c>CAP_KILL</c>).
+    /// it worked, because an agent that could not be killed goes on writing the worktree.
     /// True when the command is gone, killed or already ended.
     /// </summary>
     bool TryKill();

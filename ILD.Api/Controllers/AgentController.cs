@@ -370,7 +370,7 @@ public class AgentController : ControllerBase
 
     // -- Branch sync (ADR-0014) ------------------------------------------------
     //
-    // The orchestrator holds the repository token and the agent uid can reach
+    // The orchestrator holds the repository token and the agent can reach
     // neither it nor the askpass helper, so an agent that needs commits pushed to
     // its run branch after the run started cannot `git pull` them itself. It asks
     // here instead: the orchestrator does the authenticated fetch and the local

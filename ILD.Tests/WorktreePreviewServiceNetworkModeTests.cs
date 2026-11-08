@@ -12,8 +12,7 @@ namespace ILD.Tests;
 /// A Worktree Preview follows the network mode (ADR-0019): its install steps and
 /// services launch without the proxy in Off and proxied otherwise, with the mode
 /// read when the start, single-service start or install is called. Observed on real
-/// children (each writes the proxy variable it was given to a file), since a crossing
-/// to the agent uid cannot be executed on this host.
+/// children (each writes the proxy variable it was given to a file).
 /// </summary>
 [Collection(PreviewPortsCollection.Name)]
 public class WorktreePreviewServiceNetworkModeTests : IDisposable
@@ -34,15 +33,13 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private WorktreePreviewService BuildService(
-        IEgressPolicy? policy, string? agentUser = null, string? agentGroup = null, string? openGroup = null)
+    private WorktreePreviewService BuildService(IEgressPolicy? policy)
     {
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         _service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, agentUser, agentGroup, agentHome: null,
-            egressProxy: Proxy, environment: new TestProcessEnvironment().WithRealPath(),
-            networkOpenGroup: openGroup, egressPolicy: policy);
+            NullLogger<WorktreePreviewService>.Instance,
+            egressProxy: Proxy, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: policy);
         return _service;
     }
 
@@ -121,22 +118,6 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
 
         Assert.Equal(Proxy, Written("install.out"));
         Assert.Equal(Proxy, Written("web.out"));
-    }
-
-    [Fact]
-    public void An_Off_step_under_uid_isolation_runs_under_the_open_group_and_a_proxied_one_under_the_primary_group()
-    {
-        var service = BuildService(policy: null, agentUser: "agent", agentGroup: "agent-primary", openGroup: "ild-net-open");
-        var step = new WorktreePreviewService.ResolvedStep("true", _worktree, new Dictionary<string, string>(StringComparer.Ordinal));
-
-        var off = service.BuildPreviewProcess(step with { NetworkMode = NetworkMode.Off });
-        var monitor = service.BuildPreviewProcess(step with { NetworkMode = NetworkMode.Monitor });
-
-        Assert.Contains("--regid=ild-net-open", off.ArgumentList);
-        Assert.DoesNotContain("--regid=agent-primary", off.ArgumentList);
-        Assert.False(off.Environment.ContainsKey("HTTPS_PROXY"));
-        Assert.Contains("--regid=agent-primary", monitor.ArgumentList);
-        Assert.Equal(Proxy, monitor.Environment["HTTPS_PROXY"]);
     }
 
     private static int FindFreePort()

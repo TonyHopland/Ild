@@ -82,23 +82,12 @@ public sealed class InteractiveProviderSessionService
         }
 
         var sessionId = Guid.NewGuid();
-        // The TUI runs as the agent uid (below), so its cwd has to be writable by
-        // it. Rooting it at the shared scratch root means the setgid shared-group
-        // tree grants that by inheritance, rather than a per-directory chmod.
         var sessionRoot = AgentIsolation.CreateScratchDirectory("ild-sessions", sessionId.ToString("N"));
 
         try
         {
-            // Run the login TUI as the *agent* uid, exactly like a run (ADR-0014).
-            // These CLIs write their credentials with owner-only modes
-            // (~/.claude/.credentials.json is 0600, opencode's auth.json likewise),
-            // which no group or ACL grant can widen after the fact — so the login
-            // has to be performed by the uid that later has to read them, or the
-            // agent reads as logged-out until the next boot repair. It also means
-            // this is no longer a second, unrouted agent-CLI launch path.
-            // The routed command carries the environment the crossing requires
-            // (HOME, so the TUI writes credentials into the agent's home rather
-            // than the orchestrator's); applying it is not optional.
+            // The command carries the environment an agent launch gets (the egress proxy);
+            // applying it is not optional.
             // Only the user's extra arguments: the terminal is for logging in and for
             // checking that the CLI accepts them, not a run, so none of a run's flags.
             var (extraArgs, notice) = ResolveExtraArgs(provider);
@@ -136,8 +125,7 @@ public sealed class InteractiveProviderSessionService
         }
         finally
         {
-            // The TUI ran as the agent, which can write here: cleared as the agent,
-            // so a link it planted is unlinked rather than followed.
+            // The TUI could write anything here: a link it planted is unlinked rather than followed.
             try { await _host.DeleteAsync([sessionRoot], CancellationToken.None); } catch { }
         }
     }

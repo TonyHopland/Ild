@@ -33,7 +33,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
     private ServiceProvider _services = null!;
 
     private string SessionPath => ClaudeCodeAdapter.GetSessionFilePath(
-        _worktree, SessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, _environment)!;
+        _worktree, SessionId, _environment)!;
 
     public async ValueTask InitializeAsync()
     {
@@ -83,14 +83,9 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
     [Fact]
     public void Session_files_live_under_the_home_the_claude_child_runs_with()
     {
-        var agentHome = Path.Combine(_home, "agent-home");
-        var agentProjects = Path.Combine(agentHome, ".claude", "projects") + Path.DirectorySeparatorChar;
         var ownProjects = Path.Combine(_home, ".claude", "projects") + Path.DirectorySeparatorChar;
 
-        Assert.StartsWith(agentProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome, _environment));
-        // Isolation off, or no agent home configured: the crossing leaves HOME alone.
-        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, agentUser: null, agentHome, _environment));
-        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome: null, _environment));
+        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, _environment));
     }
 
     [Fact]

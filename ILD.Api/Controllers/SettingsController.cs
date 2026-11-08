@@ -28,7 +28,6 @@ public class SettingsController : ControllerBase
     private readonly IEgressPolicy _egressPolicy;
     private readonly INetworkNotifier _networkNotifier;
     private readonly AttachmentLimits _attachmentLimits;
-    private readonly NetworkEnforcementStatus _enforcement;
     private readonly IRunHost _runHost;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
@@ -62,7 +61,6 @@ public class SettingsController : ControllerBase
         IEgressPolicy egressPolicy,
         INetworkNotifier networkNotifier,
         AttachmentLimits attachmentLimits,
-        NetworkEnforcementStatus enforcement,
         IRunHost runHost)
     {
         _store = store;
@@ -73,7 +71,6 @@ public class SettingsController : ControllerBase
         _egressPolicy = egressPolicy;
         _networkNotifier = networkNotifier;
         _attachmentLimits = attachmentLimits;
-        _enforcement = enforcement;
         _runHost = runHost;
     }
 
@@ -173,8 +170,6 @@ public class SettingsController : ControllerBase
         if (!KnownKeys.Contains(key)) return NotFound(new { error = $"Unknown setting key '{key}'" });
         if (request.Value is not { } sent) return BadRequest(new { error = "A value is required." });
         if (!TryCanonicalize(key, sent, out var value, out var error)) return BadRequest(new { error });
-        if (key == AppSettingKeys.NetworkMode && EgressRules.TryParseMode(value, out var mode) && mode == NetworkMode.Off && !_enforcement.OffAvailable)
-            return BadRequest(new { error = $"Network mode Off is unavailable here, so agents launched in it would have no network. {_enforcement.Reason}" });
 
         await _store.UpsertAsync(key, value, ct);
 

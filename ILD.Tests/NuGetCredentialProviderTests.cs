@@ -105,25 +105,6 @@ public sealed class NuGetCredentialProviderTests : IDisposable
     }
 
     [Fact]
-    public void Under_uid_isolation_a_provider_the_agent_cannot_read_does_not_count()
-    {
-        if (OperatingSystem.IsWindows()) return;
-        var plugin = Plugin(Path.Combine(_root, "system", "CredentialProvider.Microsoft"),
-            UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        var env = new TestProcessEnvironment
-        {
-            { "PATH", DotNet(withSdk: true) },
-            { "HOME", Home() },
-            { "NUGET_PLUGIN_PATHS", plugin },
-            { AgentIsolation.AgentUserEnvVar, "agent" },
-        };
-
-        Assert.True(NuGetCredentialProvider.IsMissing(env));
-        File.SetUnixFileMode(plugin, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
-        Assert.False(NuGetCredentialProvider.IsMissing(env));
-    }
-
-    [Fact]
     public void The_dotnet_tool_on_the_path_is_found_by_an_sdk_that_looks_there()
     {
         var tool = Tool(Path.Combine(_root, "usr-local-bin"));

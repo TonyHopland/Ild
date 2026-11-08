@@ -27,7 +27,7 @@ public sealed class WorktreePreviewServiceVolumeHoldTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WorktreesPath"] = Path.Combine(_root, "worktrees") })
             .Build();
         _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, agentUser: null, agentGroup: null, agentHome: null,
+            NullLogger<WorktreePreviewService>.Instance,
             environment: new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } }.WithRealPath());
     }
 

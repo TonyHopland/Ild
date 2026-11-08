@@ -204,9 +204,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             : command.OwnerId != Guid.Empty ? command.OwnerId : RunPaths.OwnerOf(psi.WorkingDirectory)
                 ?? throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to");
 
-        var (fileName, arguments) = command.AsAgent
-            ? (psi.FileName, psi.ArgumentList.ToList())
-            : AgentIsolation.Unrouted(psi) is { } inner ? (inner.FileName, inner.Arguments.ToList()) : (psi.FileName, psi.ArgumentList.ToList());
+        var (fileName, arguments) = (psi.FileName, psi.ArgumentList.ToList());
         var environment = EnvironmentFor(command, psi, owner, out var network);
         if (owner.Chat)
             foreach (var line in await ChatEnvironmentAsync(owner.Id, ct))
@@ -254,8 +252,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         network = new Dictionary<string, string>(StringComparer.Ordinal);
         if (command.AsAgent)
         {
-            var (proxy, _) = AgentIsolation.ResolveLaunchNetwork(command.NetworkMode, command.ProviderId);
-            if (proxy is not null)
+            // The run's network reaches only ILD, so even a launch in network mode Off goes through the proxy,
+            // which lets every request of that mode through.
+            if (AgentIsolation.EgressProxyUrl(command.ProviderId) is { } proxy)
                 foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
                     network[name] = value;
         }

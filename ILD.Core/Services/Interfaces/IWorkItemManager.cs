@@ -185,7 +185,7 @@ public interface IWorkItemManager
     ///
     /// <para>
     /// Runs with the orchestrator's repository credentials, which is the whole point:
-    /// under ADR-0014 the agent uid can reach neither the token nor the askpass
+    /// the agent can reach neither the token nor the askpass
     /// helper, so an agent that needs the latest remote commits asks for this rather
     /// than running <c>git pull</c> itself.
     /// </para>

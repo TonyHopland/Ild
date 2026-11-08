@@ -11,10 +11,9 @@ using Porta.Pty;
 namespace ILD.Core.Services.RunHosts.Local;
 
 /// <summary>
-/// The run host for a run that lives on the machine ILD runs on: the agent's processes are children
-/// of the orchestrator that cross to the lower-trust agent uid (ADR-0014), and its files sit in the
-/// worktree and the scratch and agent-read roots of <see cref="AgentIsolation"/>. This is the only
-/// place that spawns a process, opens a PTY or reads the agent's files as the agent.
+/// The run host for a run that lives on the machine ILD runs on, as when a developer runs ILD with
+/// <c>dotnet run</c>: the agent's processes are children of ILD, and its files sit in the worktree and
+/// the scratch and agent-read roots of <see cref="AgentIsolation"/>.
 /// </summary>
 public sealed class LocalRunHost : IRunHost
 {
@@ -25,24 +24,17 @@ public sealed class LocalRunHost : IRunHost
     private readonly IServiceProvider? _services;
     private readonly IRepositoryManager? _repositories;
     private readonly ProcessRunOptions _agentOptions;
-    private readonly AgentIdentity? _agent;
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<LocalRunProcess, byte>> _running = new();
 
     /// <param name="runner">What bundles are moved with; the git and shell scripts of a clone run through it.</param>
     /// <param name="services">Where <see cref="CreateAsync"/> and <see cref="DeleteAsync"/> find the repository manager, which uses this host.</param>
-    /// <param name="agent">Who the scripts run as; the configured agent user when null.</param>
     /// <param name="repositories">The repository manager to make worktrees with, when it is not to be found through <paramref name="services"/>.</param>
-    public LocalRunHost(
-        IProcessRunner? runner = null, IServiceProvider? services = null, AgentIdentity? agent = null, IRepositoryManager? repositories = null)
+    public LocalRunHost(IProcessRunner? runner = null, IServiceProvider? services = null, IRepositoryManager? repositories = null)
     {
         _runner = runner;
         _services = services;
         _repositories = repositories;
-        agent ??= AgentIsolation.AgentUser is { } user
-            ? new AgentIdentity(user, AgentIsolation.AgentGroup ?? user, AgentIsolation.AgentHome ?? string.Empty)
-            : null;
-        _agent = agent;
-        _agentOptions = new ProcessRunOptions(AsAgent: agent, AgentScoped: true);
+        _agentOptions = new ProcessRunOptions(AgentScoped: true);
     }
 
     public RunHostKind Kind => RunHostKind.Local;
@@ -70,8 +62,7 @@ public sealed class LocalRunHost : IRunHost
 
     public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
-        var psi = command.AsAgent ? RouteAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : command.Start;
-        EnsureRouted(psi);
+        var psi = command.AsAgent ? PrepareAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : command.Start;
         var process = await StartAsync(psi, ct);
         var tracked = new LocalRunProcess(process, Forget(command.OwnerId));
         if (command.OwnerId != Guid.Empty)
@@ -101,23 +92,13 @@ public sealed class LocalRunHost : IRunHost
         }
     }
 
-    /// <summary>
-    /// A command its caller says it routed is checked to be: a builder that lost its route would otherwise
-    /// start as the orchestrator, with its secrets and capabilities (ADR-0014). Only where agent uid isolation is on.
-    /// </summary>
-    internal void EnsureRouted(ProcessStartInfo psi)
-    {
-        if (_agent is not null && !AgentIsolation.IsRouted(psi))
-            throw new InvalidOperationException($"refusing to start '{psi.FileName}' as the orchestrator: agent uid isolation is on and the command was not routed to the agent (ADR-0014)");
-    }
-
-    /// <summary>The launch of an agent CLI: <paramref name="psi"/> with the execution's environment, crossed to the agent uid.</summary>
-    internal static ProcessStartInfo RouteAgentLaunch(
+    /// <summary>The launch of an agent CLI: <paramref name="psi"/> with the execution's environment and its network mode's proxy.</summary>
+    internal static ProcessStartInfo PrepareAgentLaunch(
         ProcessStartInfo psi, Guid? providerId, ILD.Data.Enums.NetworkMode mode, IReadOnlyDictionary<string, string>? environment)
     {
         foreach (var (name, value) in environment ?? new Dictionary<string, string>())
             psi.Environment[name] = value;
-        return AgentIsolation.Route(psi, providerId, mode);
+        return AgentIsolation.ApplyLaunchEnvironment(psi, providerId, mode);
     }
 
     private Action<LocalRunProcess> Forget(Guid ownerId) => process =>
@@ -153,7 +134,7 @@ public sealed class LocalRunHost : IRunHost
         => PtyProvider.SpawnAsync(options, ct);
 
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)
-        => AgentIsolation.RouteCommand(fileName, arguments, providerId, mode);
+        => AgentIsolation.TerminalCommand(fileName, arguments, providerId, mode);
 
     // -- Bundles -----------------------------------------------------------------
 
