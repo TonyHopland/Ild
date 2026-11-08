@@ -737,7 +737,7 @@ Set as build args (e.g. in `.env` consumed by `docker compose build`):
 | `NODE_VERSION`         | Tag of the Node image the frontend is built with (default `26-alpine`)                   |
 | `NODE_RUNTIME_VERSION` | Node in ILD's image, which installs the coding agents (default `26.13.0`; see below)     |
 | `NPM_VERSION`          | npm installed over the one Node ships (default `12.2.1`; see below)                      |
-| `APP_UID` / `APP_GID`  | uid and gid of the `ild` user ILD runs as (default 10001)                                |
+| `ILD_UID` / `ILD_GID`  | uid and gid of the `ild` user ILD runs as (default 10001)                                |
 | `RUNNER_WITH_CHROME`   | `runner` target only: `0` builds the runner image without Chrome (default `1`)           |
 
 ILD's image is the ASP.NET runtime with git, Node and npm, and `gosu`. It has no

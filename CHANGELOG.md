@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` (`.env.example` lists the paths), then `docker compose up -d --build`, which also builds the runner image. On the first start, ILD takes back the files its agent user left in its volumes.
 - **On Kubernetes, ILD runs every loop run and chat in a pod.** Give it the RBAC, `ILD_API_URL`, `ILD_K8S_RUNNER_IMAGE` and a ReadWriteMany `ILD_K8S_TOOLS_CLAIM` from the deployment guide before you upgrade. Without the claim, runs get only what the slim `ild-runner` image holds.
 - **The ILD image is smaller: it no longer has the .NET SDK, Chrome or a second user**, since agents never run in it.
-- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials**; Claude subscriptions now use a long-lived token that the provider terminal creates once.
+- **ILD runs as uid 10001, as documented.** The .NET base image had silently made it 1654; the first start after the upgrade gives the volumes to the new uid.- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials**; Claude subscriptions now use a long-lived token that the provider terminal creates once.
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
 
 ### Removed

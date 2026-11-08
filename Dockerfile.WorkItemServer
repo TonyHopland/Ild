@@ -18,20 +18,22 @@ RUN dotnet publish -c Release -o /app/publish --no-restore ${VERSION:+-p:Version
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
-ARG APP_UID=10001
-ARG APP_GID=10001
+# Not APP_UID/APP_GID: the .NET base images set those as ENV (1654), and an ENV wins over an ARG of the same
+# name, which silently made ild uid 1654.
+ARG ILD_UID=10001
+ARG ILD_GID=10001
 RUN apt-get update && apt-get install -y --no-install-recommends git gosu netcat-openbsd && rm -rf /var/lib/apt/lists/*
-RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
+RUN existing_group="$(getent group "${ILD_GID}" | cut -d: -f1 || true)" && \
 	if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
 		groupmod -n ild "$existing_group"; \
 	elif [ -z "$existing_group" ]; then \
-		groupadd --gid ${APP_GID} ild; \
+		groupadd --gid ${ILD_GID} ild; \
 	fi && \
-	existing_user="$(getent passwd "${APP_UID}" | cut -d: -f1 || true)" && \
+	existing_user="$(getent passwd "${ILD_UID}" | cut -d: -f1 || true)" && \
 	if [ -n "$existing_user" ] && [ "$existing_user" != "ild" ]; then \
 		usermod -l ild -g ild -d /home/ild -m -s /usr/sbin/nologin "$existing_user"; \
 	elif [ -z "$existing_user" ]; then \
-		useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
+		useradd --uid ${ILD_UID} --gid ${ILD_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
 	fi
 # --chown on the COPY itself: a follow-up `chown -R /app` would rewrite every
 # file into an extra layer, shipping the published output twice.

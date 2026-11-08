@@ -79,8 +79,10 @@ WORKDIR /app
 ARG NODE_RUNTIME_VERSION=26.13.0
 ARG NPM_VERSION=12.2.1
 ARG WITH_CERTS=0
-ARG APP_UID=10001
-ARG APP_GID=10001
+# Not APP_UID/APP_GID: the .NET base images set those as ENV (1654), and an ENV wins over an ARG of the same
+# name, which silently made ild uid 1654.
+ARG ILD_UID=10001
+ARG ILD_GID=10001
 
 # gosu: the entrypoint drops from root to ild. netcat: it waits for PostgreSQL.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd && \
@@ -92,17 +94,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 # the managed coding-agent installs land under /data owned by ild. Reuses
 # any existing user/group at the configured UID/GID. Its group's gid is the one
 # the entrypoint gives a rootful engine's socket (ILD_CONTAINER_SOCKET_GRANT).
-RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
+RUN existing_group="$(getent group "${ILD_GID}" | cut -d: -f1 || true)" && \
     if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
       groupmod -n ild "$existing_group"; \
     elif [ -z "$existing_group" ]; then \
-      groupadd --gid ${APP_GID} ild; \
+      groupadd --gid ${ILD_GID} ild; \
     fi && \
-    existing_user="$(getent passwd "${APP_UID}" | cut -d: -f1 || true)" && \
+    existing_user="$(getent passwd "${ILD_UID}" | cut -d: -f1 || true)" && \
     if [ -n "$existing_user" ] && [ "$existing_user" != "ild" ]; then \
       usermod -l ild -g ild -d /home/ild -m -s /usr/sbin/nologin "$existing_user"; \
     elif [ -z "$existing_user" ]; then \
-      useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
+      useradd --uid ${ILD_UID} --gid ${ILD_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
     fi
 
 # Coding agents (Pi, OpenCode, Claude Code) are intentionally NOT baked into
@@ -134,8 +136,8 @@ RUN apt-get update && \
     npm install -g --prefix /usr/local --cache /tmp/npm-install-cache --no-audit --no-fund "npm@$NPM_VERSION" && \
     rm -rf /tmp/npm-install-cache /root/.npm && \
     smoke_home="$(mktemp -d)" && \
-    chown "${APP_UID}:${APP_GID}" "$smoke_home" && \
-    actual="$(gosu "${APP_UID}:${APP_GID}" env HOME="$smoke_home" sh -lc 'npm --version')"; \
+    chown "${ILD_UID}:${ILD_GID}" "$smoke_home" && \
+    actual="$(gosu "${ILD_UID}:${ILD_GID}" env HOME="$smoke_home" sh -lc 'npm --version')"; \
     rm -rf "$smoke_home"; \
     if [ "$actual" != "$NPM_VERSION" ]; then \
       echo "npm reports '$actual', but NPM_VERSION=$NPM_VERSION" >&2; \
