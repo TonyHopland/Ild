@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.RunHosts.Tools;
 
 namespace ILD.Tests;
@@ -40,6 +41,17 @@ public sealed class RunToolStoreScriptTests : IDisposable
             ln -sf ../pkg/cli.js "$prefix/node_modules/.bin/pi"
             echo "npm $2" >> "$FAKE_LOG"
             """);
+        // dotnet: the SDK version FAKE_SDK names; `tool install … --tool-path <dir>` leaves the provider's command there.
+        WriteExecutable("dotnet", """
+            #!/bin/bash
+            case "$1" in
+              --version) echo "${FAKE_SDK:-10.0.100}" ;;
+              tool) dir=$(printf '%s\n' "$@" | grep -A1 -x -- --tool-path | tail -1)
+                    ver=$(printf '%s\n' "$@" | grep -A1 -x -- --version | tail -1)
+                    mkdir -p "$dir"; printf '#!/bin/sh\n' > "$dir/nuget-plugin-microsoft-artifacts-credential-provider"
+                    chmod +x "$dir/nuget-plugin-microsoft-artifacts-credential-provider"; echo "credprovider $ver" >> "$FAKE_LOG" ;;
+            esac
+            """);
     }
 
     public void Dispose() => Directory.Delete(_dir, recursive: true);
@@ -63,6 +75,8 @@ public sealed class RunToolStoreScriptTests : IDisposable
         catch (System.ComponentModel.Win32Exception) { return false; }
     }
 
+    private string? _sdk;
+
     private (int ExitCode, string StdOut, string StdErr) Run(params string[] arguments)
     {
         Assert.SkipUnless(OperatingSystem.IsLinux() && Has("jq") && Has("flock"), "needs Linux with bash, jq and flock");
@@ -72,6 +86,7 @@ public sealed class RunToolStoreScriptTests : IDisposable
         psi.Environment["ILD_TOOLS_ROOT"] = Root;
         psi.Environment["MISE_DATA_DIR"] = Path.Combine(Root, "mise");
         psi.Environment["FAKE_LOG"] = Log;
+        if (_sdk is not null) psi.Environment["FAKE_SDK"] = _sdk;
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
@@ -127,5 +142,53 @@ public sealed class RunToolStoreScriptTests : IDisposable
         Assert.Equal([wrap], line["path"]!.AsArray().Select(p => p!.GetValue<string>()));
         var wrapper = File.ReadAllText(Path.Combine(wrap, "pi"));
         Assert.Contains($"exec \"{Root}/mise/installs/node/24.0/bin/node\" \"{Root}/agents/pi/1.5.0/node_modules/pkg/cli.js\"", wrapper);
+    }
+    private static string[] PathOf(string stdout) => JsonNode.Parse(stdout.Trim())!["path"]!.AsArray().Select(p => p!.GetValue<string>()).ToArray();
+
+    [Fact]
+    public void A_dotnet_sdk_from_9_0_200_gets_the_azure_artifacts_credential_provider_on_its_path_once_per_sdk()
+    {
+        var first = Run("tool=dotnet@10");
+        var again = Run("tool=dotnet@10");
+        var sameSdk = Run("tool=dotnet@10.0");
+
+        Assert.True(first.ExitCode == 0, first.StdErr);
+        var provider = $"{Root}/nuget-credprovider/2.0.5/10.0.100";
+        Assert.Equal([$"{Root}/mise/installs/dotnet/10.0/bin", provider], PathOf(first.StdOut));
+        Assert.True(File.Exists(Path.Combine(provider, NuGetCredentialProvider.ToolCommand)));
+        Assert.Equal(first.StdOut, again.StdOut);
+        Assert.Contains(provider, PathOf(sameSdk.StdOut));
+        Assert.Equal(["dotnet@10", "credprovider 2.0.5", "dotnet@10.0"], Installs());
+    }
+
+    [Fact]
+    public void An_sdk_older_than_9_0_200_gets_no_provider_and_says_why()
+    {
+        _sdk = "8.0.404";
+        var result = Run("tool=dotnet@8");
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        Assert.Equal([$"{Root}/mise/installs/dotnet/8.0/bin"], PathOf(result.StdOut));
+        Assert.Contains("only from SDK 9.0.200", result.StdErr);
+        Assert.Equal(["dotnet@8"], Installs());
+        Assert.Equal(result.StdOut, Run("tool=dotnet@8").StdOut);
+        Assert.Equal(["dotnet@8"], Installs());
+    }
+
+    [Fact]
+    public void A_dotnet_manifest_from_before_the_provider_gets_it_without_installing_dotnet_again()
+    {
+        Run("tool=dotnet@10");
+        var manifest = Path.Combine(Root, "manifests", "dotnet@10.json");
+        var old = JsonNode.Parse(File.ReadAllText(manifest))!.AsObject();
+        old.Remove("nuget");
+        old["path"] = new JsonArray(old["path"]!.AsArray()[0]!.GetValue<string>());
+        File.WriteAllText(manifest, old.ToJsonString());
+
+        var result = Run("tool=dotnet@10");
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        Assert.Contains($"{Root}/nuget-credprovider/2.0.5/10.0.100", PathOf(result.StdOut));
+        Assert.Equal(["dotnet@10", "credprovider 2.0.5"], Installs());
     }
 }

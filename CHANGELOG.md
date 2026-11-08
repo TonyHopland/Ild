@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets. Settings warns when the container socket is not rootless or cannot be reached.
 - **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart. A rootful Podman machine's socket works as it is.
 - **A run in a container or pod gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows**; `run.tools` in `ild.config.json` names them when finding them is not enough.
+- **A run restores NuGet packages from a private Azure Artifacts feed**: the toolchain store installs the credential provider with each .NET SDK from 9.0.200 on.
 - **Chats share one container, or one pod in Kubernetes, and the provider sign-in terminal runs in a short-lived container that keeps the login when it closes.**
 
 ### Changed

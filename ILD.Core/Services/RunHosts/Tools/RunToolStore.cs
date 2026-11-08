@@ -85,14 +85,62 @@ public static class RunToolStore
 
         manifest_for() { printf '%s/manifests/%s.json' "$root" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._@-' '_')"; }
 
+        # Runs a command with the PATH and variables a manifest names, as a run would.
+        in_tool_env() {
+          local m="$1" kv; shift
+          (
+            while IFS= read -r kv; do export "$kv"; done < <(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$m")
+            PATH="$(jq -r '.path | join(":")' "$m"):$base_path" "$@"
+          )
+        }
+
+        # The Azure Artifacts credential provider, pinned. It turns the VSS_NUGET_EXTERNAL_FEED_ENDPOINTS ILD hands a
+        # run into credentials for its private NuGet feeds; without it a restore from one fails with a 401.
+        credprovider_version=2.0.5
+
+        # Gives a .NET toolchain the credential provider, on its PATH, where NuGet looks for nuget-plugin-* commands
+        # from SDK 9.0.200 on. An older SDK does not look there, so it gets none. Installed once per SDK version.
+        add_nuget_provider() {
+          local m="$1" sdk dir
+          sdk="$(in_tool_env "$m" dotnet --version)"
+          if ! printf '%s\n' "$sdk" | awk -F. '{ exit !($1 > 9 || ($1 == 9 && ($2 > 0 || $3 + 0 >= 200))) }'; then
+            echo "dotnet SDK $sdk: no Azure Artifacts credential provider, which NuGet finds on PATH only from SDK 9.0.200 on" >&2
+            jq -c '.nuget = true' "$m" > "$m.nuget"
+            mv -f "$m.nuget" "$m"
+            return 0
+          fi
+          dir="$root/nuget-credprovider/$credprovider_version/$sdk"
+          mkdir -p "$root/nuget-credprovider/$credprovider_version"
+          exec 8>"$dir.lock"; flock 8
+          if [ ! -e "$dir/.ild-complete" ]; then
+            rm -rf "$dir"
+            in_tool_env "$m" env DOTNET_CLI_HOME=/tmp/ild-credprovider NUGET_PACKAGES=/tmp/ild-credprovider/packages \
+              DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+              dotnet tool install Microsoft.Artifacts.CredentialProvider.NuGet.Tool \
+              --version "$credprovider_version" --tool-path "$dir" >&2
+            [ -x "$dir/nuget-plugin-microsoft-artifacts-credential-provider" ]
+            touch "$dir/.ild-complete"
+          fi
+          exec 8>&-
+          jq -c --arg dir "$dir" '.path += [$dir] | .nuget = true' "$m" > "$m.nuget"
+          mv -f "$m.nuget" "$m"
+        }
+
+        # A .NET manifest from before the credential provider (no "nuget" field) gets it once.
+        needs_nuget() { [ "${1%%@*}" = dotnet ] && [ "$(jq -r '.nuget // false' "$2")" != true ]; }
+
         # Installs a toolchain once and leaves its manifest at manifest_for. Called as a command, never inside $(…):
         # a failure there would not stop the script, and the run would start without the toolchain it asked for.
         ensure_tool() {
           local spec="$1" m where envjson
           m="$(manifest_for "$spec")"
-          if [ ! -s "$m" ]; then
+          if [ ! -s "$m" ] || needs_nuget "$spec" "$m"; then
             exec 9>"$m.lock"; flock 9
-            if [ ! -s "$m" ]; then
+            if [ -s "$m" ] && needs_nuget "$spec" "$m"; then
+              cp "$m" "$m.tmp"
+              add_nuget_provider "$m.tmp"
+              mv -f "$m.tmp" "$m"
+            elif [ ! -s "$m" ]; then
               mise install "$spec" >&2
               where="$(mise where "$spec")"
               envjson="$(cd / && PATH="$base_path" mise env --json "$spec")"
@@ -102,6 +150,7 @@ public static class RunToolStore
                    path: (if ($added | length) > 0 then $added else [$where + "/bin"] end),
                    env: ($env | del(.PATH) | with_entries(select(.key | test("^_?_?MISE") | not)))}' > "$m.tmp"
               [ -s "$m.tmp" ]
+              if [ "${spec%%@*}" = dotnet ]; then add_nuget_provider "$m.tmp"; fi
               mv -f "$m.tmp" "$m"
             fi
             exec 9>&-

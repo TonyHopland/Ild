@@ -945,23 +945,24 @@ into credentials only through Microsoft's Azure Artifacts credential provider;
 without it a restore from the feed fails with `NU1301 … 401 (Unauthorized)`
 however good the PAT is.
 
-**Neither ILD's image nor the `ild-runner` image installs it**, and the
-[toolchain store](#run-toolchains) does not either, so NuGet restores from a
-private Azure Artifacts feed fail in a run's container or pod today; npm feeds
-are unaffected. To use such a feed, build a runner image of your own
-`FROM ghcr.io/tonyhopland/ild-runner` with the provider installed (below) and
-point `ILD_CONTAINER_RUNNER_IMAGE` or `ILD_K8S_RUNNER_IMAGE` at it; if that image
-also carries the .NET SDK, set `ILD_RUN_TOOLCHAINS=off`.
+**In a run's container or pod, the [toolchain store](#run-toolchains) installs
+it** with each .NET SDK from 9.0.200 on: the `Microsoft.Artifacts.CredentialProvider.NuGet.Tool`
+tool, version 2.0.5, once per SDK version, on that toolchain's `PATH`, where
+NuGet looks for it. A store filled before this gets it the next time a run needs
+that SDK. An older SDK does not look on `PATH`, so it gets none and the
+installer's log says so; pin 9.0.200 or later (in `global.json`, or `run.tools`)
+for a repository that restores from a private feed. A runner image of your own
+with `ILD_RUN_TOOLCHAINS=off` has to bring the provider itself (below).
 
-ILD looks for the provider in its own environment, the way NuGet looks: the files
+Under `dotnet run`, ILD looks for the provider in its own environment, the way NuGet looks: the files
 `NUGET_PLUGIN_PATHS` names (which switch every other lookup off), else the tool's
 command on `PATH` (for an SDK from 9.0.200 on), else `~/.nuget/plugins` in the
 home. Where a .NET SDK is installed but no provider is found — the usual state of
 a `dotnet run` development setup — Settings → Package feeds shows "NuGet restores
 won't be authenticated", Test's OK says NuGet credentials can't be delivered, and
 a run with feeds logs the warning at its start (it is also on the Start node's
-output). ILD's image has no SDK, so it shows nothing; it cannot see into a
-runner image. Install the provider for the user the agent runs as:
+output). ILD's image has no SDK, so it shows nothing. Install the provider for
+the user the agent runs as:
 
 - with a .NET SDK 9.0.200 or later,
   `dotnet tool install --global Microsoft.Artifacts.CredentialProvider.NuGet.Tool --version 2.0.5`,
