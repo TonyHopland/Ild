@@ -242,6 +242,10 @@ have. The drain then, for each run this process is driving:
    killed, but each loop still has its interrupted-node bookkeeping to do on the
    way out. A timeout logs a warning and never fails the shutdown.
 
+Then the run host puts away what it made: a run's container is stopped (a pod is
+left as it is), the chat container or pod and any sign-in one are removed; see
+[What happens to the containers and pods ILD made](./deployment.md#what-happens-to-the-containers-and-pods-ild-made).
+
 **Resume semantics.** On the next start a shutdown-parked run resumes through
 the halt path, against the same agent session, with the prompt `"Continue where
 you left off."` — the node is not re-run cold and its session context is not

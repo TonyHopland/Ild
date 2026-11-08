@@ -19,7 +19,7 @@ namespace ILD.Core.Services.RunHosts.Container;
 /// its own that reaches only ILD, and all three carry the run's labels. There are no owner references: ending the
 /// run deletes the container, the volume and the network, and the sweeper deletes what a killed ILD left.
 /// </summary>
-public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDisposable
+public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHostShutdown, IDisposable
 {
     public const string RunLeftoverKind = "container-run";
 
@@ -384,8 +384,82 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
         => owner.Chat ? await ChatContainerRunningAsync(ct) : await _api.GetAsync($"/containers/{Escaped(owner.Chat ? ChatName : ObjectName(owner.Id))}/json", ct, HttpStatusCode.NotFound) is not null;
 
     protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
-        => await DockerExec.OpenAsync(
-            _api, owner.Chat ? await EnsureChatContainerAsync(ct) : _execNames.TryGetValue(owner.Id, out var other) ? other : ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct);
+    {
+        if (owner.Chat)
+            return await DockerExec.OpenAsync(_api, await EnsureChatContainerAsync(ct), command, stdin, tty, ExitStatusTimeout, ct);
+        if (_execNames.TryGetValue(owner.Id, out var other))
+            return await DockerExec.OpenAsync(_api, other, command, stdin, tty, ExitStatusTimeout, ct);
+        try
+        {
+            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct);
+        }
+        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.Conflict)
+        {
+            // Stopped when ILD shut down, or by a restart of the engine or machine: started again, with all it held.
+            await StartStoppedRunAsync(owner.Id, ct);
+            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct);
+        }
+    }
+
+    private async Task StartStoppedRunAsync(Guid owner, CancellationToken ct)
+    {
+        var name = ObjectName(owner);
+        Logger?.LogInformation("Starting the stopped container of run {Run} again", owner);
+        await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
+        // Its address on its network can change with a start.
+        _addresses[owner] = await WaitReadyAsync(name, $"run {owner:N}", ct);
+    }
+
+    // -- Shutdown ----------------------------------------------------------------
+
+    /// <summary>
+    /// What ILD puts away when it stops, after the drain has parked its runs. The chat container and any sign-in container
+    /// are removed: what chats keep is in their volume, and the next chat makes the container from the runner image as
+    /// it is then. Each run's container is stopped, not removed, so nothing runs while ILD is down while a parked run,
+    /// its checkout and its agent session wait in it; ILD starts it again when the run next needs it.
+    /// </summary>
+    public async Task ShutdownAsync(CancellationToken ct)
+    {
+        var work = new List<Task> { RemoveContainerAsync(ChatName, "the chat container", ct) };
+        work.AddRange(_signIns.Keys.Select(name => RemoveContainerAsync(name, "a sign-in container", ct)));
+        try
+        {
+            var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
+            foreach (var listed in (await _api.GetAsync($"/containers/json?filters={filter}", ct))?.AsArray() ?? [])
+                if (listed?["Labels"]?[RunPaths.RunLabel]?.GetValue<string>() is { } run && Guid.TryParseExact(run, "N", out var owner))
+                    work.Add(StopRunAsync(owner, ct));
+        }
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException)
+        {
+            Logger?.LogWarning(ex, "Could not list the containers of the runs to stop them; they keep running until ILD next needs them");
+        }
+        await Task.WhenAll(work);
+    }
+
+    private async Task StopRunAsync(Guid owner, CancellationToken ct)
+    {
+        try
+        {
+            await _api.PostAsync($"/containers/{Escaped(ObjectName(owner))}/stop?t=2", null, ct, HttpStatusCode.NotModified, HttpStatusCode.NotFound);
+            _addresses.TryRemove(owner, out _);
+        }
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException or OperationCanceledException)
+        {
+            Logger?.LogWarning(ex, "Could not stop the container of run {Run}", owner);
+        }
+    }
+
+    private async Task RemoveContainerAsync(string name, string subject, CancellationToken ct)
+    {
+        try
+        {
+            await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true", null, ct));
+        }
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException or OperationCanceledException)
+        {
+            Logger?.LogWarning(ex, "Could not remove {Subject} {Name}; it is replaced when ILD next needs it", subject, name);
+        }
+    }
 
     // -- Chats -------------------------------------------------------------------
 
@@ -433,7 +507,42 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
     private async Task<bool> ChatContainerRunningAsync(CancellationToken ct)
     {
         var container = await _api.GetAsync($"/containers/{Escaped(ChatName)}/json", ct, HttpStatusCode.NotFound);
-        return container?["State"]?["Running"]?.GetValue<bool>() == true && AddressIn(container, ChatName) is not null;
+        return container?["State"]?["Running"]?.GetValue<bool>() == true && AddressIn(container, ChatName) is not null
+            && container["Config"]?["Labels"]?[SpecLabel]?.GetValue<string>() == await ChatSpecAsync(ct);
+    }
+
+    /// <summary>The label that says which runner image, and which of ILD's settings, the chat container was made with.</summary>
+    internal const string SpecLabel = "ild/spec";
+
+    private string? _chatSpec;
+
+    /// <summary>
+    /// What the chat container is made from: the runner image's id, so a rebuilt or pulled image under the same name
+    /// counts, and the settings it is given. A chat container made from anything else is replaced, since the chat
+    /// container is long-lived and nothing else would ever bring it up to date. Read once per ILD process.
+    /// </summary>
+    private async Task<string> ChatSpecAsync(CancellationToken ct)
+    {
+        if (_chatSpec is { } known) return known;
+        // The image's name is the path: Docker and Podman both take one with slashes there.
+        var image = await _api.GetAsync($"/images/{_options.RunnerImage}/json", ct, HttpStatusCode.NotFound);
+        string[] parts =
+        [
+            image?["Id"]?.GetValue<string>() ?? "", _options.RunnerImage, _options.IldHost, _options.ToolsVolume,
+            _options.Toolchains ? "tools" : "no-tools",
+            .. _options.GitIdentity.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => $"{e.Key}={e.Value}"),
+        ];
+        var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', parts)));
+        return _chatSpec = Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
+    }
+
+    /// <summary>Removes a chat container made from another runner image or other settings, so it is not left running until the next chat.</summary>
+    internal async Task RetireStaleChatContainerAsync(CancellationToken ct)
+    {
+        var container = await _api.GetAsync($"/containers/{Escaped(ChatName)}/json", ct, HttpStatusCode.NotFound);
+        if (container is null || container["Config"]?["Labels"]?[SpecLabel]?.GetValue<string>() == await ChatSpecAsync(ct)) return;
+        Logger?.LogInformation("Replacing the chat container: the runner image or ILD's settings changed since it was made");
+        await RemoveContainerAsync(ChatName, "the chat container", ct);
     }
 
     private async Task CreateChatContainerAsync(string ildAddress, CancellationToken ct)
@@ -447,7 +556,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
             User = $"{RunnerUid}:{RunnerUid}",
             WorkingDir = RunPaths.ChatsRoot,
             Env = _options.GitIdentity.Select(e => $"{e.Key}={e.Value}").ToArray(),
-            Labels = ChatLabels(),
+            Labels = new Dictionary<string, string>(ChatLabels()) { [SpecLabel] = await ChatSpecAsync(ct) },
             HostConfig = new
             {
                 Binds = _options.Toolchains
@@ -654,10 +763,18 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
         if (await WarningAsync(ct) is { } warning)
             Logger?.LogWarning("{Warning}", warning);
         await ReconnectToRunsAsync(ct);
+        try
+        {
+            await RetireStaleChatContainerAsync(ct);
+        }
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException)
+        {
+            Logger?.LogWarning(ex, "Could not check the chat container; it is checked again when a chat next needs it");
+        }
     }
 
     /// <summary>
-    /// Puts ILD's own container back on the network of every running run of this instance, and of the chat container,
+    /// Puts ILD's own container back on the network of every run of this instance, a stopped one included, and of the chat container,
     /// at the address each was given for ILD. A container that is recreated (an upgrade, <c>docker compose up</c>)
     /// starts on none of them, and without this the runs and chats it left could reach neither the model gateway nor
     /// the MCP endpoint, and their previews could not be reached. A restarted container keeps its networks, and
@@ -672,7 +789,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
             if (self is null) return;
             var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
             var networks = new List<(string Network, string Subject)>();
-            foreach (var listed in (await _api.GetAsync($"/containers/json?filters={filter}", ct))?.AsArray() ?? [])
+            foreach (var listed in (await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct))?.AsArray() ?? [])
             {
                 if (listed?["Labels"]?[RunPaths.RunLabel]?.GetValue<string>() is { } run && Guid.TryParseExact(run, "N", out var owner))
                     networks.Add((ObjectName(owner), $"run {owner:N}"));

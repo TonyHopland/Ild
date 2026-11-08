@@ -296,6 +296,7 @@ Whoever holds the socket controls every container on the host: it can start a pr
 - The network is `internal`, so the container cannot reach the internet or the host's other networks. ILD connects its own container (`ILD_CONTAINER_ILD_CONTAINER`) to the network, so the run reaches ILD and nothing else: the model gateway, the MCP endpoint and the egress proxy. Anything else the agent connects to goes through the egress proxy and its [limits](configuration.md#agent-network-limits).
 - The container is given the host name in `ILD_API_URL` as ILD's address on its own network. The code goes in and out as bundles over exec, so the container never holds the git credential or the mirror.
 - The toolchains its repository needs and the agents ILD has installed, from the [toolchain store](configuration.md#run-toolchains): the `ild-tools` volume, mounted read-only. The first run that needs a version installs it, in a short-lived `ild-tools-…` container of the runner image on the engine's default network; later runs reuse it. The volume is shared by every run, and never pruned.
+- When ILD stops, the container is stopped, and started again when the run next needs it ([What happens to the containers and pods ILD made](#what-happens-to-the-containers-and-pods-ild-made)).
 - Every object is labelled `app.kubernetes.io/managed-by=ild`, `ild/instance=<ILD_CONTAINER_INSTANCE>` and `ild/run=<run id>`. There are no owner references on a single host, so Cleanup deletes the container, the volume and the network explicitly, and the sweeper (once at startup, then every `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`) deletes the labelled objects of runs that are finished or gone. It only touches its own instance. An ILD that is killed mid-run leaves nothing behind after its next start.
 
 ### The engine socket
@@ -428,6 +429,45 @@ Note that draining bounds how long a stop takes, not whether a run survives one:
 a process down longer than the work-item server's stale-claim window (~15
 minutes) still has its item reclaimed and its local run cancelled on startup, as
 it always did.
+
+### What happens to the containers and pods ILD made
+
+After the drain, ILD puts away what it made, within a few seconds of the grace
+period:
+
+| | Docker or Podman | Kubernetes |
+| --- | --- | --- |
+| A run's container or pod | **Stopped**, with its volume and network kept: nothing runs while ILD is down, a preview included. ILD starts it again when the run next needs it, which also covers a restart of the engine or the machine | **Kept running**: a pod cannot be stopped, and it is what a parked run resumes in |
+| The chat container or pod | **Removed**. The chats' folders are in its volume or claim; the next chat makes it again from the runner image as it is then | **Deleted**, the same way |
+| A sign-in container or pod | **Removed** | **Deleted** |
+
+The chat container or pod is long-lived, so ILD also replaces one that was made
+from another runner image or with other settings: at startup, and before a chat
+uses it. A `docker compose up --build` that rebuilds the runner image therefore
+reaches the chats too. A run keeps the image it started with to its end; the next
+run gets the new one.
+
+A run's objects are removed when the run is cleaned up, and the sweep (at startup
+and every 10 minutes) removes those of runs that finished or that ILD no longer
+knows, such as after `docker compose down -v`. A container left running by an
+ILD that was killed outright is stopped or replaced the next time ILD needs it.
+
+### Removing ILD for good
+
+`docker compose down -v` removes ILD's own containers and volumes, but not what
+ILD made through the engine, since compose did not make it, and an ILD that never
+starts again never sweeps it. Remove it by its label, on the engine ILD used:
+
+```sh
+docker rm -f $(docker ps -aq --filter label=app.kubernetes.io/managed-by=ild)
+docker volume rm $(docker volume ls -q --filter label=app.kubernetes.io/managed-by=ild)
+docker network rm $(docker network ls -q --filter label=app.kubernetes.io/managed-by=ild)
+docker volume rm ild-tools   # the toolchain store
+```
+
+(`podman` takes the same commands.) On Kubernetes, run
+`kubectl delete pods,pvc,secrets,networkpolicies -l app.kubernetes.io/managed-by=ild`
+in the run namespace, then delete the `ILD_K8S_TOOLS_CLAIM` claim if you made one.
 
 ## First-startup behavior
 

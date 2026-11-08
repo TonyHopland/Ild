@@ -144,7 +144,21 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// No CPU or memory limit, as chats had in ILD's own container.
     /// </summary>
     public V1Pod ChatPod()
-        => BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore, limits: false);
+    {
+        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore, limits: false);
+        pod.Metadata.Annotations = new Dictionary<string, string> { [KubernetesNames.SpecAnnotation] = SpecOf(pod) };
+        return pod;
+    }
+
+    /// <summary>
+    /// A hash of a pod's spec: the runner image and everything ILD gives the pod. The chat pod is long-lived, so one whose
+    /// annotation differs from what ILD would make now (a new runner image, other settings) is replaced.
+    /// </summary>
+    public static string SpecOf(V1Pod pod)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(k8s.KubernetesJson.Serialize(pod.Spec)));
+        return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
+    }
 
     private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, bool mountTools, bool limits)
     {

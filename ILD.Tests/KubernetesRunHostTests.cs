@@ -38,10 +38,10 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         if (Directory.Exists(_scratch)) Directory.Delete(_scratch, recursive: true);
     }
 
-    private static KubernetesRunHostOptions Options(string instance = Instance, string? toolsClaim = null) => KubernetesRunHostOptions.From(name => name switch
+    private static KubernetesRunHostOptions Options(string instance = Instance, string? toolsClaim = null, string image = "registry.example/ild-runner:1") => KubernetesRunHostOptions.From(name => name switch
     {
         "ILD_API_URL" => "http://ild.example:8080",
-        "ILD_K8S_RUNNER_IMAGE" => "registry.example/ild-runner:1",
+        "ILD_K8S_RUNNER_IMAGE" => image,
         "ILD_K8S_INSTANCE" => instance,
         "ILD_K8S_STORAGE_CLASS" => "run-scratch",
         "ILD_K8S_TOOLS_CLAIM" => toolsClaim,
@@ -251,6 +251,53 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Contains("fatal: bad bundle", ex.Message);
         Assert.Empty(_api.Names("pods"));
         Assert.Empty(_api.Names("secrets"));
+    }
+
+    // -- Shutdown and the chat pod's spec -----------------------------------------
+
+    [Fact]
+    public async Task Shutdown_deletes_the_chat_pod_and_open_sign_in_pods_and_leaves_run_pods()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin && !e.Tty) await e.ReadStdinToEndAsync();
+            if (!e.Tty) await e.ExitAsync(0);
+        };
+        var ct = TestContext.Current.CancellationToken;
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run"), ct);
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        await using var signIn = await _host.OpenSignInAsync(null, "claude", [], 80, 24, ct);
+        var signInPod = SignInPod();
+
+        await _host.ShutdownAsync(ct);
+
+        Assert.Contains($"pods/{KubernetesNames.ChatName(Instance)}", _api.Deleted);
+        Assert.Contains($"pods/{signInPod}", _api.Deleted);
+        Assert.DoesNotContain($"pods/{Name(_run)}", _api.Deleted);
+    }
+
+    [Fact]
+    public async Task A_chat_pod_made_from_another_spec_is_replaced_and_one_from_the_same_is_kept()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        var ct = TestContext.Current.CancellationToken;
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        var chat = KubernetesNames.ChatName(Instance);
+
+        await NewHost(Options()).CheckAsync(ct);
+        Assert.DoesNotContain($"pods/{chat}", _api.Deleted);
+
+        // A new runner image.
+        var upgraded = NewHost(Options(image: "registry.example/ild-runner:2"));
+        await upgraded.CheckAsync(ct);
+        Assert.Contains($"pods/{chat}", _api.Deleted);
+
+        await upgraded.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        Assert.Equal("registry.example/ild-runner:2", _api.Get<V1Pod>("pods", chat)!.Spec.Containers.Single().Image);
     }
 
     // -- Provider sign-in --------------------------------------------------------

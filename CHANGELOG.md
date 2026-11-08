@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ILD runs as uid 10001, as documented.** The .NET base image had silently made it 1654; the first start after the upgrade gives the volumes to the new uid.- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials**; Claude subscriptions now use a long-lived token that the provider terminal creates once.
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
 
+### Fixed
+
+- **ILD no longer leaves its containers running while it is down.** On shutdown it stops each run's container, which it starts again when the run next needs it, and removes the chat and sign-in containers. The chat container or pod is also replaced when the runner image or ILD's settings changed, so chats no longer keep an old image.
+
 ### Removed
 
 - **`ILD_RUN_HOST`.** ILD started from its image always runs agents in containers, or pods in Kubernetes; only `dotnet run` runs them as ILD's own processes.

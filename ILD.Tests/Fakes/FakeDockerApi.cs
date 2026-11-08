@@ -55,6 +55,12 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     /// <summary>Whether the runner image is on the machine; a create without it answers 404.</summary>
     public bool ImagePresent { get; set; } = true;
 
+    /// <summary>The id <c>/images/&lt;name&gt;/json</c> answers for each image name; a name not here answers 404.</summary>
+    public Dictionary<string, string> ImageIds { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Whether a container was stopped (and not started since): an exec into it is refused with 409, as an engine refuses it.</summary>
+    public bool IsStopped(string name) { lock (_gate) return _containers.TryGetValue(name, out var c) && c.Stopped; }
+
     /// <summary>What <c>/info</c> answers; null answers 404.</summary>
     public JsonNode? Info { get; set; }
 
@@ -99,6 +105,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
             var container = _containers[name];
             container.Running = false;
             container.Started = false;
+            container.Stopped = true;
         }
     }
 
@@ -264,6 +271,10 @@ internal sealed class FakeDockerApi : IAsyncDisposable
                 ("GET", ["containers", "json"]) => (200, _containers.Values.Where(c => Matches(request, c.Labels)).Select(c => new { Names = new[] { "/" + c.Name }, c.Labels }).ToList()),
                 ("GET", ["containers", var name, "json"]) => InspectContainer(name),
                 ("POST", ["containers", var name, "start"]) => StartContainer(name),
+                ("POST", ["containers", var name, "stop"]) => StopContainer(name),
+                ("GET", ["images", .. var image, "json"]) => ImageIds.TryGetValue(string.Join('/', image), out var imageId)
+                    ? (200, new { Id = imageId })
+                    : Failure(404, $"no such image: {string.Join('/', image)}"),
                 ("DELETE", ["containers", var name]) => DeleteContainer(name),
                 ("POST", ["containers", var name, "exec"]) => CreateExec(name, request),
 
@@ -373,6 +384,17 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         if (!_containers.TryGetValue(name, out var container)) return Failure(404, $"no such container: {name}");
         if (container.Running) return (304, null);
         container.Started = true;
+        container.Stopped = false;
+        return (204, null);
+    }
+
+    private (int, object?) StopContainer(string name)
+    {
+        if (!_containers.TryGetValue(name, out var container)) return Failure(404, $"no such container: {name}");
+        if (container.Stopped) return (304, null);
+        container.Running = false;
+        container.Started = false;
+        container.Stopped = true;
         return (204, null);
     }
 
@@ -387,7 +409,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         return (200, new
         {
             Name = "/" + name,
-            State = new { Running = container.Running, Status = container.Running ? "running" : "created", ExitCode = 0, Error = "" },
+            State = new { Running = container.Running, Status = container.Running ? "running" : container.Stopped ? "exited" : "created", ExitCode = 0, Error = "" },
             NetworkSettings = new { Networks = networks },
             Config = new { Labels = container.Labels },
             HostConfig = container.Config["HostConfig"]?.DeepClone(),
@@ -403,7 +425,8 @@ internal sealed class FakeDockerApi : IAsyncDisposable
 
     private (int, object?) CreateExec(string container, Request request)
     {
-        if (!_containers.ContainsKey(container)) return Failure(404, $"no such container: {container}");
+        if (!_containers.TryGetValue(container, out var target)) return Failure(404, $"no such container: {container}");
+        if (target.Stopped) return Failure(409, $"container {container} is not running");
         var body = JsonNode.Parse(request.Body)!;
         var id = $"exec-{++_nextExec}";
         var exec = new FakeDockerExec(
@@ -469,6 +492,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         public HashSet<string> Networks { get; } = [];
         public bool Started { get; set; }
         public bool Running { get; set; }
+        public bool Stopped { get; set; }
         public int Reads { get; set; }
     }
 }

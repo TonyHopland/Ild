@@ -14,6 +14,9 @@ public static class KubernetesNames
     public const string RoleLabel = RunPaths.RoleLabel;
     public const string ChatRole = RunPaths.ChatRole;
 
+    /// <summary>The annotation that says which pod spec the chat pod was made from.</summary>
+    public const string SpecAnnotation = "ild/spec";
+
     /// <summary>The role of a provider sign-in pod, which the sweep removes once ILD no longer has it open.</summary>
     public const string SignInRole = "signin";
 

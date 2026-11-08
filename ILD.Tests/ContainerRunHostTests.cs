@@ -1099,6 +1099,68 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal("3Gi", shared.MemoryLimit);
     }
 
+    // -- Shutdown ----------------------------------------------------------------
+
+    [Fact]
+    public async Task Shutdown_removes_the_chat_container_and_stops_each_run_which_starts_again_on_its_next_command()
+    {
+        await CreateRunAsync();
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        var ct = TestContext.Current.CancellationToken;
+
+        await _host.ShutdownAsync(ct);
+
+        Assert.Contains($"containers/{ChatContainer}", _api.Deleted);
+        Assert.True(_api.IsStopped(Name(_run)));
+        // The run keeps everything it holds: its container, volume and network are not removed.
+        Assert.DoesNotContain($"containers/{Name(_run)}", _api.Deleted);
+        Assert.Contains(Name(_run), _api.Volumes());
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), ct);
+        await process.WaitForExitAsync(ct);
+
+        Assert.False(_api.IsStopped(Name(_run)));
+        Assert.Contains(_api.Execs, e => e.Container == Name(_run) && e.Command.Contains("make-it"));
+    }
+
+    [Fact]
+    public async Task A_run_container_stopped_by_a_restart_of_the_engine_is_started_again_by_its_next_command()
+    {
+        await CreateRunAsync();
+        _api.Stop(Name(_run));
+        var ct = TestContext.Current.CancellationToken;
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), ct);
+        await process.WaitForExitAsync(ct);
+
+        Assert.Equal(0, process.ExitCode);
+        Assert.False(_api.IsStopped(Name(_run)));
+    }
+
+    [Fact]
+    public async Task A_chat_container_made_from_another_runner_image_is_replaced_at_startup_and_one_from_the_same_is_kept()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        _api.ImageIds["registry.example/ild-runner:1"] = "sha256:aaa";
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        var made = _api.Container(ChatContainer)!["Labels"]![ContainerRunHost.SpecLabel]!.GetValue<string>();
+
+        using (var same = NewHost(Options()))
+        {
+            await same.CheckAsync(ct);
+            Assert.DoesNotContain($"containers/{ChatContainer}", _api.Deleted);
+        }
+
+        // compose up --build: the same name, a new image.
+        _api.ImageIds["registry.example/ild-runner:1"] = "sha256:bbb";
+        using var upgraded = NewHost(Options());
+        await upgraded.CheckAsync(ct);
+        Assert.Contains($"containers/{ChatContainer}", _api.Deleted);
+
+        await upgraded.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        Assert.NotEqual(made, _api.Container(ChatContainer)!["Labels"]![ContainerRunHost.SpecLabel]!.GetValue<string>());
+    }
+
     // -- Chats -------------------------------------------------------------------
 
     private const string ChatContainer = "ild-chat-main";

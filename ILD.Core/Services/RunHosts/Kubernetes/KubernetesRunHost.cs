@@ -16,7 +16,7 @@ namespace ILD.Core.Services.RunHosts.Kubernetes;
 /// The run host that puts each loop run in a pod of its own, with a volume of its own. The run's Secret owns the pod,
 /// the volume claim and the network policy, so deleting the Secret deletes them all.
 /// </summary>
-public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost
+public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHostShutdown
 {
     public const string RunLeftoverKind = "kubernetes-run";
 
@@ -177,10 +177,18 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost
     public override async Task CheckAsync(CancellationToken ct = default)
     {
         await CheckStorageAsync(ct);
+        try
+        {
+            await RetireStaleChatPodAsync(ct);
+        }
+        catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
+        {
+            Logger?.LogWarning(ex, "Could not check the chat pod; it is checked again when a chat next needs it");
+        }
         if (_options.Toolchains && _options.ToolsClaim is null)
             Logger?.LogWarning(
                 "{Claim} is not set, so runs get no toolchains or agents from the store and have only what the runner image {Image} has. " +
-                "Set it to a ReadWriteMany claim for the store, or run the full runner image (ild-runner-full) with {Toolchains}=off",
+                "Set it to a ReadWriteMany claim for the store, or use a runner image of your own that has them, with {Toolchains}=off",
                 KubernetesRunHostOptions.ToolsClaimSetting, _options.RunnerImage, RunHostOptions.ToolchainsSetting);
     }
 
@@ -339,15 +347,15 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost
     /// </summary>
     private async Task<string> EnsureChatPodAsync(CancellationToken ct)
     {
-        if (await ChatPodStateAsync(ct) is { } pod && IsReady(pod) && pod.Metadata.DeletionTimestamp is null) return ChatPodName;
+        if (await ChatPodStateAsync(ct) is { } pod && IsReady(pod) && pod.Metadata.DeletionTimestamp is null && IsCurrent(pod)) return ChatPodName;
 
         await _chatGate.WaitAsync(ct);
         try
         {
             var existing = await ChatPodStateAsync(ct);
-            if (existing is not null && IsReady(existing) && existing.Metadata.DeletionTimestamp is null) return ChatPodName;
+            if (existing is not null && IsReady(existing) && existing.Metadata.DeletionTimestamp is null && IsCurrent(existing)) return ChatPodName;
 
-            if (existing is not null && (existing.Metadata.DeletionTimestamp is not null || existing.Status?.Phase is "Failed" or "Succeeded"))
+            if (existing is not null && (existing.Metadata.DeletionTimestamp is not null || existing.Status?.Phase is "Failed" or "Succeeded" || !IsCurrent(existing)))
             {
                 if (existing.Metadata.DeletionTimestamp is null)
                     await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
@@ -368,6 +376,44 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost
         {
             _chatGate.Release();
         }
+    }
+
+    private string? _chatSpec;
+
+    // Whether the chat pod was made from the spec ILD would make it from now.
+    private bool IsCurrent(V1Pod pod)
+        => pod.Metadata.Annotations?.TryGetValue(KubernetesNames.SpecAnnotation, out var spec) == true
+            && spec == (_chatSpec ??= KubernetesManifests.SpecOf(_manifests.ChatPod()));
+
+    /// <summary>Deletes a chat pod made from another runner image or other settings, so it is not left running until the next chat.</summary>
+    internal async Task RetireStaleChatPodAsync(CancellationToken ct)
+    {
+        if (await ChatPodStateAsync(ct) is not { } pod || pod.Metadata.DeletionTimestamp is not null || IsCurrent(pod)) return;
+        Logger?.LogInformation("Replacing the chat pod: the runner image or ILD's settings changed since it was made");
+        await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
+    }
+
+    // -- Shutdown ----------------------------------------------------------------
+
+    /// <summary>
+    /// What ILD puts away when it stops, after the drain. The chat pod and any sign-in pod are deleted: the chats' folders
+    /// are in their claim, and the next chat makes the pod from the runner image as it is then. A run's pod stays: a
+    /// pod cannot be stopped, and it is what a parked run resumes in.
+    /// </summary>
+    public async Task ShutdownAsync(CancellationToken ct)
+    {
+        var options = new V1DeleteOptions { GracePeriodSeconds = 0 };
+        await Task.WhenAll(new[] { ChatPodName }.Concat(_signIns.Keys).Select(async name =>
+        {
+            try
+            {
+                await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(name, _namespace, options, cancellationToken: ct));
+            }
+            catch (Exception ex) when (ex is HttpOperationException or HttpRequestException or OperationCanceledException)
+            {
+                Logger?.LogWarning(ex, "Could not delete the pod {Name}; it is replaced or swept when ILD next starts", name);
+            }
+        }));
     }
 
     private async Task<V1Pod?> ChatPodStateAsync(CancellationToken ct)

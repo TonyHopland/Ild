@@ -87,6 +87,8 @@ public static class ServiceCollectionExtensions
             };
             return host;
         });
+        // Before GracefulRunDrainService, so it stops after the drain has parked the runs.
+        services.AddHostedService<RunHostShutdownService>();
         services.AddHostedService(sp => new RunHostSweeper(
             sp.GetRequiredService<IRunHost>(),
             RetainedRuns(sp),
