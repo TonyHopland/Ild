@@ -56,7 +56,9 @@ compose_dummy_env() { # <compose file>
   {
     grep -o '\${[A-Za-z_][A-Za-z0-9_]*:?' "$1" | sed 's/^\${//; s/:?$//'
     grep -o '\${[A-Za-z_][A-Za-z0-9_]*}' "$1" | sed 's/^\${//; s/}$//'
-  } | sort -u | sed 's/$/=ci-dummy/'
+  } | sort -u | grep -v -x ILD_CONTAINER_SOCKET_HOST | sed 's/$/=ci-dummy/'
+  # The socket is a bind mount's source, so it has to be a path: a bare name would be an undefined named volume.
+  echo ILD_CONTAINER_SOCKET_HOST=/run/podman/podman.sock
 }
 
 model="$compose_file"
