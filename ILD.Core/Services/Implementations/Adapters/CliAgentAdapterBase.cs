@@ -138,6 +138,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// run host decides where and how it runs, rather than each call site.
     /// </summary>
     /// <param name="psi">The launch.</param>
+    /// <param name="agentFiles">The files in the agent read root that the adapter wrote for this launch and that <paramref name="psi"/> points at; a host that cannot share them stages exactly these.</param>
     /// <param name="ctx">
     /// The execution the launch belongs to, so no launch of it can leave out what it
     /// carries: the provider (the egress proxy applies that provider's scoped
@@ -146,9 +147,13 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// already carries, and the <see cref="AgentExecutionContext.NetworkMode"/> that
     /// decides whether the child is proxied (ADR-0019).
     /// </param>
-    protected Task<IRunProcess> StartAgentProcessAsync(ProcessStartInfo psi, AgentExecutionContext ctx)
+    protected Task<IRunProcess> StartAgentProcessAsync(
+        ProcessStartInfo psi, AgentExecutionContext ctx, IEnumerable<string?>? agentFiles = null)
         => RunHost.StartCommandAsync(
-            RunCommand.Agent(psi, OwnerOf(ctx), ctx.Provider.Id, ctx.NetworkMode, ctx.Environment), ctx.Cancel);
+            RunCommand.Agent(
+                psi, OwnerOf(ctx), ctx.Provider.Id, ctx.NetworkMode, ctx.Environment,
+                (ctx.AgentFiles ?? []).Concat(agentFiles ?? []).Where(file => !string.IsNullOrEmpty(file)).Select(file => file!).ToList()),
+            ctx.Cancel);
 
     /// <summary>The run or chat an execution belongs to: whose processes <see cref="IRunHost.KillAllAsync"/> ends.</summary>
     protected static Guid OwnerOf(AgentExecutionContext ctx) => ctx.ChatSessionId ?? ctx.RunContext.LoopRunId;

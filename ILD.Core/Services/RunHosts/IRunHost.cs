@@ -173,7 +173,7 @@ public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string
 /// </summary>
 public sealed record RunCommand
 {
-    private RunCommand(ProcessStartInfo start, Guid ownerId, bool asAgent, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment)
+    private RunCommand(ProcessStartInfo start, Guid ownerId, bool asAgent, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment, IReadOnlyList<string>? agentFiles = null)
     {
         Start = start;
         OwnerId = ownerId;
@@ -181,6 +181,7 @@ public sealed record RunCommand
         ProviderId = providerId;
         NetworkMode = networkMode;
         Environment = environment;
+        AgentFiles = agentFiles ?? [];
     }
 
     public ProcessStartInfo Start { get; }
@@ -190,10 +191,16 @@ public sealed record RunCommand
     public NetworkMode NetworkMode { get; }
     public IReadOnlyDictionary<string, string>? Environment { get; }
 
+    /// <summary>
+    /// The files in the agent read root that the adapter wrote for this launch and its arguments or environment point at.
+    /// A host that cannot share ILD's disk with the launch copies exactly these in; text is never searched for paths.
+    /// </summary>
+    public IReadOnlyList<string> AgentFiles { get; }
+
     /// <summary>An agent CLI launch: the host gives it the provider's egress rules and environment.</summary>
     public static RunCommand Agent(
-        ProcessStartInfo start, Guid ownerId, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment)
-        => new(start, ownerId, asAgent: true, providerId, networkMode, environment);
+        ProcessStartInfo start, Guid ownerId, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment, IReadOnlyList<string>? agentFiles = null)
+        => new(start, ownerId, asAgent: true, providerId, networkMode, environment, agentFiles);
 
     /// <summary>
     /// A command the caller has already given its environment and proxy (a Cmd node, a preview, a git command in a

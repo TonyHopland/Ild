@@ -71,8 +71,6 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         echo "$n"
         """;
 
-    private static readonly Regex StagedPath = new(@"[A-Za-z0-9._/\-]*", RegexOptions.Compiled);
-
     /// <summary>
     /// Makes the run's or chat's environment answer the declared forwards (docs/adr/0020) on its own loopback, as ILD
     /// does under <c>dotnet run</c>: one socat per forward listens on <c>127.0.0.1:&lt;local port&gt;</c> and tunnels each
@@ -281,7 +279,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         if (command.AsAgent)
         {
             if (Path.IsPathRooted(fileName)) fileName = Path.GetFileName(fileName);
-            (arguments, environment) = await StageAgentFilesAsync(owner, arguments, environment, ct);
+            (arguments, environment) = await StageAgentFilesAsync(owner, command, arguments, environment, ct);
         }
         foreach (var (name, value) in network) environment[name] = value;
 
@@ -343,51 +341,50 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             ? value.Replace($"{IPAddress.Loopback}:{EgressProxyPort}", $"{ildHost}:{EgressProxyPort}", StringComparison.Ordinal)
             : value;
 
-    // The files a launch is given to read (MCP configs, package feed settings, an agent extension) sit in a directory
-    // of ILD's that a run cannot see; they go to memory in it and the launch is pointed at the copies.
+    // The files an adapter wrote for a launch to read (MCP configs, package feed settings, an agent extension) sit in a
+    // directory of ILD's that a run cannot see; exactly the declared ones go to memory in it and the launch is pointed
+    // at the copies. Text is never searched for paths: a prompt can say anything.
     private async Task<(List<string> Arguments, Dictionary<string, string> Environment)> StageAgentFilesAsync(
-        ExecOwner owner, List<string> arguments, Dictionary<string, string> environment, CancellationToken ct)
+        ExecOwner owner, RunCommand command, List<string> arguments, Dictionary<string, string> environment, CancellationToken ct)
     {
+        if (command.AgentFiles.Count == 0) return (arguments, environment);
         string root;
-        try { root = AgentReadRoot(); }
+        try { root = Path.GetFullPath(AgentReadRoot()); }
         catch (InvalidOperationException) { return (arguments, environment); }
 
+        var ownerSegment = command.OwnerId.ToString("N");
         var staged = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var declared in command.AgentFiles)
+        {
+            var local = Path.GetFullPath(declared);
+            var relative = Path.GetRelativePath(root, local);
+            var inside = relative != "." && !Path.IsPathRooted(relative)
+                && !relative.Split(Path.DirectorySeparatorChar).Contains("..");
+            if (!inside || command.OwnerId == Guid.Empty
+                || !relative.Contains(ownerSegment, StringComparison.OrdinalIgnoreCase) || !File.Exists(local))
+            {
+                Logger?.LogWarning("Not staging {Path} into the run: it is not a file this launch wrote in the agent read root", declared);
+                continue;
+            }
+            staged[declared] = RunPaths.AgentReadDirectory + "/" + relative.Replace(Path.DirectorySeparatorChar, '/');
+            if (local != declared) staged[local] = staged[declared];
+        }
+
         string Rewrite(string text)
         {
-            var from = 0;
-            while (text.IndexOf(root, from, StringComparison.Ordinal) is var at and >= 0)
-            {
-                var end = at + root.Length;
-                if (end < text.Length && text[end] == '/')
-                {
-                    var tail = StagedPath.Match(text, end).Value;
-                    staged[root + tail] = RunPaths.AgentReadDirectory + tail;
-                }
-                from = end;
-            }
-            return text.Replace(root, RunPaths.AgentReadDirectory, StringComparison.Ordinal);
+            foreach (var (local, remote) in staged.OrderByDescending(e => e.Key.Length))
+                text = text.Replace(local, remote, StringComparison.Ordinal);
+            return text;
         }
 
         var rewrittenArguments = arguments.Select(Rewrite).ToList();
         var rewrittenEnvironment = environment.ToDictionary(e => e.Key, e => Rewrite(e.Value), StringComparer.Ordinal);
-        foreach (var (local, remote) in staged)
-            await CopyIntoRunAsync(owner, local, remote, ct);
-        return (rewrittenArguments, rewrittenEnvironment);
-    }
-
-    private async Task CopyIntoRunAsync(ExecOwner owner, string local, string remote, CancellationToken ct)
-    {
-        if (File.Exists(local))
+        foreach (var (local, remote) in staged.DistinctBy(e => e.Value))
         {
             await using var content = File.OpenRead(local);
             await WriteFileInRunAsync(owner, remote, content, readOnly: true, ct);
         }
-        else if (Directory.Exists(local))
-        {
-            foreach (var file in Directory.EnumerateFiles(local, "*", SearchOption.AllDirectories))
-                await CopyIntoRunAsync(owner, file, remote + file[local.Length..], ct);
-        }
+        return (rewrittenArguments, rewrittenEnvironment);
     }
 
     private async Task<bool> KillCommandAsync(ExecOwner owner, string commandId, CancellationToken ct)

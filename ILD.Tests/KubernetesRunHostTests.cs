@@ -508,38 +508,73 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Contains("HTTP_PROXY=http://scope:abc@ild.example:3128", _api.Execs.Last().Command);
     }
 
-    [Fact]
-    public async Task Files_an_agent_launch_reads_are_copied_into_the_pod_and_the_launch_is_pointed_at_the_copies()
+    private KubernetesRunHost AgentReadHost(string readRoot, Dictionary<string, string> written)
     {
-        await CreateRunAsync();
-        var readRoot = Path.Combine(_scratch, "agent-read");
-        Directory.CreateDirectory(Path.Combine(readRoot, "ild-mcp-config"));
-        File.WriteAllText(Path.Combine(readRoot, "ild-mcp-config", "claude-1.json"), "{\"mcp\":true}");
         var host = new KubernetesRunHost(_api.Client(), Options(), FakeKubernetesApi.Namespace, new ProcessRunner(), _log)
         {
             ReadyPollInterval = TimeSpan.FromMilliseconds(10),
             AgentReadRoot = () => readRoot,
         };
-        var written = new Dictionary<string, string>();
         _api.OnExec = async e =>
         {
             if (e.WantsStdin && e.Command.Count > 4 && e.Command[3] == "sh" && e.Command[4].StartsWith("/run/ild/agent-read", StringComparison.Ordinal))
                 written[e.Command[4]] = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
             await e.ExitAsync(0);
         };
-        var psi = Command(WorkingDirectory, "claude", "--mcp-config", Path.Combine(readRoot, "ild-mcp-config", "claude-1.json"));
+        return host;
+    }
+
+    [Fact]
+    public async Task Files_an_agent_launch_declares_are_copied_into_the_pod_and_the_launch_is_pointed_at_the_copies()
+    {
+        await CreateRunAsync();
+        var readRoot = Path.Combine(_scratch, "agent-read");
+        Directory.CreateDirectory(Path.Combine(readRoot, "ild-mcp-config"));
+        var config = Path.Combine(readRoot, "ild-mcp-config", $"claude-{_run:N}-1.json");
+        File.WriteAllText(config, "{\"mcp\":true}");
+        var written = new Dictionary<string, string>();
+        var host = AgentReadHost(readRoot, written);
+        var psi = Command(WorkingDirectory, "claude", "--mcp-config", config);
 
         using var process = await host.StartCommandAsync(
-            RunCommand.Agent(psi, _run, null, NetworkMode.Off, new Dictionary<string, string> { ["CFG"] = "--c=" + Path.Combine(readRoot, "ild-mcp-config", "claude-1.json") }),
+            RunCommand.Agent(psi, _run, null, NetworkMode.Off, new Dictionary<string, string> { ["CFG"] = "--c=" + config }, [config]),
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var staged = "/run/ild/agent-read/ild-mcp-config/claude-1.json";
+        var staged = $"/run/ild/agent-read/ild-mcp-config/claude-{_run:N}-1.json";
         Assert.Equal("{\"mcp\":true}", written[staged]);
         var launch = _api.Execs.Last().Command;
         Assert.Contains(staged, launch);
         Assert.Contains("CFG=--c=" + staged, launch);
         Assert.DoesNotContain(launch, c => c.Contains(readRoot, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Paths_in_a_prompt_or_declared_outside_the_launchs_own_files_are_not_copied_into_the_pod()
+    {
+        await CreateRunAsync();
+        var readRoot = Path.Combine(_scratch, "agent-read");
+        Directory.CreateDirectory(Path.Combine(readRoot, "ild-mcp-config"));
+        var others = Path.Combine(readRoot, "ild-mcp-config", $"claude-{Guid.NewGuid():N}-1.json");
+        File.WriteAllText(others, "other launch");
+        var secret = Path.Combine(_scratch, "auth.json");
+        File.WriteAllText(secret, "login");
+        var written = new Dictionary<string, string>();
+        var host = AgentReadHost(readRoot, written);
+        var prompt = $"read {readRoot}/ then {others} and {readRoot}/../auth.json";
+        var psi = Command(WorkingDirectory, "claude", "-p", prompt);
+
+        using var process = await host.StartCommandAsync(
+            RunCommand.Agent(psi, _run, null, NetworkMode.Off,
+                new Dictionary<string, string> { ["CFG"] = $"{readRoot}/../auth.json" },
+                [others, $"{readRoot}/ild-mcp-config/../../auth.json", Path.Combine(readRoot, "ild-mcp-config"), readRoot]),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(written);
+        var launch = _api.Execs.Last().Command;
+        Assert.Contains(prompt, launch);
+        Assert.Contains($"CFG={readRoot}/../auth.json", launch);
     }
 
     // -- Kill leftovers ----------------------------------------------------------

@@ -1,3 +1,4 @@
+using ILD.Data.Enums;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -106,6 +107,74 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var psi = new ProcessStartInfo(file) { WorkingDirectory = workingDirectory, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in args) psi.ArgumentList.Add(a);
         return psi;
+    }
+
+    private ContainerRunHost AgentReadHost(string readRoot, Dictionary<string, string> written)
+    {
+        var host = new ContainerRunHost(Options(), new ProcessRunner(), _log)
+        {
+            ReadyPollInterval = TimeSpan.FromMilliseconds(10),
+            ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
+            Agents = () => [],
+            ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"),
+            AgentReadRoot = () => readRoot,
+        };
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin)
+            {
+                var content = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
+                var target = e.Command.FirstOrDefault(c => c.StartsWith("/run/ild/agent-read", StringComparison.Ordinal));
+                if (target is not null) written[target] = content;
+            }
+            await e.ExitAsync(0);
+        };
+        return host;
+    }
+
+    [Fact]
+    public async Task Files_an_agent_launch_declares_are_copied_into_the_container_and_the_launch_is_pointed_at_the_copies()
+    {
+        await CreateRunAsync();
+        var readRoot = Path.Combine(_scratch, "agent-read");
+        Directory.CreateDirectory(Path.Combine(readRoot, "ild-mcp-config"));
+        var config = Path.Combine(readRoot, "ild-mcp-config", $"claude-{_run:N}-1.json");
+        File.WriteAllText(config, "{\"mcp\":true}");
+        var written = new Dictionary<string, string>();
+        var host = AgentReadHost(readRoot, written);
+
+        using var process = await host.StartCommandAsync(
+            RunCommand.Agent(Command(WorkingDirectory, "claude", "--mcp-config", config), _run, null, NetworkMode.Off, null, [config]),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var staged = $"/run/ild/agent-read/ild-mcp-config/claude-{_run:N}-1.json";
+        Assert.Equal("{\"mcp\":true}", written[staged]);
+        var launch = _api.Execs.Last().Command;
+        Assert.Contains(staged, launch);
+        Assert.DoesNotContain(launch, c => c.Contains(readRoot, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Paths_in_a_prompt_are_not_copied_into_the_container()
+    {
+        await CreateRunAsync();
+        var readRoot = Path.Combine(_scratch, "agent-read");
+        Directory.CreateDirectory(Path.Combine(readRoot, "ild-mcp-config"));
+        var others = Path.Combine(readRoot, "ild-mcp-config", $"claude-{Guid.NewGuid():N}-1.json");
+        File.WriteAllText(others, "other launch");
+        File.WriteAllText(Path.Combine(_scratch, "auth.json"), "login");
+        var written = new Dictionary<string, string>();
+        var host = AgentReadHost(readRoot, written);
+        var prompt = $"read {readRoot}/ then {others} and {readRoot}/../auth.json";
+
+        using var process = await host.StartCommandAsync(
+            RunCommand.Agent(Command(WorkingDirectory, "claude", "-p", prompt), _run, null, NetworkMode.Off, null),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(written);
+        Assert.Contains(prompt, _api.Execs.Last().Command);
     }
 
     // -- Create ------------------------------------------------------------------

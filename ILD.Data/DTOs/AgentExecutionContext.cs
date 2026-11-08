@@ -43,5 +43,8 @@ public record AgentExecutionContext(
     // The network mode in force when this execution was launched; every process the
     // adapter starts for it follows it (ADR-0019). A site that forgets it launches
     // proxied, as before the Off mode existed.
-    NetworkMode NetworkMode = NetworkMode.Monitor
+    NetworkMode NetworkMode = NetworkMode.Monitor,
+    // Files in the agent read root that ILD wrote for the whole execution (the package feed npm config) and that
+    // arguments or environment of its launches point at; a launch's own files are declared by its adapter.
+    IReadOnlyList<string>? AgentFiles = null
 );
