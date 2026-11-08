@@ -304,7 +304,9 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
 
   grant_engine_socket
   wait_for_postgres
-  exec gosu "$RUNTIME_USER:$RUNTIME_GROUP" "$@"
+  # The user alone, not user:group: gosu then takes the supplementary groups from /etc/group, which is how
+  # ILD keeps the engine socket's group that grant_engine_socket just gave it. With user:group it gets none.
+  exec gosu "$RUNTIME_USER" "$@"
 fi
 
 wait_for_postgres
