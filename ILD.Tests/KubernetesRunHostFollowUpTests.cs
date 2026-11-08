@@ -71,8 +71,8 @@ public sealed class KubernetesRunHostFollowUpTests
         var wd = KubernetesNames.WorkingDirectory(run);
         api.OnExec = e => e.ExitAsync(0);
 
-        using var owned = await host.StartCommandAsync(RunCommand.Routed(new System.Diagnostics.ProcessStartInfo("agent") { WorkingDirectory = wd }, run), TestContext.Current.CancellationToken);
-        using var preview = await host.StartCommandAsync(RunCommand.Routed(new System.Diagnostics.ProcessStartInfo("npm") { WorkingDirectory = wd }), TestContext.Current.CancellationToken);
+        using var owned = await host.StartCommandAsync(RunCommand.Prepared(new System.Diagnostics.ProcessStartInfo("agent") { WorkingDirectory = wd }, run), TestContext.Current.CancellationToken);
+        using var preview = await host.StartCommandAsync(RunCommand.Prepared(new System.Diagnostics.ProcessStartInfo("npm") { WorkingDirectory = wd }), TestContext.Current.CancellationToken);
         await host.KillAllAsync(run, TestContext.Current.CancellationToken);
 
         var ownedId = ((ExecRunProcess)owned).CommandId;
@@ -94,11 +94,11 @@ public sealed class KubernetesRunHostFollowUpTests
         var worktree = KubernetesNames.WorkingDirectory(run);
         var local = new Mock<IRunHost>();
 
-        var inPod = ClaudeCodeAdapter.SessionFilePath(pod.Object, worktree, "s1", "agent", "/home/agent", ProcessEnvironment.Current);
-        var onDisk = ClaudeCodeAdapter.SessionFilePath(local.Object, "/worktrees/a", "s1", "agent", "/home/agent", ProcessEnvironment.Current);
+        var inPod = ClaudeCodeAdapter.SessionFilePath(pod.Object, worktree, "s1", ProcessEnvironment.Current);
+        var onDisk = ClaudeCodeAdapter.SessionFilePath(local.Object, "/worktrees/a", "s1", ProcessEnvironment.Current);
 
         Assert.Equal($"{KubernetesNames.HomeDirectory(run)}/.claude/projects/{ClaudeCodeAdapter.EncodeWorktreePath(worktree)}/s1.jsonl", inPod);
-        Assert.StartsWith("/home/agent/.claude/projects/", onDisk);
+        Assert.Equal(ClaudeCodeAdapter.GetSessionFilePath("/worktrees/a", "s1", ProcessEnvironment.Current), onDisk);
     }
 
     [Fact]

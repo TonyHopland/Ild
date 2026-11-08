@@ -5,11 +5,9 @@ using Microsoft.Extensions.Logging;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// Runs subprocesses for the orchestrator: as its own uid by default, as the agent
-/// user when the caller asks for it (<see cref="ProcessRunOptions.AsAgent"/>). A
-/// child of the orchestrator's own uid never inherits the secrets
-/// <see cref="AgentIsolation.SecretEnvironmentKeys"/> names unless the caller opts
-/// in, and runs without the orchestrator's ambient capabilities (ADR-0014).
+/// Runs subprocesses for the orchestrator. A child never inherits the secrets
+/// <see cref="AgentIsolation.SecretEnvironmentKeys"/> names unless the caller
+/// passes them itself.
 /// </summary>
 public sealed class ProcessRunner : IProcessRunner
 {
@@ -21,10 +19,9 @@ public sealed class ProcessRunner : IProcessRunner
     public ProcessRunner(ILogger<ProcessRunner>? logger = null) { _logger = logger; }
 
     /// <summary>
-    /// The start info for one child. <paramref name="isolationMarker"/> and
-    /// <paramref name="inheritedEnvironment"/> are the ambient inputs (the
-    /// configured agent user, the orchestrator's own environment), explicit so the
-    /// result is testable without touching process-global state.
+    /// The start info for one child. <paramref name="inheritedEnvironment"/> stands in for the
+    /// orchestrator's own environment when set, so the result is testable without touching
+    /// process-global state.
     /// </summary>
     internal static ProcessStartInfo BuildStartInfo(
         string fileName,
@@ -32,7 +29,6 @@ public sealed class ProcessRunner : IProcessRunner
         string? workingDirectory,
         IReadOnlyDictionary<string, string?>? environmentVariables,
         ProcessRunOptions? options,
-        string? isolationMarker,
         IReadOnlyDictionary<string, string>? inheritedEnvironment)
     {
         var psi = new ProcessStartInfo(fileName)
@@ -53,8 +49,7 @@ public sealed class ProcessRunner : IProcessRunner
                 psi.Environment[key] = value;
         }
 
-        var agent = options?.AsAgent;
-        var agentScoped = agent is not null || options?.AgentScoped == true;
+        var agentScoped = options?.AgentScoped == true;
         if (options?.CleanEnvironment == true)
             psi.Environment.Clear();
         else if (agentScoped)
@@ -80,15 +75,9 @@ public sealed class ProcessRunner : IProcessRunner
             }
         }
 
-        // The crossing needs the ambient CAP_SETUID that dropping capabilities
-        // would remove before setpriv ran, so an agent child is never wrapped twice.
-        if (agentScoped && options?.CleanEnvironment != true)
-            return AgentIsolation.Route(psi, agent?.User, agent?.Group, agent?.Home);
-
-        // Runs as the orchestrator, but git/npm act on agent-writable input
-        // (package.json, .git/config and hooks), so it must not inherit the
-        // orchestrator's ambient capabilities — see ADR-0014.
-        return AgentIsolation.DropInheritedCapabilities(psi, isolationMarker);
+        return agentScoped && options?.CleanEnvironment != true
+            ? AgentIsolation.ApplyLaunchEnvironment(psi, egressProxy: null)
+            : psi;
     }
 
     public async Task<ProcessResult> RunAsync(
@@ -102,7 +91,7 @@ public sealed class ProcessRunner : IProcessRunner
         _logger?.LogDebug("exec {File} {Args} cwd={Cwd}", fileName, string.Join(' ', args), workingDirectory);
 
         using var proc = await RunHosts.Local.LocalRunHost.StartAsync(
-            BuildStartInfo(fileName, args, workingDirectory, environmentVariables, options, AgentIsolation.AgentUser, null), ct);
+            BuildStartInfo(fileName, args, workingDirectory, environmentVariables, options, null), ct);
         var stdoutTask = options?.StandardOutputTo is { } sink
             ? CopyStandardOutputAsync(proc, sink, ct)
             : proc.StandardOutput.ReadToEndAsync(ct);

@@ -82,7 +82,7 @@ public sealed class ClaudeProjectFolderSweeper : BackgroundService
         {
             if (ct.IsCancellationRequested) break;
             if (startingCwds.Any(cwd => tracked.Contains(Normalize(cwd)))) continue;
-            if (await AnyExistsAsync(startingCwds, ct)) continue;
+            if (startingCwds.Any(AgentWritableFiles.EntryExists)) continue;
 
             freed += await _folders.DeleteForAsync(startingCwds[0], ct);
             deleted++;
@@ -91,17 +91,6 @@ public sealed class ClaudeProjectFolderSweeper : BackgroundService
         if (deleted > 0)
             _log.LogInformation("Claude Code folder sweep deleted {Count} folders of working directories that are gone, freeing {Bytes} bytes", deleted, freed);
         return deleted;
-    }
-
-    // Either uid seeing it is enough to keep it: the agent ran there, and Ild made most of these.
-    private static async Task<bool> AnyExistsAsync(IEnumerable<string> paths, CancellationToken ct)
-    {
-        foreach (var path in paths)
-        {
-            if (AgentWritableFiles.EntryExists(path) || await AgentWritableFiles.EntryExistsAsAgentAsync(path, ct))
-                return true;
-        }
-        return false;
     }
 
     private static string Normalize(string path) => Path.TrimEndingDirectorySeparator(path);

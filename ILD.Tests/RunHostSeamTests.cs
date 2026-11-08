@@ -107,8 +107,8 @@ public class RunHostSeamTests
         host.Script = _ => FakeCommandScript.Hangs();
         var mine = Guid.NewGuid();
         var other = Guid.NewGuid();
-        using var first = await host.StartCommandAsync(RunCommand.Routed(new ProcessStartInfo("x"), mine), TestContext.Current.CancellationToken);
-        using var second = await host.StartCommandAsync(RunCommand.Routed(new ProcessStartInfo("y"), other), TestContext.Current.CancellationToken);
+        using var first = await host.StartCommandAsync(RunCommand.Prepared(new ProcessStartInfo("x"), mine), TestContext.Current.CancellationToken);
+        using var second = await host.StartCommandAsync(RunCommand.Prepared(new ProcessStartInfo("y"), other), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, await host.KillAllAsync(mine, TestContext.Current.CancellationToken));
 
@@ -124,7 +124,7 @@ public class RunHostSeamTests
         var psi = new ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add("sleep 60");
-        using var process = await host.StartCommandAsync(RunCommand.Routed(AgentIsolation.Route(psi, AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome), owner), TestContext.Current.CancellationToken);
+        using var process = await host.StartCommandAsync(RunCommand.Prepared(psi, owner), TestContext.Current.CancellationToken);
         Assert.False(process.HasExited);
 
         Assert.Equal(1, await host.KillAllAsync(owner, TestContext.Current.CancellationToken));
@@ -160,7 +160,7 @@ public class LocalRunHostTrackingTests
         var psi = new ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add("sleep 60");
-        return AgentIsolation.Route(psi, AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome);
+        return psi;
     }
 
     [Fact]
@@ -169,8 +169,8 @@ public class LocalRunHostTrackingTests
         var host = new LocalRunHost();
         var mine = Guid.NewGuid();
         var other = Guid.NewGuid();
-        using var theirs = await host.StartCommandAsync(RunCommand.Routed(Sleeper(), other), TestContext.Current.CancellationToken);
-        var released = await host.StartCommandAsync(RunCommand.Routed(Sleeper(), mine), TestContext.Current.CancellationToken);
+        using var theirs = await host.StartCommandAsync(RunCommand.Prepared(Sleeper(), other), TestContext.Current.CancellationToken);
+        var released = await host.StartCommandAsync(RunCommand.Prepared(Sleeper(), mine), TestContext.Current.CancellationToken);
         var releasedId = released.Id;
         released.TryKill();
         await released.WaitForExitAsync(TestContext.Current.CancellationToken);
@@ -188,41 +188,13 @@ public class LocalRunHostTrackingTests
         var owner = Guid.NewGuid();
         var repositories = new Mock<ILD.Core.Services.Interfaces.IRepositoryManager>();
         var host = new LocalRunHost(repositories: repositories.Object);
-        using var process = await host.StartCommandAsync(RunCommand.Routed(Sleeper(), owner), TestContext.Current.CancellationToken);
+        using var process = await host.StartCommandAsync(RunCommand.Prepared(Sleeper(), owner), TestContext.Current.CancellationToken);
         var exitedWhenRemoved = false;
         repositories.Setup(r => r.DestroyWorktreeAsync("/w")).Callback(() => exitedWhenRemoved = process.HasExited).Returns(Task.CompletedTask);
 
         await host.DeleteAsync(new RunEnvironment(owner, "/w"), TestContext.Current.CancellationToken);
 
         Assert.True(exitedWhenRemoved, "the command was still running when the worktree was removed");
-    }
-
-    private static readonly AgentIdentity Agent = new("agent", "agent", "/home/agent");
-
-    [Fact]
-    public void A_command_that_was_not_routed_is_refused_when_agent_isolation_is_on()
-    {
-        var host = new LocalRunHost(agent: Agent);
-
-        var ex = Assert.Throws<InvalidOperationException>(() => host.EnsureRouted(new ProcessStartInfo("/bin/true")));
-        Assert.Contains("ADR-0014", ex.Message);
-    }
-
-    [Fact]
-    public void A_command_routed_to_the_agent_is_accepted_when_agent_isolation_is_on()
-    {
-        var host = new LocalRunHost(agent: Agent);
-        var routed = AgentIsolation.Route(new ProcessStartInfo("/bin/true"), "agent", "agent", "/home/agent");
-
-        host.EnsureRouted(routed);
-    }
-
-    [Fact]
-    public void Without_agent_isolation_a_command_is_started_as_built()
-    {
-        // The test process is single-uid (TestEnvironmentBaseline); a host built without an agent follows the process.
-        Assert.Null(AgentIsolation.AgentUser);
-        new LocalRunHost().EnsureRouted(new ProcessStartInfo("/bin/true"));
     }
 }
 

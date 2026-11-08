@@ -94,7 +94,7 @@ public class AgentIsolationSpawnSiteTests
     [InlineData("var pty = await PtyProvider.SpawnAsync(options, ct);", true)]
     [InlineData("var wrapped = new[] { \"/usr/bin/setpriv\" }; var s = setpriv;", true)]
     [InlineData("var psi = new ProcessStartInfo(\"git\");", false)]
-    [InlineData("await host.StartCommandAsync(RunCommand.Routed(psi));", false)]
+    [InlineData("await host.StartCommandAsync(RunCommand.Prepared(psi));", false)]
     public void The_scan_tells_a_spawn_from_a_description_of_one(string statement, bool spawn)
         => Assert.Equal(spawn, SpawnSite.IsMatch(Redact(statement)));
 

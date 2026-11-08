@@ -5,8 +5,8 @@ namespace ILD.McpServer.Tools;
 
 /// <summary>
 /// MCP tools that act on a work item's run branch with the orchestrator's
-/// repository credentials. The agent runs under its own, lower-trust uid and can
-/// reach neither the repository token nor the git askpass helper (ADR-0014), so a
+/// repository credentials. The agent reaches neither the repository token nor the
+/// git askpass helper, so a
 /// plain <c>git pull</c> in the worktree cannot authenticate — it asks the
 /// orchestrator to do the remote half instead.
 ///

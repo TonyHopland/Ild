@@ -40,7 +40,7 @@ public class WorktreePreviewServiceInstallTests : IDisposable
                 NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims())
             : new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
                 NullLogger<WorktreePreviewService>.Instance,
-                agentUser: null, agentGroup: null, agentHome: null, environment: environment);
+                environment: environment);
     }
 
     private void WriteConfig(string installCommand)
@@ -133,8 +133,7 @@ public class WorktreePreviewServiceInstallTests : IDisposable
     [Fact]
     public async Task InstallAsync_appends_npm_global_bin_so_image_tools_win_ties()
     {
-        // Position, not mere presence. Under uid isolation this directory is the
-        // AGENT's ($AGENT_HOME/.local/bin, chowned to it by the entrypoint), and
+        // Position, not mere presence. This directory is agent-writable, and
         // this is the ORCHESTRATOR's own PATH — inherited by ProcessRunner, which
         // spawns bare `git` and `npm`, and by Cmd nodes. First
         // position would let a file the agent dropped there answer for them and run

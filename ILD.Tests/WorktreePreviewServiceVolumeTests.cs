@@ -69,7 +69,6 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         var environment = new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } }.WithRealPath();
         var service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            agentUser: null, agentGroup: null, agentHome: null,
             environment: environment, isPortAvailable: isPortAvailable, claims: claims);
         _services.Add(service);
         return service;

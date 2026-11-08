@@ -2,12 +2,14 @@ using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Network;
+using ILD.Core.Services.RunHosts;
+using ILD.Data.Enums;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// The agent side of ADR-0019: every crossing to the agent uid points the child
-/// at the egress proxy, and no orchestrator-side spawn is.
+/// The agent side of ADR-0019: every agent launch points the child at the egress
+/// proxy, and no orchestrator-side spawn is.
 /// </summary>
 public class AgentIsolationEgressTests
 {
@@ -70,11 +72,11 @@ public class AgentIsolationEgressTests
     }
 
     [Fact]
-    public void Route_points_the_agent_at_the_proxy_and_keeps_loopback_direct()
+    public void A_launch_is_pointed_at_the_proxy_and_keeps_loopback_direct()
     {
         var psi = BuildPsi();
 
-        AgentIsolation.Route(psi, "agent", "agent", "/home/agent", egressProxy: "http://127.0.0.1:3128");
+        AgentIsolation.ApplyLaunchEnvironment(psi, egressProxy: "http://127.0.0.1:3128");
 
         foreach (var key in new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" })
             Assert.Equal("http://127.0.0.1:3128", psi.Environment[key]);
@@ -84,105 +86,84 @@ public class AgentIsolationEgressTests
         Assert.Equal(["localhost", "127.0.0.1", "::1", "[::1]"], psi.Environment["NO_PROXY"]!.Split(','));
         // Node's built-in fetch ignores the variables above without it.
         Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
-        // The crossing itself is unchanged.
-        Assert.Equal("/usr/bin/setpriv", psi.FileName);
-        Assert.Equal("/home/agent", psi.Environment["HOME"]);
+        Assert.Equal("/data/agents/claude-code/versions/v1/node_modules/.bin/claude", psi.FileName);
     }
 
     [Fact]
-    public void Route_leaves_the_environment_alone_when_no_proxy_is_configured()
+    public void A_launch_gets_no_proxy_when_none_is_configured()
     {
         var psi = BuildPsi();
+        foreach (var key in ProxyKeys)
+            psi.Environment.Remove(key);
 
-        AgentIsolation.Route(psi, "agent", "agent", "/home/agent", egressProxy: null);
+        AgentIsolation.ApplyLaunchEnvironment(psi, egressProxy: null);
 
         foreach (var key in ProxyKeys)
             Assert.False(psi.Environment.ContainsKey(key), $"{key} set without a proxy");
     }
 
-    [Fact]
-    public void The_funnel_does_not_depend_on_the_uid_crossing()
+    [Theory]
+    [InlineData(NetworkMode.Monitor, true)]
+    [InlineData(NetworkMode.Whitelist, true)]
+    [InlineData(NetworkMode.Blacklist, true)]
+    [InlineData(NetworkMode.Off, false)]
+    public void Every_mode_but_Off_points_a_local_launch_at_the_proxy(NetworkMode mode, bool proxied)
     {
-        // Single-uid deployment: the proxy still logs, so the launch is still pointed at it.
-        var psi = BuildPsi();
-
-        AgentIsolation.Route(psi, agentUser: null, agentGroup: null, agentHome: null, egressProxy: "http://127.0.0.1:3128");
-
-        Assert.Equal("http://127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
-        Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
-        Assert.NotEqual("/usr/bin/setpriv", psi.FileName);
+        Assert.Equal(proxied ? "http://127.0.0.1:3128" : null, AgentIsolation.ResolveLaunchProxy(mode, "3128", null));
+        Assert.Null(AgentIsolation.ResolveLaunchProxy(mode, null, null));
     }
 
     [Fact]
     public void Orchestrator_side_spawns_are_never_proxied()
     {
         var psi = BuildPsi();
+        foreach (var key in ProxyKeys)
+            psi.Environment.Remove(key);
 
-        AgentIsolation.DropInheritedCapabilities(psi, "agent");
         AgentIsolation.StripOrchestratorEnvironment(psi);
 
-        Assert.Equal("/usr/bin/setpriv", psi.FileName);
         foreach (var key in ProxyKeys)
             Assert.False(psi.Environment.ContainsKey(key), $"{key} reached an orchestrator-side spawn");
     }
 
     [Fact]
-    public void RouteCommand_carries_the_proxy_with_the_pty_command()
+    public void TerminalCommand_carries_only_the_proxy_with_the_pty_command()
     {
-        var routed = AgentIsolation.RouteCommand("/usr/bin/claude", Array.Empty<string>(), "agent", "agent", "/home/agent",
+        var routed = AgentIsolation.TerminalCommand("/usr/bin/claude", Array.Empty<string>(),
             egressProxy: "http://provider:11111111-1111-1111-1111-111111111111@127.0.0.1:3128");
 
-        Assert.Equal("/usr/bin/setpriv", routed.FileName);
+        Assert.Equal("/usr/bin/claude", routed.FileName);
         Assert.Equal("http://provider:11111111-1111-1111-1111-111111111111@127.0.0.1:3128", routed.Environment["HTTPS_PROXY"]);
         Assert.Equal(AgentIsolation.EgressNoProxy, routed.Environment["no_proxy"]);
         Assert.Equal("1", routed.Environment["NODE_USE_ENV_PROXY"]);
-        Assert.Equal("/home/agent", routed.Environment["HOME"]);
-    }
-
-    [Fact]
-    public void RouteCommand_carries_only_the_proxy_when_isolation_is_off()
-    {
-        var routed = AgentIsolation.RouteCommand("/usr/bin/claude", Array.Empty<string>(), null, null, null,
-            egressProxy: "http://127.0.0.1:3128");
-
-        Assert.Equal("/usr/bin/claude", routed.FileName);
         Assert.Equal(ProxyKeys.OrderBy(k => k, StringComparer.Ordinal), routed.Environment.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Empty(AgentIsolation.TerminalCommand("/usr/bin/claude", Array.Empty<string>(), egressProxy: null).Environment);
     }
 
     [Fact]
-    public void Proxy_options_and_enforcement_status_follow_the_port_variable()
+    public void Proxy_options_and_status_follow_the_port_variable()
     {
         Assert.False(EgressProxyOptions.Parse(null).Enabled);
         Assert.False(EgressProxyOptions.Parse("x").Enabled);
         Assert.Equal(3128, EgressProxyOptions.Parse(" 3128 ").Port);
 
-        var noProxy = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Disabled, "enforced", null);
-        Assert.Equal(NetworkEnforcementStatus.Advisory, noProxy.Enforcement);
+        var noProxy = NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Disabled);
         Assert.False(noProxy.ProxyEnabled);
+        Assert.Null(noProxy.ProxyPort);
 
-        var enforced = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", "nft rules installed for uid 10002");
-        Assert.True(enforced.IsEnforced);
-        Assert.Equal("nft rules installed for uid 10002", enforced.Reason);
-        Assert.Equal(3128, enforced.ProxyPort);
-
-        var advisory = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "advisory", "NET_ADMIN not granted");
-        Assert.False(advisory.IsEnforced);
-        Assert.Equal("NET_ADMIN not granted", advisory.Reason);
-
-        var unreported = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), null, null);
-        Assert.Equal(NetworkEnforcementStatus.Advisory, unreported.Enforcement);
-        Assert.NotEmpty(unreported.Reason);
+        var proxied = NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128"));
+        Assert.True(proxied.ProxyEnabled);
+        Assert.Equal(3128, proxied.ProxyPort);
     }
 
-    [Fact]
-    public void An_enforced_status_without_a_reported_reason_still_says_why_Off_is_unavailable()
+    [Theory]
+    [InlineData(RunHostKind.Local, "advisory")]
+    [InlineData(RunHostKind.Container, "enforced")]
+    [InlineData(RunHostKind.Kubernetes, "enforced")]
+    public void Rules_are_enforced_only_where_runs_sit_on_a_network_that_reaches_only_ILD(RunHostKind kind, string enforcement)
     {
-        var closed = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null);
-        Assert.False(closed.OffAvailable);
-        Assert.Contains("Off is unavailable", closed.Reason);
-
-        var open = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "ild-net-open");
-        Assert.True(open.OffAvailable);
-        Assert.DoesNotContain("Off", open.Reason);
+        Assert.Equal(enforcement, NetworkEnforcementStatus.EnforcementFor(kind));
+        Assert.NotEmpty(NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128")).ReasonFor(kind));
+        Assert.NotEmpty(NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Disabled).ReasonFor(kind));
     }
 }

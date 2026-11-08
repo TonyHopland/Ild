@@ -568,7 +568,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     /// session id). The ILD extension holds the API token and lives where only the
     /// orchestrator can write, so failing to remove it throws, for the caller to keep
     /// its run or chat and retry. The agent and session directories are the agent's
-    /// and may hold anything it planted; they are cleared as the agent and never fail
+    /// and may hold anything it planted; they are cleared without following links and never fail
     /// the caller. Returns whether those are fully gone.
     /// </summary>
     public static async Task<bool> DeleteRunFilesAsync(Guid loopRunId, CancellationToken ct = default)

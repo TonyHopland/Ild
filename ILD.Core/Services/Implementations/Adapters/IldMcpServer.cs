@@ -22,8 +22,7 @@ public static class IldMcpServer
     /// <c>null</c> when it cannot be written, in which case the agent runs without
     /// its MCP servers and <paramref name="logger"/> gets a warning naming the path
     /// and the reason. The config carries the ILD API token,
-    /// so it goes into <see cref="AgentIsolation.AgentReadRoot"/>: readable by the
-    /// agent group, changeable by the orchestrator only. The caller deletes it once
+    /// so it goes into <see cref="AgentIsolation.AgentReadRoot"/>, owner-only. The caller deletes it once
     /// the CLI exits; its name carries <paramref name="loopRunId"/> (the session id
     /// for a chat turn) so <see cref="DeleteConfigFiles"/> can clear a run's files,
     /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, ILogger, CancellationToken)"/>
@@ -39,8 +38,7 @@ public static class IldMcpServer
         try
         {
             path = Path.Combine(
-                AgentIsolation.CreateAgentReadDirectoryUnder(
-                    root, environment.Get(AgentIsolation.AgentUserEnvVar), ConfigDirectorySegment),
+                AgentIsolation.CreateAgentReadDirectoryUnder(root, ConfigDirectorySegment),
                 $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}.json");
             AgentIsolation.WriteAgentReadableFile(path, JsonSerializer.SerializeToUtf8Bytes(config));
             return path;
@@ -173,6 +171,5 @@ public static class IldMcpServer
     /// rather than from the process.
     /// </summary>
     private static string AgentReadRoot(IProcessEnvironment environment)
-        => AgentIsolation.ResolveAgentReadRoot(
-            environment.Get(AgentIsolation.AgentReadRootEnvVar), environment.Get(AgentIsolation.AgentUserEnvVar));
+        => AgentIsolation.ResolveAgentReadRoot(environment.Get(AgentIsolation.AgentReadRootEnvVar));
 }

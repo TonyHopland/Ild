@@ -57,10 +57,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         using var feeds = PackageFeedCredentialFiles.Materialize(
             packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
         var mode = await ctx.Services.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken);
-        var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(mode, aiProviderId: null);
-        var psi = IsolateCommand(
-            ShellStartInfo(command, workingDirectory),
-            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, proxy, regid);
+        var psi = IsolateCommand(ShellStartInfo(command, workingDirectory), AgentIsolation.LaunchProxy(mode, aiProviderId: null));
         foreach (var (name, value) in feeds.Environment)
             psi.Environment[name] = value;
         string Combined() => sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
@@ -68,7 +65,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         IRunProcess p;
         try
         {
-            p = await host.StartCommandAsync(RunCommand.Routed(psi, ctx.Run.Id), ctx.CancellationToken);
+            p = await host.StartCommandAsync(RunCommand.Prepared(psi, ctx.Run.Id), ctx.CancellationToken);
         }
         catch (Exception ex)
         {
@@ -91,11 +88,8 @@ public sealed class CmdNodeExecutor : INodeExecutor
         {
             // Waiting stops; the shell does not. Without this reap a cancelled or
             // timed-out node leaves /bin/sh and its children running over the
-            // worktree the engine is about to commit and delete. setpriv execs the
-            // shell in place, so p is the tree's root. Under uid isolation the tree
-            // is the agent uid's and the kill relies on the orchestrator's ambient
-            // CAP_KILL across uids, so a failure means something worth reading,
-            // not something to swallow.
+            // worktree the engine is about to commit and delete. A failed kill
+            // means something worth reading, not something to swallow.
             var reaped = await ReapAsync(p);
             return (false, Combined(), ex.Message + reaped);
         }
@@ -133,16 +127,12 @@ public sealed class CmdNodeExecutor : INodeExecutor
 
     /// <summary>
     /// The command is loop-authored, but it runs in a worktree the agent just
-    /// wrote — its builds, test suites and scripts — so it runs with exactly the
-    /// agent's privileges (ADR-0014, ADR-0016). The orchestrator's secrets and
-    /// topology are stripped in every mode. Under uid isolation it also crosses
-    /// to the agent uid, HOME and egress rules with no capabilities. In
-    /// single-uid mode it stays a plain shell as the orchestrator uid, which can
-    /// still read the orchestrator's <c>/proc/&lt;pid&gt;/environ</c>.
+    /// wrote — its builds, test suites and scripts — so it gets what an agent
+    /// launch gets (ADR-0016): none of the orchestrator's secrets, and the egress
+    /// proxy of the network mode.
     /// </summary>
-    internal static ProcessStartInfo IsolateCommand(
-        ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy, string? regidOverride = null)
-        => AgentIsolation.Route(AgentIsolation.StripOrchestratorEnvironment(psi), agentUser, agentGroup, agentHome, egressProxy, regidOverride);
+    internal static ProcessStartInfo IsolateCommand(ProcessStartInfo psi, string? egressProxy)
+        => AgentIsolation.ApplyLaunchEnvironment(AgentIsolation.StripOrchestratorEnvironment(psi), egressProxy);
 
     // Long enough that only a tree genuinely stuck in the kernel — an
     // uninterruptible write to a slow mount — reaches the timeout, short enough

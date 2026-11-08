@@ -533,8 +533,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         if (ScopeFactory is null) return;
 
         // Claude keeps its session files in the shared credential store, which the
-        // agent can write, so they are only checked, written and read as the agent
-        // (see AgentWritableFiles), never by the orchestrator through a link.
+        // agent can write, so they are only checked, written and read through the run host
+        // (see AgentWritableFiles), never through a link.
         var path = SessionFilePath(worktreePath, sessionId);
         if (path is null || await RunHost.FileExistsAsync(path, ctx.Cancel)) return;
 
@@ -574,35 +574,32 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     }
 
     private string? SessionFilePath(string worktreePath, string sessionId)
-        => SessionFilePath(RunHost, worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
+        => SessionFilePath(RunHost, worktreePath, sessionId, EnvironmentVariables);
 
     /// <summary>Where Claude keeps the session: under the home the run's host says its CLIs run with, otherwise under ours.</summary>
-    internal static string? SessionFilePath(
-        IRunHost host, string worktreePath, string sessionId, string? agentUser, string? agentHome, IProcessEnvironment environment)
+    internal static string? SessionFilePath(IRunHost host, string worktreePath, string sessionId, IProcessEnvironment environment)
         => host.RunHomeFor(worktreePath) is { } home && !string.IsNullOrEmpty(sessionId)
             ? Path.Combine(home, ".claude", "projects", EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl")
-            : GetSessionFilePath(worktreePath, sessionId, agentUser, agentHome, environment);
+            : GetSessionFilePath(worktreePath, sessionId, environment);
 
-    // Claude keeps its sessions under the HOME it runs with, which under uid
-    // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
+    // Claude keeps its sessions under the HOME it runs with, which on this machine is ours.
     public static string? GetSessionFilePath(string worktreePath, string sessionId)
-        => GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, ProcessEnvironment.Current);
+        => GetSessionFilePath(worktreePath, sessionId, ProcessEnvironment.Current);
 
     /// <inheritdoc cref="GetSessionFilePath(string, string)"/>
     /// <param name="environment">Where our own <c>HOME</c> is read.</param>
-    internal static string? GetSessionFilePath(
-        string worktreePath, string sessionId, string? agentUser, string? agentHome, IProcessEnvironment environment)
+    internal static string? GetSessionFilePath(string worktreePath, string sessionId, IProcessEnvironment environment)
     {
         if (string.IsNullOrEmpty(worktreePath) || string.IsNullOrEmpty(sessionId)) return null;
-        return GetProjectsRoot(agentUser, agentHome, environment) is { } projects
+        return GetProjectsRoot(environment) is { } projects
             ? Path.Combine(projects, EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl")
             : null;
     }
 
     /// <summary>The <c>.claude/projects</c> directory under the <c>HOME</c> Claude runs with.</summary>
-    internal static string? GetProjectsRoot(string? agentUser, string? agentHome, IProcessEnvironment environment)
+    internal static string? GetProjectsRoot(IProcessEnvironment environment)
     {
-        var home = AgentIsolation.ResolveChildHome(agentUser, agentHome) ?? environment.Get("HOME");
+        var home = environment.Get("HOME");
         if (string.IsNullOrEmpty(home))
             home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".claude", "projects");

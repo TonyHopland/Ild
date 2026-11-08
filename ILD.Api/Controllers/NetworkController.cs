@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -31,6 +32,7 @@ public class NetworkController : ControllerBase
     private readonly INetworkNotifier _notifier;
     private readonly NetworkEnforcementStatus _enforcement;
     private readonly IEgressForwarderState _forwarder;
+    private readonly IRunHost _runHost;
 
     public NetworkController(
         INetworkPolicyStore store,
@@ -39,8 +41,10 @@ public class NetworkController : ControllerBase
         IEgressPolicy policy,
         INetworkNotifier notifier,
         NetworkEnforcementStatus enforcement,
-        IEgressForwarderState forwarder)
+        IEgressForwarderState forwarder,
+        IRunHost runHost)
     {
+        _runHost = runHost;
         _store = store;
         _forwards = forwards;
         _providers = providers;
@@ -85,11 +89,11 @@ public class NetworkController : ControllerBase
     public IActionResult GetStatus()
         => Ok(new
         {
-            enforcement = _enforcement.Enforcement,
-            reason = _enforcement.Reason,
+            enforcement = NetworkEnforcementStatus.EnforcementFor(_runHost.Kind),
+            reason = _enforcement.ReasonFor(_runHost.Kind),
             proxyEnabled = _enforcement.ProxyEnabled,
             proxyPort = _enforcement.ProxyPort,
-            offAvailable = _enforcement.OffAvailable,
+            offAvailable = true,
         });
 
     [HttpGet("entries")]

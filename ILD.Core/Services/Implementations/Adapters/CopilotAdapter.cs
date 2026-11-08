@@ -263,7 +263,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         }
 
         // Passed as `@file`, never inline JSON, so the server's API token stays
-        // out of argv (ADR-0014).
+        // out of argv.
         if (!string.IsNullOrWhiteSpace(mcpConfigPath))
         {
             psi.ArgumentList.Add("--additional-mcp-config");

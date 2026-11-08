@@ -45,9 +45,6 @@ public class WorktreePreviewServicePortAllocationTests : IDisposable
             new ConfigurationBuilder().Build(),
             PreviewProxyBase.Parse(null),
             NullLogger<WorktreePreviewService>.Instance,
-            agentUser: null,
-            agentGroup: null,
-            agentHome: null,
             isPortAvailable: isPortAvailable);
         return _service;
     }

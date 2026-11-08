@@ -284,7 +284,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "make-it", "a b");
         psi.Environment["ILD_TEST_ONLY"] = "yes";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("hello\n", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
@@ -312,7 +312,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "cat");
         psi.RedirectStandardInput = true;
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.StandardInput.WriteAsync("prompt text");
         process.StandardInput.Close();
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
@@ -331,7 +331,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             await e.DropAsync();
         };
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.NotEqual(0, process.ExitCode);
@@ -346,7 +346,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "curl");
         psi.Environment["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("HTTP_PROXY=http://scope:abc@ild.example:3128", _api.Execs.Last().Command);
@@ -356,7 +356,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task A_command_for_a_container_that_is_gone_says_so_instead_of_hanging()
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => _host.StartCommandAsync(RunCommand.Routed(Command(WorkingDirectory, "ls"), _run), TestContext.Current.CancellationToken));
+            () => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "ls"), _run), TestContext.Current.CancellationToken));
 
         Assert.Contains("could not run a command in the container", ex.Message);
     }
@@ -400,7 +400,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             if (e.Joined.Contains("long-job")) await hold.Task;
             else await e.ExitAsync(0);
         };
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
         var startedAs = Assert.Single(_api.Execs, e => e.Joined.Contains("long-job")).Command[5];
 
         var killedOk = await Task.Run(() => process.TryKill(), TestContext.Current.CancellationToken);
@@ -845,7 +845,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "npm", "test");
         psi.Environment["PATH"] = "/ild/side/bin:/usr/bin";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains(commands, c => c.Contains("npm test", StringComparison.Ordinal));
@@ -1151,7 +1151,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var chat = Guid.NewGuid();
         var folder = $"{ChatFolder(chat)}/repos/widgets";
 
-        using var process = await host.StartCommandAsync(RunCommand.Routed(Command(folder, "git", "status"), chat), TestContext.Current.CancellationToken);
+        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command(folder, "git", "status"), chat), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var exec = _api.Execs.Last();
@@ -1172,7 +1172,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var chat = Guid.NewGuid();
         var title = Guid.NewGuid();
 
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(Command(ChatFolder(chat), "claude"), title), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "claude"), title), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var exec = _api.Execs.Last();
@@ -1193,7 +1193,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.Equal("tool=node@20", Assert.Single(installs).Last());
         using var restarted = NewHost(Options(), []);
-        using var process = await restarted.StartCommandAsync(RunCommand.Routed(Command(ChatFolder(chat), "node", "-v"), chat), TestContext.Current.CancellationToken);
+        using var process = await restarted.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "node", "-v"), chat), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var path = _api.Execs.Last().Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal));

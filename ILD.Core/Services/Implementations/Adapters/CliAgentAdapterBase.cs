@@ -107,7 +107,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             + "Set the model with the Model field, not here; other flags ILD already sets can't be used either. "
             + "Open the provider terminal after saving to check that the CLI accepts them. "
             + "Don't put secrets here: the arguments are visible in the process list. "
-            + "Use the API key or environment settings for secrets (ADR-0014).");
+            + "Use the API key or environment settings for secrets.");
 
     public abstract Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);
 
@@ -134,10 +134,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     }
 
     /// <summary>
-    /// Start a coding-agent CLI. Every agent launch goes through here so that
-    /// "a CLI launch crosses to the lower-trust agent uid" (ADR-0014) is owned by
-    /// one place instead of being remembered at each call site — a missed call
-    /// would silently run the agent as the orchestrator again.
+    /// Start a coding-agent CLI. Every agent launch goes through here so that the
+    /// run host decides where and how it runs, rather than each call site.
     /// </summary>
     /// <param name="psi">The launch.</param>
     /// <param name="ctx">
@@ -170,18 +168,16 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         return scope.ServiceProvider.GetService<IRunHost>() ?? LocalRunHost.Shared;
     }
 
-    /// <summary>The launch <see cref="StartAgentProcess"/> starts: <paramref name="psi"/> with the execution's environment, crossed to the agent uid.</summary>
-    internal static ProcessStartInfo RouteForExecution(ProcessStartInfo psi, AgentExecutionContext ctx)
-        => LocalRunHost.RouteAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment);
+    /// <summary>The launch <see cref="StartAgentProcess"/> starts: <paramref name="psi"/> with the execution's environment and its network mode's proxy.</summary>
+    internal static ProcessStartInfo PrepareForExecution(ProcessStartInfo psi, AgentExecutionContext ctx)
+        => LocalRunHost.PrepareAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment);
 
     /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind
-    /// best-effort kill it reports whether the kill actually took effect:
-    /// under uid isolation (ADR-0014) the agent runs with a different real
-    /// <em>and saved</em> uid, so <c>kill(2)</c> fails with <c>EPERM</c> unless
-    /// the orchestrator holds <c>CAP_KILL</c>. Silently swallowing that leaves an
-    /// orphaned agent writing the worktree after a Halt or a node timeout while
-    /// the engine moves on, so callers surface the failure instead.
+    /// best-effort kill it reports whether the kill actually took effect.
+    /// Silently swallowing a failed kill leaves an orphaned agent writing the
+    /// worktree after a Halt or a node timeout while the engine moves on, so
+    /// callers surface the failure instead.
     /// </summary>
     /// <returns><c>true</c> when the process is gone (killed, or already exited).</returns>
     protected static bool KillProcessTree(IRunProcess process) => process.TryKill();
@@ -194,8 +190,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     protected static string KillAndDescribe(IRunProcess process, string message)
         => KillProcessTree(process)
             ? message
-            : message + " — WARNING: the agent process could not be killed and may still be running. "
-                + "Under uid isolation the orchestrator needs CAP_KILL for the agent uid (see ADR-0014).";
+            : message + " — WARNING: the agent process could not be killed and may still be running.";
 
     /// <summary>
     /// Hand the freshly-captured session id to the run's <c>OnSessionId</c>
@@ -258,7 +253,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         IAdapterSessionSnapshotStore store, SessionSnapshotKey key, string path, string format, CancellationToken ct)
     {
         // The session file sits where the agent can write, so it is only measured and
-        // read as the agent (see AgentWritableFiles), never through a link.
+        // read through the run host (see AgentWritableFiles), never through a link.
         // An empty file holds nothing to keep, and must not replace a history stored earlier.
         if (await RunHost.GetFileLengthAsync(path, ct) is not ({ } length and > 0)) return true;
 
@@ -313,7 +308,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
     /// <summary>
     /// What <paramref name="parse"/> makes of the session file at <paramref name="path"/>,
-    /// read line by line as the agent without holding the file whole; the default when
+    /// read line by line through the run host without holding the file whole; the default when
     /// there is no regular file there.
     /// </summary>
     protected async Task<T?> ParseSessionFileAsync<T>(string path, Func<TextReader, T> parse, CancellationToken ct)

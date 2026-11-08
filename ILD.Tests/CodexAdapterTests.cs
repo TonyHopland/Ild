@@ -484,12 +484,12 @@ public sealed class CodexAdapterTests : IDisposable
             Assert.DoesNotContain(secret, environ);
         }
 
-        // Readable by the agent group, changeable by the orchestrator only; named for the run or chat.
+        // Owner-only; named for the run or chat.
         var written = WrittenFiles();
         Assert.Equal(new[] { ildStrings[^1], docsStrings[3] }.Order(), written.Select(w => w.Path).Order());
         foreach (var (path, mode, owner) in written)
         {
-            Assert.Equal("640", mode);
+            Assert.Equal("600", mode);
             Assert.Equal(Environment.UserName, owner);
             Assert.Contains($"-{ownerId:N}-", Path.GetFileName(path));
         }

@@ -51,15 +51,15 @@ public class RepositoryManagerBundleFlowTests : IDisposable
         }
     }
 
-    private (RepositoryManager Mgr, BundleCountingRunner Bundles) NewManager(bool isolated)
+    private (RepositoryManager Mgr, BundleCountingRunner Bundles) NewManager()
     {
         var bundles = new BundleCountingRunner();
-        var runner = new AuditingRunner(isolated, inner: bundles);
+        var runner = new AuditingRunner(inner: bundles);
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         runner.ForbidAgentAccess(_mirrors);
         _runners.Add(runner);
-        return (new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors), bundles);
+        return (new RepositoryManager(runner, null, _worktrees, _mirrors), bundles);
     }
 
     private static void Upstream(string remote, string seed, string file)
@@ -70,13 +70,11 @@ public class RepositoryManagerBundleFlowTests : IDisposable
         GitCli.Run(seed, "push", remote, "main");
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Start_fetch_rebase_and_push_work_with_the_mirror_store_closed_to_the_agent(bool isolated)
+    [Fact]
+    public async Task Start_fetch_rebase_and_push_work_with_the_mirror_store_closed_to_the_agent()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (mgr, _) = NewManager(isolated);
+        var (mgr, _) = NewManager();
         var remote = GitCli.MakeRemote(_tmp, "remote");
         var seed = Path.Combine(_tmp, "remote-seed");
         var auth = new GitAuthOptions(remote, "tok", "Forgejo");
@@ -124,7 +122,7 @@ public class RepositoryManagerBundleFlowTests : IDisposable
     public async Task A_store_an_earlier_version_shared_with_the_agent_is_closed_when_it_is_next_used()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (mgr, _) = NewManager(isolated: false);
+        var (mgr, _) = NewManager();
         var remote = GitCli.MakeRemote(_tmp, "remote");
         var auth = new GitAuthOptions(remote, null);
         Assert.True((await mgr.CloneAsync(remote, Path.Combine(_tmp, "base"), ct, auth)).Success);
@@ -138,13 +136,11 @@ public class RepositoryManagerBundleFlowTests : IDisposable
         Assert.Equal(OwnerOnly, File.GetUnixFileMode(mirror));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_fetch_sends_only_what_the_run_lacks_keeps_branches_it_already_has_and_removes_deleted_ones(bool isolated)
+    [Fact]
+    public async Task A_fetch_sends_only_what_the_run_lacks_keeps_branches_it_already_has_and_removes_deleted_ones()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (mgr, bundles) = NewManager(isolated);
+        var (mgr, bundles) = NewManager();
         var remote = GitCli.MakeRemote(_tmp, "remote");
         var seed = Path.Combine(_tmp, "remote-seed");
         var auth = new GitAuthOptions(remote, "tok", "Forgejo");
@@ -178,13 +174,11 @@ public class RepositoryManagerBundleFlowTests : IDisposable
         Assert.Equal("refs/remotes/origin/main", GitCli.Out(basePath, "symbolic-ref", "refs/remotes/origin/HEAD"));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_branch_that_becomes_a_directory_name_upstream_syncs_after_a_fetch_and_after_a_push(bool isolated)
+    [Fact]
+    public async Task A_branch_that_becomes_a_directory_name_upstream_syncs_after_a_fetch_and_after_a_push()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (mgr, _) = NewManager(isolated);
+        var (mgr, _) = NewManager();
         var remote = GitCli.MakeRemote(_tmp, "remote");
         var auth = new GitAuthOptions(remote, "tok", "Forgejo");
         var basePath = Path.Combine(_tmp, "base");

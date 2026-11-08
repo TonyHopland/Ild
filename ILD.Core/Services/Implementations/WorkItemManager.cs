@@ -1391,7 +1391,7 @@ public class WorkItemManager : IWorkItemManager
 
         // The rebase below only ever touches local refs, so this fetch is the one
         // step that needs the repository's credentials — which is exactly what the
-        // agent uid cannot supply for itself (ADR-0014).
+        // agent cannot supply for itself.
         if (!await _repoManager.FetchAsync(ctx.WorktreePath, cancellationToken, ctx.Auth))
             return new PullBranchResult(
                 PullBranchOutcome.Failed,
@@ -1417,14 +1417,6 @@ public class WorkItemManager : IWorkItemManager
         // Rebase rather than merge, matching what the Start node does with the
         // default branch: the run branch stays a linear series of the run's own
         // commits on top of whatever origin holds.
-        //
-        // This rewrites far more of the working tree than the commit on the push
-        // path does, and it runs as the ORCHESTRATOR inside a worktree the agent
-        // uid has been writing to. That is safe without any ownership fix-up:
-        // /worktrees is provisioned as a shared read/write tree (setgid + a default
-        // ACL granting the shared group rwx, see entrypoint.sh), so agent-created
-        // files are group-writable by the orchestrator and the files git writes
-        // here come out writable by the agent — ownership differs, access does not.
         var rebase = await _repoManager.RebaseAsync(ctx.WorktreePath, upstream, cancellationToken);
         if (!rebase.Success)
         {

@@ -5,8 +5,8 @@ namespace ILD.Core.Services.Implementations.ModelGateway;
 
 /// <summary>
 /// After a provider terminal closes, takes the logins it made out of the throwaway home the CLI ran in
-/// and into the credential store (ADR-0031). The terminal runs as the agent uid, so what it left is
-/// the agent's to write: only a fixed list of files is read, each as the agent and never through a link,
+/// and into the credential store (ADR-0031). What the terminal left is the CLI's to write: only a fixed
+/// list of files is read, each never through a link,
 /// and a file is kept only when it parses and really holds a login, so a CLI that wrote nothing worth
 /// keeping, or a planted file, cannot replace a working login.
 /// </summary>

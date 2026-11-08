@@ -56,7 +56,7 @@ public class ClaudeCodeAdapterForkTests
             var expectedFork = sourceJsonl.Replace("source-sess", "fork-dest", StringComparison.Ordinal);
             Assert.Equal(expectedFork, await harness.WithStoreAsync(store => SessionSnapshotTestSupport.ReadAllTextAsync(store, destKey, ct)));
             var restoredPath = ClaudeCodeAdapter.GetSessionFilePath(
-                worktreeDir, "fork-dest", AgentIsolation.AgentUser, AgentIsolation.AgentHome, environment)!;
+                worktreeDir, "fork-dest", environment)!;
             Assert.Equal(expectedFork, File.ReadAllText(restoredPath));
 
             Assert.Equal(sourceJsonl, await harness.WithStoreAsync(store => SessionSnapshotTestSupport.ReadAllTextAsync(store, sourceKey, ct)));

@@ -1606,13 +1606,13 @@ export interface NetworkForward {
   listenError: string | null;
 }
 
-/** Whether the firewall behind the proxy is in place, and why not when it is not. */
+/** Whether runs and chats can reach the network only through the proxy (they run in containers or pods), and why. */
 export interface NetworkStatus {
   enforcement: "enforced" | "advisory";
   reason: string;
   proxyEnabled: boolean;
   proxyPort: number | null;
-  /** Whether an agent launched in network mode Off can reach the network here. */
+  /** Always true: an agent launched in network mode Off can reach the network. */
   offAvailable: boolean;
 }
 

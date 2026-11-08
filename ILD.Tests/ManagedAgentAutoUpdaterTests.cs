@@ -34,7 +34,7 @@ public sealed class ManagedAgentAutoUpdaterTests : IDisposable
     public ManagedAgentAutoUpdaterTests()
     {
         Directory.CreateDirectory(_dataRoot);
-        _service = new ManagedAgentService(new HttpClient(_registry), _npm, _dataRoot, logger: null, agentUser: null, usage: _usage, forecast: _forecast);
+        _service = new ManagedAgentService(new HttpClient(_registry), _npm, _dataRoot, logger: null, usage: _usage, forecast: _forecast);
         _updater = BuildUpdater(0);
     }
 

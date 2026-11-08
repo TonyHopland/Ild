@@ -292,7 +292,6 @@ public class RunReclaimerTests : IDisposable
             .Build();
         using var preview = new WorktreePreviewService(new Mock<IHttpClientFactory>().Object, configuration,
             PreviewProxyBase.Disabled, NullLogger<WorktreePreviewService>.Instance,
-            agentUser: null, agentGroup: null, agentHome: null,
             environment: new TestProcessEnvironment { { "HOME", Path.Combine(worktreesRoot, "home") } }.WithRealPath());
         var repositoryId = Guid.NewGuid();
         await preview.InstallAsync(stored, volumes: new PreviewVolumeScope(repositoryId, keepPreviewData, "wi-a", "Title"),

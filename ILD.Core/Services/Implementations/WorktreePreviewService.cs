@@ -40,11 +40,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly IConfiguration _configuration;
     private readonly PreviewProxyBase _proxyBase;
     private readonly ILogger<WorktreePreviewService> _logger;
-    private readonly string? _agentUser;
-    private readonly string? _agentGroup;
-    private readonly string? _agentHome;
     private readonly string? _egressProxy;
-    private readonly string? _networkOpenGroup;
     private readonly IEgressPolicy? _egressPolicy;
     private readonly IProcessEnvironment _environment;
     private readonly Func<int, bool> _isPortAvailable;
@@ -83,20 +79,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         IWorkItemNotifier? notifier = null,
         IRunHost? host = null)
         : this(httpClientFactory, configuration, proxyBase, logger,
-            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
             AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims,
-            networkOpenGroup: AgentIsolation.NetworkOpenGroup, egressPolicy: egressPolicy, notifier: notifier, host: host)
+            egressPolicy: egressPolicy, notifier: notifier, host: host)
     {
     }
 
     /// <summary>
-    /// The uid-isolation parameters taken explicitly rather than read from the
-    /// process environment — the convention <c>ManagedAgentService</c> and the
-    /// <c>AgentIsolation</c> overloads already use, so a test can drive the
-    /// isolated shape without setting variables that would turn isolation on for
-    /// every other test in the host process. The DI constructor above supplies the
-    /// production values; all three are null when isolation is off, and every
-    /// decision keyed off them then reduces to the pre-isolation behaviour.
     /// <paramref name="environment"/> is where our own <c>HOME</c> and <c>PATH</c>
     /// are read, and where an install puts the npm global bin on <c>PATH</c>: the
     /// process environment unless a test supplies its own.
@@ -104,23 +92,19 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// handed out: binding it on loopback unless a test supplies its own.
     /// <paramref name="claims"/> records which previews hold each repository's preview
     /// data: the host's, which its reset consults too, or a private one.
-    /// <paramref name="networkOpenGroup"/> and <paramref name="egressPolicy"/> decide what a launch gets
-    /// in network mode Off (<see cref="AgentIsolation.ResolveLaunchNetwork(NetworkMode, string?, string?)"/>);
-    /// with no policy every launch is proxied, as <paramref name="egressProxy"/> says.
+    /// <paramref name="egressPolicy"/> decides whether a launch is proxied: not in network mode Off
+    /// (<see cref="AgentIsolation.ResolveLaunchProxy(NetworkMode, string?)"/>); with no policy every launch
+    /// is proxied, as <paramref name="egressProxy"/> says.
     /// </summary>
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
-        string? agentUser,
-        string? agentGroup,
-        string? agentHome,
         string? egressProxy = null,
         IProcessEnvironment? environment = null,
         Func<int, bool>? isPortAvailable = null,
         PreviewDataClaims? claims = null,
-        string? networkOpenGroup = null,
         IEgressPolicy? egressPolicy = null,
         IWorkItemNotifier? notifier = null,
         IRunHost? host = null)
@@ -130,29 +114,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _configuration = configuration;
         _proxyBase = proxyBase;
         _logger = logger;
-        // Blank and unset are the same thing throughout AgentIsolation; normalise
-        // once here so every decision below can just test for null.
-        _agentUser = NonEmpty(agentUser);
-        _agentGroup = NonEmpty(agentGroup);
-        _agentHome = NonEmpty(agentHome);
         _egressProxy = NonEmpty(egressProxy);
-        _networkOpenGroup = NonEmpty(networkOpenGroup);
         _egressPolicy = egressPolicy;
         _environment = environment ?? ProcessEnvironment.Current;
         _isPortAvailable = isPortAvailable ?? IsPortAvailable;
         _claims = claims ?? new PreviewDataClaims();
         _notifier = notifier;
     }
-
-    /// <summary>
-    /// The <c>HOME</c> a preview step actually runs with once it has crossed to the
-    /// agent uid, or <c>null</c> when the crossing leaves <c>HOME</c> alone — which
-    /// covers both "isolation is off" and "isolation is on but no agent home is
-    /// configured". <see cref="AgentIsolation.ResolveChildHome"/> owns the rule and
-    /// the crossing applies the same answer, so the npm prefix derived from it here
-    /// cannot drift from the <c>HOME</c> the child is really given.
-    /// </summary>
-    private string? ChildHome => AgentIsolation.ResolveChildHome(_agentUser, _agentHome);
 
     private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
@@ -1491,7 +1459,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             // the gate the pumps contend for.
             await writer.WriteLineAsync($"> {resolved.Command}");
 
-            var process = await _host.StartCommandAsync(RunCommand.Routed(BuildPreviewProcess(resolved)), cancellationToken);
+            var process = await _host.StartCommandAsync(RunCommand.Prepared(BuildPreviewProcess(resolved)), cancellationToken);
 
             // Subscribed before the check, so an exit that has already happened and
             // one still to come both let go (the lease ignores the second).
@@ -1920,22 +1888,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <summary>
     /// Per-worktree preview state the <em>preview itself</em> writes — the npm cache
     /// its install steps populate, and whatever a profile puts under
-    /// <c>${STATE_DIR}</c>. Rooted at the shared scratch root: the setgid,
-    /// shared-group tree with a default ACL that the entrypoint provisions for
-    /// exactly this. The preview's steps run as the agent (ADR-0016) and must be
-    /// able to write here, which the orchestrator-private root would not allow.
-    ///
-    /// <para>
-    /// The old private-root rationale — the agent can predict this path, so it could
-    /// pre-create it and plant content the steps then consume — does not survive the
-    /// steps becoming the agent: the agent planting something its own uid then reads
-    /// crosses no boundary. It survives for anything the <em>orchestrator</em>
-    /// touches, which is why the log files are not here; see
-    /// <see cref="BuildLogDirectory"/>. What this does cost is that preview state is
-    /// reachable by every run's agent through the shared <c>ild-agents</c> group —
-    /// the residual ADR-0014 already states for every other shared tree, not a new
-    /// one.
-    /// </para>
+    /// <c>${STATE_DIR}</c>. Rooted at the scratch root, since the preview's steps
+    /// must be able to write here.
     /// </summary>
     private static string BuildStateDirectory(string worktreePath)
         => AgentIsolation.CreateScratchDirectory(StateDirectorySegments(worktreePath));
@@ -1956,19 +1910,16 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// the orchestrator — the stdout/stderr pumps
     /// (<see cref="LaunchServiceProcessAsync"/>, <see cref="RunInstallStepsAsync"/>)
     /// run in-process, and <see cref="GetServiceLogAsync"/> serves them to
-    /// <c>get_preview_logs</c>. Moving the preview's steps to the agent uid did
-    /// nothing to move those.
+    /// <c>get_preview_logs</c>.
     ///
     /// <para>
-    /// So the private root's reasoning applies here undiminished. The path is a hash
-    /// of the worktree, which the agent knows, and a shared-group directory would let
-    /// it pre-create <c>install.log</c> as a symlink to somewhere only the
+    /// The path is a hash of the worktree, which the agent knows, and a directory it
+    /// could write would let it pre-create <c>install.log</c> as a symlink to somewhere only the
     /// orchestrator can write — <c>~/.profile</c>, say, which the next
     /// <c>/bin/sh -lc</c> preview spawn would then execute as the orchestrator. The
     /// read side is the mirror: an arbitrary orchestrator-readable file, served
-    /// through the API. The <c>0700</c> root, created before any agent-uid process
-    /// runs, is what forecloses both; it is the same guarantee the git askpass helper
-    /// relies on (ADR-0014).
+    /// through the API. The <c>0700</c> private root is what forecloses both; it
+    /// is the same guarantee the git askpass helper relies on.
     /// </para>
     /// </summary>
     private static string BuildLogDirectory(string worktreePath)
@@ -2058,8 +2009,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var npmBin = GetNpmGlobalBinDirectory();
         var npmCache = Path.Combine(stateDirectory, "npm-cache");
 
-        EnsureNpmDirectory(npmPrefix);
-        EnsureNpmDirectory(npmBin);
+        Directory.CreateDirectory(npmPrefix);
+        Directory.CreateDirectory(npmBin);
         Directory.CreateDirectory(npmCache);
 
         var currentPath = _environment.Get("PATH") ?? string.Empty;
@@ -2076,26 +2027,15 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     /// <summary>
     /// The <c>HOME</c> a preview step runs with, and the root the npm global prefix
-    /// is derived from. Under uid isolation that is the <em>agent's</em> home:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?, string?)"/>
-    /// sets <c>HOME</c> there as part of the crossing, so deriving the prefix from
-    /// anything else would point <c>npm install -g</c> at a directory the uid
-    /// running it cannot write — the orchestrator's home is <c>0710</c>,
-    /// traverse-only for the agent.
+    /// is derived from: ours.
     /// </summary>
     private string ResolveHomeDirectory()
     {
-        if (ChildHome is { } childHome)
-            return childHome;
-
         var home = _environment.Get("HOME");
         if (string.IsNullOrWhiteSpace(home))
         {
-            // Not reachable in the container (HOME is always set), and only
-            // reachable at all when isolation is off — so this is the single-uid
-            // fallback. It must still not be a fixed path in world-writable /tmp:
-            // the step's npm would read a planted ~/.npmrc. Same reasoning as the
-            // askpass helper (ADR-0014).
+            // Never a fixed path in world-writable /tmp: the step's npm would read
+            // a planted ~/.npmrc. Same reasoning as the askpass helper.
             return AgentIsolation.CreatePrivateDirectory("home");
         }
 
@@ -2113,53 +2053,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         => Path.Combine(ResolveHomeDirectory(), ".local", "bin");
 
     /// <summary>
-    /// Create one of the npm prefix directories — but never inside the agent's home.
-    /// The entrypoint provisions that home's scaffolding as the agent uid; a
-    /// directory the orchestrator created there would be owned by the orchestrator,
-    /// in a home whose group the agent is not a member of, and the agent's own
-    /// <c>npm install -g</c> would then fail on a prefix it cannot write. There, the
-    /// orchestrator only <em>names</em> the path.
-    ///
-    /// <para>
-    /// The test is containment in the home the child is actually given, not "is
-    /// isolation on" — those are different questions when a crossing is configured
-    /// with a user but no home. The prefix then lands in the orchestrator's own
-    /// home, where the orchestrator both may and must create it: skipping would
-    /// leave <see cref="EnsureInstalledToolsOnProcessPath"/> advertising a
-    /// directory that does not exist.
-    /// </para>
-    /// </summary>
-    private void EnsureNpmDirectory(string path)
-    {
-        if (ChildHome is { } childHome && IsInside(path, childHome))
-            return;
-
-        Directory.CreateDirectory(path);
-    }
-
-    private static bool IsInside(string path, string root)
-    {
-        // Resolve the root through any symlinks first. Path.GetFullPath normalizes
-        // ".." but not links, so a symlinked agent home would compare against a name
-        // that is not where the directory actually lives and the containment test
-        // could answer wrong in either direction.
-        var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Resolve(root))) + Path.DirectorySeparatorChar;
-        return Path.GetFullPath(Resolve(path)).StartsWith(prefix, StringComparison.Ordinal);
-
-        static string Resolve(string value)
-        {
-            try
-            {
-                // Only an existing entry can be resolved; a path yet to be created
-                // has no link to follow, so its literal form is already the answer.
-                return new DirectoryInfo(value).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? value;
-            }
-            catch (IOException) { return value; }
-            catch (UnauthorizedAccessException) { return value; }
-        }
-    }
-
-    /// <summary>
     /// Add the npm global bin directory to the host process PATH so the agents can
     /// resolve tools an install step put there. Cmd nodes and the AI CLI adapters
     /// launch their processes with the inherited host-process environment, which
@@ -2168,24 +2061,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// the Start node's install. Idempotent.
     ///
     /// <para>
-    /// Under uid isolation both ends of that hand-off are the agent — the install
-    /// step that writes the tool and the nodes that later exec it — so the prefix
-    /// following the agent's home makes this path exactly right rather than
-    /// approximately: before, a binary under the orchestrator's
-    /// <c>/home/ild/.local/bin</c> was executable by the agent only by accident of
-    /// mode bits.
-    /// </para>
-    ///
-    /// <para>
     /// It is <em>appended</em>, not prepended. This is the orchestrator's own PATH,
-    /// and under isolation the directory being added is agent-writable, so a planted
+    /// and the directory being added is agent-writable, so a planted
     /// binary sharing a name with something the image ships would otherwise be
     /// preferred by every orchestrator-side spawn that resolves by bare name — git
     /// and npm through <c>ProcessRunner</c>, for instance. Appending means the
     /// image's copy wins ties and only genuinely new tools are contributed, which is
-    /// all this was ever for. (The preview's own children still get it first: they
-    /// run as the agent, where a tool it installed beating one in the image is the
-    /// intended behaviour and crosses no boundary.)
+    /// all this was ever for. (The preview's own children still get it first, where a tool it installed
+    /// beating one in the image is the intended behaviour.)
     /// </para>
     /// </summary>
     private void EnsureInstalledToolsOnProcessPath()
@@ -2195,9 +2078,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // Create the directory up front. It is only populated lazily (by an
         // `npm install -g` in a Start node), but agents launched with this PATH
         // — e.g. Claude Code — warn when a PATH entry does not exist on disk.
-        // Under isolation the entrypoint has already created it as the agent; see
-        // EnsureNpmDirectory for why the orchestrator must not.
-        EnsureNpmDirectory(npmBin);
+        Directory.CreateDirectory(npmBin);
 
         var currentPath = _environment.Get("PATH") ?? string.Empty;
 
@@ -2228,7 +2109,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             : Path.Combine(runtime.WorktreePath, resolved));
 
         // A volume may be shared by every work item of the repository, and the agent
-        // can write it, so the directory is made as the agent rather than by us.
+        // can write it, so the directory is made without following what it left there.
         if (PreviewVolumes.Contain(runtime.Volumes, full))
         {
             try
@@ -2292,30 +2173,22 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
-    /// The one place a preview child's uid, capabilities and environment are
+    /// The one place a preview child's environment is
     /// decided — both spawn sites (install steps and long-running services) go
     /// through it, so neither can drift from the other.
     ///
     /// <para>
     /// The command text comes from the worktree's <c>ild.config.json</c>, a file the
     /// agent writes and can trigger itself through the ILD MCP tools. It is
-    /// therefore agent-authored code, and it runs as the agent:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?, string?)"/>
-    /// drops it to the agent uid, clears the inherited and ambient capability sets,
-    /// and points <c>HOME</c> at the agent's own home. That gives a preview command
-    /// exactly the privileges the agent already has and nothing more — and, because
-    /// the agent's own builds in the same worktree run under that uid too, it is
-    /// what stops a preview build tripping over files the agent owns (ADR-0016).
-    /// With <c>ILD_AGENT_USER</c> unset the routing is a no-op and the command runs
-    /// inline as the current user, exactly as before.
+    /// therefore agent-authored code, and gets what an agent launch gets: none of the
+    /// orchestrator's secrets, and the egress proxy of its network mode (ADR-0016).
     /// </para>
     ///
     /// <para>
     /// The environment is constructed, not inherited: .NET pre-populates a child's
     /// from the current process, which would otherwise hand a preview command the
     /// DB connection strings, the encryption-at-rest key, the orchestrator's own API
-    /// tokens, and the variables describing this process's identity and private
-    /// directories. Stripping happens before the resolved step's environment is
+    /// tokens. Stripping happens before the resolved step's environment is
     /// applied, never after, so what it removes is only ever what was
     /// <em>inherited</em>: refusing to inherit is not refusing to be configured. A
     /// preview that legitimately needs one of those names sets it in
@@ -2337,8 +2210,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         psi.ArgumentList.Add(resolved.Command);
 
         AgentIsolation.StripOrchestratorEnvironment(psi);
-        var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(resolved.NetworkMode, _egressProxy, _networkOpenGroup);
-        AgentIsolation.Route(psi, _agentUser, _agentGroup, _agentHome, proxy, regid);
+        AgentIsolation.ApplyLaunchEnvironment(psi, AgentIsolation.ResolveLaunchProxy(resolved.NetworkMode, _egressProxy));
 
         foreach (var entry in resolved.Environment)
         {
@@ -2350,7 +2222,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task<CommandResult> RunCommandAsync(ResolvedStep resolved, CancellationToken cancellationToken)
     {
-        using var process = await _host.StartCommandAsync(RunCommand.Routed(BuildPreviewProcess(resolved)), cancellationToken);
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(BuildPreviewProcess(resolved)), cancellationToken);
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);

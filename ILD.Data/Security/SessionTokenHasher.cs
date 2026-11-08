@@ -12,8 +12,8 @@ namespace ILD.Data.Security;
 /// <para>
 /// With <c>ILD_SESSION_TOKEN_PEPPER</c> set the mapping is HMAC-SHA256 keyed on it,
 /// so only a process holding the key can derive a stored value from a token. That is
-/// what stops someone who can merely <em>write</em> the database — the lower-trust
-/// agent uid of ADR-0014, a restored backup, a replica — from inserting a row for a
+/// what stops someone who can merely <em>write</em> the database — a restored
+/// backup, a replica — from inserting a row for a
 /// token they chose and presenting it as a live sign-in. An unkeyed hash offers no
 /// such protection: anyone can compute one.
 /// </para>

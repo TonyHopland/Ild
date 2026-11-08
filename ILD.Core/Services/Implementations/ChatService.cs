@@ -803,7 +803,7 @@ public sealed class ChatService : IChatService
 
         // Best-effort scratch-dir removal: nothing chat-local should remain, but a
         // leftover directory must never fail the hard-delete. The agent writes the
-        // scratch dir, so it is cleared as the agent: a link it planted is unlinked,
+        // scratch dir, so it is cleared without trusting it: a link it planted is unlinked,
         // never followed, and its read-only folders are opened first.
         try
         {

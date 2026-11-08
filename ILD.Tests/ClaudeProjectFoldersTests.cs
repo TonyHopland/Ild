@@ -28,7 +28,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
     private readonly TestDb _db = new();
     private readonly string _root = Directory.CreateTempSubdirectory("ild-claude-projects-").FullName;
     private readonly ClaudeProjectFolders _folders;
-    private string _agentUid = null!;
+    private string _uid = null!;
     private Guid _versionId;
 
     public ClaudeProjectFoldersTests()
@@ -38,7 +38,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _agentUid = (await AgentWritableFiles.GetUidAsync(TestContext.Current.CancellationToken))!;
+        _uid = OwnUid();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         _db.Context.LoopTemplates.Add(template);
@@ -56,7 +56,17 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
 
     private string ProjectFolder(string cwd) => Path.Combine(_folders.ProjectsRoot!, ClaudeCodeAdapter.EncodeWorktreePath(cwd));
 
-    private string TempFolder(string cwd) => Path.Combine(_root, "tmp", $"claude-{_agentUid}", ClaudeCodeAdapter.EncodeWorktreePath(cwd));
+    private string TempFolder(string cwd) => Path.Combine(_root, "tmp", $"claude-{_uid}", ClaudeCodeAdapter.EncodeWorktreePath(cwd));
+
+    private static string OwnUid()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("id") { RedirectStandardOutput = true, UseShellExecute = false };
+        psi.ArgumentList.Add("-u");
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var uid = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return uid;
+    }
 
     /// <summary>A session started in <paramref name="cwd"/>, whose later lines carry <paramref name="laterCwds"/>.</summary>
     private void WriteTranscript(string cwd, bool old = true, params string[] laterCwds)

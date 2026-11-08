@@ -5,7 +5,7 @@ namespace ILD.Core.Services.Interfaces;
 /// clone it made there before, for the chat's <c>clone_repository</c> tool.
 /// ILD fetches its own base clone of the repository with the remote provider's
 /// credentials; the chat's clone is filled from that base clone by git running
-/// as the agent, so no credential ever reaches the chat's folder.
+/// without credentials, so none ever reaches the chat's folder.
 /// </summary>
 public interface IChatRepositoryCloner
 {

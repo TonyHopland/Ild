@@ -57,7 +57,7 @@ public class PreviewStartWaitTests
         {
             using var service = new WorktreePreviewService(
                 new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-                NullLogger<WorktreePreviewService>.Instance, agentUser: null, agentGroup: null, agentHome: null);
+                NullLogger<WorktreePreviewService>.Instance);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.BeginStartAsync(root, null, TestContext.Current.CancellationToken));
 

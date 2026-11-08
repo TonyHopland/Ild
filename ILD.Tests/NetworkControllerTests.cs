@@ -1,6 +1,7 @@
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -24,10 +25,12 @@ public sealed class NetworkControllerTests : IDisposable
 
     public void Dispose() => _db.Dispose();
 
-    private NetworkController Build(NetworkEnforcementStatus? status = null)
-        => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            status ?? NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null),
-            _forwarder);
+    private static readonly NetworkEnforcementStatus Proxied = NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128"));
+
+    private static IRunHost Host(RunHostKind kind) => Mock.Of<IRunHost>(h => h.Kind == kind);
+
+    private NetworkController Build(RunHostKind kind = RunHostKind.Container)
+        => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object, Proxied, _forwarder, Host(kind));
 
     private sealed class StubForwarderState : IEgressForwarderState
     {
@@ -435,26 +438,19 @@ public sealed class NetworkControllerTests : IDisposable
         _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 
-    [Fact]
-    public void Status_reports_the_enforcement_the_entrypoint_announced()
+    [Theory]
+    [InlineData(RunHostKind.Local, "advisory")]
+    [InlineData(RunHostKind.Container, "enforced")]
+    [InlineData(RunHostKind.Kubernetes, "enforced")]
+    public void Status_reports_enforcement_by_where_runs_execute_and_Off_as_always_available(RunHostKind kind, string enforcement)
     {
-        var advisory = Build(NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "advisory", "NET_ADMIN was not granted"));
+        var status = Body<Dictionary<string, object>>(Build(kind).GetStatus());
 
-        var status = Body<Dictionary<string, object>>(advisory.GetStatus());
-
-        Assert.Equal("advisory", status["enforcement"].ToString());
-        Assert.Equal("NET_ADMIN was not granted", status["reason"].ToString());
+        Assert.Equal(enforcement, status["enforcement"].ToString());
+        Assert.Equal(Proxied.ReasonFor(kind), status["reason"].ToString());
+        Assert.Equal("True", status["proxyEnabled"].ToString());
+        Assert.Equal("3128", status["proxyPort"].ToString());
         Assert.Equal("True", status["offAvailable"].ToString());
-    }
-
-    [Fact]
-    public void Status_reports_off_unavailable_under_the_firewall_without_an_open_group()
-    {
-        var enforced = Build(NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null));
-        var open = Build(NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "agent-open"));
-
-        Assert.Equal("False", Body<Dictionary<string, object>>(enforced.GetStatus())["offAvailable"].ToString());
-        Assert.Equal("True", Body<Dictionary<string, object>>(open.GetStatus())["offAvailable"].ToString());
     }
 
     private sealed record UpdatedEntryView(Guid Id, string Host, NetworkListKind ListKind, Guid? AiProviderId, DateTime CreatedAt);
@@ -598,7 +594,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateException("unique"));
         var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+            Proxied, _forwarder, Host(RunHostKind.Container));
 
         var result = await controller.UpdateEntry(Guid.NewGuid(), Rule("api.example.com"), TestContext.Current.CancellationToken);
 
@@ -616,7 +612,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
         var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+            Proxied, _forwarder, Host(RunHostKind.Container));
 
         var result = await controller.UpdateEntry(Guid.NewGuid(), Rule(), TestContext.Current.CancellationToken);
 
@@ -631,7 +627,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateException("unique"));
         var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
-            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+            Proxied, _forwarder, Host(RunHostKind.Container));
 
         var result = await controller.UpdateForward(Guid.NewGuid(), Forward(localPort: 15432), TestContext.Current.CancellationToken);
 
@@ -647,7 +643,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
         var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
-            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+            Proxied, _forwarder, Host(RunHostKind.Container));
 
         var result = await controller.UpdateForward(Guid.NewGuid(), Forward(), TestContext.Current.CancellationToken);
 
