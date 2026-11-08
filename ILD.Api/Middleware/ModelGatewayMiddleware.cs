@@ -140,24 +140,44 @@ public sealed partial class ModelGatewayMiddleware
             root = new Uri($"https://{afterPrefix[0].ToLowerInvariant()}");
             rest = afterPrefix.Length > 1 ? afterPrefix[1] : string.Empty;
         }
-        else if (route == GatewayRoutes.GitHub && rest.Length > 0 && !rest.StartsWith("copilot_internal/", StringComparison.Ordinal) && !rest.StartsWith("mcp/", StringComparison.Ordinal))
+        else if (!IsAllowedPath(route, rest))
         {
             return false;
         }
 
-        if (rest.StartsWith('/') || rest.Any(c => c is '\\' or '#' or '?' or '@' || char.IsControl(c))
-            || rest.Split('/').Any(segment => segment is ".."))
+        // Kestrel has decoded the path once, so a '%' left over is double encoding (%252e%252e) or %2F, which no
+        // agent CLI sends and which Uri would otherwise decode into a dot segment.
+        if (rest.StartsWith('/') || rest.Any(c => c is '\\' or '#' or '?' or '@' or '%' || char.IsControl(c))
+            || rest.Split('/').Any(segment => segment is ".." or "."))
             return false;
 
+        var expectedPath = $"{root.AbsolutePath.TrimEnd('/')}/{rest}";
         var builder = new UriBuilder(root.Scheme, root.Host, root.Port)
         {
-            Path = $"{root.AbsolutePath.TrimEnd('/')}/{rest}",
+            Path = expectedPath,
             Query = query.HasValue ? query.Value![1..] : string.Empty,
         };
         target = builder.Uri;
         return string.Equals(target.Host, root.Host, StringComparison.OrdinalIgnoreCase)
-            && target.Port == root.Port && target.Scheme == root.Scheme;
+            && target.Port == root.Port && target.Scheme == root.Scheme
+            && string.Equals(target.AbsolutePath, expectedPath, StringComparison.Ordinal);
     }
+
+    // What each agent CLI calls on its route. An entry ending in '/' is a prefix; any other is the exact path.
+    private static readonly Dictionary<string, string[]> AllowedPaths = new()
+    {
+        [GatewayRoutes.GitHub] = ["", "copilot_internal/", "mcp/"],
+        [GatewayRoutes.ChatGpt] = ["codex/", "wham/"],
+        [GatewayRoutes.Anthropic] = ["v1/messages", "v1/messages/count_tokens", "v1/models", "v1/models/"],
+        [GatewayRoutes.Upstream] =
+            ["chat/completions", "completions", "responses", "messages", "messages/count_tokens", "models", "models/"],
+    };
+
+    private static bool IsAllowedPath(string route, string rest)
+        => AllowedPaths.TryGetValue(route, out var allowed)
+            && allowed.Any(entry => entry.EndsWith('/')
+                ? rest.StartsWith(entry, StringComparison.Ordinal)
+                : string.Equals(rest, entry, StringComparison.Ordinal));
 
     [GeneratedRegex(@"^[a-z0-9-]+(\.[a-z0-9-]+)*\.githubcopilot\.com\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CopilotHost();
