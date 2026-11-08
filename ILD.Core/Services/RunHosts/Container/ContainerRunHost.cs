@@ -479,7 +479,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
     // -- Provider sign-in --------------------------------------------------------
 
     private const string SignInRole = "signin";
-    private const string SignInHome = "/tmp/home";
 
     private static string SignInName(Guid id) => $"ild-signin-{id:N}";
 
@@ -490,15 +489,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
         [RunPaths.InstanceLabel] = _options.Instance,
         [RunPaths.RoleLabel] = SignInRole,
     };
-
-    // Reads one regular, non-empty file of at most the import's cap in the home, as base64; nothing else is printed.
-    private const string ReadLoginScript = """
-        f="$HOME/$1"
-        { [ -f "$f" ] && [ ! -L "$f" ]; } || exit 3
-        size=$(stat -c %s -- "$f") || exit 3
-        { [ "$size" -gt 0 ] && [ "$size" -le "$2" ]; } || exit 3
-        base64 -w0 -- "$f"
-        """;
 
     /// <summary>
     /// A terminal for a provider's login in a short-lived container of the runner image of its own: the agent from the toolchain
@@ -556,9 +546,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             await WaitRunningAsync(name, ct);
 
-            if (Path.IsPathRooted(command)) command = Path.GetFileName(command);
-            IReadOnlyList<string> terminal = ["/bin/sh", "-c", "mkdir -p -- \"$HOME\" && cd -- \"$HOME\" && exec env TERM=xterm-256color \"$@\"", "sh", command, .. arguments];
-            var exec = await OpenExecAsync(id, terminal, stdin: true, tty: true, ct);
+            var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), stdin: true, tty: true, ct);
             var pty = new ExecPty(exec);
             pty.Resize(cols, rows);
 
@@ -569,15 +557,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
             await RemoveAsync();
             throw;
         }
-    }
-
-    private async Task<string?> ReadSignInFileAsync(Guid id, string relativePath, CancellationToken ct)
-    {
-        var result = await RunScriptAsync(id, ReadLoginScript, [relativePath, CredentialImport.MaxBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)], ct);
-        if (result.ExitCode == 3) return null;
-        if (!result.Success)
-            throw new InvalidOperationException($"could not read {relativePath} in the sign-in container: {result.StdErr.Trim()}");
-        return Encoding.UTF8.GetString(Convert.FromBase64String(result.StdOut.Trim()));
     }
 
     // -- Preview -----------------------------------------------------------------

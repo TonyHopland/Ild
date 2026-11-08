@@ -53,7 +53,7 @@ Where a run's agent, commands and files live is not a setting ([ADR-0036](adr/00
 
 ## Kubernetes run host
 
-When ILD's image runs in a Kubernetes cluster, each **loop run** gets a pod of its own with a volume of its own, created when the run starts and deleted when it is cleaned up. The pod stays up while a Human node waits, so previews keep working. Chats, scheduled jobs included, share one pod. ILD keeps the graph, the human nodes, the database and the UI; the pod only executes. Setup, RBAC and the example manifests are in [Kubernetes run host](deployment.md#kubernetes-run-host); the decisions are in [ADR-0033](adr/0033-kubernetes-run-host.md).
+When ILD's image runs in a Kubernetes cluster, each **loop run** gets a pod of its own with a volume of its own, created when the run starts and deleted when it is cleaned up. The pod stays up while a Human node waits, so previews keep working. Chats, scheduled jobs included, share one pod. The provider sign-in terminal runs in a short-lived pod of its own (`ild-signin-<id>`, labelled `ild/role=signin`), with no NetworkPolicy so the CLI's OAuth flow can reach the provider; it is deleted when the terminal closes, and the sweep removes one left behind. ILD keeps the graph, the human nodes, the database and the UI; the pod only executes. Setup, RBAC and the example manifests are in [Kubernetes run host](deployment.md#kubernetes-run-host); the decisions are in [ADR-0033](adr/0033-kubernetes-run-host.md).
 
 Nothing in ILD is specific to a CNI or a storage backend. The cluster needs Kubernetes 1.30 or later (the exec API's v5 channel protocol, which can close a command's stdin) and a CNI that enforces NetworkPolicy for the isolation described below.
 

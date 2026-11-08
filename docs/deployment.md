@@ -267,7 +267,7 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
 
    The runner image is published with the same tags as the ILD image; pin the version ILD runs. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have.
 
-   `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains): ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs to reach the internet, so allow that label egress if the namespace denies it by default. Without a ReadWriteMany class, build a runner image of your own `FROM ghcr.io/tonyhopland/ild-runner` with the toolchains and agent CLIs your runs need, and set `ILD_RUN_TOOLCHAINS=off`.
+   `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains): ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs to reach the internet, so allow that label egress if the namespace denies it by default. The provider sign-in terminal's short-lived pod, labelled `ild/role=signin`, needs the same. Without a ReadWriteMany class, build a runner image of your own `FROM ghcr.io/tonyhopland/ild-runner` with the toolchains and agent CLIs your runs need, and set `ILD_RUN_TOOLCHAINS=off`.
 4. The preview proxy forwards to the pod's address, so ILD must be able to reach pod IPs, as any pod in the cluster can.
 
 ### Storage

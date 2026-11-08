@@ -16,7 +16,7 @@ namespace ILD.Core.Services.RunHosts.Kubernetes;
 /// The run host that puts each loop run in a pod of its own, with a volume of its own. The run's Secret owns the pod,
 /// the volume claim and the network policy, so deleting the Secret deletes them all.
 /// </summary>
-public sealed class KubernetesRunHost : ExecRunHost
+public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost
 {
     public const string RunLeftoverKind = "kubernetes-run";
 
@@ -31,6 +31,8 @@ public sealed class KubernetesRunHost : ExecRunHost
     private readonly SemaphoreSlim _toolsGate = new(1, 1);
     private readonly SemaphoreSlim _chatGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, string> _execNames = new();
+    // The sign-in pods open now, which the sweep leaves alone.
+    private readonly ConcurrentDictionary<string, byte> _signIns = new(StringComparer.Ordinal);
 
     public KubernetesRunHost(
         IKubernetes client, KubernetesRunHostOptions options, string namespaceName, IProcessRunner runner, ILogger? logger = null)
@@ -243,6 +245,56 @@ public sealed class KubernetesRunHost : ExecRunHost
         }
     }
 
+    // -- Provider sign-in --------------------------------------------------------
+
+    /// <summary>
+    /// A terminal for a provider's login in a short-lived pod of the runner image of its own: the agent from the toolchain
+    /// store (installed first if it is missing), no NetworkPolicy so the OAuth flow can reach the provider, and none of
+    /// what a chat or run has. It writes the credentials the model gateway keeps from agents, so nothing else shares it.
+    /// The pod goes when the result is disposed, or on a failure to start.
+    /// </summary>
+    public async Task<SignInTerminal> OpenSignInAsync(ManagedAgent? agent, string command, IReadOnlyList<string> arguments, int cols, int rows, CancellationToken ct)
+    {
+        var id = Guid.NewGuid();
+        var name = KubernetesNames.SignInName(id);
+        _signIns[name] = 0;
+        _execNames[id] = name;
+
+        async Task RemoveAsync()
+        {
+            _execNames.TryRemove(id, out _);
+            // Forgotten whether or not the delete works, so the sweep can remove a pod that it did not.
+            _signIns.TryRemove(name, out _);
+            try
+            {
+                await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(
+                    name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: CancellationToken.None));
+            }
+            catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
+            {
+                Logger?.LogWarning(ex, "Could not remove the sign-in pod {Name}; the next sweep removes it", name);
+            }
+        }
+
+        try
+        {
+            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), ct);
+            await _client.CoreV1.CreateNamespacedPodAsync(
+                _manifests.SignIn(name, SignInHome, tools?.For(SignInHome) ?? [], mountTools: tools is { Path.Count: > 0 }), _namespace, cancellationToken: ct);
+            await WaitReadyAsync(name, "the provider sign-in", ct);
+
+            var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), stdin: true, tty: true, ct);
+            var pty = new ExecPty(exec);
+            pty.Resize(cols, rows);
+            return new SignInTerminal(pty, (path, token) => ReadSignInFileAsync(id, path, token), RemoveAsync);
+        }
+        catch
+        {
+            await RemoveAsync();
+            throw;
+        }
+    }
+
     // -- Preview -----------------------------------------------------------------
 
     public override async Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
@@ -361,10 +413,16 @@ public sealed class KubernetesRunHost : ExecRunHost
             Collect((await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
             Collect((await _client.CoreV1.ListNamespacedPersistentVolumeClaimAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
             Collect((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
+            var signIns = (await _client.CoreV1.ListNamespacedPodAsync(
+                    _namespace, labelSelector: $"{selector},{KubernetesNames.RoleLabel}={KubernetesNames.SignInRole}", cancellationToken: ct)).Items
+                .Select(p => p.Metadata.Name)
+                .Where(n => n is not null && !_signIns.ContainsKey(n))
+                .ToList();
 
             return runs
                 .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
                 .Select(run => new RunLeftover(RunLeftoverKind, run))
+                .Concat(signIns.Select(n => new RunLeftover(RunLeftoverKind, n!)))
                 .ToList();
         }
         catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
@@ -378,6 +436,20 @@ public sealed class KubernetesRunHost : ExecRunHost
     {
         if (leftover.Kind != RunLeftoverKind)
             throw new ArgumentException($"unknown leftover kind '{leftover.Kind}'", nameof(leftover));
+        if (leftover.Location.StartsWith("ild-signin-", StringComparison.Ordinal))
+        {
+            try
+            {
+                await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(
+                    leftover.Location, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
+                return true;
+            }
+            catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
+            {
+                Logger?.LogWarning(ex, "Could not delete the sign-in pod {Name}; the next sweep tries again", leftover.Location);
+                return false;
+            }
+        }
         if (!Guid.TryParseExact(leftover.Location, "N", out var owner))
             return false;
 

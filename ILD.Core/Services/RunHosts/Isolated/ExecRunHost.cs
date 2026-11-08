@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts.Tools;
 using Microsoft.Extensions.Logging;
@@ -717,6 +718,35 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             throw new InvalidOperationException($"could not run a command in the {Noun} of {(owner.Chat ? "chat" : "run")} {owner.Id:N}: {ex.Message}", ex);
         }
     }
+
+    // -- Provider sign-in --------------------------------------------------------
+
+    /// <summary>The home of the CLI in a sign-in container or pod, where it writes its login.</summary>
+    protected const string SignInHome = "/tmp/home";
+
+    // Reads one regular, non-empty file of at most the import's cap in the home, as base64; nothing else is printed.
+    private const string ReadLoginScript = """
+        f="$HOME/$1"
+        { [ -f "$f" ] && [ ! -L "$f" ]; } || exit 3
+        size=$(stat -c %s -- "$f") || exit 3
+        { [ "$size" -gt 0 ] && [ "$size" -le "$2" ]; } || exit 3
+        base64 -w0 -- "$f"
+        """;
+
+    /// <summary>The text of a login file in a sign-in environment's home, by its path relative to it; null when it is not a regular file of a size worth reading.</summary>
+    protected async Task<string?> ReadSignInFileAsync(Guid id, string relativePath, CancellationToken ct)
+    {
+        var result = await RunScriptAsync(id, ReadLoginScript, [relativePath, CredentialImport.MaxBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)], ct);
+        if (result.ExitCode == 3) return null;
+        if (!result.Success)
+            throw new InvalidOperationException($"could not read {relativePath} in the sign-in {Noun}: {result.StdErr.Trim()}");
+        return Encoding.UTF8.GetString(Convert.FromBase64String(result.StdOut.Trim()));
+    }
+
+    /// <summary>The command that starts a sign-in CLI in its home, in a terminal.</summary>
+    protected static IReadOnlyList<string> SignInTerminalCommand(string command, IReadOnlyList<string> arguments)
+        => ["/bin/sh", "-c", "mkdir -p -- \"$HOME\" && cd -- \"$HOME\" && exec env TERM=xterm-256color \"$@\"", "sh",
+            Path.IsPathRooted(command) ? Path.GetFileName(command) : command, .. arguments];
 
     // Reads a script from stdin into a file, then runs it with the arguments, so what the script runs does not read
     // the rest of the script as its own input.

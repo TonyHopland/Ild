@@ -280,6 +280,62 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         },
     };
 
+    /// <summary>
+    /// A short-lived pod of the runner image for a provider's sign-in terminal: the store's claim read-only when the CLI
+    /// comes from it, and nothing of a run or chat. It carries no run label, so no run's NetworkPolicy selects it and the
+    /// OAuth flow can reach the provider, and the sweep finds it by its role.
+    /// </summary>
+    public V1Pod SignIn(string name, string home, IEnumerable<string> toolEnvironment, bool mountTools) => new()
+    {
+        Metadata = new V1ObjectMeta
+        {
+            Name = name,
+            NamespaceProperty = namespaceName,
+            Labels = new Dictionary<string, string>
+            {
+                [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
+                [KubernetesNames.InstanceLabel] = options.Instance,
+                [KubernetesNames.RoleLabel] = KubernetesNames.SignInRole,
+            },
+        },
+        Spec = new V1PodSpec
+        {
+            AutomountServiceAccountToken = false,
+            EnableServiceLinks = false,
+            RestartPolicy = "Never",
+            TerminationGracePeriodSeconds = 0,
+            SecurityContext = new V1PodSecurityContext
+            {
+                RunAsNonRoot = true,
+                RunAsUser = RunnerUid,
+                RunAsGroup = RunnerUid,
+                FsGroup = RunnerUid,
+                SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" },
+            },
+            Containers =
+            [
+                new V1Container
+                {
+                    Name = RunnerContainer,
+                    Image = options.RunnerImage,
+                    Command = ["/usr/bin/tini", "--", "sleep", "infinity"],
+                    Env = [new V1EnvVar { Name = "HOME", Value = home }, .. toolEnvironment.Select(EnvVar)],
+                    SecurityContext = new V1SecurityContext
+                    {
+                        AllowPrivilegeEscalation = false,
+                        Capabilities = new V1Capabilities { Drop = ["ALL"] },
+                    },
+                    VolumeMounts = mountTools && options.ToolsClaim is not null
+                        ? [new V1VolumeMount { Name = ToolsVolume, MountPath = RunToolStore.Root, ReadOnlyProperty = true }]
+                        : [],
+                },
+            ],
+            Volumes = mountTools && options.ToolsClaim is { } claim
+                ? [new V1Volume { Name = ToolsVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = claim, ReadOnlyProperty = true } }]
+                : [],
+        },
+    };
+
     private static V1EnvVar EnvVar(string assignment)
     {
         var split = assignment.IndexOf('=');

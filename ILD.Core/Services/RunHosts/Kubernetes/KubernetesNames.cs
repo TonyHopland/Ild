@@ -14,6 +14,12 @@ public static class KubernetesNames
     public const string RoleLabel = RunPaths.RoleLabel;
     public const string ChatRole = RunPaths.ChatRole;
 
+    /// <summary>The role of a provider sign-in pod, which the sweep removes once ILD no longer has it open.</summary>
+    public const string SignInRole = "signin";
+
+    /// <summary>The name of a provider sign-in pod.</summary>
+    public static string SignInName(Guid id) => $"ild-signin-{id:N}";
+
     /// <summary>The name of a run's Secret, volume claim, network policy and pod.</summary>
     public static string ObjectName(Guid ownerId) => $"ild-run-{ownerId:N}";
 

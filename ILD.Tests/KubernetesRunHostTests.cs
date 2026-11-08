@@ -253,6 +253,57 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Empty(_api.Names("secrets"));
     }
 
+    // -- Provider sign-in --------------------------------------------------------
+
+    private string SignInPod() => Assert.Single(_api.Names("pods"), n => n.StartsWith("ild-signin-", StringComparison.Ordinal));
+
+    [Fact]
+    public async Task The_sign_in_terminal_runs_in_a_pod_of_its_own_and_reads_the_login_from_its_home()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin && !e.Tty) await e.ReadStdinToEndAsync();
+            if (e.Joined.Contains("base64", StringComparison.Ordinal))
+                await e.WriteStdoutAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes("{\"token\":\"x\"}")));
+            if (!e.Tty) await e.ExitAsync(0);
+        };
+        var ct = TestContext.Current.CancellationToken;
+
+        var terminal = await _host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "/usr/local/bin/claude", ["setup-token"], 100, 30, ct);
+        var name = SignInPod();
+        var pod = _api.Get<V1Pod>("pods", name)!;
+        Assert.Equal(KubernetesNames.SignInRole, pod.Metadata.Labels[KubernetesNames.RoleLabel]);
+        // No run label: no run's NetworkPolicy selects it, so the OAuth flow can reach the provider.
+        Assert.False(pod.Metadata.Labels.ContainsKey(KubernetesNames.RunLabel));
+        Assert.False(pod.Spec.AutomountServiceAccountToken);
+        Assert.Equal("/tmp/home", pod.Spec.Containers.Single().Env.Single(e => e.Name == "HOME").Value);
+        Assert.Empty(pod.Spec.Volumes ?? []);
+        var shell = Assert.Single(_api.Execs, e => e.Pod == name && e.Tty);
+        Assert.Equal(["claude", "setup-token"], shell.Command.TakeLast(2));
+
+        Assert.Equal("{\"token\":\"x\"}", await terminal.ReadLoginAsync(".claude/.credentials.json", ct));
+
+        await terminal.DisposeAsync();
+        Assert.Contains($"pods/{name}", _api.Deleted);
+    }
+
+    [Fact]
+    public async Task A_sign_in_pod_left_behind_is_swept_and_one_still_open_is_not()
+    {
+        _api.OnExec = e => e.Tty ? Task.CompletedTask : e.ExitAsync(0);
+        var ct = TestContext.Current.CancellationToken;
+        await using var open = await _host.OpenSignInAsync(null, "claude", [], 80, 24, ct);
+        var name = SignInPod();
+
+        Assert.DoesNotContain(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct), l => l.Location == name);
+
+        // Another ILD, or this one after a restart, has no terminal open in it.
+        var restarted = NewHost(Options());
+        var leftover = Assert.Single(await restarted.ListLeftoversAsync(new HashSet<Guid>(), ct), l => l.Location == name);
+        Assert.True(await restarted.DeleteLeftoverAsync(leftover, ct));
+        Assert.Contains($"pods/{name}", _api.Deleted);
+    }
+
     // -- Toolchains --------------------------------------------------------------
 
     [Fact]

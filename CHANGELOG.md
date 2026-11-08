@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A run in a container or pod gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows**; `run.tools` in `ild.config.json` names them when finding them is not enough.
 - **Network forwards work in run and chat containers and pods**: `127.0.0.1:<local port>` there reaches the forward's destination through the egress proxy.
 - **A run restores NuGet packages from a private Azure Artifacts feed**: the toolchain store installs the credential provider with each .NET SDK from 9.0.200 on.
-- **Chats share one container, or one pod in Kubernetes, and the provider sign-in terminal runs in a short-lived container that keeps the login when it closes.**
+- **Chats share one container, or one pod in Kubernetes, and the provider sign-in terminal runs in a short-lived container, or pod, that keeps the login when it closes.**
 
 ### Changed
 
