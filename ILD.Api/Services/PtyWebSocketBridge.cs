@@ -175,6 +175,31 @@ public static class PtyWebSocketBridge
     }
 
     /// <summary>
+    /// Turns a terminal down with its reason, on a socket that was accepted only to say it. A request refused before
+    /// the upgrade reaches the browser as nothing but a failed connection, so the reason goes in the close frame,
+    /// which the terminal panel shows, and as a line of output.
+    /// </summary>
+    public static async Task RefuseAsync(WebSocket socket, string reason, CancellationToken ct)
+    {
+        await SendNoticeAsync(socket, reason, ct);
+        await CloseSocketAsync(socket, WebSocketCloseStatus.PolicyViolation, reason, ct);
+    }
+
+    /// <summary>
+    /// A close frame's reason may hold at most 123 bytes of UTF-8, and a longer one makes the close throw, which would
+    /// leave the socket to be dropped instead. Cut at a character boundary.
+    /// </summary>
+    internal static string CloseDescription(string description)
+    {
+        const int MaxBytes = 123;
+        if (Encoding.UTF8.GetByteCount(description) <= MaxBytes) return description;
+        var cut = description;
+        while (Encoding.UTF8.GetByteCount(cut + "…") > MaxBytes) cut = cut[..^1];
+        if (cut.Length > 0 && char.IsHighSurrogate(cut[^1])) cut = cut[..^1];
+        return cut + "…";
+    }
+
+    /// <summary>
     /// Show ILD's own <paramref name="message"/> as a line of terminal output. Never
     /// throws; a socket that is no longer open gets nothing. Must not overlap a
     /// running <see cref="RunAsync"/>'s output pump.
@@ -339,7 +364,7 @@ public static class PtyWebSocketBridge
         {
             try
             {
-                await socket.CloseAsync(status, description, ct);
+                await socket.CloseAsync(status, CloseDescription(description), ct);
             }
             catch { }
         }

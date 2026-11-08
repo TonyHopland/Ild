@@ -577,17 +577,26 @@ public class LoopRunsController : ControllerBase
         // session/usage limit), or cancelled — so a human can read the diff or
         // recover work. Only a still-Running run is off-limits: its executor is
         // actively writing the worktree, so a concurrent shell would race it.
+        // A refusal is said over an accepted socket: refused before the upgrade, it
+        // reaches the browser as a failed connection with no reason at all.
+        string? refusal = null;
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
-            return BadRequest(new { error = "Terminal is not available while the run is still executing." });
-        if (string.IsNullOrWhiteSpace(run.WorktreePath) || !await HttpContext.RequestServices.GetRunHost().DirectoryExistsAsync(run.WorktreePath, HttpContext.RequestAborted))
-            return BadRequest(new { error = "Run has no live worktree." });
+            refusal = "The terminal opens once the run stops executing: it is parked, done or failed.";
+        else if (string.IsNullOrWhiteSpace(run.WorktreePath) || !await HttpContext.RequestServices.GetRunHost().DirectoryExistsAsync(run.WorktreePath, HttpContext.RequestAborted))
+            refusal = "The run has no worktree any more: it was cleaned up.";
+        if (refusal is not null)
+        {
+            using var refused = await HttpContext.WebSockets.AcceptWebSocketAsync();
+            await PtyWebSocketBridge.RefuseAsync(refused, refusal, HttpContext.RequestAborted);
+            return new EmptyResult();
+        }
 
         // The worktree is the run's, so its shell gets the feeds the run's processes get.
         var feeds = await _packageFeeds.ResolveAsync(
             await RunRepository.IdOfAsync(run, _workItemManager), HttpContext.RequestAborted);
         using var socket = await HttpContext.WebSockets.AcceptWebSocketAsync();
         await _shellSessions.RunAsync(
-            socket, run.WorktreePath, run.Id.ToString("N"), cols, rows, feeds.Feeds, HttpContext.RequestAborted);
+            socket, run.WorktreePath!, run.Id.ToString("N"), cols, rows, feeds.Feeds, HttpContext.RequestAborted);
         return new EmptyResult();
     }
 }
