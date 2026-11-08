@@ -134,17 +134,19 @@ public class RunHostSeamTests
     }
 
     [Theory]
-    [InlineData(null, RunHostKind.Local)]
-    [InlineData("", RunHostKind.Local)]
-    [InlineData("local", RunHostKind.Local)]
-    [InlineData(" Container ", RunHostKind.Container)]
-    [InlineData("KUBERNETES", RunHostKind.Kubernetes)]
-    public void The_setting_names_a_backend_and_defaults_to_local(string? value, RunHostKind expected)
-        => Assert.Equal(expected, RunHostOptions.Parse(value));
-
-    [Fact]
-    public void An_unknown_backend_is_refused()
-        => Assert.Contains("ILD_RUN_HOST", Assert.Throws<InvalidOperationException>(() => RunHostOptions.Parse("docker")).Message);
+    [InlineData(null, null, RunHostKind.Local)]
+    [InlineData(null, "10.0.0.1", RunHostKind.Local)]
+    [InlineData("1", null, RunHostKind.Container)]
+    [InlineData("1", "", RunHostKind.Container)]
+    [InlineData("1", "10.0.0.1", RunHostKind.Kubernetes)]
+    public void Runs_go_to_containers_from_ILDs_image_to_pods_in_a_cluster_and_stay_local_otherwise(
+        string? image, string? kubernetes, RunHostKind expected)
+        => Assert.Equal(expected, RunHostOptions.Detect(name => name switch
+        {
+            RunHostOptions.ImageMarker => image,
+            RunHostOptions.KubernetesMarker => kubernetes,
+            _ => null,
+        }));
 
     [Fact]
     public async Task The_local_host_points_the_preview_proxy_at_loopback()

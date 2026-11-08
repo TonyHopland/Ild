@@ -7,7 +7,7 @@ namespace ILD.Core.Services.RunHosts.Kubernetes;
 public static class KubernetesRunHostFactory
 {
     /// <summary>
-    /// The host for <c>ILD_RUN_HOST=kubernetes</c>: loop runs go to pods, and what is not a loop run stays on <paramref name="local"/>.
+    /// The host for ILD in its image in a Kubernetes cluster: loop runs go to pods, and what is not a loop run stays on <paramref name="local"/>.
     /// Reaches the cluster with ILD's own service account, or with the kubeconfig the settings name.
     /// </summary>
     public static RoutingRunHost Create(IRunHost local, Func<string, string?> setting, IProcessRunner runner, ILoggerFactory loggers,

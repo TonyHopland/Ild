@@ -1,5 +1,7 @@
 # ADR-0014: The coding agent runs under a separate OS user from the orchestrator
 
+> **Status: superseded by [ADR-0036](./0036-runs-always-in-containers.md).** Agents no longer run in ILD's container, so there is no second user.
+
 The orchestrator (`dotnet ILD.Api.dll`, PID 1) and the coding-agent CLI it spawns
 (claude / opencode / pi / copilot) now run as **two distinct, non-root Linux
 users** — `ild` (uid 10001) for the orchestrator and `agent` (uid 10002) for the

@@ -63,20 +63,20 @@ public sealed record ContainerRunHostOptions
 
         var defaults = new ContainerRunHostOptions();
         var socket = Value(SocketSetting)
-            ?? throw new InvalidOperationException($"{SocketSetting} is required when ILD_RUN_HOST=container: it is the socket of the container engine, and ILD never looks for one.");
+            ?? throw new InvalidOperationException($"{SocketSetting} is required when ILD runs from its image outside Kubernetes: it is the socket of the container engine, and ILD never looks for one.");
         const string UnixPrefix = "unix://";
         if (socket.StartsWith(UnixPrefix, StringComparison.Ordinal)) socket = socket[UnixPrefix.Length..];
         if (!socket.StartsWith('/'))
             throw new InvalidOperationException($"{SocketSetting} is '{socket}'; it must be the absolute path of a unix socket.");
 
         var image = Value(RunnerImageSetting)
-            ?? throw new InvalidOperationException($"{RunnerImageSetting} is required when ILD_RUN_HOST=container.");
+            ?? throw new InvalidOperationException($"{RunnerImageSetting} is required when ILD runs from its image outside Kubernetes.");
 
         var ildUrl = Value("ILD_API_URL")
-            ?? throw new InvalidOperationException("ILD_API_URL must be set when ILD_RUN_HOST=container: the run's container reaches the model gateway and the MCP endpoint there.");
+            ?? throw new InvalidOperationException("ILD_API_URL must be set when ILD runs from its image: the run's container reaches the model gateway and the MCP endpoint there.");
         if (!Uri.TryCreate(ildUrl, UriKind.Absolute, out var uri) || uri.IsLoopback || IPAddress.TryParse(uri.Host, out _))
             throw new InvalidOperationException(
-                $"ILD_API_URL is '{ildUrl}'; with ILD_RUN_HOST=container it must name ILD by a host name that is not localhost (the machine's name, or the compose service), because each run's container is given that name for ILD's address on its own network.");
+                $"ILD_API_URL is '{ildUrl}'; with runs in containers it must name ILD by a host name that is not localhost (the machine's name, or the compose service), because each run's container is given that name for ILD's address on its own network.");
 
         return defaults with
         {

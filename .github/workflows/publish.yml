@@ -26,19 +26,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [ild, ild-runner, ild-runner-full, ild-workitem-server]
+        image: [ild, ild-runner, ild-workitem-server]
         arch: [amd64, arm64]
         # Per-image and per-arch attributes, folded into all four combinations.
         include:
           - image: ild
             dockerfile: Dockerfile
-            # Batteries-included, matching the compose defaults. Coding agents
-            # (Pi, OpenCode, Claude Code) are not baked in — they install onto
-            # /data on demand from the AI Provider page; WITH_NODE provides npm.
+            # ILD itself. Runs, chats and sign-ins get containers of their own from ild-runner.
             extra_build_args: |
-              WITH_NODE=1
-              WITH_DOTNET_SDK=1
-              WITH_CHROME=1
               WITH_CERTS=0
           # The slim image of a run's pod or container: an OS and mise, no toolchains or agents. ILD installs those
           # per repository into a shared store the run mounts (docs/adr/0035-run-toolchains.md).
@@ -46,16 +41,6 @@ jobs:
             dockerfile: Dockerfile
             target: runner
             extra_build_args: ""
-          # The previous runner: the ild image's toolchains and three agent CLIs baked in, for a Kubernetes cluster
-          # without a shared toolchain store.
-          - image: ild-runner-full
-            dockerfile: Dockerfile
-            target: runner-full
-            extra_build_args: |
-              WITH_NODE=1
-              WITH_DOTNET_SDK=1
-              WITH_CHROME=1
-              WITH_CERTS=0
           - image: ild-workitem-server
             dockerfile: Dockerfile.WorkItemServer
             extra_build_args: ""
@@ -140,7 +125,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [ild, ild-runner, ild-runner-full, ild-workitem-server]
+        image: [ild, ild-runner, ild-workitem-server]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4

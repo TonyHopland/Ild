@@ -2,9 +2,6 @@ ARG NODE_VERSION=26-alpine
 ARG DOTNET_VERSION=10.0
 # The base of the slim runner image (the `runner` target).
 ARG RUNNER_BASE=ubuntu:24.04
-# Selects the final stage's base image (see the final-base-* stages below).
-# Declared here, before the first FROM, so it can be used in a FROM line.
-ARG WITH_DOTNET_SDK=0
 
 FROM node:${NODE_VERSION} AS frontend-build
 WORKDIR /app
@@ -73,50 +70,28 @@ RUN rid="linux-$( [ "${TARGETARCH:-amd64}" = "arm64" ] && echo arm64 || echo x64
     dotnet publish -c Release -r "$rid" --self-contained -p:PublishSingleFile=true \
       -o /app/mcp-server-runner ${VERSION:+-p:Version=$VERSION}
 
-# The final stage's base is picked by WITH_DOTNET_SDK: work-item execution that
-# builds .NET repos needs the SDK, so in that case we start from the official
-# SDK image rather than layering a second, separately-downloaded SDK on top of
-# the ASP.NET runtime image (which would ship two copies of the shared
-# frameworks). Both bases are Debian-derived, so the apt steps below are
-# identical either way.
-FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final-base-0
-FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS final-base-1
-
-FROM final-base-${WITH_DOTNET_SDK} AS final
+# ILD itself. Runs, chats and sign-ins never execute here: they get containers of their own from the `runner` image
+# below (pods in Kubernetes), so this image holds no language toolchain, browser or second user. It keeps git, for
+# ILD's mirrors and base clones, and Node with npm, which install the coding agents onto /data and check their versions.
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
 
-ARG WITH_NODE=0
 ARG NODE_RUNTIME_VERSION=26.13.0
 ARG NPM_VERSION=12.2.1
-ARG WITH_CHROME=0
 ARG WITH_CERTS=0
 ARG APP_UID=10001
 ARG APP_GID=10001
-# Second, lower-trust user the coding-agent CLI runs as, plus the group both it
-# and the orchestrator share for the worktree + /data agent installs (ADR-0014).
-ARG AGENT_UID=10002
-ARG AGENT_GID=10002
-ARG SHARED_GID=10003
-# The group an agent launched in network mode Off runs under, which the egress firewall lets
-# reach the network directly (ADR-0019). It has no members: neither the agent nor ild is
-# one, so only the orchestrator, which chooses the agent's gid at launch, can put a process in it.
-ARG NET_OPEN_GID=10004
 
-# Install base utilities and optional tools before copying source so Docker
-# layer caching skips tool installs when only source code changes.
-# libcap2-bin (capsh) + util-linux (setpriv): the entrypoint keeps ambient
-# CAP_SETUID/SETGID on the orchestrator so it can drop the agent CLI to a second
-# uid; acl (setfacl): default ACLs make shared dirs read/write across both uids.
-# nftables (iptables as fallback): the entrypoint installs the uid-keyed egress
-# rules that funnel the agent through the in-container proxy (ADR-0019).
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd libcap2-bin util-linux acl nftables iptables && \
+# gosu: the entrypoint drops from root to ild. netcat: it waits for PostgreSQL.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 # Create the runtime user up front. ILD runs as this non-root user (the
 # entrypoint drops to it via gosu) and owns /app, /data and /worktrees;
 # the managed coding-agent installs land under /data owned by ild. Reuses
-# any existing user/group at the configured UID/GID.
+# any existing user/group at the configured UID/GID. Its group's gid is the one
+# the entrypoint gives a rootful engine's socket (ILD_CONTAINER_SOCKET_GRANT).
 RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
     if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
       groupmod -n ild "$existing_group"; \
@@ -130,74 +105,18 @@ RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
       useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
     fi
 
-# Create the lower-trust agent user and the shared group (ADR-0014). The coding
-# agent CLI runs as `agent` so it no longer shares the orchestrator's uid; the
-# `ild-agents` group is what grants both users access to the worktree tree and
-# the /data agent installs, while /data's secrets stay ild-only. Both users are
-# members of the shared group; the runtime paths' ownership/modes are applied by
-# the entrypoint (volumes overlay any build-time perms). The entrypoint sets both
-# homes to 0710/0750 group ild-agents at runtime — the agent traverses /home/ild
-# to resolve the credential-store and .gitconfig symlinks beneath it via the
-# GROUP, not via world bits; this chmod is only a sane build-time baseline for the
-# non-isolated case (useradd's Debian HOME_MODE is 0750 group ild, which the agent
-# is not in).
-RUN if [ -z "$(getent group "${SHARED_GID}" | cut -d: -f1 || true)" ]; then \
-      groupadd --gid ${SHARED_GID} ild-agents; \
-    fi && \
-    if [ -z "$(getent group "${AGENT_GID}" | cut -d: -f1 || true)" ]; then \
-      groupadd --gid ${AGENT_GID} agent; \
-    fi && \
-    if [ -z "$(getent group "${NET_OPEN_GID}" | cut -d: -f1 || true)" ]; then \
-      groupadd --gid ${NET_OPEN_GID} ild-net-open; \
-    fi && \
-    if [ -z "$(getent passwd "${AGENT_UID}" | cut -d: -f1 || true)" ]; then \
-      useradd --uid ${AGENT_UID} --gid ${AGENT_GID} --create-home --home-dir /home/agent --shell /usr/sbin/nologin agent; \
-    fi && \
-    usermod -aG ild-agents ild && \
-    usermod -aG ild-agents agent && \
-    chmod 0755 /home/agent /home/ild
-
-# Let the agent uid run git in trees the orchestrator owns. `git worktree add`
-# runs as ild, so the worktree, its .git file and the gitdir under
-# /data/repos/<repo>/.git/worktrees/<name> are all owned by uid 10001 — and since
-# 2.35.2 git compares the repository owner's uid to geteuid() and refuses with
-# "detected dubious ownership" otherwise. Group membership and mode 2775 do not
-# enter into that check, so without this every git command the agent runs (the
-# review prompts use git log/diff/status, and it commits its own work) fails.
-#
-# This must be system-level: git ignores safe.directory from repository config,
-# and /home/agent/.gitconfig is a symlink onto the read-only host mount so it
-# cannot carry it either. `*` rather than per-path entries because the trailing
-# `/*` form is version-dependent and would fail silently on an older git. It
-# costs nothing here: safe.directory guards against picking up a repo owned by
-# some *other* user, whereas both uids are ours and the sharing is deliberate —
-# the real boundary is the uid/group/mode scheme, not this heuristic.
-RUN git config --system --add safe.directory '*'
-
 # Coding agents (Pi, OpenCode, Claude Code) are intentionally NOT baked into
 # the image. They are installed on demand onto the persistent /data volume
 # from the AI Provider page (npm-based), so they can be updated without
-# rebuilding the image and survive redeploys. Node/npm below (WITH_NODE) is
-# what those runtime installs and version checks use.
+# rebuilding the image and survive redeploys; a run gets the same versions in
+# its container (docs/adr/0035-run-toolchains.md).
 #
-# NPM_VERSION replaces the npm that ships with Node, because repositories that
-# pin a newer npm in devEngines fail every npm/npx command under an older one.
-# Empty keeps Node's bundled npm. It is installed into the prefix Node was
-# extracted to, so /usr/local/bin/npm is that npm for every uid and in the login
-# shells previews run in, which reset PATH; the cache is a throwaway directory so
-# nothing lands under a home. The smoke check runs it as the agent and as ild
-# from a login shell, each with a throwaway HOME, and fails the build unless
-# both report NPM_VERSION.
-#
-# libatomic1 is a runtime dependency of the official Node 26 binaries; it is
-# installed explicitly so the autoremove below keeps it.
-#
-# pnpm comes only from corepack, which leaves each repository's packageManager
-# to decide the version. Node 25+ no longer ships corepack, so there the image
-# has no pnpm: no pin applies at image level, and a global pnpm would override
-# every repository's own.
-RUN if [ "$WITH_NODE" = "1" ]; then \
-  apt-get update && \
+# NPM_VERSION replaces the npm that ships with Node. Empty keeps Node's bundled
+# npm. The smoke check runs it as ild with a throwaway HOME and fails the build
+# unless it reports NPM_VERSION. libatomic1 is a runtime dependency of the
+# official Node 26 binaries; it is installed explicitly so the autoremove below
+# keeps it.
+RUN apt-get update && \
   apt-get install -y --no-install-recommends curl xz-utils libatomic1 && \
   if [ "$NODE_RUNTIME_VERSION" = "latest" ]; then \
     NODE_RUNTIME_VERSION=$(curl -fsSL https://nodejs.org/dist/index.json | sed -n 's/.*"version":"\(v[^"]*\)".*/\1/p' | head -n1 | sed 's/^v//'); \
@@ -211,98 +130,21 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
   curl -fsSL "https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/node-v${NODE_RUNTIME_VERSION}-linux-${NODE_ARCH}.tar.xz" -o node.tar.xz && \
   tar -xf node.tar.xz -C /usr/local --strip-components=1 && \
   rm node.tar.xz && \
-  if command -v corepack >/dev/null 2>&1; then corepack enable; fi && \
   if [ -n "$NPM_VERSION" ]; then \
     npm install -g --prefix /usr/local --cache /tmp/npm-install-cache --no-audit --no-fund "npm@$NPM_VERSION" && \
     rm -rf /tmp/npm-install-cache /root/.npm && \
-    for ids in "${AGENT_UID}:${AGENT_GID}" "${APP_UID}:${APP_GID}"; do \
-      actual= && \
-      smoke_home="$(mktemp -d)" && \
-      chown "$ids" "$smoke_home" && \
-      actual="$(gosu "$ids" env HOME="$smoke_home" sh -lc 'npm --version')"; \
-      rm -rf "$smoke_home"; \
-      if [ "$actual" != "$NPM_VERSION" ]; then \
-        echo "npm as $ids reports '$actual', but NPM_VERSION=$NPM_VERSION" >&2; \
-        exit 1; \
-      fi; \
-    done; \
+    smoke_home="$(mktemp -d)" && \
+    chown "${APP_UID}:${APP_GID}" "$smoke_home" && \
+    actual="$(gosu "${APP_UID}:${APP_GID}" env HOME="$smoke_home" sh -lc 'npm --version')"; \
+    rm -rf "$smoke_home"; \
+    if [ "$actual" != "$NPM_VERSION" ]; then \
+      echo "npm reports '$actual', but NPM_VERSION=$NPM_VERSION" >&2; \
+      exit 1; \
+    fi; \
   fi && \
   apt-get purge -y curl xz-utils && \
   apt-get autoremove -y && \
-  rm -rf /var/lib/apt/lists/*; \
-fi
-
-# Google publishes google-chrome-stable for both amd64 and arm64 Linux (arm64
-# since 2025, https://blog.google/chromium/bringing-chrome-to-arm64-linux-devices/),
-# which is exactly the pair of architectures release builds ship (ADR-0012), so
-# WITH_CHROME=1 is honoured on both — the package name is the only difference.
-# Anything else (armhf) has no upstream .deb: that skips with a message instead
-# of failing, unlike the Node step above which exits 1, because Chrome is an
-# opt-in extra and an image without a browser beats no image at all. Both .debs
-# install /opt/google/chrome/chrome, exactly where Puppeteer's default
-# `--channel stable` resolution looks (used by chrome-devtools-mcp, see
-# opencode.json), so no extra config is needed on either architecture. We don't
-# purge wget/ca-certificates afterwards because google-chrome-stable depends on
-# both.
-#
-# --no-install-recommends matters here: Chrome's recommends pull in the full
-# mesa DRI driver set and the Noto font families, which headless Chrome never
-# uses and which cost more than Chrome itself. fonts-liberation is added back
-# explicitly so pages still render with sane default fonts.
-RUN if [ "$WITH_CHROME" = "1" ]; then \
-  CHROME_ARCH="$(dpkg --print-architecture)"; \
-  case "$CHROME_ARCH" in \
-    amd64|arm64) \
-      apt-get update && \
-      apt-get install -y --no-install-recommends wget ca-certificates && \
-      wget -q -O /tmp/google-chrome.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_${CHROME_ARCH}.deb" && \
-      apt-get install -y --no-install-recommends /tmp/google-chrome.deb fonts-liberation && \
-      rm -f /tmp/google-chrome.deb && \
-      rm -rf /var/lib/apt/lists/* ;; \
-    *) echo "Skipping Chrome: no upstream package for $CHROME_ARCH" >&2 ;; \
-  esac; \
-fi
-
-# The Azure Artifacts credential provider, for repositories that restore from a
-# private NuGet feed: it answers NuGet with the credentials a run hands it in
-# VSS_NUGET_EXTERNAL_FEED_ENDPOINTS, and holds no secret itself. Installed as the
-# .NET tool, pinned, into one root-owned directory every uid can read, and linked
-# into /usr/local/bin: NuGet (from SDK 9.0.200) finds a nuget-plugin-* command on
-# PATH, and /usr/local/bin stays on PATH whatever HOME a process has, including
-# the login shells previews run in, which reset PATH. No NUGET_PLUGIN_PATHS: set,
-# it would switch that PATH lookup and ~/.nuget/plugins off for every process.
-# The tool runs on the image's own runtime, so every architecture .NET supports
-# is covered. An SDK too old for it fails the build rather than shipping an image
-# whose NuGet feeds cannot work; so does a failed install. The smoke check runs
-# the provider by name, as the agent, from a login shell, against a made-up
-# endpoint, so the image is never built unless the agent's NuGet can find and run it.
-ARG WITH_DOTNET_SDK
-ARG DOTNET_VERSION
-ARG ARTIFACTS_CREDPROVIDER_VERSION=2.0.5
-RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
-  sdk_version="$(dotnet --version)" && \
-  if ! printf '%s\n' "$sdk_version" | awk -F. '{ exit !($1 > 9 || ($1 == 9 && ($2 > 0 || $3 + 0 >= 200))) }'; then \
-    echo "The Azure Artifacts credential provider needs .NET SDK 9.0.200 or later, but DOTNET_VERSION=${DOTNET_VERSION} gives SDK ${sdk_version}. Build with DOTNET_VERSION=9.0 or later." >&2; \
-    exit 1; \
-  fi && \
-  mkdir -p /tmp/credprovider-install && \
-  DOTNET_CLI_HOME=/tmp/credprovider-install NUGET_PACKAGES=/tmp/credprovider-install/packages \
-  DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
-    dotnet tool install Microsoft.Artifacts.CredentialProvider.NuGet.Tool \
-      --version "$ARTIFACTS_CREDPROVIDER_VERSION" --tool-path /usr/local/share/artifacts-credprovider && \
-  rm -rf /tmp/credprovider-install && \
-  chmod -R a+rX,go-w /usr/local/share/artifacts-credprovider && \
-  ln -s /usr/local/share/artifacts-credprovider/nuget-plugin-microsoft-artifacts-credential-provider /usr/local/bin/ && \
-  mkdir -p /tmp/credprovider-smoke && \
-  chown ${AGENT_UID}:${AGENT_GID} /tmp/credprovider-smoke && \
-  smoke_endpoint=https://pkgs.dev.azure.com/image-build/_packaging/smoke/nuget/v3/index.json && \
-  gosu ${AGENT_UID}:${AGENT_GID} env HOME=/tmp/credprovider-smoke \
-    VSS_NUGET_EXTERNAL_FEED_ENDPOINTS="{\"endpointCredentials\":[{\"endpoint\":\"$smoke_endpoint\",\"username\":\"ild\",\"password\":\"smoke-check\"}]}" \
-    sh -lc 'nuget-plugin-microsoft-artifacts-credential-provider -U "$0" -N -C -F Json' "$smoke_endpoint" \
-    > /tmp/credprovider-smoke.json && \
-  grep -q '"Password":"smoke-check"' /tmp/credprovider-smoke.json && \
-  rm -rf /tmp/credprovider-smoke /tmp/credprovider-smoke.json; \
-fi
+  rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /certs /tmp/extra-certs
 RUN if [ "$WITH_CERTS" = "1" ]; then \
@@ -324,70 +166,17 @@ COPY --from=frontend-build --chown=ild:ild /app/frontend/dist ./wwwroot
 ENV HOME=/home/ild
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees
-
-# uid-isolation wiring (ADR-0014). These drive the entrypoint's two-uid setup;
-# they are unset in Dockerfile.WorkItemServer, so its entrypoint keeps the
-# single-uid gosu drop. The app-side ILD_AGENT_* vars are deliberately NOT set
-# here: the entrypoint exports them from AGENT_USER/GROUP/HOME so there is one
-# source of truth. Setting them here independently would mean that clearing
-# AGENT_USER (the documented single-uid escape hatch) left the app still routing
-# every launch through setpriv, failing every run with an opaque EPERM.
-ENV AGENT_USER=agent
-ENV AGENT_GROUP=agent
-ENV AGENT_HOME=/home/agent
-ENV SHARED_GROUP=ild-agents
-# Not a group the agent is in (the entrypoint refuses one it is in, or that is AGENT_GROUP or
-# SHARED_GROUP). Network mode Off stays unavailable unless the container also runs with
-# no-new-privileges.
-ENV NETWORK_OPEN_GROUP=ild-net-open
-# cap_kill is required as well as cap_setuid/cap_setgid: setpriv gives the agent
-# a different real AND saved uid, so kill(2) from the orchestrator returns EPERM
-# without it — Halt and the per-node timeouts would leave the agent orphaned in
-# the worktree. The agent itself still gets no capabilities (setpriv clears the
-# inheritable + ambient sets, so its post-exec permitted set is empty).
-ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid,cap_kill
-# Loopback port of the agent egress proxy (ADR-0019). Read by the app, which
-# listens there and points every agent launch's HTTP(S)_PROXY at it, and by the
-# entrypoint, whose firewall rules let the agent uid reach loopback only, with no DNS.
-# Set it empty to run without the proxy.
+# ILD runs from this image: runs, chats and sign-ins go to containers, or to pods in Kubernetes
+# (ILD.Core/Services/RunHosts/RunHostOptions.cs). Not a setting; nothing else sets it.
+ENV ILD_IMAGE=1
+# Port of the agent egress proxy (ADR-0019), which each run's and chat's container is pointed at.
 ENV ILD_NETWORK_PROXY_PORT=3128
-# Shared read/write: the agent writes its worktree, and git worktree commits go
-# through the base repo's object store under /data/repos.
-# Scratch both uids touch (per-run agent session state, the interactive
-# terminal cwd). It lives under /tmp so it is discarded with the container
-# rather than growing on a volume, but it is set up like the other shared trees
-# so that a file the orchestrator seeds there stays writable by the agent.
-ENV AGENT_SCRATCH_DIR=/tmp/ild-agent-scratch
-# Orchestrator-only state (the git askpass helper; a preview's install and
-# service logs, which the orchestrator opens, appends to and serves back even
-# though the preview itself runs as the agent). Created owner-only by the
-# entrypoint before anything else runs, which is what stops the agent planting a
-# file — or a symlink — the orchestrator would then write or execute as itself.
-# On /tmp so it stays ephemeral instead of growing on the data volume.
-ENV ORCHESTRATOR_PRIVATE_DIR=/tmp/ild-orchestrator-private
-# Files the orchestrator hands the agent to read (pi's ILD extension, the MCP
-# configs given to the agent CLIs — all carrying the ILD API token). Owned by the
-# orchestrator with the shared group and no group write, so the agent can read
-# them but cannot create, rename or delete anything there. Ephemeral on /tmp.
-ENV AGENT_READ_DIR=/tmp/ild-agent-read
-ENV SHARED_RW_DIRS="/worktrees /data/repos /data/chat-sessions /tmp/ild-agent-scratch"
-# Shared read-only: the agent execs the npm-installed CLIs but must not be able
-# to rewrite them — the orchestrator runs those same binaries as ild (version
-# checks, the provider terminal), so a writable install would be a way back
-# across the boundary. The orchestrator still installs/updates them as the owner.
-# The git mirrors are not listed: they are owner-only and reach the agent as bundles.
-ENV SHARED_RO_DIRS="/data/agents"
-ENV DATA_TRAVERSE_DIRS=/data
 
-# Baseline ownership; the entrypoint finalizes modes + default ACLs on the
-# volume-mounted paths at startup (a named volume overlays these build-time
-# perms). /worktrees is group-owned by the shared group up front; /data stays
-# ild-private and is opened to traverse-only later. The agent-config store holds
-# the provider logins and is the orchestrator's alone (docs/adr/0031-model-gateway.md).
+# The agent-config store holds the provider logins and is ILD's alone
+# (docs/adr/0031-model-gateway.md).
 RUN mkdir -p /data /worktrees /home/ild/.agent-config && \
-  chown ild:ild /app /data /home/ild/.agent-config && \
-  chmod 0700 /home/ild/.agent-config && \
-  chown ild:ild-agents /worktrees
+  chown ild:ild /app /data /worktrees /home/ild/.agent-config && \
+  chmod 0700 /home/ild/.agent-config
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
@@ -426,8 +215,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git config --system --add safe.directory '*' && \
     mkdir -p /app /ild-run /ild-chat /opt/ild-tools && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /ild-chat /opt/ild-tools && chmod 0755 /ild-run /ild-chat
 # Chrome, for the chrome-devtools MCP server agents drive a browser with: it needs system libraries the store cannot
-# provide, so it is part of the image, at /opt/google/chrome/chrome where Puppeteer's stable channel looks. As in the
-# ILD image (see WITH_CHROME there): amd64 and arm64 only, recommends left out, fonts-liberation added back.
+# provide, so it is part of the image, at /opt/google/chrome/chrome where Puppeteer's stable channel looks. Google publishes
+# google-chrome-stable for amd64 and arm64 only. Its recommends are left out and fonts-liberation added back.
 # RUNNER_WITH_CHROME=0 builds the image without it.
 ARG RUNNER_WITH_CHROME=1
 RUN if [ "$RUNNER_WITH_CHROME" = "1" ]; then \
@@ -442,26 +231,6 @@ RUN if [ "$RUNNER_WITH_CHROME" = "1" ]; then \
       esac; \
     fi
 COPY --from=build --chown=${RUNNER_UID}:${RUNNER_UID} /app/mcp-server-runner/ /app/
-ENV HOME=/tmp
-USER ${RUNNER_UID}
-WORKDIR /app
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sleep", "infinity"]
-
-# The previous runner: what the ILD image provides for the agent, without ILD, with three coding agents baked in. For a
-# Kubernetes cluster that has no shared toolchain store (ILD_K8S_TOOLS_CLAIM unset), where a run cannot be given
-# toolchains at run time. Built with the same WITH_* arguments as the ILD image. Declared before the last stage so the
-# default target stays ILD.
-FROM final AS runner-full
-ARG RUNNER_UID=10001
-USER root
-RUN apt-get update && apt-get install -y --no-install-recommends tini bash && \
-    rm -rf /var/lib/apt/lists/* && \
-    npm install -g --prefix /usr/local --cache /tmp/npm-install-cache --no-audit --no-fund \
-      @anthropic-ai/claude-code opencode-ai @earendil-works/pi-coding-agent && \
-    rm -rf /tmp/npm-install-cache /root/.npm && \
-    rm -rf /app && mkdir -p /app /ild-run /ild-chat && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /ild-chat && chmod 0755 /ild-run /ild-chat
-COPY --from=build --chown=${RUNNER_UID}:${RUNNER_UID} /app/mcp-server/ /app/
 ENV HOME=/tmp
 USER ${RUNNER_UID}
 WORKDIR /app

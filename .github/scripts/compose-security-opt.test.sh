@@ -7,14 +7,10 @@
 # future compose refactor could drop it and every other check in this repo would
 # stay green. The flag is what stops a process in these containers from gaining
 # privilege on execve through a setuid/setgid bit or a file capability. That
-# matters most in the `ild` image, which both carries setuid-root binaries
-# (util-linux's mount/su, Chrome's chrome-sandbox) and runs the lower-trust agent
-# uid (ADR-0014) they would be an escalation route for. Nothing in either image
-# needs the gain the flag refuses — the orchestrator drops privilege retaining
-# capabilities it already holds and spawns the agent through `setpriv` rather
-# than a setuid helper, the WorkItem server drops with `gosu`, and every Chrome
-# launch path passes --no-sandbox — so the flag costs nothing to keep and would
-# cost nothing visible to lose.
+# matters because both images carry setuid-root binaries (util-linux's mount/su).
+# Nothing in either image needs the gain the flag refuses: both entrypoints drop
+# root with `gosu` and nothing afterwards gains a privilege, so the flag costs
+# nothing to keep and would cost nothing visible to lose.
 #
 # The assertion is deliberately PER SERVICE. A file-wide grep for the string
 # would keep passing after the flag was moved to, or left on, only one of them —
@@ -39,12 +35,6 @@ compose_file="$repo_root/docker-compose.yml"
 required_flag="no-new-privileges:true"
 required_services="ild workitem-server"
 
-# The one capability the `ild` entrypoint spends before dropping privilege: the
-# uid-keyed firewall rules that make the agent egress proxy an enforced boundary
-# rather than an advisory one (ADR-0019). Its absence has no runtime symptom
-# either — the stack boots and only Settings says "advisory".
-required_cap="NET_ADMIN"
-cap_services="ild"
 
 failures=0
 fail() { echo "FAIL: $*"; failures=$((failures + 1)); }
@@ -329,16 +319,6 @@ for service in $required_services; do
   else
     fail "service '$service' has security_opt [$(printf '%s' "$opts" | tr '\n' ' ')]" \
          "but not '$required_flag'"
-  fi
-done
-
-for service in $cap_services; do
-  caps="$(values_in "$model" "$service" cap_add)"
-  if printf '%s\n' "$caps" | grep -Fxq "$required_cap"; then
-    pass "service '$service' is granted '$required_cap' for the entrypoint's egress rules"
-  else
-    fail "service '$service' has cap_add [$(printf '%s' "$caps" | tr '\n' ' ')] but not '$required_cap'" \
-         "(without it the agent egress filter runs in advisory mode - see ADR-0019)"
   fi
 done
 

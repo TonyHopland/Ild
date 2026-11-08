@@ -63,11 +63,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
-        // Chosen by the setting and never detected.
+        // Not a setting: containers (or pods in a cluster) from ILD's image, its own processes under dotnet run.
         services.AddSingleton<IRunHost>(sp =>
         {
             var config = sp.GetRequiredService<IConfiguration>();
-            var kind = RunHostOptions.Parse(config[RunHostOptions.SettingName]);
+            var kind = RunHostOptions.Detect(name => config[name]);
             var runner = sp.GetRequiredService<IProcessRunner>();
             var local = new LocalRunHost(runner, sp);
             if (kind == RunHostKind.Local) return local;

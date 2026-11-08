@@ -80,12 +80,12 @@ public sealed record KubernetesRunHostOptions
 
         var defaults = new KubernetesRunHostOptions();
         var ildUrl = Value("ILD_API_URL")
-            ?? throw new InvalidOperationException("ILD_API_URL must be ILD's Service address when ILD_RUN_HOST=kubernetes: the run's pods reach the model gateway and the MCP endpoint there.");
+            ?? throw new InvalidOperationException("ILD_API_URL must be ILD's Service address when ILD runs in Kubernetes: the run's pods reach the model gateway and the MCP endpoint there.");
         if (!Uri.TryCreate(ildUrl, UriKind.Absolute, out var uri) || uri.IsLoopback)
-            throw new InvalidOperationException($"ILD_API_URL is '{ildUrl}'; with ILD_RUN_HOST=kubernetes it must be an address the run's pods can reach, not a loopback one.");
+            throw new InvalidOperationException($"ILD_API_URL is '{ildUrl}'; with runs in pods it must be an address the run's pods can reach, not a loopback one.");
 
         var image = Value(RunnerImageSetting)
-            ?? throw new InvalidOperationException($"{RunnerImageSetting} is required when ILD_RUN_HOST=kubernetes.");
+            ?? throw new InvalidOperationException($"{RunnerImageSetting} is required when ILD runs in Kubernetes.");
 
         return defaults with
         {

@@ -1,5 +1,7 @@
 # ADR-0019: Agent egress is funnelled through an in-container proxy keyed on the agent uid
 
+> **Status: superseded in part by [ADR-0036](./0036-runs-always-in-containers.md).** The uid-keyed firewall, the agent uid and `NET_ADMIN` are gone; the egress proxy, its lists and its log remain, and a run's or chat's network, which reaches only ILD, is what makes the proxy the only way out.
+
 The operator can limit which hosts the coding agent may reach — a whitelist, a
 blacklist, a mode toggle (`off` / `monitor` / `whitelist` / `blacklist`, default
 `monitor`) and a log of every destination — and that limit is enforced **inside the container,

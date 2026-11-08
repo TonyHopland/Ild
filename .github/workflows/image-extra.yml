@@ -2,13 +2,10 @@ name: Image (extra targets)
 
 # The image builds that are NOT worth running on every PR.
 #
-# ci.yml builds the shipped amd64 image on all PRs. These three can only break
+# ci.yml builds the shipped amd64 image on all PRs. These two can only break
 # when Docker-related inputs change, and each one costs a full frontend + dotnet
 # publish, so they are gated on the paths below instead:
 #
-#   ild-runtime-base    the WITH_DOTNET_SDK=0 base (final-base-0). Nothing else
-#                       ever selects it -- the batteries-included build in
-#                       ci.yml always resolves to final-base-1.
 #   ild-workitem-server the second Dockerfile.
 #   ild-arm64           arm64 on a native arm64 runner. publish.yml builds arm64
 #                       for real at release; this surfaces a break on the PR
@@ -45,15 +42,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: ild-runtime-base
-            dockerfile: Dockerfile
-            platform: linux/amd64
-            runner: ubuntu-latest
-            extra_cache_from: type=gha,scope=ci-ild
-            build_args: |
-              WITH_NODE=1
-              WITH_DOTNET_SDK=0
-              WITH_CHROME=0
           - name: ild-workitem-server
             dockerfile: Dockerfile.WorkItemServer
             platform: linux/amd64
@@ -64,10 +52,7 @@ jobs:
             dockerfile: Dockerfile
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-            build_args: |
-              WITH_NODE=1
-              WITH_DOTNET_SDK=1
-              WITH_CHROME=1
+            build_args: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -81,10 +66,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: false
           build-args: ${{ matrix.build_args }}
-          # The amd64 entries read ci.yml's scope as well: ild-runtime-base
-          # shares this Dockerfile's frontend-build and build stages with the
-          # main image and differs only in the final stage's base, so those
-          # stages come from cache rather than being rebuilt. The arm64 entry
+          # The amd64 entry reads ci.yml's scope as well. The arm64 entry
           # has no such donor and reads only its own scope -- ci.yml builds
           # amd64 only, and publish.yml's arm64 scope is unreachable from here
           # because it is written on tag refs, which a PR run cannot restore.

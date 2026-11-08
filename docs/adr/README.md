@@ -38,5 +38,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0033](./0033-kubernetes-run-host.md)                                | A loop run is a pod, owned by one object and swept by label                        |
 | [0034](./0034-container-run-host.md)                                | A loop run is a container, a volume and a network, swept by label                  |
 | [0035](./0035-run-toolchains.md)                                     | A run gets its toolchains and agents from a shared, read-only store                |
+| [0036](./0036-runs-always-in-containers.md)                         | ILD from its image always runs agents in containers; local is for `dotnet run` only |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

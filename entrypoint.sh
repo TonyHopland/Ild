@@ -5,47 +5,6 @@ RUNTIME_USER="${RUNTIME_USER:-ild}"
 RUNTIME_GROUP="${RUNTIME_GROUP:-ild}"
 RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
 
-# uid isolation (docs/adr/0014-agent-uid-isolation.md). When AGENT_USER is set the
-# coding-agent CLI runs as a second, lower-trust uid instead of sharing the
-# orchestrator's. In that mode:
-#   * SHARED_RW_DIRS are group-owned by SHARED_GROUP, setgid, and default-ACL'd so
-#     files created by either uid stay read/write for the other (worktrees, the
-#     /data agent installs + repo store, the credential store).
-#   * DATA_TRAVERSE_DIRS (/data) stay ild-private but traversable by SHARED_GROUP,
-#     so the agent can reach the shared subtrees by exact path without reading
-#     secrets. Reach is granted through the group throughout — no "other" bits.
-#   * The orchestrator is dropped WITH ambient RUNTIME_AMBIENT_CAPS so it — and
-#     only it — can drop the agent to AGENT_USER via setpriv.
-# All unset => single-uid mode, unchanged (Dockerfile.WorkItemServer).
-AGENT_USER="${AGENT_USER:-}"
-AGENT_GROUP="${AGENT_GROUP:-${AGENT_USER}}"
-AGENT_HOME="${AGENT_HOME:-}"
-AGENT_SCRATCH_DIR="${AGENT_SCRATCH_DIR:-}"
-ORCHESTRATOR_PRIVATE_DIR="${ORCHESTRATOR_PRIVATE_DIR:-}"
-AGENT_READ_DIR="${AGENT_READ_DIR:-}"
-SHARED_GROUP="${SHARED_GROUP:-}"
-# Network mode Off (docs/adr/0019-agent-egress-through-in-container-proxy.md): the group an
-# Off launch runs under, which the egress rules let reach the network directly. Neither the
-# agent's primary group (AGENT_GROUP) nor SHARED_GROUP, and the agent user is not a member
-# of it. Enabled only under no-new-privileges; see resolve_network_open_gid.
-NETWORK_OPEN_GROUP="${NETWORK_OPEN_GROUP:-}"
-# Only install_agent_egress_rules may export it, once its rule is in place: an inherited value
-# would otherwise send Off launches to a group the firewall has no rule for.
-unset ILD_NETWORK_OPEN_GROUP
-RUNTIME_AMBIENT_CAPS="${RUNTIME_AMBIENT_CAPS:-}"
-# Agent egress funnel (docs/adr/0019-agent-egress-through-in-container-proxy.md).
-# When set, the app runs a filtering proxy on 127.0.0.1:ILD_NETWORK_PROXY_PORT as the
-# orchestrator and points every agent launch at it; install_agent_egress_rules
-# below makes that the agent uid's only way out when NET_ADMIN allows.
-ILD_NETWORK_PROXY_PORT="${ILD_NETWORK_PROXY_PORT:-}"
-NFT_BIN="${NFT_BIN:-nft}"
-IPTABLES_BIN="${IPTABLES_BIN:-iptables}"
-IP6TABLES_BIN="${IP6TABLES_BIN:-ip6tables}"
-CAP_STATUS_FILE="${CAP_STATUS_FILE:-/proc/self/status}"
-SHARED_RW_DIRS="${SHARED_RW_DIRS:-}"
-SHARED_RO_DIRS="${SHARED_RO_DIRS:-}"
-DATA_TRAVERSE_DIRS="${DATA_TRAVERSE_DIRS:-}"
-
 # Agent CLI config dirs (.claude, .opencode, .pi, ...) are kept in a single
 # persistent volume mounted at AGENT_CONFIG_STORE, then symlinked into
 # $HOME at container start. This lets login state survive image rebuilds
@@ -57,22 +16,19 @@ DATA_TRAVERSE_DIRS="${DATA_TRAVERSE_DIRS:-}"
 # project state) is the canonical example: without it, even a valid
 # .claude/.credentials.json reads as logged-out.
 #
-# Under uid isolation the store belongs to the orchestrator alone (0700, no shared
-# group, no ACL) and is linked into its home only (docs/adr/0031-model-gateway.md).
-# The agent runs with its own copies of these directories, seeded once from the
-# store without the credential files (seed_agent_config), and reaches its model
-# through the gateway, so nothing it can read or write holds a provider credential.
+# The store holds the provider logins and is ILD's alone (0700): agents run in
+# containers of their own and reach their model through ILD's gateway, so none
+# of them ever reads it (docs/adr/0031-model-gateway.md).
 #
 # Names may be nested (e.g. .config/opencode): opencode keeps its auth/state under
 # the XDG data dir, hence the .config/opencode + .local/share/opencode entries.
 AGENT_CONFIG_STORE="${AGENT_CONFIG_STORE:-/home/ild/.agent-config}"
 AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot .codex .config/opencode .local/share/opencode}"
 AGENT_CONFIG_FILES="${AGENT_CONFIG_FILES:-.claude.json}"
-# Files that hold a provider credential. They stay in the store and are never copied
-# to the agent's home. Copilot's config.json mixes its tokens with its settings, so
-# it is left out whole.
-AGENT_CREDENTIAL_FILES="${AGENT_CREDENTIAL_FILES:-.credentials.json auth.json .copilot/config.json}"
 
+# Own a runtime directory (a volume mount point) by the runtime user. The whole
+# tree is re-owned only when something in it belongs to another uid, as on the
+# first start after an upgrade from a version whose agents ran as a second uid.
 ensure_owned_by_runtime_user() {
   path="$1"
 
@@ -85,177 +41,20 @@ ensure_owned_by_runtime_user() {
   fi
 }
 
-# Make a path shared read/write between the orchestrator and the agent uid:
-# group-owned by SHARED_GROUP, every directory setgid (so new entries keep
-# inheriting the group) and carrying a default POSIX ACL granting the group rwx
-# on everything created later.
-#
-# The invariant is deliberately about GROUP and MODE, not owner: files in a
-# shared tree legitimately belong to whichever uid created them (the agent owns
-# what it writes into its worktree). Including the owner would both fire the
-# expensive repair on every restart once the agent has written anything, and
-# make the repair seize the agent's files — so the repair is a `chgrp`, and only
-# the root of the tree gets its owner normalized.
-#
-# The recursive repair runs only when the tripwire below finds real drift (first
-# run, a wrong group, a directory that lost setgid/group-rwx, or a file that lost
-# group-read), so steady-state startups stay cheap even on a large worktree/repo
-# tree. The tripwire is a cheap check, not an exhaustive audit: it deliberately
-# does not require group-write on every file, because git creates loose objects
-# read-only (0444) by design and that must not trigger a full re-walk each boot.
-ensure_shared_rw() {
-  path="$1"
-
-  mkdir -p "$path"
-
-  if find "$path" \( \
-        ! -group "$SHARED_GROUP" \
-        -o \( -type d ! -perm -2070 \) \
-        -o \( -type f ! -perm -040 \) \
-      \) -print -quit 2>/dev/null | grep -q .; then
-    chgrp -R "$SHARED_GROUP" "$path"
-    find "$path" -type d -exec chmod g+rwxs {} + 2>/dev/null || true
-    find "$path" -type f -exec chmod g+rw {} + 2>/dev/null || true
-    if command -v setfacl >/dev/null 2>&1; then
-      setfacl -R -m g:"$SHARED_GROUP":rwX "$path" 2>/dev/null || true
-      # Default ACLs only apply to directories; set them per-dir to avoid errors.
-      find "$path" -type d -exec setfacl -d -m g:"$SHARED_GROUP":rwx {} + 2>/dev/null || true
-    fi
-  fi
-
-  # Cheap and idempotent: the root of the shared tree is always normalized.
-  # 2770, not 2775: access to this tree is a GROUP grant, and reaching anything
-  # inside requires traversing this root — so denying "other" here is what makes
-  # the grant group-only, whatever the modes on individual entries beneath say.
-  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
-  chmod 2770 "$path"
-}
-
-# The agent read root (AGENT_READ_DIR) and the app's fixed folders in it, which
-# hold the files carrying the ILD API token, provisioned like ensure_shared_ro.
-# None may be a symlink: ensure_shared_ro would chown and chmod whatever a link
-# points at, and the app refuses a linked root anyway, so stop here, where the
-# operator sees why.
-ensure_agent_read_dirs() {
-  read_root="$1"
-  for read_dir in "$read_root" "$read_root/ild-pi-ext" "$read_root/ild-mcp-config"; do
-    if [ -L "$read_dir" ]; then
-      echo "entrypoint: $read_dir is a symlink; AGENT_READ_DIR and its ild-pi-ext and ild-mcp-config folders must be real directories" >&2
-      exit 1
-    fi
-  done
-  for read_dir in "$read_root" "$read_root/ild-pi-ext" "$read_root/ild-mcp-config"; do
-    ensure_shared_ro "$read_dir"
-  done
-}
-
-# Like ensure_shared_rw, but the group only gets read/execute. Used for the
-# managed agent installs: the agent must be able to exec those CLIs, but the
-# orchestrator runs the same binaries as itself (version checks, the provider
-# terminal), so letting the agent rewrite them would hand it a way back across
-# the boundary. The owner (orchestrator) still writes, so installs/updates work.
-ensure_shared_ro() {
-  path="$1"
-
-  mkdir -p "$path"
-
-  # Unlike the read/write tripwire this must also catch EXCESS permission, not
-  # just missing permission: the agent CLIs are installed onto /data at runtime
-  # (npm, as the orchestrator, under the umask 002 set below), which leaves the
-  # tree group-writable. A missing-only check reports that state as clean — 2775
-  # contains 2050 and 0775 contains 040 — so g-w would never be applied and the
-  # agent could rewrite the very binaries the orchestrator later execs as itself.
-  # The group-write clause is restricted to regular files and directories on
-  # purpose: symlinks are always mode 0777 (npm fills node_modules/.bin with
-  # them) and chmod cannot change that, so including them would report drift
-  # forever and re-walk the whole tree on every boot.
-  if find "$path" \( \
-        ! -group "$SHARED_GROUP" \
-        -o \( -type d ! -perm -2050 \) \
-        -o \( -type f ! -perm -040 \) \
-        -o \( \( -type d -o -type f \) -perm -020 \) \
-      \) -print -quit 2>/dev/null | grep -q .; then
-    chgrp -R "$SHARED_GROUP" "$path"
-    # Directories keep group r-x + setgid; files gain group read but never group
-    # execute — an already-executable binary keeps the group x it came with, so
-    # the agent can still exec the CLI it must not be able to modify.
-    find "$path" -type d -exec chmod g+rxs,g-w {} + 2>/dev/null || true
-    find "$path" -type f -exec chmod g+r,g-w {} + 2>/dev/null || true
-    if command -v setfacl >/dev/null 2>&1; then
-      setfacl -R -m g:"$SHARED_GROUP":rX "$path" 2>/dev/null || true
-      find "$path" -type d -exec setfacl -d -m g:"$SHARED_GROUP":rx {} + 2>/dev/null || true
-    fi
-  fi
-
-  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
-  chmod 2750 "$path"
-}
-
-# Orchestrator-only state: owned by the runtime user, owner-only, and created
-# HERE — before any agent-uid process can run. That ordering is the point. The
-# askpass helper git is handed (with the repository token in its environment) and
-# the preview state dir both live at fixed, guessable paths; if the agent could
-# create one of those paths first, orchestrator code that only writes the file
-# "if it is missing" would execute the agent's version as the orchestrator.
-# Pre-creating the root at 0700 closes that regardless of how guessable the paths
-# beneath it are, which is why this can stay on /tmp and remain ephemeral rather
-# than accumulating on the data volume.
-ensure_private() {
-  path="$1"
-  mkdir -p "$path"
-  chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$path"
-  chmod 0700 "$path"
-}
-
-# Keep a private directory (e.g. /data holding secrets) owned by the runtime user
-# but traversable by the shared group, so the agent uid can reach the shared
-# subtrees beneath it by exact path without being able to list it or read private
-# sibling files.
-#
-# 0710 with the shared group rather than 0711: --x is the same reach for the
-# agent either way, but granting it through the group keeps it scoped to the two
-# uids that are meant to have it instead of to everyone. Deliberately NOT setgid —
-# files the orchestrator writes directly here must keep its own group, or private
-# state would drift into the shared one.
-ensure_traverse() {
-  path="$1"
-  mkdir -p "$path"
-  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
-  chmod 0710 "$path"
-}
-
 # Ensure the parent directory of a nested $HOME link exists and apply the caller's
 # OWNER:GROUP spec to *every* level between $HOME (exclusive) and that parent
 # (inclusive).
 #
 # `mkdir -p`, run as root, creates the intermediate levels too — making
 # $HOME/.local/share also creates $HOME/.local — so chowning only the immediate
-# parent left those intermediates root:root. The orchestrator could then traverse
+# parent left those intermediates root:root. The runtime user could then traverse
 # but not write them, and a later Directory.CreateDirectory($HOME/.local/bin) at
 # install time was denied (WI-163). Walking the whole chain covers every nested
 # entry, current or future.
-#
-# The chain keeps whatever mode `mkdir -p` gave it. This matters only in two-uid
-# mode, where the entrypoint sets umask 002 so those dirs are 0775 (group-
-# writable) — then the GROUP in the spec, not the mode, decides who else may
-# write. Callers there pass the home owner's *private* group (see link_agent_
-# config_dirs), never the shared agent group, or the agent uid would gain write on
-# the orchestrator's home scaffolding (ADR-0014). Single-uid mode has no separate
-# agent uid and does not set that umask, so the exposure cannot arise (and the
-# private and store groups coincide there anyway).
-#
-# The 4th arg opts into best-effort chowns (`|| true`). The entrypoint runs under
-# `set -e`, so the default strict chown aborts the boot if it fails — which is
-# what we want for the ORCHESTRATOR home, where a silently-skipped chown would
-# re-open the exact WI-163 failure. The secondary (agent) home passes best-effort
-# to preserve its original tolerant behavior: it is populated as pure convenience
-# right after agent_home itself is chowned strictly, so a failure there should not
-# be able to take the whole container down.
 ensure_home_link_parent() {
   _home="$1"
   _ownership="$2"        # chown OWNER:GROUP spec applied to each level of the chain
   _link="$3"
-  _best_effort="${4:-}"  # non-empty => tolerate chown failures (`|| true`)
   _parent="$(dirname "$_link")"
 
   [ "$_parent" != "$_home" ] || return 0
@@ -263,11 +62,7 @@ ensure_home_link_parent() {
   mkdir -p "$_parent"
   _dir="$_parent"
   while [ "$_dir" != "$_home" ] && [ "$_dir" != "/" ]; do
-    if [ -n "$_best_effort" ]; then
-      chown "$_ownership" "$_dir" 2>/dev/null || true
-    else
-      chown "$_ownership" "$_dir"
-    fi
+    chown "$_ownership" "$_dir"
     _dir="$(dirname "$_dir")"
   done
 }
@@ -275,17 +70,15 @@ ensure_home_link_parent() {
 # For each agent dotdir name, ensure a subdir exists under the config store
 # and that $HOME/<name> is a symlink pointing at it. The volume is the source
 # of truth across rebuilds. If the image baked in a *real* $HOME/<name>
-# directory (e.g. the Claude Code installer creates ~/.claude at build time),
-# fold its contents into the store on first run — without overwriting newer
-# persisted copies — then replace it with the symlink, so login state written
-# later lands in the volume instead of the throwaway container layer.
+# directory, fold its contents into the store on first run — without
+# overwriting newer persisted copies — then replace it with the symlink, so
+# login state written later lands in the volume instead of the container layer.
 link_agent_config_dirs() {
   store="$1"
   user_home="$2"
   owner="$3"
-  group="$4"        # shared group for the store target + symlink (both uids share it)
-  home_group="$5"   # owner's private group for the $HOME parent-chain scaffolding
-  shift 5
+  group="$4"
+  shift 4
 
   [ -d "$store" ] || return 0
 
@@ -296,22 +89,8 @@ link_agent_config_dirs() {
 
     mkdir -p "$target"
     # Nested names (.config/opencode) need their parent in $HOME to exist and be
-    # writable by the home owner so the CLI can write siblings there. Own the
-    # chain with the orchestrator's PRIVATE group ($home_group, e.g. ild:ild), not
-    # the shared store $group: in two-uid mode these dirs are 0775 (umask 002), so
-    # the shared group would hand the agent uid write on the ORCHESTRATOR's home
-    # scaffolding — $HOME/.local and every level below it.
-    #
-    # Nothing in the orchestrator's home is meant to be agent-writable except the
-    # credential store, which is shared deliberately (the target + symlink below
-    # keep $group for exactly that). $HOME/.local is the sharp case because
-    # $HOME/.local/bin is on the orchestrator's own PATH, so anything the agent
-    # could plant there would be exec'd as the orchestrator — the cross-uid tool
-    # shadowing ADR-0014 exists to prevent. Note that the preview's npm prefix is
-    # NOT what makes that true any more: under ADR-0016 the preview runs as the
-    # agent and installs into $AGENT_HOME/.local instead, which is provisioned for
-    # the agent further down. This chain stays private on its own account.
-    ensure_home_link_parent "$user_home" "$owner:$home_group" "$link"
+    # writable by the home owner so the CLI can write siblings there.
+    ensure_home_link_parent "$user_home" "$owner:$group" "$link"
 
     migrated=
     if [ -d "$link" ] && [ ! -L "$link" ]; then
@@ -326,11 +105,8 @@ link_agent_config_dirs() {
 
     ln -sfn "$target" "$link"
     # Only the migration branch brings in files of unknown ownership, so only it
-    # needs the recursive pass. Doing it unconditionally re-walked the whole store
-    # (which holds the .claude/projects transcripts) on every boot — defeating the
-    # tripwire optimization in ensure_shared_rw below — and seized files the agent
-    # had created back to the orchestrator, which its own `chgrp`-only repair is
-    # careful not to do.
+    # needs the recursive pass; doing it on every boot would re-walk the whole
+    # store, which holds the .claude/projects transcripts.
     if [ -n "$migrated" ]; then
       chown -R "$owner:$group" "$target"
     else
@@ -349,9 +125,8 @@ link_agent_config_files() {
   store="$1"
   user_home="$2"
   owner="$3"
-  group="$4"        # shared group for the store target + symlink
-  home_group="$5"   # owner's private group for the $HOME parent chain (see link_agent_config_dirs)
-  shift 5
+  group="$4"
+  shift 4
 
   [ -d "$store" ] || return 0
 
@@ -360,7 +135,7 @@ link_agent_config_files() {
     target="$store/$name"
     link="$user_home/$name"
 
-    ensure_home_link_parent "$user_home" "$owner:$home_group" "$link"
+    ensure_home_link_parent "$user_home" "$owner:$group" "$link"
 
     if [ -f "$link" ] && [ ! -L "$link" ] && [ ! -e "$target" ]; then
       mv "$link" "$target"
@@ -374,51 +149,9 @@ link_agent_config_files() {
   done
 }
 
-# Give a second home its own copy of the store's dotdirs/dotfiles, once, without the
-# credential files. Used for the agent user's home: the agent keeps its sessions and
-# settings there, and the store (which holds the logins) stays out of its reach. A
-# link left by an earlier version, which pointed into the store, is replaced; a copy
-# already there is kept.
-seed_agent_config() {
-  home="$1"
-  owner="$2"
-  store="$3"
-  shift 3
-
-  [ -d "$store" ] || return 0
-  mkdir -p "$home"
-
-  for name in "$@"; do
-    [ -n "$name" ] || continue
-    link="$home/$name"
-    if [ -L "$link" ]; then
-      rm -f "$link"
-    fi
-    [ -e "$link" ] && continue
-    # best_effort: this agent-home scaffolding is convenience, and its chown below is
-    # likewise tolerant — keep both from aborting boot.
-    ensure_home_link_parent "$home" "$owner:$owner" "$link" best_effort
-    if [ -e "$store/$name" ]; then
-      cp -a "$store/$name" "$link" 2>/dev/null || true
-    else
-      case "$name" in
-        .claude.json) ;;
-        *) mkdir -p "$link" ;;
-      esac
-    fi
-    for credential in $AGENT_CREDENTIAL_FILES; do
-      case "$credential" in
-        */*) [ -e "$home/$credential" ] && rm -f -- "$home/$credential" ;;
-        *) [ -d "$link" ] && find "$link" -name "$credential" -type f -delete 2>/dev/null ;;
-      esac
-    done
-    chown -R "$owner:$owner" "$link" 2>/dev/null || true
-  done
-}
-
-# The credential store is the orchestrator's alone: owned by it, 0700, and rid of the
-# group and ACL grants earlier versions gave the agent. The tripwire keeps the common
-# boot, where nothing drifted, from walking the whole store.
+# The credential store is the runtime user's alone: owned by it, 0700, and rid of
+# the group and ACL grants earlier versions gave their agent uid. The tripwire
+# keeps the common boot, where nothing drifted, from walking the whole store.
 ensure_credential_store() {
   path="$1"
   mkdir -p "$path"
@@ -478,200 +211,16 @@ wait_for_postgres() {
   return 0
 }
 
-# Whether this process holds CAP_NET_ADMIN (bit 12 of CapEff) — the one thing the
-# egress rules need, and the one thing an operator may decline to grant.
-has_cap_net_admin() {
-  caps="$(awk '/^CapEff:/ {print $2}' "$CAP_STATUS_FILE" 2>/dev/null)"
-  [ -n "$caps" ] || return 1
-  [ $(( 0x$caps & 4096 )) -ne 0 ]
-}
-
-# Whether this process runs with no_new_privs. The runtime sets it (compose: no-new-privileges;
-# podman, docker and Kubernetes need it set), every descendant inherits it and none can clear it,
-# so a setgid file an Off agent plants can never lend its group to a later process.
-has_no_new_privs() {
-  nnp="$(awk '/^NoNewPrivs:/ {print $2}' "$CAP_STATUS_FILE" 2>/dev/null)"
-  [ "$nnp" = 1 ]
-}
-
-# The gid of NETWORK_OPEN_GROUP, printed only when network mode Off may be offered: nothing
-# when no group is configured, and nothing plus a WARNING on stderr when it is configured but
-# unusable. Unusable means: no-new-privileges is not in effect (a setgid ild-net-open file planted
-# by an Off process could then pass the group to a Whitelist-mode process), the group is missing,
-# or it is the agent's primary group, the shared group or one the agent is a member of (the
-# firewall would then accept traffic from agents that were not launched in Off).
-resolve_network_open_gid() {
-  [ -n "$NETWORK_OPEN_GROUP" ] || return 0
-  problem=""
-  open_gid="$(getent group "$NETWORK_OPEN_GROUP" 2>/dev/null | cut -d: -f3)"
-  if ! has_no_new_privs; then
-    problem="NETWORK_OPEN_GROUP needs no-new-privileges, which is not in effect for this container"
-  elif [ -z "$open_gid" ]; then
-    problem="the group '$NETWORK_OPEN_GROUP' does not exist"
-  elif [ "$open_gid" = "$(id -g "$AGENT_USER" 2>/dev/null)" ]; then
-    problem="the group '$NETWORK_OPEN_GROUP' is the agent's primary group"
-  elif [ "$open_gid" = "$(getent group "$AGENT_GROUP" 2>/dev/null | cut -d: -f3)" ]; then
-    problem="the group '$NETWORK_OPEN_GROUP' is AGENT_GROUP, the group every other agent launch runs under"
-  elif [ -n "$SHARED_GROUP" ] && [ "$open_gid" = "$(getent group "$SHARED_GROUP" 2>/dev/null | cut -d: -f3)" ]; then
-    problem="the group '$NETWORK_OPEN_GROUP' is the shared group"
-  elif id -G "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$open_gid"; then
-    problem="the agent user is a member of '$NETWORK_OPEN_GROUP'"
-  fi
-  if [ -n "$problem" ]; then
-    echo "WARNING: network mode Off is unavailable: $problem" >&2
-    return 0
-  fi
-  echo "$open_gid"
-}
-
-# The agent uid's egress, as a single uid-keyed rule set that carries no domains:
-# loopback (the proxy, ILD's own API for the MCP callback, previews) is open, DNS
-# is dropped even on loopback, everything else is dropped — so a connection that
-# skips the proxy, IP literal or not, goes nowhere and the agent looks up no name.
-# Every allow/deny decision lives in the proxy, which is why editing a list never
-# touches these rules. Idempotent: the table is replaced wholesale, so a restart
-# never stacks a second copy.
-install_egress_rules_nft() {
-  uid="$1"
-  open_gid="${2:-}"
-  # Tab-indented (<<-) so the table's closing brace is not a column-0 line: the
-  # shell tests slice functions out of this file up to their first one. The
-  # optional accept for the open group (network mode Off) sits right after the
-  # other-uid accept, ahead of the DNS drops, so an Off agent is not filtered at all.
-  {
-    cat <<-EOF
-	table inet ild_agent_egress
-	delete table inet ild_agent_egress
-	table inet ild_agent_egress {
-	  chain output {
-	    type filter hook output priority filter; policy accept;
-	    meta skuid != $uid accept
-	EOF
-    [ -z "$open_gid" ] || echo "    meta skuid $uid meta skgid $open_gid accept"
-    cat <<-EOF
-	    udp dport 53 drop
-	    tcp dport 53 drop
-	    oif "lo" accept
-	    counter drop
-	  }
-	}
-	EOF
-  } | "$NFT_BIN" -f - || return 1
-}
-
-# Same rules through legacy iptables, for a kernel or image without nf_tables. The open-group
-# accept matches the effective gid only (no --suppl-groups), as the nft one does. A family that
-# fails takes the families already installed down with it: the report is then advisory, and
-# leftover drops would leave an Off agent, which skips the proxy, with no network.
-install_egress_rules_iptables() {
-  uid="$1"
-  open_gid="${2:-}"
-  installed=0
-  for ipt in "$IPTABLES_BIN" "$IP6TABLES_BIN"; do
-    command -v "$ipt" >/dev/null 2>&1 || continue
-    if ! install_egress_chain_iptables "$ipt" "$uid" "$open_gid"; then
-      remove_egress_rules_iptables "$uid"
-      return 1
-    fi
-    installed=1
-  done
-  [ "$installed" = 1 ]
-}
-
-install_egress_chain_iptables() {
-  if ! "$1" -w -N ILD_AGENT_EGRESS 2>/dev/null; then
-    "$1" -w -F ILD_AGENT_EGRESS || return 1
-  fi
-  if ! "$1" -w -C OUTPUT -m owner --uid-owner "$2" -j ILD_AGENT_EGRESS 2>/dev/null; then
-    "$1" -w -I OUTPUT 1 -m owner --uid-owner "$2" -j ILD_AGENT_EGRESS || return 1
-  fi
-  if [ -n "$3" ]; then
-    "$1" -w -A ILD_AGENT_EGRESS -m owner --uid-owner "$2" --gid-owner "$3" -j ACCEPT || return 1
-  fi
-  "$1" -w -A ILD_AGENT_EGRESS -p udp --dport 53 -j DROP || return 1
-  "$1" -w -A ILD_AGENT_EGRESS -p tcp --dport 53 -j DROP || return 1
-  "$1" -w -A ILD_AGENT_EGRESS -o lo -j ACCEPT || return 1
-  "$1" -w -A ILD_AGENT_EGRESS -j DROP || return 1
-}
-
-remove_egress_rules_iptables() {
-  for ipt in "$IPTABLES_BIN" "$IP6TABLES_BIN"; do
-    command -v "$ipt" >/dev/null 2>&1 || continue
-    "$ipt" -w -D OUTPUT -m owner --uid-owner "$1" -j ILD_AGENT_EGRESS 2>/dev/null || true
-    "$ipt" -w -F ILD_AGENT_EGRESS 2>/dev/null || true
-    "$ipt" -w -X ILD_AGENT_EGRESS 2>/dev/null || true
-  done
-}
-
-# Funnel the agent uid through the egress proxy, or say plainly why not. Runs as
-# root right before the drop, so NET_ADMIN is spent here and nowhere else; the
-# rules live in the network namespace and outlive the capability. Exports
-# ILD_NETWORK_ENFORCEMENT (enforced|advisory) and a reason the app surfaces in
-# Settings, so a deployment that could not enforce is never silently "protected".
-install_agent_egress_rules() {
-  export ILD_NETWORK_ENFORCEMENT=advisory
-  if [ -z "$ILD_NETWORK_PROXY_PORT" ]; then
-    export ILD_NETWORK_ENFORCEMENT_REASON="ILD_NETWORK_PROXY_PORT is empty, so no egress proxy runs and no firewall rules were installed."
-    echo "WARNING: agent egress is not filtered: $ILD_NETWORK_ENFORCEMENT_REASON" >&2
-    return 0
-  fi
-  agent_uid="$(id -u "$AGENT_USER" 2>/dev/null || true)"
-  if [ -z "$agent_uid" ]; then
-    export ILD_NETWORK_ENFORCEMENT_REASON="The agent user '$AGENT_USER' does not exist, so no uid-keyed firewall rules could be installed."
-    echo "WARNING: agent egress is advisory only: $ILD_NETWORK_ENFORCEMENT_REASON" >&2
-    return 0
-  fi
-  if ! has_cap_net_admin; then
-    export ILD_NETWORK_ENFORCEMENT_REASON="NET_ADMIN is not granted to the container, so the firewall rules that stop the agent bypassing the proxy were not installed. Grant it with --cap-add=NET_ADMIN (docker/podman) or securityContext.capabilities.add: [NET_ADMIN] (Kubernetes)."
-    echo "WARNING: agent egress is advisory only: $ILD_NETWORK_ENFORCEMENT_REASON" >&2
-    return 0
-  fi
-
-  # The resolver prints the gid, or its warning on stderr; both are captured so the warning can
-  # also go into the reason.
-  open_gid=""
-  open_problem=""
-  resolved="$(resolve_network_open_gid 2>&1)"
-  case "$resolved" in
-    "") ;;
-    *[!0-9]*)
-      echo "$resolved" >&2
-      open_problem="${resolved#WARNING: network mode Off is unavailable: }"
-      ;;
-    *) open_gid="$resolved" ;;
-  esac
-
-  if command -v "$NFT_BIN" >/dev/null 2>&1 && install_egress_rules_nft "$agent_uid" "$open_gid"; then
-    tool="nftables"
-  elif install_egress_rules_iptables "$agent_uid" "$open_gid"; then
-    tool="iptables"
-  else
-    export ILD_NETWORK_ENFORCEMENT_REASON="NET_ADMIN is granted but neither nftables nor iptables could install the agent egress rules (see the errors above)."
-    echo "WARNING: agent egress is advisory only: $ILD_NETWORK_ENFORCEMENT_REASON" >&2
-    return 0
-  fi
-
-  export ILD_NETWORK_ENFORCEMENT=enforced
-  export ILD_NETWORK_ENFORCEMENT_REASON="$tool rules drop everything uid $agent_uid ($AGENT_USER) sends except loopback, and its DNS is blocked, so only the proxy on 127.0.0.1:$ILD_NETWORK_PROXY_PORT reaches the network."
-  if [ -n "$open_gid" ]; then
-    export ILD_NETWORK_OPEN_GROUP="$NETWORK_OPEN_GROUP"
-    ILD_NETWORK_ENFORCEMENT_REASON="$ILD_NETWORK_ENFORCEMENT_REASON Agents launched in network mode Off run under group $NETWORK_OPEN_GROUP (gid $open_gid) and reach the network directly, unfiltered."
-  else
-    ILD_NETWORK_ENFORCEMENT_REASON="$ILD_NETWORK_ENFORCEMENT_REASON Network mode Off is unavailable: ${open_problem:-NETWORK_OPEN_GROUP is not set}; agents launched in it have no network."
-  fi
-  echo "Agent egress enforced: $ILD_NETWORK_ENFORCEMENT_REASON"
-}
-
 # Whether this container runs in a user namespace (rootless Podman or Docker), where root here is not
 # the host's root. The initial namespace maps every uid to itself.
 in_user_namespace() {
   [ "$(awk 'NR==1{print $1" "$2" "$3}' "${UID_MAP_FILE:-/proc/self/uid_map}" 2>/dev/null)" != "0 0 4294967295" ]
 }
 
-# The container run host (ILD_RUN_HOST=container) drives the engine through the socket mounted at
-# ILD_CONTAINER_SOCKET. Only the orchestrator may open it: whoever holds it controls the engine, so the
-# agent uid never may. capsh and gosu rebuild the supplementary groups from /etc/group when they drop to
-# RUNTIME_USER, so a compose group_add is lost; the group is granted here, before the drop.
+# ILD in its image, outside Kubernetes, runs every run, chat and sign-in in a container, through the engine
+# socket mounted at ILD_CONTAINER_SOCKET. Whoever holds it controls the engine; only ILD's process does, and
+# no run or chat container is ever given it. gosu rebuilds the supplementary groups from /etc/group when it
+# drops to RUNTIME_USER, so a compose group_add is lost; the group is granted here, before the drop.
 #  - A socket whose group is not root (a rootful Docker's docker group, a socket an operator gave a group):
 #    RUNTIME_USER joins a group of that gid, made if the image has none. Nothing outside changes.
 #  - A socket of group root in a user namespace (rootless Podman or Docker: the host user's own socket
@@ -682,7 +231,8 @@ in_user_namespace() {
 #    and said why, unless the operator sets ILD_CONTAINER_SOCKET_GRANT=1. Then its group becomes
 #    RUNTIME_USER's own, on every start, so a socket the engine made anew after a restart is covered too.
 grant_engine_socket() {
-  [ "${ILD_RUN_HOST:-}" = "container" ] || return 0
+  # Not ILD's image (the WorkItem Server shares this script), or pods instead of containers.
+  [ "${ILD_IMAGE:-}" = 1 ] && [ -z "${KUBERNETES_SERVICE_HOST:-}" ] || return 0
   socket="${ILD_CONTAINER_SOCKET:-}"
   socket="${socket#unix://}"
   if [ -z "$socket" ] || [ ! -S "$socket" ]; then
@@ -707,16 +257,11 @@ grant_engine_socket() {
     gid="$(getent group "$group" | cut -d: -f3)"
   elif [ "${ILD_CONTAINER_SOCKET_GRANT:-}" = 1 ]; then
     # The operator chose it: the socket goes to RUNTIME_USER's own group, whose gid the image fixes (10001),
-    # since outside a user namespace the host sees the same number. Checked before the chgrp, so a group the
-    # agent is in never gets the host's socket.
+    # since outside a user namespace the host sees the same number.
     group="$(getent group "$RUNTIME_USER" | cut -d: -f1)"
     gid="$(getent group "$RUNTIME_USER" | cut -d: -f3)"
     if [ -z "$group" ]; then
       echo "WARNING: ILD_CONTAINER_SOCKET_GRANT=1 but this image has no group $RUNTIME_USER; $socket is left alone and no run can start." >&2
-      return 0
-    fi
-    if [ -n "${AGENT_USER:-}" ] && id -G "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$gid"; then
-      echo "WARNING: the agent user $AGENT_USER is in group $group; $socket is left alone, since that would hand the agent the engine. No run can start." >&2
       return 0
     fi
     if ! chgrp "$group" "$socket"; then
@@ -729,10 +274,6 @@ grant_engine_socket() {
     return 0
   fi
 
-  if [ -n "${AGENT_USER:-}" ] && id -G "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$gid"; then
-    echo "WARNING: the agent user $AGENT_USER is in group $group, which can open $socket; ILD does not join it, since that would hand the agent the engine. No run can start." >&2
-    return 0
-  fi
   case "$(stat -c %A "$socket")" in
     ????rw*) ;;
     *) echo "WARNING: $socket is not readable and writable by its group $group; ILD cannot open it and no run can start." >&2 ;;
@@ -741,101 +282,10 @@ grant_engine_socket() {
   echo "Container engine socket $socket: $RUNTIME_USER can open it through group $group."
 }
 
-# Drop from root to the runtime user and exec the app. Under uid isolation the
-# orchestrator keeps ambient RUNTIME_AMBIENT_CAPS (via capsh --keep) so it can
-# later drop the agent CLI to AGENT_USER under no_new_privs; otherwise a plain
-# gosu drop (no retained capabilities) is used.
-drop_and_exec() {
-  if [ -n "$AGENT_USER" ]; then
-    # Fail loudly rather than degrading. Silently falling back to the gosu drop
-    # here would leave the orchestrator without the ambient capabilities while the
-    # app still routes every agent launch through setpriv — so isolation would be
-    # off AND every run would fail with an opaque EPERM. The gosu form would also
-    # drop the supplementary groups the shared dirs depend on.
-    if [ -z "$SHARED_GROUP" ]; then
-      echo "FATAL: AGENT_USER=$AGENT_USER but SHARED_GROUP is empty; every shared-directory repair would silently no-op and the agent would have no access to the worktree. Unset AGENT_USER to run single-uid." >&2
-      exit 1
-    fi
-    if [ -z "$RUNTIME_AMBIENT_CAPS" ]; then
-      echo "FATAL: AGENT_USER=$AGENT_USER but RUNTIME_AMBIENT_CAPS is empty; the orchestrator could not spawn the agent. Unset AGENT_USER to run single-uid." >&2
-      exit 1
-    fi
-    for tool in capsh setpriv; do
-      if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "FATAL: AGENT_USER=$AGENT_USER requires '$tool' (capsh: libcap2-bin, setpriv: util-linux). Unset AGENT_USER to run single-uid." >&2
-        exit 1
-      fi
-    done
-
-    amb=""
-    inh=""
-    for cap in $(echo "$RUNTIME_AMBIENT_CAPS" | tr ',' ' '); do
-      amb="$amb --addamb=$cap"
-      inh="${inh:+$inh,}$cap"
-    done
-    # --keep=1 preserves the caps across the setuid; --inh puts them in the
-    # inheritable set; --addamb raises them ambient so they survive the agent's
-    # exec. The `-- -c 'exec "$@"' -- "$@"` form execs the app via bash.
-    # shellcheck disable=SC2086
-    exec capsh --keep=1 --user="$RUNTIME_USER" --inh="$inh" $amb -- -c 'exec "$@"' -- "$@"
-  fi
-
-  exec gosu "$RUNTIME_USER:$RUNTIME_GROUP" "$@"
-}
-
 if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
-  if [ -n "$AGENT_USER" ]; then
-    # Group-writable by default. Where a default ACL is in effect it already
-    # grants the shared group rwx (the umask is ignored for those paths), but the
-    # setfacl calls are best-effort — a volume filesystem without ACL support
-    # would silently leave the agent read-only on files the orchestrator creates.
-    # umask 002 makes the setgid + shared-group scheme work on its own. Files the
-    # orchestrator writes under the private /data are unaffected in practice:
-    # they stay group `ild`, which the agent is not a member of.
-    umask 002
-
-    # The app reads ILD_AGENT_* to decide whether (and to whom) it drops each
-    # agent-CLI launch. Derive them here rather than setting them in the image, so
-    # AGENT_USER is the single switch: clearing it turns isolation off for BOTH
-    # the shell-side setup and the app, instead of leaving the app routing
-    # launches through setpriv without the caps or shared dirs to back it.
-    export ILD_AGENT_USER="$AGENT_USER"
-    export ILD_AGENT_GROUP="$AGENT_GROUP"
-    # The shared group, distinct from the agent's primary group above: the orchestrator is a
-    # member of it, and it is the group ensure_shared_ro gives the git mirror root.
-    export ILD_SHARED_GROUP="$SHARED_GROUP"
-    export ILD_AGENT_HOME="$AGENT_HOME"
-    export ILD_AGENT_SCRATCH_ROOT="$AGENT_SCRATCH_DIR"
-    export ILD_ORCHESTRATOR_PRIVATE_ROOT="$ORCHESTRATOR_PRIVATE_DIR"
-    export ILD_AGENT_READ_ROOT="$AGENT_READ_DIR"
-
-    # Two-uid mode. Order matters: the private roots (/data) are created and
-    # locked to traverse-only FIRST, so that the shared subtrees created beneath
-    # them in the next loop land inside an already-correct parent rather than
-    # having /data implicitly created with default ownership by a `mkdir -p`.
-    for path in $DATA_TRAVERSE_DIRS; do
-      ensure_traverse "$path"
-    done
-    for path in $SHARED_RW_DIRS; do
-      ensure_shared_rw "$path"
-    done
-    for path in $SHARED_RO_DIRS; do
-      ensure_shared_ro "$path"
-    done
-    [ -n "$ORCHESTRATOR_PRIVATE_DIR" ] && ensure_private "$ORCHESTRATOR_PRIVATE_DIR"
-    # Files the agent reads but must not be able to change (pi's ILD extension,
-    # the agent CLIs' MCP configs, all carrying the ILD API token): created here,
-    # before any agent-uid process runs, so they are the orchestrator's from the
-    # start. The app's fixed folders are made the same way, so the app only ever
-    # creates per-run folders, inside folders the agent cannot write.
-    if [ -n "$AGENT_READ_DIR" ]; then
-      ensure_agent_read_dirs "$AGENT_READ_DIR"
-    fi
-  else
-    for path in $RUNTIME_DIRS; do
-      ensure_owned_by_runtime_user "$path"
-    done
-  fi
+  for path in $RUNTIME_DIRS; do
+    ensure_owned_by_runtime_user "$path"
+  done
 
   runtime_home="$(getent passwd "$RUNTIME_USER" | cut -d: -f6)"
   if [ -n "$runtime_home" ]; then
@@ -843,72 +293,18 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     chown "$RUNTIME_USER:$RUNTIME_GROUP" "$runtime_home"
     export HOME="$runtime_home"
 
-    # In two-uid mode the store lives under the runtime user's home and the
-    # agent's dotdirs are symlinks into it, so the agent uid must be able to
-    # traverse this home. useradd's Debian default is 0750 group ild, which the
-    # agent is not in; the fix is the GROUP, so below this home becomes 0710 group
-    # ild-agents — traversal only (never listing), and never through world bits.
-    config_group="$RUNTIME_GROUP"
-    if [ -n "$AGENT_USER" ]; then
-      # 0710 + shared group: the agent must traverse this home to resolve the
-      # .gitconfig symlink, but it never needs to list it, and no one outside
-      # the two uids needs anything here. The credential store inside stays 0700.
-      chown "$RUNTIME_USER:$SHARED_GROUP" "$runtime_home"
-      chmod 0710 "$runtime_home"
-    fi
-
-    # Intentional word-split on AGENT_CONFIG_DIRS / AGENT_CONFIG_FILES —
-    # entries are space-separated names. $config_group is the shared store group
-    # (SHARED_GROUP under isolation); $RUNTIME_GROUP is the orchestrator's own
-    # private group, used for the $HOME parent-chain scaffolding so the agent uid
-    # never gains write on it (single-uid: the two groups are identical anyway).
+    # Intentional word-split on AGENT_CONFIG_DIRS / AGENT_CONFIG_FILES:
+    # entries are space-separated names.
     # shellcheck disable=SC2086
-    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" "$RUNTIME_GROUP" $AGENT_CONFIG_DIRS
+    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$RUNTIME_GROUP" $AGENT_CONFIG_DIRS
     # shellcheck disable=SC2086
-    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" "$RUNTIME_GROUP" $AGENT_CONFIG_FILES
-
-    if [ -n "$AGENT_USER" ] && [ -n "$AGENT_HOME" ]; then
-      ensure_credential_store "$AGENT_CONFIG_STORE"
-
-      agent_home="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
-      agent_home="${agent_home:-$AGENT_HOME}"
-      mkdir -p "$agent_home"
-      chown "$AGENT_USER:$SHARED_GROUP" "$agent_home"
-      chmod 0750 "$agent_home"
-
-      # shellcheck disable=SC2086
-      seed_agent_config "$agent_home" "$AGENT_USER" "$AGENT_CONFIG_STORE" $AGENT_CONFIG_DIRS $AGENT_CONFIG_FILES
-
-      # The npm global prefix a Worktree Preview's install steps use. The preview
-      # runs as the agent (ADR-0016), so `npm install -g` writes here and the
-      # agent-uid Cmd nodes and CLI adapters that follow exec from here. It has to
-      # be created now, as root, and owned by the agent: the orchestrator prepends
-      # $AGENT_HOME/.local/bin to its own PATH and would otherwise create it
-      # itself, leaving a prefix owned by a uid the agent is not — and npm would
-      # fail on it. `mkdir -p` also covers .local, which link_secondary_home may
-      # already have made for .local/share/opencode.
-      mkdir -p "$agent_home/.local/bin"
-      chown "$AGENT_USER:$AGENT_USER" "$agent_home/.local" "$agent_home/.local/bin"
-
-      # Give the agent git the orchestrator's mounted commit identity: its own
-      # home has no .gitconfig, so point one at the read-only mounted file.
-      if [ -e "$runtime_home/.gitconfig" ] || [ -L "$runtime_home/.gitconfig" ]; then
-        ln -sfn "$runtime_home/.gitconfig" "$agent_home/.gitconfig"
-        chown -h "$AGENT_USER:$AGENT_USER" "$agent_home/.gitconfig" 2>/dev/null || true
-      fi
-    fi
-  fi
-
-  if [ -n "$AGENT_USER" ]; then
-    install_agent_egress_rules
-  else
-    export ILD_NETWORK_ENFORCEMENT=advisory
-    export ILD_NETWORK_ENFORCEMENT_REASON="Agent uid isolation is off (AGENT_USER is empty), so there is no separate uid to key firewall rules on; the proxy still logs and filters proxy-honouring clients."
+    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$RUNTIME_GROUP" $AGENT_CONFIG_FILES
+    ensure_credential_store "$AGENT_CONFIG_STORE"
   fi
 
   grant_engine_socket
   wait_for_postgres
-  drop_and_exec "$@"
+  exec gosu "$RUNTIME_USER:$RUNTIME_GROUP" "$@"
 fi
 
 wait_for_postgres

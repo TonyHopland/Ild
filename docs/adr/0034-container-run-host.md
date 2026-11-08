@@ -1,5 +1,7 @@
 # ADR-0034: A loop run can be a container, with a volume and a network, swept by label
 
+> **Status: amended by [ADR-0036](./0036-runs-always-in-containers.md).** The run host is no longer a setting: ILD's image always uses containers, or pods in Kubernetes, and `local` exists only under `dotnet run`.
+
 [ADR-0032](./0032-run-host-interface.md) put where a run lives behind `IRunHost`, and [ADR-0033](./0033-kubernetes-run-host.md) built the pod host. `ILD_RUN_HOST=container` is the single-machine version: each loop run gets a container of its own through the Docker-compatible REST API. It does not spread load, but it isolates a run from ILD and from other runs the same way.
 
 ## Decision

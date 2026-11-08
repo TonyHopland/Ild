@@ -1,5 +1,7 @@
 # ADR-0032: Where a run's processes and files live is one interface, the run host
 
+> **Status: amended by [ADR-0036](./0036-runs-always-in-containers.md).** The run host is no longer a setting: ILD's image always uses containers, or pods in Kubernetes, and `local` exists only under `dotnet run`.
+
 The orchestrator used to start the agent's processes, open its terminals, read its transcripts and find its previews with code that assumed one machine and the uid split of [ADR-0014](./0014-agent-uid-isolation.md). To run the agent somewhere else, a container or a Kubernetes pod, that assumption has to sit behind one seam.
 
 ## Decision

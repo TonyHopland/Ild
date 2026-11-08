@@ -1,5 +1,7 @@
 # ADR-0033: A loop run is a pod, owned by one object and swept by label
 
+> **Status: amended by [ADR-0036](./0036-runs-always-in-containers.md).** The run host is no longer a setting: ILD's image always uses containers, or pods in Kubernetes, and `local` exists only under `dotnet run`.
+
 [ADR-0032](./0032-run-host-interface.md) put where a run lives behind `IRunHost`. `ILD_RUN_HOST=kubernetes` is the second host: each loop run gets a pod of its own, so runs are isolated from ILD and from each other and the scheduler spreads them across nodes.
 
 ## Decision

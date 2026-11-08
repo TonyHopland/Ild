@@ -150,7 +150,7 @@ public interface IRunHost
     Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default);
 }
 
-/// <summary>Which backend holds the runs; the <c>ILD_RUN_HOST</c> setting.</summary>
+/// <summary>Which backend holds the runs (<see cref="RunHostOptions.Detect"/>).</summary>
 public enum RunHostKind
 {
     Local,

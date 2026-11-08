@@ -2,11 +2,11 @@
 #
 # Tests for entrypoint.sh's grant_engine_socket.
 #
-# The container run host drives the engine through the socket at ILD_CONTAINER_SOCKET, and whoever
-# can open it controls the engine. The entrypoint gives the orchestrator user (only) a group that can
-# open it, since the drop to that user rebuilds its groups from /etc/group and a compose group_add is lost.
+# ILD in its image drives the engine through the socket at ILD_CONTAINER_SOCKET, and whoever can open it
+# controls the engine. The entrypoint gives ILD's user a group that can open it, since the drop to that user
+# rebuilds its groups from /etc/group and a compose group_add is lost.
 #
-# Sources the real functions. stat, getent, groupadd, usermod, chgrp and id are stubbed to answer from
+# Sources the real functions. stat, getent, groupadd, usermod and chgrp are stubbed to answer from
 # files in a scratch directory and record what was changed, so this runs unprivileged.
 set -uo pipefail
 
@@ -37,7 +37,7 @@ fi
 printf '0 0 4294967295\n' > "$work/uid_map.host"
 printf '0 1000 1\n1 524288 65536\n' > "$work/uid_map.userns"
 
-# run <socket gid> <socket mode> <uid map> <group db> <agent gids> [ILD_RUN_HOST] [socket path]
+# run <socket gid> <socket mode> <uid map> <group db> [ILD_IMAGE] [socket path] [KUBERNETES_SERVICE_HOST]
 run() {
   : > "$work/calls"
   printf '%s' "$4" > "$work/group"
@@ -51,10 +51,9 @@ run() {
     }
     usermod() { echo "usermod $*" >> "$work/calls"; }
     chgrp() { echo "chgrp $1" >> "$work/calls"; }
-    id() { echo "$agent_gids"; }
-    sock_gid="$1" sock_mode="$2" agent_gids="$5"
-    UID_MAP_FILE="$3" ILD_RUN_HOST="${6-container}" ILD_CONTAINER_SOCKET="${7-unix://$socket}"
-    RUNTIME_USER=ild AGENT_USER=agent ILD_CONTAINER_SOCKET_GRANT="${grant-}"
+    sock_gid="$1" sock_mode="$2"
+    UID_MAP_FILE="$3" ILD_IMAGE="${5-1}" ILD_CONTAINER_SOCKET="${6-unix://$socket}" KUBERNETES_SERVICE_HOST="${7-}"
+    RUNTIME_USER=ild ILD_CONTAINER_SOCKET_GRANT="${grant-}"
     # shellcheck disable=SC1090
     . "$funcs"
     grant_engine_socket
@@ -63,68 +62,59 @@ run() {
 
 calls() { tr '\n' ';' < "$work/calls"; }
 groups='ild:x:10001:
-ild-agents:x:10003:ild,agent
-agent:x:10002:
 '
 
-run 0 srw-rw---- "$work/uid_map.userns" "$groups" "10002 10003" "local"
-[ -z "$(calls)" ] && pass "another run host: nothing is touched" || fail "another run host touched: $(calls)"
+run 0 srw-rw---- "$work/uid_map.userns" "$groups" ""
+[ -z "$(calls)" ] && pass "not ILD's image (the WorkItem Server): nothing is touched" || fail "not ILD's image, touched: $(calls)"
 
-run 0 srw-rw---- "$work/uid_map.userns" "$groups" "10002 10003" container "/nowhere.sock"
+run 0 srw-rw---- "$work/uid_map.userns" "$groups" 1 "unix://$socket" 10.0.0.1
+[ -z "$(calls)" ] && pass "in Kubernetes (pods, no socket): nothing is touched" || fail "Kubernetes touched: $(calls)"
+
+run 0 srw-rw---- "$work/uid_map.userns" "$groups" 1 "/nowhere.sock"
 if [ -z "$(calls)" ] && grep -q "is not a socket" "$work/stderr"; then pass "a missing socket is said, nothing is touched"; else fail "missing socket: $(calls) / $(cat "$work/stderr")"; fi
 
-run 0 srw-rw---- "$work/uid_map.userns" "$groups" "10002 10003"
+run 0 srw-rw---- "$work/uid_map.userns" "$groups"
 if [ "$(calls)" = "groupadd ild-engine;chgrp ild-engine;usermod -aG ild-engine ild;" ]; then
   pass "rootless (root:root in a user namespace): the socket goes to ild-engine and only ild joins it"
 else fail "rootless: $(calls)"; fi
 
 run 0 srw-rw---- "$work/uid_map.userns" "${groups}ild-engine:x:5555:ild
-" "10002 10003"
+"
 if [ "$(calls)" = "chgrp ild-engine;usermod -aG ild-engine ild;" ]; then pass "a restart reuses ild-engine"; else fail "restart: $(calls)"; fi
 
-run 0 srw-rw---- "$work/uid_map.host" "$groups" "10002 10003"
+run 0 srw-rw---- "$work/uid_map.host" "$groups"
 if [ -z "$(calls)" ] && grep -q "host's root group" "$work/stderr"; then
   pass "the host's root group outside a user namespace is left alone and said"
 else fail "rootful root group: $(calls) / $(cat "$work/stderr")"; fi
 if grep -q "ILD_CONTAINER_SOCKET_GRANT=1" "$work/stderr"; then pass "the refusal names the opt-in"; else fail "refusal: $(cat "$work/stderr")"; fi
 
-grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups" "10002 10003"
+grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups"
 if [ "$(calls)" = "chgrp ild;usermod -aG ild ild;" ] && grep -q "root-equivalent" "$work/stdout"; then
   pass "rootful with ILD_CONTAINER_SOCKET_GRANT=1: the socket goes to ild's own group, and that is said"
 else fail "rootful opt-in: $(calls) / $(cat "$work/stdout") / $(cat "$work/stderr")"; fi
 
-grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups" "10001 10002"
-if [ -z "$(calls)" ] && grep -q "would hand the agent the engine" "$work/stderr"; then
-  pass "rootful opt-in: the socket is never given to a group the agent is in"
-else fail "rootful opt-in, agent in ild: $(calls) / $(cat "$work/stderr")"; fi
-
-grant=1 run 0 srw-rw---- "$work/uid_map.host" 'agent:x:10002:
-' "10002"
+grant=1 run 0 srw-rw---- "$work/uid_map.host" 'other:x:10002:
+'
 if [ -z "$(calls)" ] && grep -q "has no group ild" "$work/stderr"; then
   pass "rootful opt-in without ILD's group: left alone and said"
 else fail "rootful opt-in, no group: $(calls) / $(cat "$work/stderr")"; fi
 
-grant=1 run 0 srw-rw---- "$work/uid_map.userns" "$groups" "10002 10003"
+grant=1 run 0 srw-rw---- "$work/uid_map.userns" "$groups"
 if [ "$(calls)" = "groupadd ild-engine;chgrp ild-engine;usermod -aG ild-engine ild;" ]; then
   pass "rootless with the opt-in set: still the private ild-engine group"
 else fail "rootless with opt-in: $(calls)"; fi
 
 run 999 srw-rw---- "$work/uid_map.host" "${groups}docker:x:999:
-" "10002 10003"
+"
 if [ "$(calls)" = "usermod -aG docker ild;" ]; then pass "a socket of the docker group: ild joins docker"; else fail "docker group: $(calls)"; fi
 
-run 998 srw-rw---- "$work/uid_map.host" "$groups" "10002 10003"
+run 998 srw-rw---- "$work/uid_map.host" "$groups"
 if [ "$(calls)" = "groupadd --gid 998 ild-engine-998;usermod -aG ild-engine-998 ild;" ]; then
   pass "a socket gid with no group here: a group of that gid is made and ild joins it"
 else fail "unknown gid: $(calls)"; fi
 
-run 10003 srw-rw---- "$work/uid_map.host" "$groups" "10002 10003"
-if ! grep -q usermod "$work/calls" && grep -q "would hand the agent the engine" "$work/stderr"; then
-  pass "a group the agent is in is never joined"
-else fail "agent's group: $(calls) / $(cat "$work/stderr")"; fi
-
 run 999 srw-r----- "$work/uid_map.host" "${groups}docker:x:999:
-" "10002 10003"
+"
 if grep -q "not readable and writable by its group" "$work/stderr"; then pass "a socket its group cannot write is said"; else fail "mode: $(cat "$work/stderr")"; fi
 
 echo

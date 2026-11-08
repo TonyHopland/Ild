@@ -9,19 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Run each loop run in its own Kubernetes pod**, spread across nodes and removed when the run is cleaned up.
-- **Run each loop run in its own Docker or Podman container on the same machine**, with a warning in Settings when the container socket is not rootless or cannot be reached.
-- **The repository's compose stack can run ILD with container runs** (`docker-compose.container-runs.yml`), and `ILD_CONTAINER_SOCKET_GRANT=1` lets it use a socket of the host's root group, such as rootful Podman's on Linux, without a `chgrp` after every restart. A rootful Podman machine's socket works as it is.
+- **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets. Settings warns when the container socket is not rootless or cannot be reached.
+- **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart. A rootful Podman machine's socket works as it is.
 - **A run in a container or pod gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows**; `run.tools` in `ild.config.json` names them when finding them is not enough.
-- **With the Kubernetes run host, chats run in one shared pod of their own, apart from ILD's database and secrets.**
-- **With the container run host, chats run in one shared container of their own, apart from ILD's database and secrets.**
-- **With the container run host, the provider sign-in terminal runs in a short-lived container of its own and keeps the login when it closes.**
+- **Chats share one container, or one pod in Kubernetes, and the provider sign-in terminal runs in a short-lived container that keeps the login when it closes.**
 
 ### Changed
 
-- **On Kubernetes, `ild-runner` is now the slim image, with no toolchains or coding agents of its own.** If you use it without `ILD_K8S_TOOLS_CLAIM`, runs get only what that image holds; set the claim, or switch `ILD_K8S_RUNNER_IMAGE` to `ild-runner-full` and set `ILD_RUN_TOOLCHAINS=off`.
+- **Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` (`.env.example` lists the paths), then `docker compose up -d --build`, which also builds the runner image. On the first start, ILD takes back the files its agent user left in its volumes.
+- **On Kubernetes, ILD runs every loop run and chat in a pod.** Give it the RBAC, `ILD_API_URL`, `ILD_K8S_RUNNER_IMAGE` and a ReadWriteMany `ILD_K8S_TOOLS_CLAIM` from the deployment guide before you upgrade. Without the claim, runs get only what the slim `ild-runner` image holds.
+- **The ILD image is smaller: it no longer has the .NET SDK, Chrome or a second user**, since agents never run in it.
 - **Coding agents no longer hold your Claude, Codex, Copilot or API credentials**; Claude subscriptions now use a long-lived token that the provider terminal creates once.
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
+
+### Removed
+
+- **`ILD_RUN_HOST`.** ILD started from its image always runs agents in containers, or pods in Kubernetes; only `dotnet run` runs them as ILD's own processes.
+- **The agent user and its firewall (`AGENT_USER`, `NET_ADMIN`, network mode Off's group).** A run's network, which reaches only ILD, now keeps agents behind the egress proxy.
+- **The `WITH_NODE`, `WITH_DOTNET_SDK` and `WITH_CHROME` build arguments, the `ild-runner-full` image and `docker-compose.container-runs.yml`.**
 
 ## [0.23.0] - 2026-11-04
 

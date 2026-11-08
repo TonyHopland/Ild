@@ -6,9 +6,9 @@
 # a credential every install's attacker already knows, and reintroducing one has
 # NO runtime symptom — the stack comes up and works perfectly. It used to ship
 # with `postgres_password` / `ild_core_password` / `ild_workitems_password` baked
-# into docker-compose.yml, the database init script and the docs, which meant the
-# lower-trust agent uid (ADR-0014) could reach PostgreSQL on the compose network
-# with credentials it could read out of this repository. The three assertions
+# into docker-compose.yml, the database init script and the docs, which meant anything
+# on the compose network could reach PostgreSQL with credentials it could read out
+# of this repository. The three assertions
 # below are what stops any of that coming back:
 #
 #   1. None of the retired constants appears anywhere in the tracked tree.
@@ -107,7 +107,7 @@ if [ -z "$postgres_block" ]; then
   fail "could not read the 'postgres' service block out of the compose model"
 elif printf '%s\n' "$postgres_block" | grep -Eq '^[[:space:]]*(- +")?[0-9]+:[0-9]+"?[[:space:]]*$|published:'; then
   fail "the 'postgres' service publishes a host port. The database is reachable" \
-       "from the agent uid on the compose network already; publishing it widens" \
+       "from the compose network already; publishing it widens" \
        "that to the host. Leave the mapping commented out as an opt-in."
 else
   pass "the 'postgres' service publishes no host port"

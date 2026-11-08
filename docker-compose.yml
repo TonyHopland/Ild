@@ -66,28 +66,16 @@ services:
         DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
         NODE_RUNTIME_VERSION: ${NODE_RUNTIME_VERSION:-26.13.0}
         NPM_VERSION: ${NPM_VERSION-12.2.1}
-        WITH_NODE: ${WITH_NODE:-1}
-        WITH_DOTNET_SDK: ${WITH_DOTNET_SDK:-1}
-        WITH_CHROME: ${WITH_CHROME:-1}
         WITH_CERTS: ${WITH_CERTS:-0}
+    # ILD joins each run's and chat's network by this name, and they reach it by
+    # it (ILD_CONTAINER_ILD_CONTAINER and ILD_API_URL below).
     container_name: ild
-    # This image DOES carry setuid-root binaries — util-linux's mount/su, and
-    # Chrome's chrome-sandbox at the default WITH_CHROME=1 — and it runs
-    # lower-trust `agent` uid (ADR-0014), for which they would be an escalation
-    # route. The flag takes them off the table. Nothing here needs the gain it
-    # refuses: the orchestrator drops to `ild` retaining capabilities it already
-    # holds (`capsh --addamb`), spawns the agent through `setpriv` rather than a
-    # setuid helper, and every Chrome launch path passes --no-sandbox, so the
-    # setuid chrome-sandbox helper is never the one relied on.
+    # The image carries setuid-root binaries (util-linux's mount/su), which the
+    # flag takes off the table. Nothing here needs the gain it refuses: the
+    # entrypoint drops root to `ild` with gosu and nothing afterwards gains a
+    # privilege.
     security_opt:
       - "no-new-privileges:true"
-    # NET_ADMIN is spent once, by the root entrypoint, on the firewall rules that
-    # funnel the lower-trust agent uid through the in-container egress proxy
-    # (ADR-0019); the drop to `ild` sheds it before the app starts and the agent
-    # never holds it. Without it the stack still runs, but egress filtering is
-    # advisory: logged and applied to proxy-honouring clients, not enforced.
-    cap_add:
-      - NET_ADMIN
     # Worktree previews no longer need a published port each: they are served
     # through 8080 on wildcard subdomains of ILD_PREVIEW_PROXY_BASE below. The
     # old 3100/5100 mappings only ever worked for the two ports this repo's own
@@ -107,7 +95,8 @@ services:
       # unset, the hash is the token's public SHA-256 and the row is forgeable.
       - "ILD_SESSION_TOKEN_PEPPER=${ILD_SESSION_TOKEN_PEPPER:?Set ILD_SESSION_TOKEN_PEPPER in your .env (generate one with: openssl rand -hex 32)}"
       - ILD_ALLOWED_ORIGINS=${ILD_ALLOWED_ORIGINS:-}
-      - ILD_API_URL=${ILD_API_URL:-http://localhost:8080}
+      # ILD's address as a run's or chat's container reaches it: its container name.
+      - ILD_API_URL=${ILD_API_URL:-http://ild:8080}
       # Serves worktree previews on wildcard subdomains of this origin
       # (wi-<workItemId>[-<serviceName>].ild.localhost:8080). Browsers resolve
       # *.localhost to loopback with no /etc/hosts entry, so this works out of the
@@ -148,19 +137,32 @@ services:
       - GIT_AUTHOR_EMAIL
       - GIT_COMMITTER_NAME
       - GIT_COMMITTER_EMAIL
+      # Every loop run, chat and provider sign-in runs in a container of its own
+      # on the engine whose socket is mounted below, from the runner image the
+      # `runner` service builds (docs/deployment.md#container-run-host).
+      - ILD_CONTAINER_SOCKET=/run/container.sock
+      - ILD_CONTAINER_RUNNER_IMAGE=${ILD_CONTAINER_RUNNER_IMAGE:-localhost/ild-runner:latest}
+      - ILD_CONTAINER_ILD_CONTAINER=ild
+      # 1 when the socket belongs to the host's root group (rootful Podman on
+      # Linux): the entrypoint then gives it ILD's own group on each start, which
+      # makes ILD root-equivalent on that host. A Podman machine's socket is
+      # root:wheel and needs nothing.
+      - ILD_CONTAINER_SOCKET_GRANT=${ILD_CONTAINER_SOCKET_GRANT:-0}
+      # What a run's container may use. 0 for no limit, on a rootless engine
+      # whose cgroup controllers are not delegated (a run then fails to start
+      # with "crun: open 'memory.max'").
+      - ILD_RUN_CPU_LIMIT=${ILD_RUN_CPU_LIMIT:-4}
+      - ILD_RUN_MEMORY_LIMIT=${ILD_RUN_MEMORY_LIMIT:-8Gi}
     volumes:
-      # The orchestrator runs as `ild`; the coding-agent CLI runs as a separate,
-      # lower-trust `agent` uid (ADR-0014). /worktrees and the /data agent/repo
-      # subtrees are shared between the two via the `ild-agents` group (setgid +
-      # default ACLs applied by the entrypoint); the rest of /data stays
-      # ild-private. No compose-side ownership tweaks are needed — the image and
-      # entrypoint own the permission scheme.
+      # The engine's socket, as the machine the containers run on sees it.
+      # Whoever holds it controls every container on that engine; only ILD's
+      # process does, never a run or a chat.
+      - ${ILD_CONTAINER_SOCKET_HOST:?Set ILD_CONTAINER_SOCKET_HOST in .env to the container engine's socket (see .env.example)}:/run/container.sock
       - ild-data:/data
       - ild-worktrees:/worktrees
-      # One volume to persist all agent CLI config/login dirs (.claude,
-      # .opencode, .pi, ...) across image rebuilds. The entrypoint symlinks each
-      # name listed in AGENT_CONFIG_DIRS from BOTH homes into this shared store,
-      # so login (as ild) and the agent run (as agent) see one credential set.
+      # One volume to persist the provider logins (.claude, .opencode, .pi, ...)
+      # across image rebuilds. The entrypoint symlinks each name listed in
+      # AGENT_CONFIG_DIRS from ILD's home into it.
       - ild-config:/home/ild/.agent-config
       # Host .gitconfig provides the default commit identity. Point GIT_CONFIG
       # at a different file, or override just the name/email via the
@@ -171,6 +173,8 @@ services:
         condition: service_healthy
       workitem-server:
         condition: service_started
+      runner:
+        condition: service_completed_successfully
     # Compose's default is 10s, which is SHORTER than the 20s run drain
     # (ILD_SHUTDOWN_DRAIN_SECONDS) — SIGKILL would land while runs were still
     # being parked, restoring exactly the hard kill the drain replaces. The
@@ -178,6 +182,20 @@ services:
     # Raise it alongside the drain if you lengthen that.
     stop_grace_period: 30s
     restart: unless-stopped
+
+  # Builds the image runs, chats and sign-ins start from, on the engine the stack
+  # runs on, where ILD needs it. The container only exits at once; the image is
+  # what is used.
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    image: localhost/ild-runner:latest
+    container_name: ild-runner-build
+    entrypoint: ["true"]
+    network_mode: none
+    restart: "no"
 
 volumes:
   postgres-data:

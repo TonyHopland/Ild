@@ -1,12 +1,17 @@
 namespace ILD.Core.Services.RunHosts;
 
 /// <summary>
-/// The <c>ILD_RUN_HOST</c> setting. Chosen explicitly and never detected from the environment:
-/// <c>local</c> (the default), <c>container</c> or <c>kubernetes</c>.
+/// Where runs execute, which is not a setting: ILD started from its own image runs them in containers, or in pods when
+/// that image runs in a Kubernetes cluster; ILD started any other way (<c>dotnet run</c>, as a developer or a preview of
+/// ILD does) runs them as its own processes.
 /// </summary>
 public static class RunHostOptions
 {
-    public const string SettingName = "ILD_RUN_HOST";
+    /// <summary>Set by ILD's image, and only there: ILD runs from that image.</summary>
+    public const string ImageMarker = "ILD_IMAGE";
+
+    /// <summary>Set by Kubernetes in every container of a pod.</summary>
+    public const string KubernetesMarker = "KUBERNETES_SERVICE_HOST";
 
     /// <summary>What a run's pod or container may use, for both hosts that isolate runs; the older <c>ILD_K8S_*</c> names still work for kubernetes.</summary>
     public const string CpuLimitSetting = "ILD_RUN_CPU_LIMIT";
@@ -32,17 +37,10 @@ public static class RunHostOptions
         };
     }
 
-    /// <summary>The backend <paramref name="value"/> names; <see cref="RunHostKind.Local"/> when it is unset or blank.</summary>
-    /// <exception cref="InvalidOperationException">The value is none of the three.</exception>
-    public static RunHostKind Parse(string? value)
+    /// <summary>The host for an ILD whose environment <paramref name="environment"/> reads.</summary>
+    public static RunHostKind Detect(Func<string, string?> environment)
     {
-        if (string.IsNullOrWhiteSpace(value)) return RunHostKind.Local;
-        return value.Trim().ToLowerInvariant() switch
-        {
-            "local" => RunHostKind.Local,
-            "container" => RunHostKind.Container,
-            "kubernetes" => RunHostKind.Kubernetes,
-            _ => throw new InvalidOperationException($"{SettingName} is '{value}'; it must be local, container or kubernetes."),
-        };
+        if (string.IsNullOrWhiteSpace(environment(ImageMarker))) return RunHostKind.Local;
+        return string.IsNullOrWhiteSpace(environment(KubernetesMarker)) ? RunHostKind.Container : RunHostKind.Kubernetes;
     }
 }

@@ -147,8 +147,8 @@ public class SettingsController : ControllerBase
     });
 
     /// <summary>
-    /// Where loop runs execute (<c>ILD_RUN_HOST</c>), and a warning when that is set up in a way the operator should fix,
-    /// such as a container socket that is root on the machine. Read-only: the host is chosen by the environment, and the
+    /// Where loop runs execute (<see cref="RunHostOptions.Detect"/>), and a warning when that is set up in a way the operator should fix,
+    /// such as a container socket that is root on the machine. Read-only: the host follows from how ILD runs, and the
     /// warning is absent whenever the engine cannot say.
     /// </summary>
     [HttpGet("run-host")]
