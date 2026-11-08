@@ -393,12 +393,20 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         {
             return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct);
         }
-        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.Conflict)
+        catch (DockerApiException)
         {
-            // Stopped when ILD shut down, or by a restart of the engine or machine: started again, with all it held.
+            // Stopped when ILD shut down, or by a restart of the engine or machine: started again, with all it held. Engines
+            // refuse an exec into a stopped container with different statuses (Docker 409, Podman 500), so its state decides.
+            if (!await RunContainerStoppedAsync(owner.Id, ct)) throw;
             await StartStoppedRunAsync(owner.Id, ct);
             return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct);
         }
+    }
+
+    private async Task<bool> RunContainerStoppedAsync(Guid owner, CancellationToken ct)
+    {
+        var container = await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct, HttpStatusCode.NotFound);
+        return container?["State"]?["Status"]?.GetValue<string>() is "exited" or "stopped" or "created";
     }
 
     private async Task StartStoppedRunAsync(Guid owner, CancellationToken ct)

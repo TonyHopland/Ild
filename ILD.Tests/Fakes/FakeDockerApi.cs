@@ -426,7 +426,8 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     private (int, object?) CreateExec(string container, Request request)
     {
         if (!_containers.TryGetValue(container, out var target)) return Failure(404, $"no such container: {container}");
-        if (target.Stopped) return Failure(409, $"container {container} is not running");
+        // As Podman answers; Docker answers 409.
+        if (target.Stopped) return Failure(500, "can only create exec sessions on running containers: container state improper");
         var body = JsonNode.Parse(request.Body)!;
         var id = $"exec-{++_nextExec}";
         var exec = new FakeDockerExec(
