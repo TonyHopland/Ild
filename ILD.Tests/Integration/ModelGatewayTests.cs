@@ -27,7 +27,7 @@ public class ModelGatewayTests : IAsyncLifetime
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         _upstream = builder.Build();
-        _upstream.MapGet("/v1/echo", (HttpRequest request) => Results.Json(new
+        _upstream.MapGet("/v1/models", (HttpRequest request) => Results.Json(new
         {
             path = request.Path.Value,
             query = request.QueryString.Value,
@@ -35,7 +35,7 @@ public class ModelGatewayTests : IAsyncLifetime
             apiKey = request.Headers["x-api-key"].ToString(),
             gatewayToken = request.Headers["X-ILD-Gateway-Token"].ToString(),
         }));
-        _upstream.MapPost("/v1/stream", async (HttpContext context) =>
+        _upstream.MapPost("/v1/responses", async (HttpContext context) =>
         {
             context.Response.ContentType = "text/event-stream";
             await context.Response.WriteAsync("data: first\n\n");
@@ -87,10 +87,10 @@ public class ModelGatewayTests : IAsyncLifetime
     {
         var client = _factory.CreateClient();
 
-        using var none = await client.SendAsync(Get("/gateway/upstream/echo"), TestContext.Current.CancellationToken);
-        using var wrong = await client.SendAsync(Get("/gateway/upstream/echo", "ildgw_not-a-real-token"), TestContext.Current.CancellationToken);
+        using var none = await client.SendAsync(Get("/gateway/upstream/models"), TestContext.Current.CancellationToken);
+        using var wrong = await client.SendAsync(Get("/gateway/upstream/models", "ildgw_not-a-real-token"), TestContext.Current.CancellationToken);
         using var theAppsOwnToken = await client.SendAsync(
-            Get("/gateway/upstream/echo", _factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token),
+            Get("/gateway/upstream/models", _factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, none.StatusCode);
@@ -106,7 +106,7 @@ public class ModelGatewayTests : IAsyncLifetime
         lease.Dispose();
 
         using var response = await _factory.CreateClient()
-            .SendAsync(Get("/gateway/upstream/echo", lease.Token), TestContext.Current.CancellationToken);
+            .SendAsync(Get("/gateway/upstream/models", lease.Token), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -118,12 +118,12 @@ public class ModelGatewayTests : IAsyncLifetime
         using var lease = Open(provider);
 
         using var response = await _factory.CreateClient()
-            .SendAsync(Get("/gateway/upstream/echo?x=1", lease.Token), TestContext.Current.CancellationToken);
+            .SendAsync(Get("/gateway/upstream/models?x=1", lease.Token), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var seen = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal("Bearer " + RealKey, seen.GetProperty("authorization").GetString());
-        Assert.Equal("/v1/echo", seen.GetProperty("path").GetString());
+        Assert.Equal("/v1/models", seen.GetProperty("path").GetString());
         Assert.Equal("?x=1", seen.GetProperty("query").GetString());
         Assert.Equal("", seen.GetProperty("gatewayToken").GetString());
         Assert.DoesNotContain(lease.Token, seen.ToString());
@@ -136,7 +136,7 @@ public class ModelGatewayTests : IAsyncLifetime
         using var lease = Open(provider);
 
         using var response = await _factory.CreateClient()
-            .SendAsync(Get("/gateway/upstream/echo", apiKey: lease.Token), TestContext.Current.CancellationToken);
+            .SendAsync(Get("/gateway/upstream/models", apiKey: lease.Token), TestContext.Current.CancellationToken);
 
         var seen = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal(RealKey, seen.GetProperty("apiKey").GetString());
@@ -148,7 +148,7 @@ public class ModelGatewayTests : IAsyncLifetime
     {
         var provider = await SeedProviderAsync();
         using var lease = Open(provider);
-        var request = Get("/gateway/upstream/echo", "static-placeholder");
+        var request = Get("/gateway/upstream/models", "static-placeholder");
         request.Headers.Add(ILD.Api.Middleware.ModelGatewayMiddleware.TokenHeader, lease.Token);
 
         using var response = await _factory.CreateClient().SendAsync(request, TestContext.Current.CancellationToken);
@@ -160,8 +160,8 @@ public class ModelGatewayTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("/gateway/upstream//evil.example/v1/echo")]
-    [InlineData("/gateway/upstream/%2Fevil.example/v1/echo")]
+    [InlineData("/gateway/upstream//evil.example/v1/models")]
+    [InlineData("/gateway/upstream/%2Fevil.example/v1/models")]
     [InlineData("/gateway/upstream/..%2F..%2Fx")]
     [InlineData("/gateway/upstream/a%5Cb")]
     [InlineData("/gateway/upstream/a%23b")]
@@ -193,6 +193,20 @@ public class ModelGatewayTests : IAsyncLifetime
             new Uri("https://api.github.com"), GatewayRoutes.GitHub, rest, default, out _));
     }
 
+    [Theory]
+    [InlineData(GatewayRoutes.Anthropic, "v1/messagesX")]
+    [InlineData(GatewayRoutes.Anthropic, "v1/messages/other")]
+    [InlineData(GatewayRoutes.ChatGpt, "codexfoo")]
+    [InlineData(GatewayRoutes.ChatGpt, "codex")]
+    [InlineData(GatewayRoutes.Upstream, "modelsX")]
+    [InlineData(GatewayRoutes.Upstream, "models/%2e%2e/x")]
+    [InlineData(GatewayRoutes.Upstream, "models/./x")]
+    public void A_path_outside_the_routes_allowlist_is_refused(string route, string rest)
+    {
+        Assert.False(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://example.test/base"), route, rest, default, out _));
+    }
+
     [Fact]
     public void A_plain_copilot_endpoint_keeps_its_host_path_and_query()
     {
@@ -213,7 +227,7 @@ public class ModelGatewayTests : IAsyncLifetime
         using var lease = Open(provider);
 
         using var response = await _factory.CreateClient()
-            .SendAsync(Get("/gateway/upstream/echo", lease.Token), TestContext.Current.CancellationToken);
+            .SendAsync(Get("/gateway/upstream/models", lease.Token), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
     }
@@ -223,7 +237,7 @@ public class ModelGatewayTests : IAsyncLifetime
     {
         var provider = await SeedProviderAsync();
         using var lease = Open(provider);
-        var request = new HttpRequestMessage(HttpMethod.Post, "/gateway/upstream/stream") { Content = new StringContent("{}") };
+        var request = new HttpRequestMessage(HttpMethod.Post, "/gateway/upstream/responses") { Content = new StringContent("{}") };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", lease.Token);
 
         using var response = await _factory.CreateClient()
