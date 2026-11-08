@@ -35,7 +35,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
     private readonly ConcurrentDictionary<string, RunToolEnvironment> _tools = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _toolsGate = new(1, 1);
     private readonly SemaphoreSlim _chatGate = new(1, 1);
-    private readonly ConcurrentDictionary<Guid, List<RunTool>> _chatTools = new();
     // Containers that are not a run's, exec'd into by an id of their own: the store's installers.
     private readonly ConcurrentDictionary<Guid, string> _execNames = new();
     // The sign-in terminals open now, which the sweep must not take for leftovers.
@@ -50,9 +49,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
 
     /// <summary>The agent CLIs a run gets: those ILD has installed, at their versions. Replaced in tests.</summary>
     internal Func<IReadOnlyList<RunAgent>> Agents { get; init; } = () => RunAgent.Installed(ManagedAgentInstall.ResolveDataRoot());
-
-    /// <summary>Where what each chat's repositories need from the toolchain store is kept. Replaced in tests.</summary>
-    internal Func<string> ChatToolsRoot { get; init; } = () => Path.Combine(ManagedAgentInstall.ResolveDataRoot(), "chat-tools");
 
     /// <summary>How often a starting container is looked at.</summary>
     internal TimeSpan ReadyPollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
@@ -252,11 +248,15 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
     /// installed, installed into the store first when it lacks them. Null when toolchains are off, so the run has only
     /// what the runner image has.
     /// </summary>
-    private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, CancellationToken ct, IReadOnlyList<RunAgent>? only = null)
+    protected override Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, CancellationToken ct)
+        => ToolsForAsync(owner, plan, Agents(), ct);
+
+    protected override bool ChatToolchains => _options.Toolchains;
+
+    private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, IReadOnlyList<RunAgent> agents, CancellationToken ct)
     {
         if (!_options.Toolchains) return null;
 
-        var agents = only ?? Agents();
         var key = string.Join('\n', RunToolStore.Arguments(plan.Tools, agents));
         // Nothing to give: the run does not mount the store, but still gets its home's .local/bin and npm prefix.
         if (key.Length == 0) return RunToolEnvironment.None;
@@ -476,76 +476,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
         }
     }
 
-    // What the chat's repositories need, kept on ILD's side: a chat's agent writes everything in the chat's folder, and
-    // what is asked of the toolchain store (which every run and chat shares) must not be something it can write.
-    private string ChatToolsFile(Guid chat) => Path.Combine(ChatToolsRoot(), $"{chat:N}.json");
-
-    private List<RunTool> ChatToolsOf(Guid chat)
-        => _chatTools.GetOrAdd(chat, _ =>
-        {
-            try
-            {
-                var file = ChatToolsFile(chat);
-                return File.Exists(file)
-                    ? (System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(file)) ?? []).Select(RunTool.Parse).OfType<RunTool>().ToList()
-                    : [];
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
-            {
-                Logger?.LogWarning(ex, "Could not read the toolchains of chat {Chat}; it gets none until a repository is cloned into it again", chat);
-                return [];
-            }
-        });
-
-    public override async Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
-    {
-        if (!_options.Toolchains || RunPaths.ChatOf(chatPath) is not { } chat) return;
-
-        var plan = RunToolDetector.Resolve(basePath);
-        var known = ChatToolsOf(chat);
-        var added = false;
-        lock (known)
-        {
-            foreach (var tool in plan.Tools)
-            {
-                if (known.FirstOrDefault(t => t.Name == tool.Name) is { } existing)
-                {
-                    if (existing != tool)
-                        Logger?.LogWarning("Chat {Chat} already has {Existing}, so {Tool} from {BasePath} is not added", chat, existing, tool, basePath);
-                    continue;
-                }
-                known.Add(tool);
-                added = true;
-            }
-            if (added)
-            {
-                Directory.CreateDirectory(ChatToolsRoot());
-                File.WriteAllText(ChatToolsFile(chat), System.Text.Json.JsonSerializer.Serialize(known.Select(t => t.ToString())));
-            }
-        }
-
-        // Installed now, in the clone call, rather than on the chat's next command.
-        if (added) await ChatEnvironmentAsync(chat, ct);
-    }
-
-    protected override async Task<IReadOnlyList<string>> ChatEnvironmentAsync(Guid chat, CancellationToken ct)
-    {
-        if (!_options.Toolchains) return [];
-
-        List<RunTool> tools;
-        var known = ChatToolsOf(chat);
-        lock (known) tools = [.. known];
-        var tooling = await ToolsForAsync($"Chat {chat}", new RunToolPlan(tools, tools.Select(t => t.ToString()).ToList()), ct);
-        return tooling?.For(RunPaths.ChatHome(chat)) ?? [];
-    }
-
-    protected override void ChatRemoved(Guid chat)
-    {
-        _chatTools.TryRemove(chat, out _);
-        try { File.Delete(ChatToolsFile(chat)); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-    }
-
     // -- Provider sign-in --------------------------------------------------------
 
     private const string SignInRole = "signin";
@@ -598,7 +528,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IDispos
         try
         {
             var agents = agent is null ? (IReadOnlyList<RunAgent>)[] : Agents().Where(a => a.Agent.Key == agent.Key).ToList();
-            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), ct, agents);
+            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), agents, ct);
             try
             {
                 await _api.PostAsync($"/containers/create?name={Escaped(name)}", new

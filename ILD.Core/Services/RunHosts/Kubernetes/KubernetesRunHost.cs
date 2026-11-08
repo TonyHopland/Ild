@@ -29,6 +29,7 @@ public sealed class KubernetesRunHost : ExecRunHost
     // What the store gave each set of toolchains and agents asked for, and the pods exec'd into that are not a run's.
     private readonly ConcurrentDictionary<string, RunToolEnvironment> _tools = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _toolsGate = new(1, 1);
+    private readonly SemaphoreSlim _chatGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, string> _execNames = new();
 
     public KubernetesRunHost(
@@ -55,6 +56,10 @@ public sealed class KubernetesRunHost : ExecRunHost
 
     protected override string Noun => "pod";
 
+    public override bool HostsChats => true;
+
+    protected override bool ChatToolchains => _options.UsesToolStore;
+
     protected override string IldUrl => _options.IldUrl;
 
     protected override int EgressProxyPort => _options.EgressProxyPort;
@@ -68,7 +73,7 @@ public sealed class KubernetesRunHost : ExecRunHost
         if (await IsHealthyAsync(owner, ct))
             return new RunEnvironment(owner, workingDirectory);
 
-        var tools = await ToolsForAsync(request, ct);
+        var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), ct);
         var secret = await CreateOwnerAsync(owner, ct);
         try
         {
@@ -76,7 +81,7 @@ public sealed class KubernetesRunHost : ExecRunHost
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.Claim(owner, reference), _namespace, cancellationToken: ct));
             await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.Policy(owner, reference), _namespace, cancellationToken: ct));
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.Pod(owner, reference, tools), _namespace, cancellationToken: ct));
-            var pod = await WaitReadyAsync(owner, ct);
+            var pod = await WaitReadyAsync(KubernetesNames.ObjectName(owner), $"run {owner:N}", ct);
             _podAddresses[owner] = pod.Status.PodIP;
 
             await PrepareAsync(owner, request, ct);
@@ -146,17 +151,17 @@ public sealed class KubernetesRunHost : ExecRunHost
         => pod.Status?.Phase == "Running" && !string.IsNullOrEmpty(pod.Status.PodIP)
             && pod.Status.ContainerStatuses?.All(c => c.Ready) == true;
 
-    private async Task<V1Pod> WaitReadyAsync(Guid owner, CancellationToken ct)
+    private async Task<V1Pod> WaitReadyAsync(string name, string subject, CancellationToken ct)
     {
         var started = Stopwatch.StartNew();
         while (true)
         {
-            var pod = await _client.CoreV1.ReadNamespacedPodAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct);
+            var pod = await _client.CoreV1.ReadNamespacedPodAsync(name, _namespace, cancellationToken: ct);
             if (IsReady(pod)) return pod;
             if (pod.Status?.Phase is "Failed" or "Succeeded")
-                throw new InvalidOperationException($"the pod of run {owner:N} ended before it was ready: {WhyNotReady(pod)}");
+                throw new InvalidOperationException($"the pod of {subject} ended before it was ready: {WhyNotReady(pod)}");
             if (started.Elapsed > _options.ReadyTimeout)
-                throw new InvalidOperationException($"the pod of run {owner:N} was not ready after {_options.ReadyTimeout.TotalSeconds:0} s: {WhyNotReady(pod)}");
+                throw new InvalidOperationException($"the pod of {subject} was not ready after {_options.ReadyTimeout.TotalSeconds:0} s: {WhyNotReady(pod)}");
             await Task.Delay(ReadyPollInterval, ct);
         }
     }
@@ -183,11 +188,10 @@ public sealed class KubernetesRunHost : ExecRunHost
     /// What the run's commands get from the toolchain store, installed into it first when it lacks them; null when the
     /// runs mount no store (toolchains off, or no claim to hold it), so the run has only what the runner image has.
     /// </summary>
-    private async Task<RunToolEnvironment?> ToolsForAsync(RunEnvironmentRequest request, CancellationToken ct)
+    protected override async Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, CancellationToken ct)
     {
         if (!_options.UsesToolStore) return null;
 
-        var plan = RunToolDetector.Resolve(request.BasePath);
         var agents = Agents();
         var key = string.Join('\n', RunToolStore.Arguments(plan.Tools, agents));
         if (key.Length == 0) return RunToolEnvironment.None;
@@ -197,8 +201,8 @@ public sealed class KubernetesRunHost : ExecRunHost
         try
         {
             if (_tools.TryGetValue(key, out known)) return known;
-            Logger?.LogInformation("Run {Run} gets {Plan}, and the agents {Agents}, from the toolchain store {Claim}",
-                request.OwnerId, plan, string.Join(", ", agents.Select(a => $"{a.Agent.Key}@{a.Version}")), _options.ToolsClaim);
+            Logger?.LogInformation("{Owner} gets {Plan}, and the agents {Agents}, from the toolchain store {Claim}",
+                label, plan, string.Join(", ", agents.Select(a => $"{a.Agent.Key}@{a.Version}")), _options.ToolsClaim);
 
             var installer = Guid.NewGuid();
             var name = $"ild-tools-{installer:N}";
@@ -208,7 +212,7 @@ public sealed class KubernetesRunHost : ExecRunHost
                 await _client.CoreV1.CreateNamespacedPodAsync(_manifests.ToolsInstaller(name), _namespace, cancellationToken: ct);
                 await WaitInstallerReadyAsync(name, ct);
                 var environment = await InstallToolsAsync(installer, plan.Tools, agents, ct);
-                Logger?.LogInformation("Run {Run} has {Installed}", request.OwnerId, string.Join(", ", environment.Installed));
+                Logger?.LogInformation("{Owner} has {Installed}", label, string.Join(", ", environment.Installed));
                 return _tools[key] = environment;
             }
             finally
@@ -243,7 +247,9 @@ public sealed class KubernetesRunHost : ExecRunHost
 
     public override async Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
     {
-        var owner = OwnerFor(workingDirectory).Id;
+        var target = OwnerFor(workingDirectory);
+        if (target.Chat) throw new NotSupportedException("a service in a chat cannot be previewed");
+        var owner = target.Id;
         if (!_podAddresses.TryGetValue(owner, out var address))
         {
             var pod = await _client.CoreV1.ReadNamespacedPodAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct);
@@ -255,11 +261,11 @@ public sealed class KubernetesRunHost : ExecRunHost
 
     protected override async Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
     {
-        if (owner.Chat) return false;
+        // A chat pod that is not there has nothing running to kill, and asking would make it.
         try
         {
-            await _client.CoreV1.ReadNamespacedPodAsync(KubernetesNames.ObjectName(owner.Id), _namespace, cancellationToken: ct);
-            return true;
+            var pod = await _client.CoreV1.ReadNamespacedPodAsync(owner.Chat ? ChatPodName : KubernetesNames.ObjectName(owner.Id), _namespace, cancellationToken: ct);
+            return !owner.Chat || IsReady(pod);
         }
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -268,7 +274,72 @@ public sealed class KubernetesRunHost : ExecRunHost
     }
 
     protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
-        => await PodExec.OpenAsync(_client, _namespace, _execNames.TryGetValue(owner.Id, out var other) ? other : KubernetesNames.ObjectName(owner.Id), command, stdin, tty, ct);
+        => await PodExec.OpenAsync(
+            _client, _namespace, owner.Chat ? await EnsureChatPodAsync(ct) : _execNames.TryGetValue(owner.Id, out var other) ? other : KubernetesNames.ObjectName(owner.Id), command, stdin, tty, ct);
+
+    // -- Chats -------------------------------------------------------------------
+
+    private string ChatPodName => KubernetesNames.ChatName(_options.Instance);
+
+    /// <summary>
+    /// The name of the chat pod, made first when it is missing, and replaced when it has ended or is going away. The claim
+    /// keeps the chats' folders through that.
+    /// </summary>
+    private async Task<string> EnsureChatPodAsync(CancellationToken ct)
+    {
+        if (await ChatPodStateAsync(ct) is { } pod && IsReady(pod) && pod.Metadata.DeletionTimestamp is null) return ChatPodName;
+
+        await _chatGate.WaitAsync(ct);
+        try
+        {
+            var existing = await ChatPodStateAsync(ct);
+            if (existing is not null && IsReady(existing) && existing.Metadata.DeletionTimestamp is null) return ChatPodName;
+
+            if (existing is not null && (existing.Metadata.DeletionTimestamp is not null || existing.Status?.Phase is "Failed" or "Succeeded"))
+            {
+                if (existing.Metadata.DeletionTimestamp is null)
+                    await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
+                await WaitChatPodGoneAsync(ct);
+                existing = null;
+            }
+
+            if (existing is null)
+            {
+                await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.ChatClaim(), _namespace, cancellationToken: ct));
+                await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.ChatPolicy(), _namespace, cancellationToken: ct));
+                await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.ChatPod(), _namespace, cancellationToken: ct));
+            }
+            await WaitReadyAsync(ChatPodName, "the chats", ct);
+            return ChatPodName;
+        }
+        finally
+        {
+            _chatGate.Release();
+        }
+    }
+
+    private async Task<V1Pod?> ChatPodStateAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _client.CoreV1.ReadNamespacedPodAsync(ChatPodName, _namespace, cancellationToken: ct);
+        }
+        catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    private async Task WaitChatPodGoneAsync(CancellationToken ct)
+    {
+        var started = Stopwatch.StartNew();
+        while (await ChatPodStateAsync(ct) is not null)
+        {
+            if (started.Elapsed > _options.ReadyTimeout)
+                throw new InvalidOperationException($"the old pod of the chats was still there after {_options.ReadyTimeout.TotalSeconds:0} s");
+            await Task.Delay(ReadyPollInterval, ct);
+        }
+    }
 
     // -- Sweep -------------------------------------------------------------------
 

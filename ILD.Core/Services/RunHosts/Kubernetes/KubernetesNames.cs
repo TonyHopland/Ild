@@ -11,9 +11,14 @@ public static class KubernetesNames
     public const string RunLabel = RunPaths.RunLabel;
     public const string RunsRoot = RunPaths.RunsRoot;
     public const string StateDirectory = RunPaths.StateDirectory;
+    public const string RoleLabel = RunPaths.RoleLabel;
+    public const string ChatRole = RunPaths.ChatRole;
 
     /// <summary>The name of a run's Secret, volume claim, network policy and pod.</summary>
     public static string ObjectName(Guid ownerId) => $"ild-run-{ownerId:N}";
+
+    /// <summary>The name of the chat pod, its volume claim and its network policy: one of each for the instance.</summary>
+    public static string ChatName(string instance) => $"ild-chat-{instance}";
 
     public static string RunRoot(Guid ownerId) => RunPaths.RunRoot(ownerId);
 
