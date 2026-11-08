@@ -652,6 +652,14 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/cleanup`, {});
   },
 
+  /**
+   * The container and folder VS Code attaches to for the run's worktree, starting a stopped container again.
+   * Refused with 409 where runs do not execute in Docker or Podman containers.
+   */
+  openInEditor: async (id: string): Promise<{ containerName: string; folder: string }> => {
+    return api.post<{ containerName: string; folder: string }>(`/loopruns/${id}/editor`, {});
+  },
+
   pause: async (id: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/pause`, {});
   },

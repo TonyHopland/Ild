@@ -1138,6 +1138,17 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Checking_a_folder_in_a_stopped_run_container_starts_it_again_so_an_editor_can_attach()
+    {
+        await CreateRunAsync();
+        _api.Stop(Name(_run));
+
+        Assert.True(await _host.DirectoryExistsAsync(WorkingDirectory, TestContext.Current.CancellationToken));
+
+        Assert.False(_api.IsStopped(Name(_run)));
+    }
+
+    [Fact]
     public async Task A_chat_container_made_from_another_runner_image_is_replaced_at_startup_and_one_from_the_same_is_kept()
     {
         var ct = TestContext.Current.CancellationToken;

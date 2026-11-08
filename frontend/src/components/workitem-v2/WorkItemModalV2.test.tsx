@@ -18,6 +18,7 @@ import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { stageParkedNode } from "../../test-support.parkedNode";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import { openAppLink, vscodeAttachUri } from "../../utils/vscodeAttachUri";
 
 // The real terminal spins up an xterm instance and a WebSocket, neither of which
 // jsdom provides. Stub it with a marker that echoes the props the modal passes so
@@ -43,6 +44,11 @@ vi.mock("../LoopRunTerminal", () => ({
       </button>
     </div>
   ),
+}));
+
+vi.mock("../../utils/vscodeAttachUri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/vscodeAttachUri")>()),
+  openAppLink: vi.fn(),
 }));
 
 afterEach(() => {
@@ -2093,6 +2099,61 @@ describe("WorkItemModalV2", () => {
     const stillThere = screen.getByTestId("embedded-terminal");
     expect(stillThere).toBe(term);
     expect(stillThere.closest("[role='tabpanel']")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  async function openTerminalTab() {
+    await renderDialog(
+      makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/ild-run/run1/repo" }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      await Promise.resolve();
+    });
+  }
+
+  test("Open in VS Code asks for the run's container and opens VS Code attached to it", async () => {
+    mockServices();
+    vi.mocked(openAppLink).mockClear();
+    const openInEditor = vi
+      .spyOn(authServices.loopRunService, "openInEditor")
+      .mockResolvedValue({ containerName: "ild-run-run1", folder: "/ild-run/run1/repo" });
+    await openTerminalTab();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+      await Promise.resolve();
+    });
+
+    expect(openInEditor).toHaveBeenCalledWith("run-1");
+    expect(openAppLink).toHaveBeenCalledWith(vscodeAttachUri("ild-run-run1", "/ild-run/run1/repo"));
+  });
+
+  test("Open in VS Code shows why it could not open, and goes where runs have no container", async () => {
+    mockServices();
+    vi.mocked(openAppLink).mockClear();
+    const openInEditor = vi
+      .spyOn(authServices.loopRunService, "openInEditor")
+      .mockRejectedValueOnce({
+        status: 400,
+        message: "Run has no live worktree.",
+      } satisfies ApiError)
+      .mockRejectedValueOnce({ status: 409, message: "No container." } satisfies ApiError);
+    await openTerminalTab();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("alert").textContent).toBe("Run has no live worktree.");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+      await Promise.resolve();
+    });
+    expect(openInEditor).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Open in VS Code" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Terminal" })).toBeTruthy();
+    expect(openAppLink).not.toHaveBeenCalled();
   });
 
   test("losing the worktree while on the Terminal tab falls back to Overview, even when running", async () => {
