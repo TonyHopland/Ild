@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Network forwards work in run and chat containers and pods**: `127.0.0.1:<local port>` there reaches the forward's destination through the egress proxy.
 - **A run restores NuGet packages from a private Azure Artifacts feed**: the toolchain store installs the credential provider with each .NET SDK from 9.0.200 on.
 - **Chats share one container, or one pod in Kubernetes, and the provider sign-in terminal runs in a short-lived container, or pod, that keeps the login when it closes.**
+- **Open in VS Code on a work item's Terminal tab opens the run's worktree in VS Code, attached to its Docker or Podman container.**
 
 ### Changed
 

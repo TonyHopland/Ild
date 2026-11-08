@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import "./workitem-v2.css";
 import { type ApiError, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
-import { workItemService } from "../../services/auth";
+import { loopRunService, workItemService } from "../../services/auth";
 import useRenderedPrompt from "../../hooks/useRenderedPrompt";
 import ConfirmModal from "../ConfirmModal";
 import LoopRunTerminal from "../LoopRunTerminal";
@@ -25,6 +25,7 @@ import {
   workItemStatusTone,
 } from "../../utils/labels";
 import { repositoryName } from "../../utils/repositoryName";
+import { openAppLink, vscodeAttachUri } from "../../utils/vscodeAttachUri";
 import { repositoryHoldOf, startOfferOf } from "./offers";
 
 type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal" | "history";
@@ -105,6 +106,27 @@ export default function WorkItemModalV2({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
+  // VS Code attaches to the run's container on the engine's machine; where runs have none, the button goes.
+  const [editorUnavailable, setEditorUnavailable] = useState(false);
+  const [editorError, setEditorError] = useState<string | null>(null);
+  const [openingEditor, setOpeningEditor] = useState(false);
+  useEffect(() => setEditorError(null), [workItem?.id, workItem?.status]);
+  const openInEditor = async (loopRunId: string) => {
+    setOpeningEditor(true);
+    setEditorError(null);
+    try {
+      const { containerName, folder } = await loopRunService.openInEditor(loopRunId);
+      openAppLink(vscodeAttachUri(containerName, folder));
+    } catch (error) {
+      if ((error as Partial<ApiError> | null)?.status === 409) setEditorUnavailable(true);
+      else
+        setEditorError(
+          (error as Partial<ApiError> | undefined)?.message || "Could not open VS Code.",
+        );
+    } finally {
+      setOpeningEditor(false);
+    }
+  };
   // Backlog to Work queue without dragging the card, which a phone cannot do,
   // and a Ready item its repository's limit or a paused scheduler holds back started anyway.
   const [moving, setMoving] = useState(false);
@@ -187,6 +209,7 @@ export default function WorkItemModalV2({
     // A terminal session belongs to the item it was opened on; switching items
     // must tear it down rather than leak the previous worktree's shell.
     setShowTerminal(false);
+    setEditorUnavailable(false);
     // Only reset when switching to a different item — status changes on the
     // same item must not yank the user away from the tab they are reading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -516,6 +539,28 @@ export default function WorkItemModalV2({
               >
                 Open Terminal
               </button>
+              {!editorUnavailable && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={openingEditor}
+                    onClick={() => void openInEditor(workItem.currentLoopRunId!)}
+                  >
+                    Open in VS Code
+                  </button>
+                  <p className="wiv2-terminal-hint">
+                    Needs VS Code with the Dev Containers extension on the machine that runs the
+                    container engine. With Podman, set <code>dev.containers.dockerPath</code> to{" "}
+                    <code>podman</code>.
+                  </p>
+                  {editorError && (
+                    <p className="wiv2-terminal-error" role="alert">
+                      {editorError}
+                    </p>
+                  )}
+                </>
+              )}
             </div>
           )}
         </section>

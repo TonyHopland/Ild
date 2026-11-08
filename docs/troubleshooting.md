@@ -52,3 +52,7 @@ ILD's log says why at startup, and **Settings > General** shows the reason. Chec
 **A run's container fails to start with `crun: open 'memory.max'`**
 
 The rootless engine's cgroup controllers are not delegated. Set `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0` in `.env`; see [Deployment](deployment.md#which-socket).
+
+**Open in VS Code does nothing, or VS Code cannot find the container**
+
+The button on a work item's **Terminal** tab opens VS Code attached to the run's container, with the worktree open. It is there only when runs execute in Docker or Podman containers, and not while the run is executing. The browser hands the link to VS Code on the machine you browse from, so that machine must run the container engine ILD uses and have VS Code with the Dev Containers extension. With Podman, set `dev.containers.dockerPath` to `podman` in VS Code's settings. A stopped container is started again when you press the button.
