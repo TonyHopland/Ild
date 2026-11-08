@@ -75,9 +75,17 @@ public static class ServiceCollectionExtensions
             // A run's pod or container reaches the egress proxy over the network, not on ILD's loopback.
             EgressProxyOptions.BindAddress = System.Net.IPAddress.Any;
             var loggers = sp.GetRequiredService<ILoggerFactory>();
-            return kind == RunHostKind.Kubernetes
+            var host = kind == RunHostKind.Kubernetes
                 ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp))
                 : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp));
+            // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
+            host.Isolated.Forwards = async ct =>
+            {
+                using var scope = sp.GetRequiredService<IServiceScopeFactory>().CreateScope();
+                var rows = await scope.ServiceProvider.GetRequiredService<INetworkForwardStore>().GetForwardsAsync(ct);
+                return rows.Select(r => new ILD.Core.Services.RunHosts.Isolated.RunForward(r.LocalPort, r.Host, r.Port)).ToList();
+            };
+            return host;
         });
         services.AddHostedService(sp => new RunHostSweeper(
             sp.GetRequiredService<IRunHost>(),

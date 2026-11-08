@@ -188,7 +188,7 @@ ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
 CMD ["dotnet", "ILD.Api.dll"]
 
 # The slim image a loop run's pod or container runs under (docs/adr/0035-run-toolchains.md): an OS, the tools every
-# project uses (git, a shell, a compiler, curl, jq, ripgrep), Chrome and mise. No language toolchain and no coding agent: ILD
+# project uses (git, a shell, a compiler, curl, jq, ripgrep), socat for the declared forwards, Chrome and mise. No language toolchain and no coding agent: ILD
 # installs the ones a repository needs, at the versions it picks, into a shared store the run mounts read-only, so a
 # node project does not carry a .NET SDK. The same image installs them: ILD runs mise in it against the store.
 # The MCP server is the self-contained build, at the path the agent's MCP config names. tini is the init, which reaps
@@ -204,7 +204,7 @@ ARG MISE_SHA256_AMD64=207ae03669918b4cc98ff505526f16568cbe0a4b5e6c9da97029600f6f
 ARG MISE_SHA256_ARM64=841f105cc4d415437630b07a7f81f0e3d3ace2298295e3bbd69ef2dd3b656177
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash tini git ca-certificates curl wget gnupg xz-utils unzip zip jq ripgrep build-essential \
+      bash tini git ca-certificates curl wget gnupg xz-utils unzip zip jq ripgrep build-essential socat \
       libicu74 libatomic1 zlib1g procps less openssh-client && \
     arch="$(dpkg --print-architecture)" && \
     case "$arch" in amd64) mise_sha="$MISE_SHA256_AMD64" ;; arm64) mise_sha="$MISE_SHA256_ARM64" ;; *) echo "no mise package for $arch" >&2; exit 1 ;; esac && \

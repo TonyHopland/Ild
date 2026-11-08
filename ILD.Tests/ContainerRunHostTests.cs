@@ -269,6 +269,50 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Empty(_api.Networks());
     }
 
+    // -- Forwards ----------------------------------------------------------------
+
+    [Fact]
+    public async Task A_command_starts_with_the_declared_forwards_answering_on_the_runs_loopback_through_the_proxy()
+    {
+        await CreateRunAsync();
+        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>(
+            [new(15432, "postgres", 5432), new(16379, "bad,host", 6379)]);
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var sync = _api.Execs.Single(e => e.Command.Contains(ExecRunHost.ForwardsScript));
+        Assert.Equal(Name(_run), sync.Container);
+        Assert.Equal(["15432", "postgres", "5432"], sync.Command.TakeLast(3));
+        // A host that could carry a socat option is not given a relay.
+        Assert.DoesNotContain("bad,host", sync.Command);
+        Assert.True(_api.Execs.IndexOf(sync) < _api.Execs.FindIndex(e => e.Command.Contains("make-it")));
+    }
+
+    [Fact]
+    public async Task With_no_forwards_a_command_costs_no_extra_exec_until_one_was_given_then_its_relays_are_stopped()
+    {
+        await CreateRunAsync();
+        IReadOnlyList<RunForward> forwards = [];
+        _host.Forwards = _ => Task.FromResult(forwards);
+        var ct = TestContext.Current.CancellationToken;
+
+        using (var first = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "a"), _run), ct)) await first.WaitForExitAsync(ct);
+        Assert.DoesNotContain(_api.Execs, e => e.Command.Contains(ExecRunHost.ForwardsScript));
+
+        forwards = [new(15432, "postgres", 5432)];
+        using (var second = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "b"), _run), ct)) await second.WaitForExitAsync(ct);
+        forwards = [];
+        using (var third = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "c"), _run), ct)) await third.WaitForExitAsync(ct);
+
+        var syncs = _api.Execs.Where(e => e.Command.Contains(ExecRunHost.ForwardsScript)).ToList();
+        Assert.Equal(2, syncs.Count);
+        Assert.Equal("5432", syncs[0].Command[^1]);
+        // Only the proxy's host and port: every relay is stopped.
+        Assert.Equal(["/bin/bash", "-c", ExecRunHost.ForwardsScript, "bash"], syncs[1].Command.Take(4));
+        Assert.Equal(6, syncs[1].Command.Count);
+    }
+
     // -- Exec --------------------------------------------------------------------
 
     [Fact]

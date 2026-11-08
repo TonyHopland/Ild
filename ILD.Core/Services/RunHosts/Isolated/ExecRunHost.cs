@@ -72,6 +72,70 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     private static readonly Regex StagedPath = new(@"[A-Za-z0-9._/\-]*", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Makes the run's or chat's environment answer the declared forwards (docs/adr/0020) on its own loopback, as ILD
+    /// does under <c>dotnet run</c>: one socat per forward listens on <c>127.0.0.1:&lt;local port&gt;</c> and tunnels each
+    /// connection to the destination through ILD's egress proxy with <c>CONNECT</c>, so the proxy judges and logs it
+    /// as it does every other. Idempotent: a relay that is running for the same destination is left alone, one for a
+    /// changed or deleted forward is stopped. Arguments: the proxy's host and port, then local port, host and port
+    /// per forward.
+    /// </summary>
+    internal const string ForwardsScript = """
+        dir="${ILD_FORWARDS_DIR:-/tmp/ild-forwards}"; mkdir -p "$dir"
+        proxy_host=$1; proxy_port=$2; shift 2
+        want=" "
+        while [ "$#" -ge 3 ]; do
+            local_port=$1; spec="$2:$3"; shift 3
+            want="$want$local_port "
+            if [ -f "$dir/$local_port.pid" ] && kill -0 "$(cat "$dir/$local_port.pid")" 2>/dev/null \
+                && [ "$(cat "$dir/$local_port.spec" 2>/dev/null)" = "$spec" ]; then
+                continue
+            fi
+            [ -f "$dir/$local_port.pid" ] && kill "$(cat "$dir/$local_port.pid")" 2>/dev/null
+            setsid socat "TCP-LISTEN:$local_port,bind=127.0.0.1,reuseaddr,fork" \
+                "PROXY:$proxy_host:$spec,proxyport=$proxy_port" </dev/null >/dev/null 2>&1 &
+            echo "$!" > "$dir/$local_port.pid"; echo "$spec" > "$dir/$local_port.spec"
+        done
+        for f in "$dir"/*.pid; do
+            [ -e "$f" ] || continue
+            local_port=$(basename "$f" .pid)
+            case "$want" in *" $local_port "*) ;; *) kill "$(cat "$f")" 2>/dev/null; rm -f "$f" "$dir/$local_port.spec" ;; esac
+        done
+        exit 0
+        """;
+
+    // A forward's host goes into a socat address, where a comma or a colon would be read as an option or a field.
+    private static readonly Regex ForwardHost = new(@"^[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?$", RegexOptions.Compiled);
+
+    /// <summary>The declared forwards, read when a command or terminal starts in a run or chat; null runs with none.</summary>
+    public Func<CancellationToken, Task<IReadOnlyList<RunForward>>>? Forwards { get; set; }
+
+    // The environments that were given relays, so one whose forwards all went is cleaned up, and one that never had
+    // any costs no extra exec per command.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ExecOwner, bool> _forwarded = new();
+
+    /// <summary>Brings the relays in <paramref name="owner"/>'s environment in line with the declared forwards. A failure is logged, never thrown: a command that needs no forward must still start.</summary>
+    private async Task SyncForwardsAsync(ExecOwner owner, CancellationToken ct)
+    {
+        if (Forwards is null) return;
+        try
+        {
+            var forwards = (await Forwards(ct)).Where(f => ForwardHost.IsMatch(f.Host) && f.LocalPort is > 0 and <= 65535 && f.Port is > 0 and <= 65535).ToList();
+            if (forwards.Count == 0 && !_forwarded.ContainsKey(owner)) return;
+            var arguments = new List<string> { new Uri(IldUrl).Host, EgressProxyPort.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            foreach (var f in forwards)
+                arguments.AddRange([f.LocalPort.ToString(System.Globalization.CultureInfo.InvariantCulture), f.Host, f.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
+            var result = await RunScriptAsync(owner, ForwardsScript, arguments, ct);
+            if (result.ExitCode != 0)
+                Logger?.LogWarning("Could not start the forwards in the {Noun} of {Owner}: {Error}", Noun, owner.Id, result.StdErr.Trim());
+            if (forwards.Count > 0) _forwarded[owner] = true; else _forwarded.TryRemove(owner, out _);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger?.LogWarning(ex, "Could not start the forwards in the {Noun} of {Owner}", Noun, owner.Id);
+        }
+    }
+
     private protected readonly ILogger? Logger = logger;
 
     /// <summary>The directory of ILD's that holds the files a launch is given to read.</summary>
@@ -130,7 +194,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// </summary>
     protected async Task<RunToolEnvironment> InstallToolsAsync(Guid installer, IReadOnlyList<RunTool> tools, IReadOnlyList<RunAgent> agents, CancellationToken ct)
     {
-        var result = await RunScriptAsync(installer, RunToolStore.InstallScript, RunToolStore.Arguments(tools, agents), ct);
+        // The script goes in on stdin, read whole before it runs: as an argument it would be part of the exec's URL on
+        // Kubernetes, which a long script makes too long for the API server (414).
+        using var script = new MemoryStream(Encoding.UTF8.GetBytes(RunToolStore.InstallScript));
+        var result = await ExecAsync(installer, [.. ScriptFromStdin, .. RunToolStore.Arguments(tools, agents)], script, null, ct);
         if (!result.Success)
         {
             var asked = string.Join(", ", tools.Select(t => t.ToString()).Concat(agents.Select(a => $"{a.Agent.Key}@{a.Version}")));
@@ -204,6 +271,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             : command.OwnerId != Guid.Empty ? command.OwnerId : RunPaths.OwnerOf(psi.WorkingDirectory)
                 ?? throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to");
 
+        await SyncForwardsAsync(owner, ct);
         var (fileName, arguments) = (psi.FileName, psi.ArgumentList.ToList());
         var environment = EnvironmentFor(command, psi, owner, out var network);
         if (owner.Chat)
@@ -346,6 +414,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var environment = (options.Environment ?? new Dictionary<string, string>()).ToDictionary(e => e.Key, e => e.Value);
         environment["HOME"] = RunPaths.HomeDirectory(owner);
         environment.TryAdd("TERM", "xterm-256color");
+        await SyncForwardsAsync(owner, ct);
 
         var command = new List<string> { "/bin/sh", "-c", "cd -- \"$1\" && shift && exec \"$@\"", "sh", options.Cwd, "env" };
         command.AddRange(environment.Select(e => $"{e.Key}={e.Value}"));
@@ -649,6 +718,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
     }
 
+    // Reads a script from stdin into a file, then runs it with the arguments, so what the script runs does not read
+    // the rest of the script as its own input.
+    private static readonly string[] ScriptFromStdin =
+        ["/bin/bash", "-c", "f=$(mktemp) && cat > \"$f\" && exec bash \"$f\" \"$@\"", "bash"];
+
     protected Task<RunHostOutput> RunScriptAsync(ExecOwner owner, string script, IReadOnlyList<string> arguments, CancellationToken ct)
         => ExecAsync(owner, ["/bin/bash", "-c", script, "bash", .. arguments], null, null, ct);
 
@@ -727,3 +801,6 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
     }
 }
+
+/// <summary>A declared forward as a run's or chat's environment answers it: <c>127.0.0.1:LocalPort</c> reaches <c>Host:Port</c> through the egress proxy.</summary>
+public sealed record RunForward(int LocalPort, string Host, int Port);

@@ -627,9 +627,12 @@ a destination.
 Declare a **forward** instead, in the **Network** section of Settings: a name, the
 real destination, and a loopback port for it to answer on.
 
-> **Forwards do not reach a run's container or pod yet.** A forward listens on
-> ILD's own loopback, which a run's container or pod does not share, so today it
-> serves only agents and previews started by an ILD under `dotnet run`.
+> **In a run's or chat's container or pod**, the loopback port is answered by a
+> relay ILD starts there (`socat`, in the runner image) before each command or
+> terminal it starts: it tunnels each connection to the forward's destination
+> through the egress proxy, which judges and logs it like any other. A forward
+> added or edited while a preview is running reaches it from the next command ILD
+> starts there, such as the preview's next restart.
 
 ```
 postgres   postgres:5432        →  127.0.0.1:15432

@@ -1,5 +1,7 @@
 # ADR-0020: Raw-TCP egress is served by a declared, judged relay, not a hole in the firewall
 
+> **Amended by [ADR-0036](./0036-runs-always-in-containers.md).** In a run's or chat's container or pod, a forward's loopback port is answered by a `socat` relay ILD starts there before each command, tunnelling through the egress proxy with `CONNECT`; the proxy judges and logs the connection as it does every other.
+
 A Worktree Preview cannot reach a database, or anything else outside the
 container. Previews run as the agent uid ([ADR-0016](./0016-preview-runs-as-the-agent.md)),
 whose nftables rules accept loopback and DNS and drop everything else
