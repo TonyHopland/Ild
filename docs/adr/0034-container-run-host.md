@@ -26,7 +26,11 @@ With `ILD_RUN_HOST=container`, chats do not run in ILD's own container either. O
 - **Made on first use** and again when it is missing or stopped; the volume keeps the chats' folders. It carries no run label, so the sweeper never takes it for a run's. After ILD's own container is recreated, `CheckAsync` puts ILD back on its network at the address the container was given.
 - **Code goes in as a bundle**: ILD bundles the branch from its own base clone under a temporary branch, the container fetches it, and the chat's clone points `origin/<branch>` at it. The marker, fast-forward-only update and refusal rules are the same as for a chat on local disk.
 - **Toolchains per chat**: the repositories a chat clones are detected from ILD's base clones and installed into the store; the chat's commands get `PATH` and variables for them. Which toolchains a chat has is kept on ILD's side, not in the chat's folder, which the chat's agent can write and which would otherwise let it ask the store to install anything. When two repositories want different versions of a tool, the first one cloned wins.
-- **Chats made before the switch keep running on local disk**, and the Kubernetes host keeps all chats local.
+- **Chats made before the switch keep running on local disk.**
+
+### On Kubernetes
+
+The Kubernetes host keeps chats the same way, in one pod per instance, `ild-chat-<instance>`, with a `ReadWriteOnce` claim of the same name at `/ild-chat` (the run storage class and size), a NetworkPolicy with the same rules as a run's, and the store's claim mounted read-only whenever `ILD_K8S_TOOLS_CLAIM` is set. The pod, claim and policy carry `ild/role=chat` and no run label or owner reference, so the sweeper leaves them alone and the claim survives the pod. The pod is a plain pod, made on first use and replaced when it has ended or is being deleted; it has no CPU or memory limit. A service in a chat cannot be previewed, and the provider sign-in terminal still runs locally.
 
 ## Provider sign-in terminal
 

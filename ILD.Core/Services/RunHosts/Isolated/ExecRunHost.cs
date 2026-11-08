@@ -1,9 +1,11 @@
+using System.Collections.Concurrent;
 using System.Collections;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts.Tools;
 using Microsoft.Extensions.Logging;
@@ -525,15 +527,90 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     // -- Chats -------------------------------------------------------------------
 
-    /// <summary>The variables (<c>NAME=value</c>) every command of the chat starts with besides its caller's: its toolchains on <c>PATH</c>.</summary>
-    protected virtual Task<IReadOnlyList<string>> ChatEnvironmentAsync(Guid chat, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
+    /// <summary>Whether chats get toolchains from the store: whether this host mounts it.</summary>
+    protected abstract bool ChatToolchains { get; }
 
-    /// <summary>The chat's folder was deleted: forget what was kept about it.</summary>
-    protected virtual void ChatRemoved(Guid chat)
+    /// <summary>Where what each chat's repositories need from the toolchain store is kept. Replaced in tests.</summary>
+    internal Func<string> ChatToolsRoot { get; init; } = () => Path.Combine(ManagedAgentInstall.ResolveDataRoot(), "chat-tools");
+
+    private readonly ConcurrentDictionary<Guid, List<RunTool>> _chatTools = new();
+
+    /// <summary>What the commands of a run or chat get from the toolchain store for <paramref name="plan"/>, installed into it first when it lacks them; null when there is no store.</summary>
+    protected abstract Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, CancellationToken ct);
+
+    // What the chat's repositories need, kept on ILD's side: a chat's agent writes everything in the chat's folder, and
+    // what is asked of the toolchain store (which every run and chat shares) must not be something it can write.
+    private string ChatToolsFile(Guid chat) => Path.Combine(ChatToolsRoot(), $"{chat:N}.json");
+
+    private List<RunTool> ChatToolsOf(Guid chat)
+        => _chatTools.GetOrAdd(chat, _ =>
+        {
+            try
+            {
+                var file = ChatToolsFile(chat);
+                return File.Exists(file)
+                    ? (System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(file)) ?? []).Select(RunTool.Parse).OfType<RunTool>().ToList()
+                    : [];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            {
+                Logger?.LogWarning(ex, "Could not read the toolchains of chat {Chat}; it gets none until a repository is cloned into it again", chat);
+                return [];
+            }
+        });
+
+    /// <summary>Adds what the repository at <paramref name="basePath"/> needs to the chat's toolchains, installing them now.</summary>
+    public async Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
     {
+        if (!ChatToolchains || RunPaths.ChatOf(chatPath) is not { } chat) return;
+
+        var plan = RunToolDetector.Resolve(basePath);
+        var known = ChatToolsOf(chat);
+        var added = false;
+        lock (known)
+        {
+            foreach (var tool in plan.Tools)
+            {
+                if (known.FirstOrDefault(t => t.Name == tool.Name) is { } existing)
+                {
+                    if (existing != tool)
+                        Logger?.LogWarning("Chat {Chat} already has {Existing}, so {Tool} from {BasePath} is not added", chat, existing, tool, basePath);
+                    continue;
+                }
+                known.Add(tool);
+                added = true;
+            }
+            if (added)
+            {
+                Directory.CreateDirectory(ChatToolsRoot());
+                File.WriteAllText(ChatToolsFile(chat), System.Text.Json.JsonSerializer.Serialize(known.Select(t => t.ToString())));
+            }
+        }
+
+        // Installed now, in the clone call, rather than on the chat's next command.
+        if (added) await ChatEnvironmentAsync(chat, ct);
     }
 
-    public virtual Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>The variables (<c>NAME=value</c>) every command of the chat starts with besides its caller's: its toolchains on <c>PATH</c>.</summary>
+    protected async Task<IReadOnlyList<string>> ChatEnvironmentAsync(Guid chat, CancellationToken ct)
+    {
+        if (!ChatToolchains) return [];
+
+        List<RunTool> tools;
+        var known = ChatToolsOf(chat);
+        lock (known) tools = [.. known];
+        var tooling = await ToolsForAsync($"Chat {chat}", new RunToolPlan(tools, tools.Select(t => t.ToString()).ToList()), ct);
+        return tooling?.For(RunPaths.ChatHome(chat)) ?? [];
+    }
+
+    /// <summary>The chat's folder was deleted: forget what was kept about it.</summary>
+    private void ChatRemoved(Guid chat)
+    {
+        _chatTools.TryRemove(chat, out _);
+        try { File.Delete(ChatToolsFile(chat)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
 
     public async Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
     {

@@ -8,6 +8,7 @@ using ILD.Core.Services.RunHosts.Kubernetes;
 using ILD.Core.Services.RunHosts.Tools;
 using ILD.Data.Enums;
 using ILD.Tests.Fakes;
+using k8s;
 using k8s.Models;
 using Microsoft.Extensions.Logging;
 using Porta.Pty;
@@ -50,7 +51,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
     private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null)
-        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [] };
+        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools") };
 
     private string WorkingDirectory => KubernetesNames.WorkingDirectory(_run);
 
@@ -697,22 +698,194 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Single(_api.Execs);
     }
 
+    // -- Chats -------------------------------------------------------------------
+
+    private static string ChatPodName => "ild-chat-main";
+
+    private static string ChatFolder(Guid chat) => RunPaths.ChatRoot(chat);
+
     [Fact]
-    public async Task Chats_stay_local_on_kubernetes_whatever_their_path_says()
+    public async Task A_chat_folder_and_its_commands_go_to_the_chat_pod_and_old_chats_stay_local()
     {
         var chat = Guid.NewGuid();
-        var local = FakeLocal();
+        var local = FakeLocal().WithDirectory("/data/chat-sessions/old");
         var routing = new RoutingRunHost(local, _host);
 
         var path = await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", TestContext.Current.CancellationToken);
         using var process = await routing.StartCommandAsync(
-            RunCommand.Routed(Command(RunPaths.ChatRoot(chat), "git", "status"), chat), TestContext.Current.CancellationToken);
+            RunCommand.Routed(Command(ChatFolder(chat), "git", "status"), chat), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.False(_host.HostsChats);
-        Assert.Equal(Path.Combine("/data/chat-sessions", chat.ToString("N")), path);
-        Assert.Equal([chat], local.ChatFolders);
-        Assert.Single(local.Started);
+        Assert.True(_host.HostsChats);
+        Assert.Equal(ChatFolder(chat), path);
+        Assert.Empty(local.ChatFolders);
+        Assert.Empty(local.Started);
+        Assert.All(_api.Execs, e => Assert.Equal(ChatPodName, e.Pod));
+        Assert.Contains(RunPaths.ChatHome(chat), _api.Execs.First().Command);
+        Assert.Contains(ChatFolder(chat), _api.Execs.Last().Command);
+
+        var before = _api.Execs.Count;
+        Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/old", TestContext.Current.CancellationToken));
+        Assert.Equal(before, _api.Execs.Count);
+    }
+
+    [Fact]
+    public async Task The_chat_pod_claim_and_policy_are_made_once_for_every_chat_and_carry_no_run_label()
+    {
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
+        Assert.Equal(1, _api.Created.Count(c => c == $"persistentvolumeclaims/{ChatPodName}"));
+        Assert.Equal(1, _api.Created.Count(c => c == $"networkpolicies/{ChatPodName}"));
+
+        var pod = _api.Get<V1Pod>("pods", ChatPodName)!;
+        var claim = _api.Get<V1PersistentVolumeClaim>("persistentvolumeclaims", ChatPodName)!;
+        var policy = _api.Get<V1NetworkPolicy>("networkpolicies", ChatPodName)!;
+        foreach (var labels in new[] { pod.Metadata.Labels, claim.Metadata.Labels, policy.Metadata.Labels })
+        {
+            Assert.Equal("chat", labels[KubernetesNames.RoleLabel]);
+            Assert.Equal(Instance, labels[KubernetesNames.InstanceLabel]);
+            Assert.False(labels.ContainsKey(KubernetesNames.RunLabel));
+        }
+        Assert.Null(claim.Metadata.OwnerReferences);
+        Assert.Equal("run-scratch", claim.Spec.StorageClassName);
+        Assert.Equal(policy.Spec.PodSelector.MatchLabels, new Dictionary<string, string> { [KubernetesNames.RoleLabel] = "chat", [KubernetesNames.InstanceLabel] = Instance });
+        Assert.Equal(["Ingress", "Egress"], policy.Spec.PolicyTypes);
+
+        var container = pod.Spec.Containers.Single();
+        Assert.Equal(RunPaths.ChatsRoot, container.WorkingDir);
+        Assert.Equal(ChatPodName, pod.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName);
+        Assert.Equal(RunPaths.ChatsRoot, container.VolumeMounts.Single(v => v.Name == "work").MountPath);
+        Assert.Null(container.Resources.Limits);
+        Assert.NotEmpty(container.Resources.Requests);
+        Assert.Contains(container.Env, e => e.Name == "GIT_AUTHOR_NAME" && e.Value == "Ada");
+        Assert.DoesNotContain(container.VolumeMounts, v => v.Name == "tools");
+    }
+
+    [Fact]
+    public async Task The_chat_pod_mounts_the_tools_claim_read_only_whenever_there_is_a_store()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"));
+
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+
+        var pod = _api.Get<V1Pod>("pods", ChatPodName)!;
+        Assert.True(pod.Spec.Volumes.Single(v => v.Name == "tools").PersistentVolumeClaim.ReadOnlyProperty);
+        var mount = pod.Spec.Containers.Single().VolumeMounts.Single(v => v.Name == "tools");
+        Assert.Equal(RunToolStore.Root, mount.MountPath);
+        Assert.True(mount.ReadOnlyProperty);
+    }
+
+    [Fact]
+    public async Task A_chat_pod_that_failed_is_replaced_and_its_claim_is_kept()
+    {
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        _api.Get<V1Pod>("pods", ChatPodName)!.Status = new V1PodStatus { Phase = "Failed" };
+
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
+        Assert.Contains($"pods/{ChatPodName}", _api.Deleted);
+        Assert.DoesNotContain($"persistentvolumeclaims/{ChatPodName}", _api.Deleted);
+        Assert.Equal(1, _api.Created.Count(c => c == $"persistentvolumeclaims/{ChatPodName}"));
+        Assert.Equal(ChatPodName, _api.Execs.Last().Pod);
+    }
+
+    [Fact]
+    public async Task A_chat_pod_that_is_terminating_is_waited_out_before_a_new_one_is_made()
+    {
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        _api.Get<V1Pod>("pods", ChatPodName)!.Metadata.DeletionTimestamp = DateTime.UtcNow;
+        var client = _api.Client();
+        var goes = Task.Run(async () =>
+        {
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            await client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, FakeKubernetesApi.Namespace, cancellationToken: TestContext.Current.CancellationToken);
+        }, TestContext.Current.CancellationToken);
+
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        await goes;
+
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
+        Assert.Null(_api.Get<V1Pod>("pods", ChatPodName)!.Metadata.DeletionTimestamp);
+    }
+
+    [Fact]
+    public async Task Kill_all_for_a_chat_ends_what_runs_in_the_chat_pod_and_starts_no_pod_that_is_not_there()
+    {
+        var chat = Guid.NewGuid();
+        Assert.Equal(0, await _host.KillAllAsync(chat, TestContext.Current.CancellationToken));
         Assert.Empty(_api.Execs);
+        Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
+
+        await _host.CreateChatFolderAsync(chat, "/unused", TestContext.Current.CancellationToken);
+        _api.OnExec = async e =>
+        {
+            await e.WriteStdoutAsync("1\n");
+            await e.ExitAsync(0);
+        };
+
+        Assert.Equal(1, await _host.KillAllAsync(chat, TestContext.Current.CancellationToken));
+        var kill = _api.Execs.Last();
+        Assert.Equal(ChatPodName, kill.Pod);
+        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[2]);
+    }
+
+    [Fact]
+    public async Task The_sweeper_leaves_the_chat_objects_alone()
+    {
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+
+        await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
+
+        Assert.Equal([ChatPodName], _api.Names("pods"));
+        Assert.Equal([ChatPodName], _api.Names("persistentvolumeclaims"));
+        Assert.Equal([ChatPodName], _api.Names("networkpolicies"));
+    }
+
+    [Fact]
+    public async Task A_service_in_a_chat_cannot_be_previewed()
+    {
+        await Assert.ThrowsAsync<NotSupportedException>(() => _host.PreviewTargetAsync(RunPaths.ChatRoot(Guid.NewGuid()), 5173, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task The_toolchains_of_the_repositories_a_chat_clones_reach_its_commands()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"));
+        var chat = Guid.NewGuid();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Pod.StartsWith("ild-tools-", StringComparison.Ordinal))
+                await e.WriteStdoutAsync("""
+                    {"kind":"tool","spec":"node@20","version":"20.19.1","path":["/opt/ild-tools/mise/installs/node/20.19.1/bin"],"env":{}}
+
+                    """);
+            await e.ExitAsync(0);
+        };
+
+        await host.AddChatToolsAsync(ChatFolder(chat), MakeBaseRepository(("package.json", "{}"), (".nvmrc", "v20\n")), TestContext.Current.CancellationToken);
+        Assert.Contains(_api.Created, c => c.StartsWith("pods/ild-tools-", StringComparison.Ordinal));
+
+        using var process = await host.StartCommandAsync(RunCommand.Routed(Command(ChatFolder(chat), "node", "-v"), chat), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var exec = _api.Execs.Last();
+        Assert.Equal(ChatPodName, exec.Pod);
+        Assert.StartsWith("PATH=/opt/ild-tools/mise/installs/node/20.19.1/bin:", exec.Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Without_a_store_a_chat_gets_no_toolchains_and_no_installer()
+    {
+        var chat = Guid.NewGuid();
+
+        await _host.AddChatToolsAsync(ChatFolder(chat), MakeBaseRepository(("package.json", "{}")), TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(_api.Created, c => c.StartsWith("pods/", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Tools;
 using k8s.Models;
 
@@ -30,6 +31,22 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         OwnerReferences = owner is null ? null : [owner],
     };
 
+    // No run label: the sweep, which deletes what a run left, never takes the chat objects for a run's. No owner reference
+    // either: the chat pod is replaced when it ends, and the claim, with the chats' folders, outlives it.
+    private V1ObjectMeta ChatMeta() => new()
+    {
+        Name = KubernetesNames.ChatName(options.Instance),
+        NamespaceProperty = namespaceName,
+        Labels = new Dictionary<string, string>
+        {
+            [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
+            [KubernetesNames.InstanceLabel] = options.Instance,
+            [KubernetesNames.RoleLabel] = KubernetesNames.ChatRole,
+        },
+    };
+
+    public V1PersistentVolumeClaim ChatClaim() => new() { Metadata = ChatMeta(), Spec = ClaimSpec() };
+
     public V1Secret Secret(Guid ownerId) => new()
     {
         Metadata = Meta(ownerId),
@@ -49,14 +66,16 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     public V1PersistentVolumeClaim Claim(Guid ownerId, V1OwnerReference owner) => new()
     {
         Metadata = Meta(ownerId, owner),
-        Spec = new V1PersistentVolumeClaimSpec
+        Spec = ClaimSpec(),
+    };
+
+    private V1PersistentVolumeClaimSpec ClaimSpec() => new()
+    {
+        AccessModes = ["ReadWriteOnce"],
+        StorageClassName = options.StorageClass,
+        Resources = new V1VolumeResourceRequirements
         {
-            AccessModes = ["ReadWriteOnce"],
-            StorageClassName = options.StorageClass,
-            Resources = new V1VolumeResourceRequirements
-            {
-                Requests = new Dictionary<string, ResourceQuantity> { ["storage"] = new(options.StorageSize) },
-            },
+            Requests = new Dictionary<string, ResourceQuantity> { ["storage"] = new(options.StorageSize) },
         },
     };
 
@@ -65,6 +84,13 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// What a run's pod can reach beyond that is reached through ILD's egress proxy.
     /// </summary>
     public V1NetworkPolicy Policy(Guid ownerId, V1OwnerReference owner)
+        => Policy(Meta(ownerId, owner), new Dictionary<string, string> { [KubernetesNames.RunLabel] = ownerId.ToString("N"), [KubernetesNames.InstanceLabel] = options.Instance });
+
+    /// <summary>The same rules for the chat pod, which no run's policy selects.</summary>
+    public V1NetworkPolicy ChatPolicy()
+        => Policy(ChatMeta(), new Dictionary<string, string> { [KubernetesNames.RoleLabel] = KubernetesNames.ChatRole, [KubernetesNames.InstanceLabel] = options.Instance });
+
+    private V1NetworkPolicy Policy(V1ObjectMeta metadata, IDictionary<string, string> podLabels)
     {
         var ild = new V1LabelSelector { MatchLabels = new Dictionary<string, string>(options.IldPodSelector) };
         var ports = new List<V1NetworkPolicyPort> { new() { Protocol = "TCP", Port = options.IldPort } };
@@ -73,10 +99,10 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
 
         return new V1NetworkPolicy
         {
-            Metadata = Meta(ownerId, owner),
+            Metadata = metadata,
             Spec = new V1NetworkPolicySpec
             {
-                PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { [KubernetesNames.RunLabel] = ownerId.ToString("N"), [KubernetesNames.InstanceLabel] = options.Instance } },
+                PodSelector = new V1LabelSelector { MatchLabels = podLabels },
                 PolicyTypes = ["Ingress", "Egress"],
                 Egress =
                 [
@@ -110,11 +136,21 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     }
 
     public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null)
+        => BuildPod(Meta(ownerId, owner), KubernetesNames.RunRoot(ownerId), KubernetesNames.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(KubernetesNames.HomeDirectory(ownerId)), tools is { Path.Count: > 0 }, limits: true);
+
+    /// <summary>
+    /// The pod that keeps every chat, long-lived: the claim of the chats at their root, and the store's claim read-only
+    /// whenever there is a store, since a pod's volumes are fixed when it is made and a chat may need toolchains later.
+    /// No CPU or memory limit, as chats had in ILD's own container.
+    /// </summary>
+    public V1Pod ChatPod()
+        => BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore, limits: false);
+
+    private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, bool mountTools, bool limits)
     {
-        var root = KubernetesNames.RunRoot(ownerId);
         return new V1Pod
         {
-            Metadata = Meta(ownerId, owner),
+            Metadata = metadata,
             Spec = new V1PodSpec
             {
                 AutomountServiceAccountToken = false,
@@ -156,9 +192,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         WorkingDir = root,
                         Env =
                         [
-                            new V1EnvVar { Name = "HOME", Value = KubernetesNames.HomeDirectory(ownerId) },
+                            .. home is null ? [] : new[] { new V1EnvVar { Name = "HOME", Value = home } },
                             .. options.GitIdentity.Select(e => new V1EnvVar { Name = e.Key, Value = e.Value }),
-                            .. (tools?.For(KubernetesNames.HomeDirectory(ownerId)) ?? []).Select(EnvVar),
+                            .. (toolEnvironment ?? []).Select(EnvVar),
                         ],
                         SecurityContext = new V1SecurityContext
                         {
@@ -168,13 +204,13 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         Resources = new V1ResourceRequirements
                         {
                             Requests = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(options.CpuRequest), ["memory"] = new(options.MemoryRequest) },
-                            Limits = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(options.CpuLimit), ["memory"] = new(options.MemoryLimit) },
+                            Limits = limits ? new Dictionary<string, ResourceQuantity> { ["cpu"] = new(options.CpuLimit), ["memory"] = new(options.MemoryLimit) } : null,
                         },
                         VolumeMounts =
                         [
                             new V1VolumeMount { Name = WorkVolume, MountPath = root },
                             new V1VolumeMount { Name = StateVolume, MountPath = KubernetesNames.StateDirectory },
-                            .. (tools is { Path.Count: > 0 } && options.ToolsClaim is not null
+                            .. (mountTools && options.ToolsClaim is not null
                                 ? [new V1VolumeMount { Name = ToolsVolume, MountPath = RunToolStore.Root, ReadOnlyProperty = true }]
                                 : Array.Empty<V1VolumeMount>()),
                         ],
@@ -182,9 +218,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 ],
                 Volumes =
                 [
-                    new V1Volume { Name = WorkVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = KubernetesNames.ObjectName(ownerId) } },
+                    new V1Volume { Name = WorkVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = claimName } },
                     new V1Volume { Name = StateVolume, EmptyDir = new V1EmptyDirVolumeSource { Medium = "Memory", SizeLimit = new ResourceQuantity("64Mi") } },
-                    .. (tools is { Path.Count: > 0 } && options.ToolsClaim is { } claim
+                    .. (mountTools && options.ToolsClaim is { } claim
                         ? [new V1Volume { Name = ToolsVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = claim, ReadOnlyProperty = true } }]
                         : Array.Empty<V1Volume>()),
                 ],
