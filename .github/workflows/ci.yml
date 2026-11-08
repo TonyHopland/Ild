@@ -39,6 +39,9 @@ jobs:
       - name: Compose credential tests
         run: .github/scripts/compose-credentials.test.sh
 
+      - name: Compose container-runs overlay tests
+        run: .github/scripts/compose-container-runs.test.sh
+
       - name: Image toolchain pin tests
         run: .github/scripts/image-toolchain-pins.test.sh
 

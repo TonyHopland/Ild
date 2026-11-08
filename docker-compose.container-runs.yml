@@ -1,0 +1,43 @@
+# Run each loop run, chat and provider sign-in in a container of its own instead of in ILD's
+# (ILD_RUN_HOST=container; docs/deployment.md#container-run-host, docs/adr/0034-container-run-host.md).
+#
+#   1. Set ILD_CONTAINER_SOCKET_HOST in .env to the socket of the engine compose talks to (see .env.example).
+#      Whoever holds that socket controls every container on that engine: prefer rootless Podman.
+#   2. On a rootful Podman engine, give its socket a group ILD may join first, after each restart of the
+#      engine or the Podman machine:  podman machine ssh chgrp 10001 /run/podman/podman.sock
+#   3. podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build
+#      (or docker compose ...). That builds the runner image too.
+#
+# Keep ILD on the same port inside its container and outside (8080:8080, as docker-compose.yml has it): a
+# preview's URL is opened by your browser outside and by a chat's browser inside.
+services:
+  ild:
+    environment:
+      - ILD_RUN_HOST=container
+      - ILD_CONTAINER_SOCKET=/run/container.sock
+      - ILD_CONTAINER_RUNNER_IMAGE=localhost/ild-runner:latest
+      # This service's container_name: ILD joins each run's network and the run reaches it there.
+      - ILD_CONTAINER_ILD_CONTAINER=ild
+      - ILD_API_URL=http://ild:8080
+      # 0 for no limit, on a rootless engine whose cgroup controllers are not delegated (a run then fails to
+      # start with "crun: open 'memory.max'").
+      - ILD_RUN_CPU_LIMIT=${ILD_RUN_CPU_LIMIT:-4}
+      - ILD_RUN_MEMORY_LIMIT=${ILD_RUN_MEMORY_LIMIT:-8Gi}
+    volumes:
+      - ${ILD_CONTAINER_SOCKET_HOST:?Set ILD_CONTAINER_SOCKET_HOST in .env to the container engine's socket (see .env.example)}:/run/container.sock
+    depends_on:
+      runner:
+        condition: service_completed_successfully
+
+  # Builds the image runs, chats and sign-ins start from, on the engine the stack runs on, where ILD needs it.
+  # The container only exits at once; it is the image that is used.
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    image: localhost/ild-runner:latest
+    container_name: ild-runner-build
+    entrypoint: ["true"]
+    network_mode: none
+    restart: "no"

@@ -28,7 +28,7 @@ Run it twice for Podman if you can: once with **ILD on the host**, once with **I
    GIT_AUTHOR_NAME=... GIT_AUTHOR_EMAIL=... GIT_COMMITTER_NAME=... GIT_COMMITTER_EMAIL=...
    ```
 
-   For ILD in a container follow [Trying it with this repository's compose stack](../deployment.md#trying-it-with-this-repositorys-compose-stack): the override, the socket for your engine (a Podman machine's is the path inside its VM), and `localhost/ild-runner:latest`.
+   For ILD in a container follow [Trying it with this repository's compose stack](../deployment.md#trying-it-with-this-repositorys-compose-stack): `docker-compose.container-runs.yml`, with `ILD_CONTAINER_SOCKET_HOST` in `.env` set to your engine's socket (a Podman machine's is the path inside its VM).
 
 3. Start ILD and read its log. Expected: no startup failure and no warning about the socket. With ILD in a container, the log has `Container engine socket /run/container.sock: ild can open it through group …`. Open **Settings > General**: no "Run host" warning.
 4. Stop the engine's socket (`systemctl --user stop podman.socket`) and reload **Settings > General**. Expected: a "Run host" card says ILD cannot reach the engine, and why. Start the socket again and restart ILD; the card is gone.

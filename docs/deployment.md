@@ -306,22 +306,10 @@ ASPNETCORE_URLS=http://0.0.0.0:8080
 
 ### ILD in a container
 
-Mount the socket into ILD's container and tell ILD its own container's name. ILD then connects itself to each run's network and the run reaches it at its address there; nothing is needed from the host's network. As a compose override:
+Mount the socket into ILD's container and tell ILD its own container's name. ILD then connects itself to each run's network and the run reaches it at its address there; nothing is needed from the host's network. The repository ships this as a compose overlay, [`docker-compose.container-runs.yml`](../docker-compose.container-runs.yml): it sets the run host up, mounts the socket named by `ILD_CONTAINER_SOCKET_HOST` in `.env` (and refuses to start without it), and builds the runner image as `localhost/ild-runner:latest` on the same engine. To run from the published image instead, set `ILD_CONTAINER_RUNNER_IMAGE` to `ghcr.io/tonyhopland/ild-runner:<the version ILD runs>` in an override of your own.
 
-```yaml
-# docker-compose.container-runs.yml
-#   docker compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d
-services:
-  ild:
-    environment:
-      - ILD_RUN_HOST=container
-      - ILD_CONTAINER_SOCKET=/run/container.sock
-      - ILD_CONTAINER_RUNNER_IMAGE=ghcr.io/tonyhopland/ild-runner:latest # or localhost/ild-runner:latest, built below
-      - ILD_CONTAINER_ILD_CONTAINER=ild # this service's container_name
-      - ILD_API_URL=http://ild:8080
-    volumes:
-      # Rootless Podman: ${XDG_RUNTIME_DIR}/podman/podman.sock. Rootful engines: see Socket trust above.
-      - ${ILD_CONTAINER_SOCKET_HOST:?Set ILD_CONTAINER_SOCKET_HOST to the engine socket on the host}:/run/container.sock
+```sh
+docker compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build
 ```
 
 ILD's entrypoint gives ILD's own user, and never the agent's, a group that can open the mounted socket, before it drops from root. `group_add` does not work for this, since the drop rebuilds the user's groups. What it does depends on the socket:
@@ -336,15 +324,9 @@ The entrypoint will not join a group the agent's user is in, since that would ha
 
 `docker compose up --build` on its own keeps `ILD_RUN_HOST` unset, so runs stay on the `local` host inside ILD's container. To try container runs from a checkout:
 
-1. Build the runner image on the engine the runs will use. Compose does not build it, and it needs no build arguments:
-
-   ```sh
-   podman build --target runner -t localhost/ild-runner:latest .
-   ```
-
-2. Save the override above as `docker-compose.container-runs.yml`, with `ILD_CONTAINER_RUNNER_IMAGE=localhost/ild-runner:latest`, and set `ILD_CONTAINER_SOCKET_HOST` in `.env` to the engine's socket (below).
-3. Start it: `podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build`. The log says `Container engine socket /run/container.sock: ild can open it through group …`, and **Settings > General** shows no "Run host" warning.
-4. Tag the test work item `HIL`. A Develop run then stops at **Approve PR**, before the PR node pushes a branch and opens a pull request on the repository.
+1. Set `ILD_CONTAINER_SOCKET_HOST` in `.env` to the socket of the engine compose talks to (below; `.env.example` lists them). On a rootful Podman engine, give the socket a group ILD may join first (below).
+2. Start it: `podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build`. That also builds the runner image (several minutes the first time); its build container, `ild-runner-build`, exits at once and stays listed as exited. The log says `Container engine socket /run/container.sock: ild can open it through group …`, and **Settings > General** shows no "cannot reach" warning (on a rootful engine it warns that the engine is not rootless).
+3. Tag the test work item `HIL`. A Develop run then stops at **Approve PR**, before the PR node pushes a branch and opens a pull request on the repository.
 
 Keep ILD's port the same outside its container as inside (`8080:8080` and the default `ILD_PREVIEW_PROXY_BASE=http://ild.localhost:8080`). A preview URL is used by your browser outside the container and by a chat's browser inside it, where `*.localhost` is ILD's container itself; mapped to another port outside (`8090:8080`), one of the two cannot load it. To move ILD to another port, move it inside too: `ASPNETCORE_URLS=http://+:8090`, `ILD_API_URL=http://ild:8090`, `8090:8090` and the proxy base on `8090`.
 
@@ -363,7 +345,7 @@ On a Podman machine, compose talks to whichever of the two engines the machine f
 
 **Rootful Podman.** Its socket belongs to the host's `root` group, which the entrypoint does not join. To use it anyway, accepting that ILD is then root-equivalent on that machine (Settings warns about it), give the socket the group of ILD's user inside the machine, `sudo chgrp 10001 /run/podman/podman.sock`, and restart ILD. A restart of the socket undoes it.
 
-**Limits on a rootless engine.** When the user's cgroup controllers are not delegated (a Podman machine, or a Linux host without systemd's `Delegate=`), a run's container fails to start with `crun: open 'memory.max' … No such file or directory`. Set both `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0` in the override's environment, which start runs without limits.
+**Limits on a rootless engine.** When the user's cgroup controllers are not delegated (a Podman machine, or a Linux host without systemd's `Delegate=`), a run's container fails to start with `crun: open 'memory.max' … No such file or directory`. Set both `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0` in `.env`, which the overlay passes on; runs then start without limits.
 
 ## Agent network limits (`NET_ADMIN`)
 
