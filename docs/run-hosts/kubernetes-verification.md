@@ -20,7 +20,6 @@ The unit and integration tests run against a fake Kubernetes API. They cannot sh
 3. Set on the ILD Deployment (`serviceAccountName: ild`, and the pods labelled `app.kubernetes.io/name=ild`):
 
    ```
-   ILD_RUN_HOST=kubernetes
    ILD_API_URL=http://<ild service>.ild.svc:8080
    ILD_K8S_NAMESPACE=ild-runs
    ILD_K8S_RUNNER_IMAGE=<the ild-runner image of the version ILD runs>

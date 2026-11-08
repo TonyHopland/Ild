@@ -1,14 +1,14 @@
 # Deployment
 
-The supported deployment is the checked-in Docker Compose stack with PostgreSQL plus the two .NET services. ILD and the WorkItem Server both run EF Core migrations against PostgreSQL when connection strings are configured.
+The supported deployment is the checked-in Docker Compose stack with PostgreSQL plus the two .NET services, on a Docker or Podman engine that also runs ILD's agents. ILD and the WorkItem Server both run EF Core migrations against PostgreSQL when connection strings are configured.
 
 ## Docker Compose
 
 ```bash
 git clone <this repo> ild && cd ild
 cp .env.example .env
-# fill in the required secrets before continuing
-docker compose up --build
+# fill in the required secrets and ILD_CONTAINER_SOCKET_HOST before continuing
+docker compose up -d --build    # or: podman compose up -d --build
 ```
 
 Compose refuses to start until `.env` supplies every secret it treats as required:
@@ -18,16 +18,24 @@ independently — `openssl rand -hex 32` — and keep them out of version contro
 are deliberately no shipped defaults: a credential that is the same on every install is
 a credential every install's attacker already knows.
 
+It also needs `ILD_CONTAINER_SOCKET_HOST`, the socket of the engine compose talks to:
+ILD runs every loop run, chat and provider sign-in in a container of its own on that
+engine. [Which socket](#which-socket) lists the paths, and
+[Container run host](#container-run-host) says what ILD does with it.
+
 `ILD_PASSWORD` is deliberately not one of them. It seeds the bootstrap user on first
 login and is never read again once that account exists, so requiring it would stop every
 already-seeded stack that has since dropped it from starting at all. Set it for a fresh
 install: unset, the account is never created and every login is rejected.
 
-The compose stack starts three services:
+The compose stack starts these services:
 
 - `postgres`, reachable only on the compose network
 - `workitem-server` on port `8081`
 - `ild` on port `8080`
+- `runner`, which builds the image runs start from, `localhost/ild-runner:latest`, on
+  the same engine (several minutes the first time). Its container, `ild-runner-build`,
+  exits at once and stays listed as exited.
 
 Open <http://localhost:8080> and log in with the configured username (`admin` by default, or `ILD_USERNAME`) and the `ILD_PASSWORD` value you supplied.
 
@@ -50,6 +58,12 @@ it creates the cluster, and nothing connects as the superuser afterwards.
 
 Setting `ILD_SESSION_TOKEN_PEPPER` for the first time signs every device out once; that
 is expected and costs a re-login.
+
+A stack from before agents always ran in containers needs `ILD_CONTAINER_SOCKET_HOST`
+in `.env` (and `ILD_CONTAINER_SOCKET_GRANT=1` for a socket of the host's `root` group),
+and is started with `docker-compose.yml` alone: `docker-compose.container-runs.yml` is
+gone. On its first start ILD's entrypoint gives ILD back the files the old agent user
+left in `/data` and `/worktrees`, which can take a while on a large volume.
 
 The release that stores saved AI sessions in compressed chunks converts the existing
 ones in the background after startup, one at a time; the app is usable meanwhile, and a
@@ -139,7 +153,7 @@ the apex `ild.localhost` is not one of them.
 An agent does not get the address above. In a chat's or run's container (or pod) `*.localhost` is that container, not ILD, and a `*.kube`-style name may not resolve there. `get_preview` gives an agent:
 
 - **In the work item's own run:** the service's own address, `http://127.0.0.1:<port>`, since the preview runs beside it.
-- **Anywhere else** (a chat, another work item's run, an agent in ILD's container): `http://wi-<workItemId>.preview.ild/`. Every agent is launched with ILD's egress proxy in `HTTP_PROXY`, and the proxy hands any `*.preview.ild` request to ILD's own web port, where it is served as the preview it names. It needs no DNS where the agent runs and works the same with every run host. The network policy does not apply to it, since it never leaves ILD; it is served only when `ILD_PREVIEW_PROXY_BASE` is set, and only over plain `http://`.
+- **Anywhere else** (a chat, another work item's run): `http://wi-<workItemId>.preview.ild/`. Every agent is launched with ILD's egress proxy in `HTTP_PROXY`, and the proxy hands any `*.preview.ild` request to ILD's own web port, where it is served as the preview it names. It needs no DNS where the agent runs and works the same with every run host. The network policy does not apply to it, since it never leaves ILD; it is served only when `ILD_PREVIEW_PROXY_BASE` is set, and only over plain `http://`.
 
 It works for clients that leave the name to the proxy: browsers (the chrome-devtools MCP server's Chrome included), curl, git, Python. Node's built-in `fetch` with `NODE_USE_ENV_PROXY` looks the name up itself first and fails on it, as on any name that does not resolve where it runs; use the Chrome tools, curl, or Node with an explicit proxy agent there. The egress proxy needs to know ILD's web port: the first `http://` address in `ASPNETCORE_URLS`, else `ASPNETCORE_HTTP_PORTS`.
 
@@ -214,24 +228,22 @@ Services that need the browser-facing hostname to build those URLs themselves ca
 set `"rewriteHost": false` (see [Configuration](./configuration.md#service-fields))
 and add the preview wildcard to their own allowed-hosts list.
 
-## Choosing a run host
+## Where runs execute
 
-`ILD_RUN_HOST` decides where a loop run's agent, commands and files live. It is always set explicitly and never detected; unset means `local`. Chats, scheduled jobs and the provider sign-in terminal always stay on the machine ILD runs on.
+ILD's image always runs agents apart from ILD: every loop run, chat and provider sign-in in a container on the engine whose socket it is given, or in pods when the image runs in a Kubernetes cluster. This is not a setting ([ADR-0036](adr/0036-runs-always-in-containers.md)). ILD started with `dotnet run` runs agents as its own processes, which is for development only ([Configuration](configuration.md#where-runs-execute)).
 
-| | `local` (default) | `container` | `kubernetes` |
-| --- | --- | --- | --- |
-| A run is | A worktree on ILD's disk, its processes children of ILD under a lower-trust uid ([ADR-0014](adr/0014-agent-uid-isolation.md)) | A container, a volume and a network on the same machine, through the Docker-compatible API ([ADR-0034](adr/0034-container-run-host.md)) | A pod and a volume claim, spread across nodes ([ADR-0033](adr/0033-kubernetes-run-host.md)) |
-| Needs | Nothing | A rootless Podman (or rootless Docker) socket and the runner image | A cluster, RBAC, a CNI that enforces NetworkPolicy |
-| Isolates the agent from ILD | By uid: it cannot read ILD's secrets, but shares the kernel, the filesystem tree and the network of ILD's container | By container: its own filesystem, process and network namespaces, no capabilities, no route but to ILD | The same, by pod and network policy |
-| Isolates runs from each other | By uid only: they share one uid and the worktree root | Yes: a volume, a container and a network each | Yes |
-| Spreads load | No | No: one machine | Yes |
-| Trust you hand over | None | Whoever holds the socket controls every container on the host | The service account's Role in the run namespace |
-
-Pick `local` for a single-user install where the agent may see the machine. Pick `container` when you want per-run isolation on one machine. Pick `kubernetes` when you already run a cluster and want runs spread over it. Moving between them only affects new runs; a run keeps the host it started on until it is cleaned up.
+| | Containers | Kubernetes |
+| --- | --- | --- |
+| A run is | A container, a volume and a network on the engine, through the Docker-compatible API ([ADR-0034](adr/0034-container-run-host.md)) | A pod and a volume claim, spread across nodes ([ADR-0033](adr/0033-kubernetes-run-host.md)) |
+| Needs | A Docker or Podman socket (rootless Podman preferred) and the runner image | A cluster, RBAC, a CNI that enforces NetworkPolicy, and a ReadWriteMany claim for toolchains |
+| Isolates the agent from ILD | By container: its own filesystem, process and network namespaces, no capabilities, no route but to ILD | The same, by pod and network policy |
+| Isolates runs from each other | Yes: a volume, a container and a network each | Yes |
+| Spreads load | No: one machine | Yes |
+| Trust you hand over | Whoever holds the socket controls every container on the engine | The service account's Role in the run namespace |
 
 ## Kubernetes run host
 
-`ILD_RUN_HOST=kubernetes` runs each loop run in a pod of its own, so runs are isolated from ILD and from each other and the scheduler spreads them across nodes. It makes no assumption about the cluster's CNI or storage backend. Every setting is in [Configuration](configuration.md#kubernetes-run-host); the decisions are in [ADR-0033](adr/0033-kubernetes-run-host.md).
+When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of its own, so runs are isolated from ILD and from each other and the scheduler spreads them across nodes. Chats share one pod. ILD only uses pods when it runs in the cluster itself: an ILD outside it runs its agents in containers on its own engine. It makes no assumption about the cluster's CNI or storage backend. Every setting is in [Configuration](configuration.md#kubernetes-run-host); the decisions are in [ADR-0033](adr/0033-kubernetes-run-host.md).
 
 ### Prerequisites
 
@@ -247,7 +259,6 @@ Pick `local` for a single-user install where the agent may see the machine. Pick
 
    ```yaml
    env:
-     - { name: ILD_RUN_HOST, value: kubernetes }
      - { name: ILD_API_URL, value: "http://ild.ild.svc:8080" }
      - { name: ILD_K8S_NAMESPACE, value: ild-runs }
      - { name: ILD_K8S_RUNNER_IMAGE, value: "ghcr.io/tonyhopland/ild-runner:latest" }
@@ -256,7 +267,7 @@ Pick `local` for a single-user install where the agent may see the machine. Pick
 
    The runner image is published with the same tags as the ILD image; pin the version ILD runs. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have.
 
-   `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains): ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs to reach the internet, so allow that label egress if the namespace denies it by default. Without a ReadWriteMany class, run `ghcr.io/tonyhopland/ild-runner-full` with `ILD_RUN_TOOLCHAINS=off` instead: Node, the .NET SDK, Chrome and three agent CLIs, baked in.
+   `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains): ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs to reach the internet, so allow that label egress if the namespace denies it by default. Without a ReadWriteMany class, build a runner image of your own `FROM ghcr.io/tonyhopland/ild-runner` with the toolchains and agent CLIs your runs need, and set `ILD_RUN_TOOLCHAINS=off`.
 4. The preview proxy forwards to the pod's address, so ILD must be able to reach pod IPs, as any pod in the cluster can.
 
 ### Storage
@@ -269,11 +280,11 @@ Deleting a run's Secret deletes its pod, volume claim and network policy through
 
 ## Container run host
 
-`ILD_RUN_HOST=container` gives each loop run a container of its own on the machine ILD runs on. It talks to Docker or Podman through the Docker-compatible REST API on a unix socket, so one implementation covers both. It does not spread load, but it isolates a run from ILD and from other runs the way a pod does. Every setting is in [Configuration](configuration.md#container-run-host); the decisions are in [ADR-0034](adr/0034-container-run-host.md); the live check is [`run-hosts/container-verification.md`](run-hosts/container-verification.md).
+ILD's image, outside Kubernetes, gives each loop run a container of its own on the engine whose socket is mounted into it, runs chats in one shared container, and runs the provider sign-in terminal in a short-lived container that keeps the login when it closes. It talks to Docker or Podman through the Docker-compatible REST API on a unix socket, so one implementation covers both. It does not spread load, but it isolates a run from ILD and from other runs the way a pod does. Every setting is in [Configuration](configuration.md#container-run-host); the decisions are in [ADR-0034](adr/0034-container-run-host.md); the live check is [`run-hosts/container-verification.md`](run-hosts/container-verification.md).
 
 ### Socket trust
 
-Whoever holds the socket controls every container on the host: it can start a privileged container that mounts the host's root. So **the socket you give ILD is a trust decision, and ILD never looks for one**; `ILD_CONTAINER_SOCKET` has no default.
+Whoever holds the socket controls every container on the host: it can start a privileged container that mounts the host's root. So **the socket you give ILD is a trust decision, and ILD never looks for one**; `ILD_CONTAINER_SOCKET_HOST` has no default.
 
 - **Rootless Podman is the supported setup.** Its socket is your user account's: a container it starts has no more reach than the account that runs it. Enable it with `systemctl --user enable --now podman.socket`; the socket is `$XDG_RUNTIME_DIR/podman/podman.sock`.
 - **A rootful Docker or Podman socket is root-equivalent on the host**, and so is ILD, and so is anything that gets code execution in ILD. Use it only on a machine you would give ILD root on. ILD asks the engine whether it is rootless (Podman's `/libpod/info`, else Docker's `/info`) and shows a warning in **Settings > General** and in its log when it is not. If the engine does not say, ILD shows nothing rather than guess; this paragraph is then the warning.
@@ -282,57 +293,32 @@ Whoever holds the socket controls every container on the host: it can start a pr
 ### What a run gets
 
 - A named volume for its files, an `internal` network of its own, and a container from the runner image started with `sleep infinity` as uid 10001, all capabilities dropped, `no-new-privileges`, the engine's default seccomp profile, and the CPU and memory limits of `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT`. The three are made at Start and deleted at Cleanup; the container stays up while a Human node waits, so previews keep working.
-- The network is `internal`, so the container cannot reach the internet or the host's other networks. **With ILD in a container (below), it reaches ILD and nothing else**: the model gateway, the MCP endpoint and the egress proxy. **With ILD on the host it does not:** the run reaches ILD at the network's gateway address, which is the host, so it can connect to every service listening on the host (SSH, a database, anything bound to all interfaces), and the egress proxy listens on all of the host's interfaces and accepts connections from the LAN as well as from runs. Run ILD in a container to isolate runs; if ILD must be on the host, add host firewall rules that let only the run networks' subnets reach ILD's port and the proxy port, and block the proxy port from the LAN. Anything else the agent connects to goes through the egress proxy and its limits.
+- The network is `internal`, so the container cannot reach the internet or the host's other networks. ILD connects its own container (`ILD_CONTAINER_ILD_CONTAINER`) to the network, so the run reaches ILD and nothing else: the model gateway, the MCP endpoint and the egress proxy. Anything else the agent connects to goes through the egress proxy and its [limits](configuration.md#agent-network-limits).
 - The container is given the host name in `ILD_API_URL` as ILD's address on its own network. The code goes in and out as bundles over exec, so the container never holds the git credential or the mirror.
 - The toolchains its repository needs and the agents ILD has installed, from the [toolchain store](configuration.md#run-toolchains): the `ild-tools` volume, mounted read-only. The first run that needs a version installs it, in a short-lived `ild-tools-…` container of the runner image on the engine's default network; later runs reuse it. The volume is shared by every run, and never pruned.
 - Every object is labelled `app.kubernetes.io/managed-by=ild`, `ild/instance=<ILD_CONTAINER_INSTANCE>` and `ild/run=<run id>`. There are no owner references on a single host, so Cleanup deletes the container, the volume and the network explicitly, and the sweeper (once at startup, then every `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`) deletes the labelled objects of runs that are finished or gone. It only touches its own instance. An ILD that is killed mid-run leaves nothing behind after its next start.
 
-### ILD on the host
+### The engine socket
 
-This setup does **not** isolate a run from the host's services (see above); use it for trying the host out, or with the firewall rules described there. Run ILD as a normal process and point it at the socket:
+Compose mounts the socket named by `ILD_CONTAINER_SOCKET_HOST` in `.env` at `/run/container.sock` in ILD's container (and refuses to start without it), tells ILD its own container's name (`ild`), and builds the runner image as `localhost/ild-runner:latest` on the same engine. ILD connects itself to each run's network and the run reaches it at its address there; nothing is needed from the host's network. To run from the published runner image instead, set `ILD_CONTAINER_RUNNER_IMAGE` to `ghcr.io/tonyhopland/ild-runner:<the version ILD runs>` in `.env`. The runner image must be on the engine the socket belongs to; ILD does not pull it and says so when it is missing.
 
-```sh
-ILD_RUN_HOST=container
-ILD_CONTAINER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock
-ILD_CONTAINER_RUNNER_IMAGE=ghcr.io/tonyhopland/ild-runner:latest
-ILD_API_URL=http://$(hostname):8080
-ASPNETCORE_URLS=http://0.0.0.0:8080
-```
-
-- Build or pull the runner image first (`podman pull`, or `podman build --target runner -t ild-runner .`, which needs no build arguments); ILD does not pull it and says so when it is missing.
-- `ILD_API_URL` must name ILD by a host name that is not `localhost` and not an IP address, and that resolves on this machine too (the machine's name, or an `/etc/hosts` entry): each run's container is given that name for ILD's address on its network, which is the network's gateway, that is, the host.
-- ILD must listen on an address the run's network can reach, not only on loopback, and the host's firewall must let the run network's subnet reach ILD's port and the egress proxy port (`ILD_NETWORK_PROXY_PORT`).
-- The preview proxy forwards to the container's address on its network, so ILD must be able to route to it. With rootful Docker or Podman it can. A rootless Podman's networks live in a user namespace the host does not route into; run ILD in a container (below) in that case.
-
-### ILD in a container
-
-Mount the socket into ILD's container and tell ILD its own container's name. ILD then connects itself to each run's network and the run reaches it at its address there; nothing is needed from the host's network. The repository ships this as a compose overlay, [`docker-compose.container-runs.yml`](../docker-compose.container-runs.yml): it sets the run host up, mounts the socket named by `ILD_CONTAINER_SOCKET_HOST` in `.env` (and refuses to start without it), and builds the runner image as `localhost/ild-runner:latest` on the same engine. To run from the published image instead, set `ILD_CONTAINER_RUNNER_IMAGE` to `ghcr.io/tonyhopland/ild-runner:<the version ILD runs>` in an override of your own.
-
-```sh
-docker compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build
-```
-
-ILD's entrypoint gives ILD's own user, and never the agent's, a group that can open the mounted socket, before it drops from root. `group_add` does not work for this, since the drop rebuilds the user's groups. What it does depends on the socket:
+ILD's entrypoint gives ILD's user a group that can open the mounted socket, before it drops from root. `group_add` does not work for this, since the drop rebuilds the user's groups. What it does depends on the socket:
 
 - **Rootless Podman or Docker.** Inside ILD's container the socket shows as `root:root`. The entrypoint gives it a group of its own, `ild-engine`, which only ILD's user is in. On the host the socket stays yours; only its group changes. Restarting the engine's socket (`systemctl --user restart podman.socket`) makes a new one with the old group; restart ILD after it.
-- **A socket with a group of its own,** such as rootful Docker's `docker` group: ILD's user joins that group. Nothing outside the container changes.
-- **A socket of the host's `root` group** (rootful Podman on Linux): the entrypoint leaves it alone and says so, and ILD cannot open it, unless you set `ILD_CONTAINER_SOCKET_GRANT=1`. Then the entrypoint gives the socket ILD's own group (`ild`, gid 10001; the host sees the same number) every time ILD's container starts, so a socket the engine makes anew after a restart of the engine or the machine is covered as soon as ILD starts again. That makes ILD root-equivalent on that machine, which is why it is your choice and off by default. The agent still never gets the socket: the entrypoint refuses if the agent's user is in that group.
+- **A socket with a group of its own,** such as rootful Docker's `docker` group, or a Podman machine's rootful socket (`root:wheel`): ILD's user joins that group. Nothing outside the container changes.
+- **A socket of the host's `root` group** (rootful Podman on Linux): the entrypoint leaves it alone and says so, and ILD cannot open it, unless you set `ILD_CONTAINER_SOCKET_GRANT=1`. Then the entrypoint gives the socket ILD's own group (`ild`, gid 10001; the host sees the same number) every time ILD's container starts, so a socket the engine makes anew after a restart of the engine or the machine is covered as soon as ILD starts again. That makes ILD root-equivalent on that machine, which is why it is your choice and off by default.
 
-The entrypoint will not join a group the agent's user is in, since that would hand the agent the engine. The runner image must be on the host the socket belongs to.
+No run or chat container is ever given the socket.
 
-#### Trying it with this repository's compose stack
-
-`docker compose up --build` on its own keeps `ILD_RUN_HOST` unset, so runs stay on the `local` host inside ILD's container. To try container runs from a checkout:
-
-1. Set `ILD_CONTAINER_SOCKET_HOST` in `.env` to the socket of the engine compose talks to (below; `.env.example` lists them). If that socket belongs to the host's `root` group, also set `ILD_CONTAINER_SOCKET_GRANT=1` (below).
-2. Start it: `podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build`. That also builds the runner image (several minutes the first time); its build container, `ild-runner-build`, exits at once and stays listed as exited. The log says `Container engine socket /run/container.sock: ild can open it through group …` (after `ILD_CONTAINER_SOCKET_GRANT=1: gave /run/container.sock … to group ild` when that setting applied), and **Settings > General** shows no "cannot reach" warning (on a rootful engine it warns that the engine is not rootless).
-3. Tag the test work item `HIL`. A Develop run then stops at **Approve PR**, before the PR node pushes a branch and opens a pull request on the repository.
+Once ILD is up, its log says `Container engine socket /run/container.sock: ild can open it through group …` (after `ILD_CONTAINER_SOCKET_GRANT=1: gave /run/container.sock … to group ild` when that setting applied), and **Settings > General** shows no "cannot reach" warning (on a rootful engine it warns that the engine is not rootless).
 
 Keep ILD's port the same outside its container as inside (`8080:8080` and the default `ILD_PREVIEW_PROXY_BASE=http://ild.localhost:8080`). A preview URL is used by your browser outside the container and by a chat's browser inside it, where `*.localhost` is ILD's container itself; mapped to another port outside (`8090:8080`), one of the two cannot load it. To move ILD to another port, move it inside too: `ASPNETCORE_URLS=http://+:8090`, `ILD_API_URL=http://ild:8090`, `8090:8090` and the proxy base on `8090`.
 
 The first run of a repository installs its toolchains and ILD's agents into the `ild-tools` volume before it starts, which takes from seconds to a few minutes; later runs reuse them. With a local model (LM Studio, Ollama) behind the provider, the agent nodes take as long as the model does.
 
-**Which socket.** The path is the socket's path on the machine the engine runs on:
+### Which socket
+
+`ILD_CONTAINER_SOCKET_HOST` is the socket's path on the machine the engine runs on:
 
 | Engine | `ILD_CONTAINER_SOCKET_HOST` | Notes |
 | --- | --- | --- |
@@ -346,49 +332,7 @@ On a Podman machine, compose talks to whichever of the two engines the machine f
 
 **Rootful Podman.** A Podman machine needs nothing: its image ships a `podman.socket` drop-in (`SocketGroup=wheel`), so `podman machine ssh stat -c %G /run/podman/podman.sock` prints `wheel`, and the entrypoint joins a group of that gid inside ILD's container. That is root-equivalent on the machine all the same, and Settings warns about it. Rootful Podman on Linux, or any engine whose socket prints `root` there, belongs to the host's `root` group, which the entrypoint does not join. To use it anyway, accepting that ILD is then root-equivalent on that machine (Settings warns about it), set `ILD_CONTAINER_SOCKET_GRANT=1` in `.env`. The entrypoint then gives the socket ILD's group on each start. Systemd makes the socket anew each time the host or `podman.socket` starts, so a change made by hand (`chgrp`) would not last; after a restart, start ILD again (`podman compose … up -d`) if it is not already restarting, and it fixes the new socket itself.
 
-**Limits on a rootless engine.** When the user's cgroup controllers are not delegated (a Podman machine, or a Linux host without systemd's `Delegate=`), a run's container fails to start with `crun: open 'memory.max' … No such file or directory`. Set both `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0` in `.env`, which the overlay passes on; runs then start without limits.
-
-## Agent network limits (`NET_ADMIN`)
-
-The coding agent's network access can be limited from Settings (see
-[Configuration → Agent network limits](./configuration.md#agent-network-limits)).
-The filtering itself happens inside the container: the orchestrator runs a proxy
-on loopback that every agent launch is pointed at, and the entrypoint installs
-firewall rules keyed on the agent uid so that a connection which skips the proxy
-is dropped. Installing those rules needs one capability, `NET_ADMIN`, which the
-root entrypoint spends once before dropping privilege — the orchestrator keeps
-only its usual three ambient capabilities and the agent gets none. Per runtime
-that is one knob:
-
-| Runtime          | Knob                                                                          |
-| ---------------- | ----------------------------------------------------------------------------- |
-| docker compose   | `cap_add: [NET_ADMIN]` on the `ild` service — already set in this repo's file |
-| docker / podman  | `--cap-add=NET_ADMIN`                                                         |
-| Kubernetes / k3s | `securityContext.capabilities.add: ["NET_ADMIN"]` on the `ild` container      |
-
-`security_opt: no-new-privileges` stays on; the rules persist in the network
-namespace after the capability is gone. Network mode `off` also depends on it: the
-entrypoint only lets the agent out directly when `no-new-privileges` is set (podman
-and docker: `--security-opt=no-new-privileges`; Kubernetes:
-`allowPrivilegeEscalation: false`), see
-[Agent network limits](configuration.md#agent-network-limits). The Kubernetes manifests on
-`feature/flux-example-setup` need the `securityContext` addition; nothing in this
-repository can make it for you. Behaviour is the same on every runtime because
-nothing outside the container is involved.
-
-**Without `NET_ADMIN` the container still starts, in advisory mode.** The proxy
-still runs, still logs every destination and still applies the lists to every
-client that honours `HTTP_PROXY` — but a hostile agent could bypass it. The
-entrypoint logs a `WARNING:` saying so, `GET /api/v1/network/status` answers
-`advisory` with the reason, and the Settings page shows a banner. Advisory is
-also what you get with uid isolation off (`AGENT_USER=`), since there is then no
-separate uid to key rules on.
-
-The rules open only loopback (the proxy, ILD's own API for the agent's MCP
-callback, and previews, but not DNS) for the agent uid; everything else it
-sends is dropped, IP literal or not. The orchestrator is not subject to them.
-The image ships `nftables` and falls back to `iptables` where nf_tables is
-unavailable.
+**Limits on a rootless engine.** When the user's cgroup controllers are not delegated (a Podman machine, or a Linux host without systemd's `Delegate=`), a run's container fails to start with `crun: open 'memory.max' … No such file or directory`. Set both `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0` in `.env`, which compose passes on; runs then start without limits.
 
 ## Volumes
 
@@ -397,6 +341,7 @@ unavailable.
 | `postgres-data` | PostgreSQL data for both ILD and the WorkItem Server. The role passwords are baked in when it is first created — see [Upgrading an existing stack](#upgrading-an-existing-stack) |
 | `ild-data`      | ILD runtime files under `/data`                                                                                                                                                  |
 | `ild-worktrees` | Per-run git worktrees                                                                                                                                                            |
+| `ild-config`    | The provider logins, ILD's alone                                                                                                                                                 |
 | `workitem-data` | Additional WorkItem Server runtime files under `/data`                                                                                                                           |
 
 Your host `~/.gitconfig` is mounted read-only into the ILD container, so agent commits inherit your local name and email by default. Point `GIT_CONFIG` at a different file, or override just the identity with `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (and the matching `GIT_COMMITTER_*` vars) in your `.env` — git reads those natively and they take precedence over the mounted file.
@@ -445,20 +390,19 @@ The `postgres:18` image keeps its data under `/var/lib/postgresql` (the data dir
 
 ## Images
 
-The main `Dockerfile` builds the frontend, publishes the .NET host, and optionally installs additional runtime tooling used by work-item execution (see [Configuration](./configuration.md#build-time-container-options)). `Dockerfile.WorkItemServer` builds the separate WorkItem Server image.
+The main `Dockerfile` builds the frontend and publishes the .NET host into a slim runtime image with git and Node, and its `runner` target builds the image runs start from (see [Configuration](./configuration.md#build-time-container-options)). `Dockerfile.WorkItemServer` builds the separate WorkItem Server image.
 
 ### Published images
 
 CI also builds and pushes these images to GHCR (see [ADR-0012](./adr/0012-ghcr-image-tagging-strategy.md)):
 
-- `ghcr.io/tonyhopland/ild` — batteries-included app plus the bundled MCP server
+- `ghcr.io/tonyhopland/ild` — ILD plus the bundled MCP server
 - `ghcr.io/tonyhopland/ild-workitem-server` — the WorkItem Server
 - `ghcr.io/tonyhopland/ild-runner` — the slim image of a run's container or pod: an OS, the tools every project uses, Chrome and mise, with no toolchain or agent ([ADR-0035](./adr/0035-run-toolchains.md))
-- `ghcr.io/tonyhopland/ild-runner-full` — the previous runner: Node, the .NET SDK, Chrome and three agent CLIs baked in, for a cluster without a store (`ILD_RUN_TOOLCHAINS=off`)
 
-A project that needs system packages beyond the slim runner (a database client, system libraries a native module links against) builds its own runner image `FROM ghcr.io/tonyhopland/ild-runner` and points `ILD_CONTAINER_RUNNER_IMAGE` or `ILD_K8S_RUNNER_IMAGE` at it.
+A project that needs system packages beyond the slim runner (a database client, system libraries a native module links against) builds its own runner image `FROM ghcr.io/tonyhopland/ild-runner` and points `ILD_CONTAINER_RUNNER_IMAGE` or `ILD_K8S_RUNNER_IMAGE` at it. A runner image that carries its own toolchains and agent CLIs, for a cluster without a ReadWriteMany claim, also sets `ILD_RUN_TOOLCHAINS=off`.
 
-A `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for all of them (amd64 + arm64, each built on a native runner and joined into one multi-arch manifest); pushes to `main` build and test but publish nothing. The compose stack still builds locally with `--build` — it does not pull these images.
+A `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for all of them (amd64 + arm64, each built on a native runner and joined into one multi-arch manifest); pushes to `main` build and test but publish nothing. The compose stack still builds ILD and the runner image locally with `--build` — it does not pull these images.
 
 **One-time setup:** the first push lands each package **private**. Flip each to **public** once in its GHCR package settings (Package → Settings → Change visibility).
 
