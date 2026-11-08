@@ -678,7 +678,9 @@ in_user_namespace() {
 #    shows as root:root here): its group becomes ild-engine, which only RUNTIME_USER is in. The host user
 #    still owns it, so nothing on the host loses access. A restart of the engine's socket makes a new one,
 #    which ILD cannot open until it restarts too; ILD says so in its log and on the settings page.
-#  - A socket of group root outside a user namespace is the host's root group: left alone, and said why.
+#  - A socket of group root outside a user namespace is the host's root group (rootful Podman): left alone,
+#    and said why, unless the operator sets ILD_CONTAINER_SOCKET_GRANT=1. Then its group becomes
+#    RUNTIME_USER's own, on every start, so a socket the engine made anew after a restart is covered too.
 grant_engine_socket() {
   [ "${ILD_RUN_HOST:-}" = "container" ] || return 0
   socket="${ILD_CONTAINER_SOCKET:-}"
@@ -703,8 +705,27 @@ grant_engine_socket() {
       return 0
     fi
     gid="$(getent group "$group" | cut -d: -f3)"
+  elif [ "${ILD_CONTAINER_SOCKET_GRANT:-}" = 1 ]; then
+    # The operator chose it: the socket goes to RUNTIME_USER's own group, whose gid the image fixes (10001),
+    # since outside a user namespace the host sees the same number. Checked before the chgrp, so a group the
+    # agent is in never gets the host's socket.
+    group="$(getent group "$RUNTIME_USER" | cut -d: -f1)"
+    gid="$(getent group "$RUNTIME_USER" | cut -d: -f3)"
+    if [ -z "$group" ]; then
+      echo "WARNING: ILD_CONTAINER_SOCKET_GRANT=1 but this image has no group $RUNTIME_USER; $socket is left alone and no run can start." >&2
+      return 0
+    fi
+    if [ -n "${AGENT_USER:-}" ] && id -G "$AGENT_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$gid"; then
+      echo "WARNING: the agent user $AGENT_USER is in group $group; $socket is left alone, since that would hand the agent the engine. No run can start." >&2
+      return 0
+    fi
+    if ! chgrp "$group" "$socket"; then
+      echo "WARNING: could not give $socket to group $group; ILD cannot open it and no run can start." >&2
+      return 0
+    fi
+    echo "ILD_CONTAINER_SOCKET_GRANT=1: gave $socket, of the host's root engine, to group $group (gid $gid). ILD is root-equivalent on that host."
   else
-    echo "WARNING: $socket belongs to the host's root group, which ILD does not join; no run can start. Give the socket a group of its own (Docker's docker group), or use rootless Podman." >&2
+    echo "WARNING: $socket belongs to the host's root group, which ILD does not join; no run can start. Set ILD_CONTAINER_SOCKET_GRANT=1 to give it ILD's own group on each start (ILD is then root-equivalent on that host), give it a group of its own (Docker's docker group), or use rootless Podman." >&2
     return 0
   fi
 

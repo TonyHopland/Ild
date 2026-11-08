@@ -83,6 +83,7 @@ With `ILD_RUN_HOST=container`, each **loop run** gets a container, a volume and 
 | Variable | Meaning |
 | --- | --- |
 | `ILD_CONTAINER_SOCKET` | **Required.** The path of the engine's unix socket (a `unix://` prefix is accepted). Never detected: whoever holds the socket controls every container on the host, so rootless Podman is the supported setup |
+| `ILD_CONTAINER_SOCKET_GRANT` | Read by ILD's container entrypoint. `1` gives a socket of the host's `root` group (a rootful engine) ILD's own group on each start, which makes ILD root-equivalent on that host. Unset, such a socket is left alone and ILD cannot open it. See [Deployment](./deployment.md#ild-in-a-container) |
 | `ILD_CONTAINER_RUNNER_IMAGE` | **Required.** The container image: the slim published `ild-runner` image, or one you build from the `runner` target of the Dockerfile. Runs get their toolchains and agents from the [toolchain store](#run-toolchains), which is filled with this image too. It must already be on the host |
 | `ILD_CONTAINER_TOOLS_VOLUME` | The named volume that holds the [toolchain store](#run-toolchains), default `ild-tools`. ILD creates it; every run and every ILD on the engine shares it |
 | `ILD_RUN_TOOLCHAINS` | `on` (default): runs get toolchains and agents from the store. `off`: only what the runner image has, for `ild-runner-full`. The `kubernetes` host reads it too |

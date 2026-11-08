@@ -316,7 +316,7 @@ ILD's entrypoint gives ILD's own user, and never the agent's, a group that can o
 
 - **Rootless Podman or Docker.** Inside ILD's container the socket shows as `root:root`. The entrypoint gives it a group of its own, `ild-engine`, which only ILD's user is in. On the host the socket stays yours; only its group changes. Restarting the engine's socket (`systemctl --user restart podman.socket`) makes a new one with the old group; restart ILD after it.
 - **A socket with a group of its own,** such as rootful Docker's `docker` group: ILD's user joins that group. Nothing outside the container changes.
-- **A socket of the host's `root` group** (rootful Podman): the entrypoint leaves it alone and says so, and ILD cannot open it. Give the socket a group of its own first.
+- **A socket of the host's `root` group** (rootful Podman on Linux): the entrypoint leaves it alone and says so, and ILD cannot open it, unless you set `ILD_CONTAINER_SOCKET_GRANT=1`. Then the entrypoint gives the socket ILD's own group (`ild`, gid 10001; the host sees the same number) every time ILD's container starts, so a socket the engine makes anew after a restart of the engine or the machine is covered as soon as ILD starts again. That makes ILD root-equivalent on that machine, which is why it is your choice and off by default. The agent still never gets the socket: the entrypoint refuses if the agent's user is in that group.
 
 The entrypoint will not join a group the agent's user is in, since that would hand the agent the engine. The runner image must be on the host the socket belongs to.
 
@@ -324,8 +324,8 @@ The entrypoint will not join a group the agent's user is in, since that would ha
 
 `docker compose up --build` on its own keeps `ILD_RUN_HOST` unset, so runs stay on the `local` host inside ILD's container. To try container runs from a checkout:
 
-1. Set `ILD_CONTAINER_SOCKET_HOST` in `.env` to the socket of the engine compose talks to (below; `.env.example` lists them). On a rootful Podman engine, give the socket a group ILD may join first (below).
-2. Start it: `podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build`. That also builds the runner image (several minutes the first time); its build container, `ild-runner-build`, exits at once and stays listed as exited. The log says `Container engine socket /run/container.sock: ild can open it through group …`, and **Settings > General** shows no "cannot reach" warning (on a rootful engine it warns that the engine is not rootless).
+1. Set `ILD_CONTAINER_SOCKET_HOST` in `.env` to the socket of the engine compose talks to (below; `.env.example` lists them). If that socket belongs to the host's `root` group, also set `ILD_CONTAINER_SOCKET_GRANT=1` (below).
+2. Start it: `podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build`. That also builds the runner image (several minutes the first time); its build container, `ild-runner-build`, exits at once and stays listed as exited. The log says `Container engine socket /run/container.sock: ild can open it through group …` (after `ILD_CONTAINER_SOCKET_GRANT=1: gave /run/container.sock … to group ild` when that setting applied), and **Settings > General** shows no "cannot reach" warning (on a rootful engine it warns that the engine is not rootless).
 3. Tag the test work item `HIL`. A Develop run then stops at **Approve PR**, before the PR node pushes a branch and opens a pull request on the repository.
 
 Keep ILD's port the same outside its container as inside (`8080:8080` and the default `ILD_PREVIEW_PROXY_BASE=http://ild.localhost:8080`). A preview URL is used by your browser outside the container and by a chat's browser inside it, where `*.localhost` is ILD's container itself; mapped to another port outside (`8090:8080`), one of the two cannot load it. To move ILD to another port, move it inside too: `ASPNETCORE_URLS=http://+:8090`, `ILD_API_URL=http://ild:8090`, `8090:8090` and the proxy base on `8090`.
@@ -338,12 +338,13 @@ The first run of a repository installs its toolchains and ILD's agents into the 
 | --- | --- | --- |
 | Rootless Podman on Linux | `/run/user/<uid>/podman/podman.sock` (`$XDG_RUNTIME_DIR/podman/podman.sock`) | The supported setup. Needs `systemctl --user enable --now podman.socket` |
 | Podman machine (Windows, macOS), rootless | `/run/user/1000/podman/podman.sock` | The path inside the machine's VM, where the containers run |
-| Podman machine, rootful | `/run/podman/podman.sock` | Belongs to the VM's `root` group, so see below |
+| Podman machine, rootful | `/run/podman/podman.sock` | The machine makes it `root:wheel` on every start, and ILD's user joins a group of that gid: nothing to do |
+| Rootful Podman on Linux | `/run/podman/podman.sock` | Belongs to the host's `root` group: also set `ILD_CONTAINER_SOCKET_GRANT=1` (below) |
 | Rootful Docker | `/var/run/docker.sock` | ILD's user joins its `docker` group |
 
 On a Podman machine, compose talks to whichever of the two engines the machine forwards its API to: the rootful one when the machine is rootful (`podman machine inspect --format '{{.Rootful}}'`), the rootless one otherwise. The stack, its volumes and the runner image all live on that engine, and the socket you mount must be that engine's. `podman machine set --rootful=false` switches a stopped machine to rootless; containers and volumes made on the rootful side stay there.
 
-**Rootful Podman.** Its socket belongs to the host's `root` group, which the entrypoint does not join. To use it anyway, accepting that ILD is then root-equivalent on that machine (Settings warns about it), give the socket the group of ILD's user inside the machine, `sudo chgrp 10001 /run/podman/podman.sock`, and restart ILD. A restart of the socket undoes it.
+**Rootful Podman.** A Podman machine needs nothing: its image ships a `podman.socket` drop-in (`SocketGroup=wheel`), so `podman machine ssh stat -c %G /run/podman/podman.sock` prints `wheel`, and the entrypoint joins a group of that gid inside ILD's container. That is root-equivalent on the machine all the same, and Settings warns about it. Rootful Podman on Linux, or any engine whose socket prints `root` there, belongs to the host's `root` group, which the entrypoint does not join. To use it anyway, accepting that ILD is then root-equivalent on that machine (Settings warns about it), set `ILD_CONTAINER_SOCKET_GRANT=1` in `.env`. The entrypoint then gives the socket ILD's group on each start. Systemd makes the socket anew each time the host or `podman.socket` starts, so a change made by hand (`chgrp`) would not last; after a restart, start ILD again (`podman compose … up -d`) if it is not already restarting, and it fixes the new socket itself.
 
 **Limits on a rootless engine.** When the user's cgroup controllers are not delegated (a Podman machine, or a Linux host without systemd's `Delegate=`), a run's container fails to start with `crun: open 'memory.max' … No such file or directory`. Set both `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0` in `.env`, which the overlay passes on; runs then start without limits.
 

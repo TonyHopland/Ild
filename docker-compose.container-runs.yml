@@ -3,8 +3,9 @@
 #
 #   1. Set ILD_CONTAINER_SOCKET_HOST in .env to the socket of the engine compose talks to (see .env.example).
 #      Whoever holds that socket controls every container on that engine: prefer rootless Podman.
-#   2. On a rootful Podman engine, give its socket a group ILD may join first, after each restart of the
-#      engine or the Podman machine:  podman machine ssh chgrp 10001 /run/podman/podman.sock
+#   2. Only if the socket belongs to the host's root group (rootful Podman on Linux; a Podman machine's is
+#      root:wheel, which needs nothing): set ILD_CONTAINER_SOCKET_GRANT=1 in .env. ILD then gives the socket its
+#      own group each time it starts, which makes ILD root-equivalent on that machine.
 #   3. podman compose -f docker-compose.yml -f docker-compose.container-runs.yml up -d --build
 #      (or docker compose ...). That builds the runner image too.
 #
@@ -19,6 +20,9 @@ services:
       # This service's container_name: ILD joins each run's network and the run reaches it there.
       - ILD_CONTAINER_ILD_CONTAINER=ild
       - ILD_API_URL=http://ild:8080
+      # 1 on a rootful engine: the entrypoint gives the socket, of the host's root group, ILD's own group on
+      # each start. Off by default, since that makes ILD root-equivalent on the engine's host.
+      - ILD_CONTAINER_SOCKET_GRANT=${ILD_CONTAINER_SOCKET_GRANT:-0}
       # 0 for no limit, on a rootless engine whose cgroup controllers are not delegated (a run then fails to
       # start with "crun: open 'memory.max'").
       - ILD_RUN_CPU_LIMIT=${ILD_RUN_CPU_LIMIT:-4}

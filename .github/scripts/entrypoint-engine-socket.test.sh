@@ -54,7 +54,7 @@ run() {
     id() { echo "$agent_gids"; }
     sock_gid="$1" sock_mode="$2" agent_gids="$5"
     UID_MAP_FILE="$3" ILD_RUN_HOST="${6-container}" ILD_CONTAINER_SOCKET="${7-unix://$socket}"
-    RUNTIME_USER=ild AGENT_USER=agent
+    RUNTIME_USER=ild AGENT_USER=agent ILD_CONTAINER_SOCKET_GRANT="${grant-}"
     # shellcheck disable=SC1090
     . "$funcs"
     grant_engine_socket
@@ -86,6 +86,28 @@ run 0 srw-rw---- "$work/uid_map.host" "$groups" "10002 10003"
 if [ -z "$(calls)" ] && grep -q "host's root group" "$work/stderr"; then
   pass "the host's root group outside a user namespace is left alone and said"
 else fail "rootful root group: $(calls) / $(cat "$work/stderr")"; fi
+if grep -q "ILD_CONTAINER_SOCKET_GRANT=1" "$work/stderr"; then pass "the refusal names the opt-in"; else fail "refusal: $(cat "$work/stderr")"; fi
+
+grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups" "10002 10003"
+if [ "$(calls)" = "chgrp ild;usermod -aG ild ild;" ] && grep -q "root-equivalent" "$work/stdout"; then
+  pass "rootful with ILD_CONTAINER_SOCKET_GRANT=1: the socket goes to ild's own group, and that is said"
+else fail "rootful opt-in: $(calls) / $(cat "$work/stdout") / $(cat "$work/stderr")"; fi
+
+grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups" "10001 10002"
+if [ -z "$(calls)" ] && grep -q "would hand the agent the engine" "$work/stderr"; then
+  pass "rootful opt-in: the socket is never given to a group the agent is in"
+else fail "rootful opt-in, agent in ild: $(calls) / $(cat "$work/stderr")"; fi
+
+grant=1 run 0 srw-rw---- "$work/uid_map.host" 'agent:x:10002:
+' "10002"
+if [ -z "$(calls)" ] && grep -q "has no group ild" "$work/stderr"; then
+  pass "rootful opt-in without ILD's group: left alone and said"
+else fail "rootful opt-in, no group: $(calls) / $(cat "$work/stderr")"; fi
+
+grant=1 run 0 srw-rw---- "$work/uid_map.userns" "$groups" "10002 10003"
+if [ "$(calls)" = "groupadd ild-engine;chgrp ild-engine;usermod -aG ild-engine ild;" ]; then
+  pass "rootless with the opt-in set: still the private ild-engine group"
+else fail "rootless with opt-in: $(calls)"; fi
 
 run 999 srw-rw---- "$work/uid_map.host" "${groups}docker:x:999:
 " "10002 10003"
