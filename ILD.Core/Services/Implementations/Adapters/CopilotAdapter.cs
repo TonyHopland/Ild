@@ -123,7 +123,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                         return NodeExecutionResult.Fail(
                             $"[copilot-error] the model gateway has no HTTPS listener, which the Copilot CLI needs: set {GatewayTlsEndpoint.PortVariable} to a free loopback port.");
                 }
-                proc = await StartAgentProcessAsync(psi, ctx);
+                proc = await StartAgentProcessAsync(psi, ctx, [mcpConfigPath]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

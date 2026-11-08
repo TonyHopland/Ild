@@ -201,6 +201,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid),
                 ForkFromSessionId: forkFromSessionId,
                 Environment: feeds.Environment,
+                AgentFiles: feeds.FilePath is null ? null : [feeds.FilePath],
                 NetworkMode: await sp.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken));
             result = await adapter.ExecuteAsync(agentCtx);
         }

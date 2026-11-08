@@ -196,7 +196,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                         Path.Combine(codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, gateway.Token), ctx.Cancel);
                     ApplyGateway(psi, gateway, codexHome);
                 }
-                proc = await StartAgentProcessAsync(psi, ctx);
+                proc = await StartAgentProcessAsync(psi, ctx, mcpServers.Select(server => server.ConfigFile));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

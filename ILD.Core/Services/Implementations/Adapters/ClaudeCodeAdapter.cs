@@ -117,7 +117,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             {
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
                 if (gateway is not null) ApplyGateway(psi, gateway, ctx.Provider);
-                proc = await StartAgentProcessAsync(psi, ctx);
+                proc = await StartAgentProcessAsync(psi, ctx, [mcpConfigPath]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
