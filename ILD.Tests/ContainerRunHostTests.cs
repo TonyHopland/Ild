@@ -1468,13 +1468,15 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_path_the_caller_sets_on_a_command_never_replaces_the_runs_own()
+    public async Task A_path_or_npm_prefix_the_caller_sets_on_a_command_never_replaces_the_runs_own()
     {
         await CreateRunAsync();
         var psi = Command(WorkingDirectory, "npm", "install");
+        psi.Environment["NPM_CONFIG_PREFIX"] = "/ild/side/.local";
         var environment = new Dictionary<string, string>
         {
             ["PATH"] = "/home/ild/.local/bin:/usr/local/bin:/usr/bin",
+            ["NPM_CONFIG_PREFIX"] = "/home/ild/.local",
             ["NPM_CONFIG_CACHE"] = "/state/npm-cache",
         };
 
@@ -1484,6 +1486,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var exec = _api.Execs.Last();
         Assert.Contains("NPM_CONFIG_CACHE=/state/npm-cache", exec.Command);
         Assert.DoesNotContain(exec.Command, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.DoesNotContain(exec.Command, c => c.StartsWith("NPM_CONFIG_PREFIX=", StringComparison.Ordinal));
     }
 
     // -- Socket ------------------------------------------------------------------

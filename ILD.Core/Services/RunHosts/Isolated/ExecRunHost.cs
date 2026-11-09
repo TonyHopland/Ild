@@ -433,6 +433,13 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     /// <summary>
+    /// What the run set for itself when it was made (<see cref="RunToolEnvironment.For"/>): its toolchains' <c>PATH</c> and
+    /// the npm prefix in its own home. ILD's values for these name ILD's directories, which mean nothing in the run — on
+    /// <c>PATH</c> they hide the toolchains, and as the prefix they send <c>npm install -g</c> to a home that is not there.
+    /// </summary>
+    private static readonly HashSet<string> RunOwnedVariables = new(StringComparer.Ordinal) { "PATH", "NPM_CONFIG_PREFIX" };
+
+    /// <summary>
     /// What the command needs set in the run: what its caller put on it that the orchestrator's own environment did not
     /// already hold (a start info begins as a copy of that environment, none of which belongs in the run), with the
     /// orchestrator's secrets taken out, and the run's own home.
@@ -446,14 +453,13 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         {
             if (value is null || secrets.Contains(name)) continue;
             if (own.Contains(name) && (string?)own[name] == value) continue;
-            // ILD's directories mean nothing in the run, whose PATH is its toolchains', set when it was made.
-            if (name == "PATH") continue;
+            if (RunOwnedVariables.Contains(name)) continue;
             environment[name] = value;
         }
         foreach (var (name, value) in command.Environment ?? new Dictionary<string, string>())
         {
-            // The same holds for a PATH the caller sets explicitly: it is built from ILD's, and would hide the run's toolchains.
-            if (name == "PATH") continue;
+            // The same holds for one the caller sets explicitly: it is built from ILD's directories, not the run's.
+            if (RunOwnedVariables.Contains(name)) continue;
             environment[name] = value;
         }
 
