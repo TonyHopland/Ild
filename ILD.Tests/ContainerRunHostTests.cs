@@ -2555,6 +2555,19 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_chat_command_gets_the_chats_npm_prefix_whatever_the_caller_sets()
+    {
+        var chat = Guid.NewGuid();
+        var psi = Command(ChatFolder(chat), "npm", "i", "-g", "x");
+
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(psi, chat, new Dictionary<string, string?> { ["NPM_CONFIG_PREFIX"] = "/caller/prefix" }), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal($"NPM_CONFIG_PREFIX={RunPaths.ChatHome(chat)}/.local", _api.Execs.Last().Env.Single(c => c.StartsWith("NPM_CONFIG_PREFIX=", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task A_command_in_a_chat_folder_is_the_chats_even_when_its_caller_names_another_id_to_kill_it_by()
     {
         var chat = Guid.NewGuid();

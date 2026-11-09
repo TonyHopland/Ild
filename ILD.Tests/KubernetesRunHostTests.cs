@@ -1346,6 +1346,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var write = Assert.Single(_api.Execs, e => e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript));
         Assert.Contains($"export ILD_API_TOKEN='{ApiToken}'", write.StdinSoFar());
         Assert.Equal(write.Command[^1], terminal.Command[5]);
+        Assert.StartsWith($"{RunPaths.ProcessDirectory}/{_run:N}/", write.Command[^1]);
     }
 
     [Fact]

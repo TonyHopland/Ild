@@ -616,7 +616,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// pod or container has its environment), or for a chat its toolchains. The host owns the home and the proxy, which in a proxied
     /// mode the run's network reaches only ILD through: a Cmd node or a preview needs it as much as an agent does. One in network mode Off has the
     /// direct route (OpenDirectRouteAsync) and no proxy, as ADR-0019 says: tools that ignore the proxy variables or are not HTTP work as they
-    /// would on the machine itself. A caller's npm prefix is dropped: the run's own was set when it was made.
+    /// would on the machine itself. A caller's npm prefix is dropped: a run's own was set when its container was made, and a chat, which shares one, gets its own in its home.
     /// </summary>
     private async Task<CommandEnvironment> EnvironmentForAsync(RunCommand command, ExecOwner owner, CancellationToken ct)
     {
@@ -625,7 +625,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             foreach (var line in await ChatEnvironmentAsync(owner.Id, ct))
                 defaults[line[..line.IndexOf('=')]] = line[(line.IndexOf('=') + 1)..];
 
-        var hostOwned = new Dictionary<string, string?>(StringComparer.Ordinal) { ["HOME"] = owner.Home, ["NPM_CONFIG_PREFIX"] = null };
+        var hostOwned = new Dictionary<string, string?>(StringComparer.Ordinal) { ["HOME"] = owner.Home, ["NPM_CONFIG_PREFIX"] = owner.Chat ? $"{owner.Home}/.local" : null };
         if (command.NetworkMode != ILD.Data.Enums.NetworkMode.Off && AgentIsolation.EgressProxyUrl(command.ProviderId) is { } proxy)
             foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
                 hostOwned[name] = value;
