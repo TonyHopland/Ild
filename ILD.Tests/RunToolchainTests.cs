@@ -168,6 +168,127 @@ public sealed class RunToolchainTests : IDisposable
         Assert.Equal(["node@24"], Detected());
     }
 
+    // -- Files the repository controls -------------------------------------------
+
+    private void Link(string path, string target)
+    {
+        var full = Path.Combine(_repo, path);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.CreateSymbolicLink(full, target);
+    }
+
+    private void Fifo(string path)
+    {
+        using var mkfifo = System.Diagnostics.Process.Start("mkfifo", Path.Combine(_repo, path));
+        mkfifo.WaitForExit();
+        Assert.Equal(0, mkfifo.ExitCode);
+    }
+
+    /// <summary>Resolves on another thread, so a read that blocks or never ends fails the test instead of hanging it.</summary>
+    private RunToolPlan ResolveWithin10Seconds()
+    {
+        var resolve = Task.Run(() => RunToolDetector.Resolve(_repo), TestContext.Current.CancellationToken);
+        Assert.True(resolve.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken), "Resolve did not finish");
+        return resolve.Result;
+    }
+
+    private IReadOnlyList<string> DetectedWithin10Seconds() => ResolveWithin10Seconds().Tools.Select(t => t.ToString()).ToList();
+
+    [Fact]
+    public void A_version_file_linked_to_dev_zero_is_ignored()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        Write("package.json", "{}");
+        Link(".nvmrc", "/dev/zero");
+        Assert.Equal(["node@24"], DetectedWithin10Seconds());
+    }
+
+    [Fact]
+    public void A_config_file_linked_to_dev_zero_reads_as_the_defaults()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        Link(RunToolDetector.ConfigFileName, "/dev/zero");
+        Write("package.json", "{}");
+
+        var plan = ResolveWithin10Seconds();
+
+        Assert.Equal(["node@24"], plan.Tools.Select(t => t.ToString()));
+        Assert.False(plan.IgnoreScripts);
+    }
+
+    [Fact]
+    public void A_global_json_linked_to_dev_zero_falls_back_to_the_target_framework()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        Link("global.json", "/dev/zero");
+        Write("App/App.csproj", "<Project><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+        Assert.Equal(["dotnet@9"], DetectedWithin10Seconds());
+    }
+
+    [Fact]
+    public void A_pipe_in_place_of_a_version_or_config_file_does_not_block()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        Write("package.json", "{}");
+        Fifo(".nvmrc");
+        Fifo(RunToolDetector.ConfigFileName);
+        Assert.Equal(["node@24"], DetectedWithin10Seconds());
+    }
+
+    [Fact]
+    public void An_oversized_config_or_version_file_is_ignored()
+    {
+        Write("package.json", "{}");
+        Write(".nvmrc", "20\n" + new string('#', 2 * 1024 * 1024));
+        Write(RunToolDetector.ConfigFileName, """{ "run": { "tools": ["go@1.23"] } }""" + new string(' ', 2 * 1024 * 1024));
+        Assert.Equal(["node@24"], DetectedWithin10Seconds());
+    }
+
+    [Fact]
+    public void A_link_to_a_file_inside_the_repository_is_followed()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        Write("package.json", "{}");
+        Write("versions/node", "20\n");
+        Link(".nvmrc", Path.Combine("versions", "node"));
+        Assert.Equal(["node@20"], DetectedWithin10Seconds());
+    }
+
+    [Fact]
+    public void A_link_to_a_file_outside_the_repository_is_ignored()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var outside = Directory.CreateTempSubdirectory("ild-run-tools-outside-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, ".nvmrc"), "20\n");
+            Write("package.json", "{}");
+            Link(".nvmrc", Path.Combine(outside, ".nvmrc"));
+            Assert.Equal(["node@24"], DetectedWithin10Seconds());
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_linked_folder_leading_out_of_the_repository_is_not_searched_for_markers()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var outside = Directory.CreateTempSubdirectory("ild-run-tools-outside-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, "go.mod"), "module x\n\ngo 1.23\n");
+            Directory.CreateSymbolicLink(Path.Combine(_repo, "elsewhere"), outside);
+            Assert.Empty(DetectedWithin10Seconds());
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     // -- Where a tool is installed ----------------------------------------------
 
     [Theory]

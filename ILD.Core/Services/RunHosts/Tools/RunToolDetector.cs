@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ILD.Core.Services.RunHosts.Local;
 
 namespace ILD.Core.Services.RunHosts.Tools;
 
@@ -68,18 +69,17 @@ public static partial class RunToolDetector
     /// <summary><c>run.tools</c> as a list (<c>["node@24"]</c>) or a map (<c>{"node": "24"}</c>), <c>run.detect</c>, and <c>run.ignoreScripts</c>.</summary>
     internal static (IReadOnlyList<RunTool> Tools, bool Detect, bool IgnoreScripts) ReadConfig(string repositoryRoot)
     {
-        var path = Path.Combine(repositoryRoot, ConfigFileName);
-        if (!File.Exists(path)) return ([], true, false);
+        if (ReadRepositoryText(repositoryRoot, Path.Combine(repositoryRoot, ConfigFileName)) is not { } text) return ([], true, false);
         JsonNode? run;
         try
         {
-            run = JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions
+            run = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions
             {
                 CommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,
             })?["run"];
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        catch (JsonException)
         {
             return ([], true, false);
         }
@@ -110,21 +110,15 @@ public static partial class RunToolDetector
     {
         foreach (var name in new[] { "mise.toml", ".mise.toml", Path.Combine(".config", "mise.toml") })
         {
-            var path = Path.Combine(root, name);
-            if (!File.Exists(path)) continue;
-            foreach (var tool in ParseMiseToml(Lines(path)))
+            foreach (var tool in ParseMiseToml(Lines(root, Path.Combine(root, name))))
                 yield return (tool, $"{tool} from {name.Replace('\\', '/')}");
         }
 
-        var toolVersions = Path.Combine(root, ".tool-versions");
-        if (File.Exists(toolVersions))
+        foreach (var line in Lines(root, Path.Combine(root, ".tool-versions")))
         {
-            foreach (var line in Lines(toolVersions))
-            {
-                var parts = StripComment(line).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 2 && RunTool.Create(parts[0], parts[1]) is { } tool)
-                    yield return (tool, $"{tool} from .tool-versions");
-            }
+            var parts = StripComment(line).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2 && RunTool.Create(parts[0], parts[1]) is { } tool)
+                yield return (tool, $"{tool} from .tool-versions");
         }
     }
 
@@ -183,13 +177,13 @@ public static partial class RunToolDetector
 
         if (First("pyproject.toml", "requirements.txt", "uv.lock", "setup.py", "Pipfile") is { } python)
         {
-            var version = FirstLineOf(Path.Combine(root, ".python-version")) ?? "3";
+            var version = FirstLineOf(root, Path.Combine(root, ".python-version")) ?? "3";
             if (RunTool.Create("python", version) is { } tool) yield return (tool, $"{tool} for {Shown(python)}");
         }
 
         if (First("go.mod") is { } goMod)
         {
-            var version = GoVersion(Lines(goMod)) ?? "latest";
+            var version = GoVersion(Lines(root, goMod)) ?? "latest";
             if (RunTool.Create("go", version) is { } tool) yield return (tool, $"{tool} for {Shown(goMod)}");
         }
 
@@ -201,7 +195,7 @@ public static partial class RunToolDetector
 
         if (First("pom.xml", "build.gradle", "build.gradle.kts") is { } java)
         {
-            var version = FirstLineOf(Path.Combine(root, ".java-version")) ?? "21";
+            var version = FirstLineOf(root, Path.Combine(root, ".java-version")) ?? "21";
             if (RunTool.Create("java", version) is { } tool) yield return (tool, $"{tool} for {Shown(java)}");
         }
     }
@@ -211,7 +205,7 @@ public static partial class RunToolDetector
     {
         foreach (var folder in new[] { packageFolder, root }.Distinct())
             foreach (var name in new[] { ".nvmrc", ".node-version" })
-                if (FirstLineOf(Path.Combine(folder, name)) is { } pinned)
+                if (FirstLineOf(root, Path.Combine(folder, name)) is { } pinned)
                 {
                     from = Path.GetRelativePath(root, Path.Combine(folder, name)).Replace('\\', '/');
                     var version = pinned.TrimStart('v', 'V');
@@ -233,22 +227,22 @@ public static partial class RunToolDetector
         var globalJson = Path.Combine(root, "global.json");
         if (markers.Count == 0 && !File.Exists(globalJson)) return null;
 
-        if (File.Exists(globalJson))
+        if (ReadRepositoryText(root, globalJson) is { } globalText)
         {
             try
             {
-                var sdk = JsonNode.Parse(File.ReadAllText(globalJson), documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })?["sdk"]?["version"];
+                var sdk = JsonNode.Parse(globalText, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true })?["sdk"]?["version"];
                 if (sdk is JsonValue v && v.TryGetValue<string>(out var pinned) && RunTool.Create("dotnet", pinned) is { } tool)
                     return (tool, $"{tool} from global.json");
             }
-            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { }
+            catch (JsonException) { }
         }
 
         var projectFiles = folders
             .SelectMany(f => new[] { "*.csproj", "*.fsproj", "*.vbproj", "Directory.Build.props" }.SelectMany(p => SafeFiles(f, p)))
             .ToList();
         var majors = projectFiles
-            .SelectMany(file => TargetFramework().Matches(SafeRead(file)))
+            .SelectMany(file => TargetFramework().Matches(SafeRead(root, file)))
             .SelectMany(element => NetMajor().Matches(element.Groups[1].Value).Select(m => int.Parse(m.Groups[1].Value)))
             .ToList();
         var version = majors.Count > 0 ? majors.Max().ToString() : "latest";
@@ -273,12 +267,10 @@ public static partial class RunToolDetector
 
     private static string? RustChannel(string root)
     {
-        var toml = Path.Combine(root, "rust-toolchain.toml");
-        if (File.Exists(toml))
-            foreach (var line in Lines(toml))
-                if (RustChannelLine().Match(line) is { Success: true } m)
-                    return RunTool.Create("rust", m.Groups[1].Value)?.Version;
-        return FirstLineOf(Path.Combine(root, "rust-toolchain")) is { } plain ? RunTool.Create("rust", plain)?.Version : null;
+        foreach (var line in Lines(root, Path.Combine(root, "rust-toolchain.toml")))
+            if (RustChannelLine().Match(line) is { Success: true } m)
+                return RunTool.Create("rust", m.Groups[1].Value)?.Version;
+        return FirstLineOf(root, Path.Combine(root, "rust-toolchain")) is { } plain ? RunTool.Create("rust", plain)?.Version : null;
     }
 
     // -- Files -------------------------------------------------------------------
@@ -287,8 +279,10 @@ public static partial class RunToolDetector
     {
         try
         {
-            return Directory.EnumerateDirectories(folder)
-                .Where(d => !Path.GetFileName(d).StartsWith('.') && !SkippedFolders.Contains(Path.GetFileName(d), StringComparer.OrdinalIgnoreCase))
+            // A linked folder is skipped: it can lead out of the repository.
+            return new DirectoryInfo(folder).EnumerateDirectories()
+                .Where(d => d.LinkTarget is null && !d.Name.StartsWith('.') && !SkippedFolders.Contains(d.Name, StringComparer.OrdinalIgnoreCase))
+                .Select(d => d.FullName)
                 .OrderBy(d => d, StringComparer.Ordinal)
                 .ToList();
         }
@@ -304,17 +298,32 @@ public static partial class RunToolDetector
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
     }
 
-    private static string SafeRead(string path)
+    /// <summary>The largest repository file read, in bytes. Anything longer is treated as absent.</summary>
+    private const int MaxFileBytes = 1024 * 1024;
+
+    /// <summary>
+    /// The text of <paramref name="path"/>, or null when it is absent or is anything but a regular file of at most
+    /// <see cref="MaxFileBytes"/> that, links followed, stays inside <paramref name="root"/>. The repository commits
+    /// these files and they are read in ILD's own process, so a link to <c>/dev/zero</c>, a pipe or a huge file must
+    /// not be able to hang it or exhaust its memory.
+    /// </summary>
+    private static string? ReadRepositoryText(string root, string path)
     {
-        try { return new FileInfo(path).Length > 1024 * 1024 ? string.Empty : File.ReadAllText(path); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return string.Empty; }
+        var resolvedRoot = LocalWorktrees.ResolveLinks(Path.GetFullPath(root));
+        var resolved = LocalWorktrees.ResolveLinks(Path.GetFullPath(path));
+        if (resolvedRoot is null || resolved is null) return null;
+        var rootWithSeparator = resolvedRoot.EndsWith(Path.DirectorySeparatorChar) ? resolvedRoot : resolvedRoot + Path.DirectorySeparatorChar;
+        if (!resolved.StartsWith(rootWithSeparator, StringComparison.Ordinal)) return null;
+        return LocalWorktrees.ReadSmallText(resolved, MaxFileBytes + 1)?.TrimStart('\uFEFF');
     }
 
-    private static IEnumerable<string> Lines(string path) => SafeRead(path).Split('\n');
+    private static string SafeRead(string root, string path) => ReadRepositoryText(root, path) ?? string.Empty;
 
-    private static string? FirstLineOf(string path)
-        => File.Exists(path)
-            ? Lines(path).Select(l => StripComment(l).Trim()).FirstOrDefault(l => l.Length > 0)
+    private static IEnumerable<string> Lines(string root, string path) => SafeRead(root, path).Split('\n');
+
+    private static string? FirstLineOf(string root, string path)
+        => ReadRepositoryText(root, path) is { } text
+            ? text.Split('\n').Select(l => StripComment(l).Trim()).FirstOrDefault(l => l.Length > 0)
             : null;
 
     private static string StripComment(string line) => line.Split('#', 2)[0];
