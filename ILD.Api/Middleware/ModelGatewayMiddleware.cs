@@ -90,7 +90,7 @@ public sealed partial class ModelGatewayMiddleware
             return;
         }
 
-        if (!TryBuildTarget(credential.Upstream, route, rest, context.Request.QueryString, out var target))
+        if (!TryBuildTarget(credential.Upstream, route, rest, context.Request.QueryString, out var target, out var withCredential))
         {
             await RefuseAsync(context, StatusCodes.Status404NotFound, "Unknown gateway route.");
             return;
@@ -101,7 +101,7 @@ public sealed partial class ModelGatewayMiddleware
             : null;
         context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
         var error = await _forwarder.SendAsync(
-            context, target.GetLeftPart(UriPartial.Authority), Client, RequestConfig, new SwapTransformer(target, credential, rewriteEndpointsTo));
+            context, target.GetLeftPart(UriPartial.Authority), Client, RequestConfig, new SwapTransformer(target, withCredential ? credential : null, rewriteEndpointsTo));
 
         if (error != ForwarderError.None)
         {
@@ -128,10 +128,12 @@ public sealed partial class ModelGatewayMiddleware
     }
 
     // The agent chooses the path, never the host: scheme, host and port always come from the credential's
-    // upstream (for Copilot, from an endpoint the answer named, matched strictly).
-    internal static bool TryBuildTarget(Uri upstream, string route, string rest, QueryString query, out Uri target)
+    // upstream (for Copilot, from an endpoint the answer named, matched strictly). withCredential is
+    // false for a target that must get no credential at all (Copilot's telemetry).
+    internal static bool TryBuildTarget(Uri upstream, string route, string rest, QueryString query, out Uri target, out bool withCredential)
     {
         target = upstream;
+        withCredential = true;
         var root = upstream;
         if (route == GatewayRoutes.GitHub && rest.StartsWith(CopilotEndpointPrefix, StringComparison.Ordinal))
         {
@@ -139,6 +141,9 @@ public sealed partial class ModelGatewayMiddleware
             if (!CopilotHost().IsMatch(afterPrefix[0])) return false;
             root = new Uri($"https://{afterPrefix[0].ToLowerInvariant()}");
             rest = afterPrefix.Length > 1 ? afterPrefix[1] : string.Empty;
+            if (!CopilotEndpoints.TryGetValue(root.Host.Split('.')[0], out var endpoint) || !IsAllowed(endpoint.Paths, rest))
+                return false;
+            withCredential = endpoint.WithCredential;
         }
         else if (!IsAllowedPath(route, rest))
         {
@@ -167,10 +172,20 @@ public sealed partial class ModelGatewayMiddleware
     private static readonly Dictionary<string, string[]> AllowedPaths = new()
     {
         [GatewayRoutes.GitHub] = ["copilot_internal/"],
-        [GatewayRoutes.ChatGpt] = ["codex/", "wham/"],
+        // wham/usage is the Codex CLI's rate-limit check; the rest of wham/ is the user's Codex cloud tasks.
+        [GatewayRoutes.ChatGpt] = ["codex/", "wham/usage"],
         [GatewayRoutes.Anthropic] = ["v1/messages", "v1/messages/count_tokens", "v1/models", "v1/models/"],
         [GatewayRoutes.Upstream] =
             ["chat/completions", "completions", "responses", "messages", "messages/count_tokens", "models", "models/"],
+    };
+
+    // What Copilot calls on the endpoints copilot_internal/user names, by the host's first label (api.githubcopilot.com,
+    // api.individual.githubcopilot.com, telemetry.business.githubcopilot.com). Any other kind of host is refused.
+    // Telemetry is sent with no credential at all: it does not need the user's token.
+    private static readonly Dictionary<string, (string[] Paths, bool WithCredential)> CopilotEndpoints = new()
+    {
+        ["api"] = (["models", "models/", "chat/completions", "responses", "v1/messages", "v1/messages/count_tokens"], true),
+        ["telemetry"] = (["telemetry"], false),
     };
 
     // An upstream provider's base URL may or may not end in the API version, so the inference paths are also
@@ -186,10 +201,12 @@ public sealed partial class ModelGatewayMiddleware
     }
 
     private static bool IsAllowedUnder(string route, string rest)
-        => AllowedPaths.TryGetValue(route, out var allowed)
-            && allowed.Any(entry => entry.EndsWith('/')
-                ? rest.StartsWith(entry, StringComparison.Ordinal)
-                : string.Equals(rest, entry, StringComparison.Ordinal));
+        => AllowedPaths.TryGetValue(route, out var allowed) && IsAllowed(allowed, rest);
+
+    private static bool IsAllowed(string[] allowed, string rest)
+        => allowed.Any(entry => entry.EndsWith('/')
+            ? rest.StartsWith(entry, StringComparison.Ordinal)
+            : string.Equals(rest, entry, StringComparison.Ordinal));
 
     [GeneratedRegex(@"^[a-z0-9-]+(\.[a-z0-9-]+)*\.githubcopilot\.com\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CopilotHost();
@@ -201,7 +218,8 @@ public sealed partial class ModelGatewayMiddleware
         return context.Response.WriteAsJsonAsync(new { error = new { type = "ild_gateway", message } });
     }
 
-    private sealed partial class SwapTransformer(Uri target, ModelCredential credential, string? rewriteEndpointsTo) : HttpTransformer
+    // With no credential, the request goes out with none: every credential header the agent sent is dropped.
+    internal sealed partial class SwapTransformer(Uri target, ModelCredential? credential, string? rewriteEndpointsTo) : HttpTransformer
     {
         [GeneratedRegex(@"https://([a-z0-9.-]+\.githubcopilot\.com)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
         private static partial Regex CopilotEndpoint();
@@ -228,6 +246,13 @@ public sealed partial class ModelGatewayMiddleware
             await base.TransformRequestAsync(httpContext, proxyRequest, destinationPrefix, cancellationToken);
             proxyRequest.RequestUri = target;
             proxyRequest.Headers.Host = null;
+            if (rewriteEndpointsTo is not null) proxyRequest.Headers.AcceptEncoding.Clear();
+
+            if (credential is null)
+            {
+                foreach (var name in CredentialHeaders) proxyRequest.Headers.Remove(name);
+                return;
+            }
 
             var carriedKey = false;
             foreach (var name in new[] { "x-api-key", "api-key" })
@@ -239,7 +264,6 @@ public sealed partial class ModelGatewayMiddleware
                 }
             }
             proxyRequest.Headers.Remove(TokenHeader);
-            if (rewriteEndpointsTo is not null) proxyRequest.Headers.AcceptEncoding.Clear();
             if (!carriedKey || proxyRequest.Headers.Authorization is not null)
                 proxyRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", credential.Secret);
 

@@ -190,7 +190,7 @@ public class ModelGatewayTests : IAsyncLifetime
         var rest = Uri.UnescapeDataString(path["/gateway/github/".Length..]);
 
         Assert.False(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
-            new Uri("https://api.github.com"), GatewayRoutes.GitHub, rest, default, out _));
+            new Uri("https://api.github.com"), GatewayRoutes.GitHub, rest, default, out _, out _));
     }
 
     [Theory]
@@ -204,7 +204,7 @@ public class ModelGatewayTests : IAsyncLifetime
     public void A_path_outside_the_routes_allowlist_is_refused(string route, string rest)
     {
         Assert.False(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
-            new Uri("https://example.test/base"), route, rest, default, out _));
+            new Uri("https://example.test/base"), route, rest, default, out _, out _));
     }
 
     [Fact]
@@ -212,9 +212,95 @@ public class ModelGatewayTests : IAsyncLifetime
     {
         Assert.True(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
             new Uri("https://api.github.com"), GatewayRoutes.GitHub, "_ep/api.individual.githubcopilot.com/v1/messages",
-            new QueryString("?a=1"), out var target));
+            new QueryString("?a=1"), out var target, out var withCredential));
 
         Assert.Equal("https://api.individual.githubcopilot.com/v1/messages?a=1", target.ToString());
+        Assert.True(withCredential);
+    }
+
+    [Theory]
+    [InlineData("_ep/api.individual.githubcopilot.com/mcp/readonly")]
+    [InlineData("_ep/api.githubcopilot.com/mcp/readonly")]
+    [InlineData("_ep/api.individual.githubcopilot.com/user/repos")]
+    [InlineData("_ep/api.individual.githubcopilot.com/v1/messagesX")]
+    [InlineData("_ep/api.individual.githubcopilot.com/")]
+    [InlineData("_ep/exp.individual.githubcopilot.com/experiments")]
+    [InlineData("_ep/origin-tracker.individual.githubcopilot.com/origin")]
+    [InlineData("_ep/proxy.individual.githubcopilot.com/v1/messages")]
+    [InlineData("_ep/telemetry.individual.githubcopilot.com/mcp/readonly")]
+    [InlineData("_ep/telemetry.individual.githubcopilot.com/v1/messages")]
+    [InlineData("mcp/readonly")]
+    public void A_copilot_path_outside_its_hosts_allowlist_is_refused(string rest)
+    {
+        Assert.False(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://api.github.com"), GatewayRoutes.GitHub, rest, default, out _, out _));
+    }
+
+    [Theory]
+    [InlineData("_ep/api.individual.githubcopilot.com/models", "https://api.individual.githubcopilot.com/models")]
+    [InlineData("_ep/api.individual.githubcopilot.com/models/claude-sonnet-4/policy", "https://api.individual.githubcopilot.com/models/claude-sonnet-4/policy")]
+    [InlineData("_ep/api.individual.githubcopilot.com/v1/messages", "https://api.individual.githubcopilot.com/v1/messages")]
+    [InlineData("_ep/api.individual.githubcopilot.com/v1/messages/count_tokens", "https://api.individual.githubcopilot.com/v1/messages/count_tokens")]
+    [InlineData("_ep/api.individual.githubcopilot.com/chat/completions", "https://api.individual.githubcopilot.com/chat/completions")]
+    [InlineData("_ep/api.business.githubcopilot.com/responses", "https://api.business.githubcopilot.com/responses")]
+    [InlineData("_ep/api.githubcopilot.com/chat/completions", "https://api.githubcopilot.com/chat/completions")]
+    public void A_copilot_model_endpoint_is_forwarded_with_the_credential(string rest, string expected)
+    {
+        Assert.True(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://api.github.com"), GatewayRoutes.GitHub, rest, default, out var target, out var withCredential));
+
+        Assert.Equal(expected, target.ToString());
+        Assert.True(withCredential);
+    }
+
+    [Fact]
+    public void Copilot_telemetry_is_forwarded_without_a_credential()
+    {
+        Assert.True(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://api.github.com"), GatewayRoutes.GitHub, "_ep/telemetry.individual.githubcopilot.com/telemetry",
+            default, out var target, out var withCredential));
+
+        Assert.Equal("https://telemetry.individual.githubcopilot.com/telemetry", target.ToString());
+        Assert.False(withCredential);
+    }
+
+    [Fact]
+    public async Task A_request_forwarded_without_a_credential_carries_none_of_the_agents_credential_headers()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = "POST";
+        context.Request.Headers.Authorization = "Bearer gho_placeholder";
+        context.Request.Headers["x-api-key"] = "placeholder";
+        context.Request.Headers["api-key"] = "placeholder";
+        context.Request.Headers[GatewayRoutes.TokenHeader] = "placeholder";
+        context.Request.Headers["x-copilot-client"] = "kept";
+        var target = new Uri("https://telemetry.individual.githubcopilot.com/telemetry");
+        using var proxyRequest = new HttpRequestMessage(HttpMethod.Post, target);
+
+        await new ILD.Api.Middleware.ModelGatewayMiddleware.SwapTransformer(target, credential: null, rewriteEndpointsTo: null)
+            .TransformRequestAsync(context, proxyRequest, "https://telemetry.individual.githubcopilot.com", TestContext.Current.CancellationToken);
+
+        Assert.Null(proxyRequest.Headers.Authorization);
+        foreach (var name in new[] { "x-api-key", "api-key", GatewayRoutes.TokenHeader })
+            Assert.False(proxyRequest.Headers.Contains(name), name);
+        Assert.Equal("kept", Assert.Single(proxyRequest.Headers.GetValues("x-copilot-client")));
+        Assert.Equal(target, proxyRequest.RequestUri);
+    }
+
+    [Fact]
+    public async Task A_request_forwarded_with_a_credential_carries_the_real_one()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = "POST";
+        context.Request.Headers.Authorization = "Bearer gho_placeholder";
+        var target = new Uri("https://api.individual.githubcopilot.com/v1/messages");
+        using var proxyRequest = new HttpRequestMessage(HttpMethod.Post, target);
+        var credential = new ModelCredential(new Uri("https://api.github.com"), RealKey, ModelCredential.NoHeaders);
+
+        await new ILD.Api.Middleware.ModelGatewayMiddleware.SwapTransformer(target, credential, rewriteEndpointsTo: null)
+            .TransformRequestAsync(context, proxyRequest, "https://api.individual.githubcopilot.com", TestContext.Current.CancellationToken);
+
+        Assert.Equal("Bearer " + RealKey, proxyRequest.Headers.Authorization?.ToString());
     }
 
     [Fact]
