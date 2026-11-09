@@ -108,24 +108,24 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         }
     }
 
-    /// <summary>Puts a toolchain installer pod of an instance in the cluster, as if a host had made it and then crashed.</summary>
-    public void SeedTools(string name, string instance)
+    /// <summary>Puts a toolchain installer pod (or its NetworkPolicy) of an instance in the cluster, as if a host had made it and then crashed.</summary>
+    public void SeedTools(string name, string instance, string kind = "pods")
     {
         lock (_gate)
-            _objects[(Namespace, "pods", name)] = new V1Pod
+        {
+            var meta = new V1ObjectMeta
             {
-                Metadata = new V1ObjectMeta
+                Name = name,
+                NamespaceProperty = Namespace,
+                Labels = new Dictionary<string, string>
                 {
-                    Name = name,
-                    NamespaceProperty = Namespace,
-                    Labels = new Dictionary<string, string>
-                    {
-                        ["app.kubernetes.io/managed-by"] = "ild",
-                        ["ild/instance"] = instance,
-                        ["ild/role"] = "tools",
-                    },
+                    ["app.kubernetes.io/managed-by"] = "ild",
+                    ["ild/instance"] = instance,
+                    ["ild/role"] = "tools",
                 },
             };
+            _objects[(Namespace, kind, name)] = kind == "pods" ? new V1Pod { Metadata = meta } : new V1NetworkPolicy { Metadata = meta };
+        }
     }
 
     private void Map(WebApplication app)

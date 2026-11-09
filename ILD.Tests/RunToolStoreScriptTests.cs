@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using ILD.Core.Services.Implementations.PackageFeeds;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.RunHosts.Tools;
 
 namespace ILD.Tests;
@@ -15,6 +16,7 @@ public sealed class RunToolStoreScriptTests : IDisposable
     private string Root => Path.Combine(_dir, "store");
     private string Bin => Path.Combine(_dir, "bin");
     private string Log => Path.Combine(_dir, "installs.log");
+    private string EnvLog => Path.Combine(_dir, "env.log");
 
     public RunToolStoreScriptTests()
     {
@@ -27,7 +29,8 @@ public sealed class RunToolStoreScriptTests : IDisposable
             spec=$1; name=${spec%@*}; ver=${spec#*@}; dir="$MISE_DATA_DIR/installs/$name/$ver.0"
             case "$cmd" in
               install) [ "$spec" = node@99 ] && { echo "mise ERROR 404 Not Found for $spec" >&2; exit 1; }
-                       mkdir -p "$dir/bin"; echo "$spec" >> "$FAKE_LOG" ;;
+                       mkdir -p "$dir/bin"; echo "$spec" >> "$FAKE_LOG"
+                       echo "mise $HTTPS_PROXY $https_proxy $ALL_PROXY $NODE_USE_ENV_PROXY" >> "$FAKE_ENV" ;;
               where) echo "$dir" ;;
               env) printf '{"PATH":"%s/bin:%s","FOO_HOME":"%s","MISE_SHELL":"bash"}' "$dir" "$PATH" "$dir" ;;
             esac
@@ -40,6 +43,7 @@ public sealed class RunToolStoreScriptTests : IDisposable
             printf '#!/usr/bin/env node\n' > "$prefix/node_modules/pkg/cli.js"
             ln -sf ../pkg/cli.js "$prefix/node_modules/.bin/pi"
             echo "npm $2" >> "$FAKE_LOG"
+            echo "npm $HTTPS_PROXY $https_proxy $ALL_PROXY $NODE_USE_ENV_PROXY" >> "$FAKE_ENV"
             """);
         // dotnet: the SDK version FAKE_SDK names; `tool install … --tool-path <dir>` leaves the provider's command there.
         WriteExecutable("dotnet", """
@@ -76,6 +80,7 @@ public sealed class RunToolStoreScriptTests : IDisposable
     }
 
     private string? _sdk;
+    private IReadOnlyDictionary<string, string> _environment = new Dictionary<string, string>();
 
     private (int ExitCode, string StdOut, string StdErr) Run(params string[] arguments)
     {
@@ -86,6 +91,8 @@ public sealed class RunToolStoreScriptTests : IDisposable
         psi.Environment["ILD_TOOLS_ROOT"] = Root;
         psi.Environment["MISE_DATA_DIR"] = Path.Combine(Root, "mise");
         psi.Environment["FAKE_LOG"] = Log;
+        psi.Environment["FAKE_ENV"] = EnvLog;
+        foreach (var (name, value) in _environment) psi.Environment[name] = value;
         if (_sdk is not null) psi.Environment["FAKE_SDK"] = _sdk;
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
@@ -111,6 +118,18 @@ public sealed class RunToolStoreScriptTests : IDisposable
         Assert.Equal([$"{Root}/mise/installs/node/20.0/bin"], line["path"]!.AsArray().Select(p => p!.GetValue<string>()));
         Assert.Equal($"{Root}/mise/installs/node/20.0", line["env"]!["FOO_HOME"]!.GetValue<string>());
         Assert.Null(line["env"]!["MISE_SHELL"]);
+    }
+
+    [Fact]
+    public void The_proxy_variables_of_the_installer_reach_mises_and_npms_environment()
+    {
+        _environment = AgentIsolation.EgressProxyEnvironment("http://installer:agents@ild.example:3128");
+
+        var result = Run("agentnode=node@24", "agent=pi|@earendil-works/pi-coding-agent|1.5.0|pi");
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        const string seen = "http://installer:agents@ild.example:3128 http://installer:agents@ild.example:3128 http://installer:agents@ild.example:3128 1";
+        Assert.Equal([$"mise {seen}", $"npm {seen}"], File.ReadAllLines(EnvLog));
     }
 
     [Fact]

@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Migrations;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -130,14 +131,16 @@ public sealed class EgressProxyTests : IAsyncLifetime
         return entry;
     }
 
-    private async Task<(TcpClient Client, string StatusLine)> ConnectAsync(string host, Guid? provider = null)
+    private async Task<(TcpClient Client, string StatusLine)> ConnectAsync(string host, Guid? provider = null, string? installer = null)
     {
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, _proxyPort);
         var stream = client.GetStream();
         var auth = provider is { } id
             ? $"Proxy-Authorization: Basic {Convert.ToBase64String(Encoding.UTF8.GetBytes($"provider:{id}"))}\r\n"
-            : string.Empty;
+            : installer is not null
+                ? $"Proxy-Authorization: Basic {Convert.ToBase64String(Encoding.UTF8.GetBytes($"installer:{installer}"))}\r\n"
+                : string.Empty;
         var request = $"CONNECT {host}:{_upstreamPort} HTTP/1.1\r\nHost: {host}:{_upstreamPort}\r\n{auth}\r\n";
         await stream.WriteAsync(Encoding.ASCII.GetBytes(request));
         var status = await ReadLineAsync(stream);
@@ -238,6 +241,68 @@ public sealed class EgressProxyTests : IAsyncLifetime
             Assert.StartsWith("HTTP/1.1 200", after);
             Assert.Equal("now allowed", await EchoAsync(second, "now allowed"));
         }
+    }
+
+    [Fact]
+    public async Task In_whitelist_mode_an_installer_reaches_the_seeded_hosts_and_no_others_and_is_logged_under_its_zone()
+    {
+        await InstallerNetworkDefaultsMigrator.MigrateAsync(_db.Context, TestContext.Current.CancellationToken);
+        await SetModeAsync(NetworkMode.Whitelist);
+
+        var (listed, listedStatus) = await ConnectAsync("registry.npmjs.org", installer: "repo-0123");
+        using (listed)
+            Assert.Equal("ping", await EchoAsync(listed, "ping"));
+        var (unlisted, unlistedStatus) = await ConnectAsync("evil.example", installer: "repo-0123");
+        unlisted.Dispose();
+        // The installers' scope is theirs alone: an agent launch is judged by the global lists.
+        var (agent, agentStatus) = await ConnectAsync("registry.npmjs.org");
+        agent.Dispose();
+
+        Assert.StartsWith("HTTP/1.1 200", listedStatus);
+        Assert.StartsWith("HTTP/1.1 403", unlistedStatus);
+        Assert.StartsWith("HTTP/1.1 403", agentStatus);
+        Assert.Equal(
+            [("registry.npmjs.org", NetworkDecision.Allowed, "repo-0123"), ("evil.example", NetworkDecision.Blocked, "repo-0123"), ("registry.npmjs.org", NetworkDecision.Blocked, null)],
+            _log.Entries.Zip(_log.Installers, (e, i) => (e.Host, e.Decision, i)).ToArray());
+    }
+
+    [Fact]
+    public async Task A_global_entry_also_admits_an_installer_and_an_installers_entry_blocks_in_blacklist_mode()
+    {
+        await SetModeAsync(NetworkMode.Whitelist);
+        await ListAsync("global.example", NetworkListKind.Whitelist);
+        var (global, globalStatus) = await ConnectAsync("global.example", installer: "agents");
+        global.Dispose();
+        Assert.StartsWith("HTTP/1.1 200", globalStatus);
+
+        await SetModeAsync(NetworkMode.Blacklist);
+        await _db.Network.AddEntryAsync(new NetworkPolicyEntry { Host = "bad.example", ListKind = NetworkListKind.Blacklist, Installers = true }, TestContext.Current.CancellationToken);
+        _policy.Invalidate();
+        var (installer, installerStatus) = await ConnectAsync("bad.example", installer: "toolchains");
+        installer.Dispose();
+        var (agent, agentStatus) = await ConnectAsync("bad.example");
+        agent.Dispose();
+
+        Assert.StartsWith("HTTP/1.1 403", installerStatus);
+        Assert.StartsWith("HTTP/1.1 200", agentStatus);
+    }
+
+    [Fact]
+    public async Task What_the_proxy_refused_an_installer_is_kept_for_the_length_of_its_install()
+    {
+        var refusals = new InstallerRefusals();
+        var recorder = new NetworkLogRecorder(_services.GetRequiredService<IServiceScopeFactory>(), new Moq.Mock<INetworkNotifier>().Object, NullLogger<NetworkLogRecorder>.Instance, refusals);
+
+        recorder.Record("early.example", 443, NetworkDecision.Blocked, null, installer: "agents");
+        refusals.Begin("agents");
+        recorder.Record("registry.example", 443, NetworkDecision.Blocked, null, installer: "agents");
+        recorder.Record("registry.example", 443, NetworkDecision.Blocked, null, installer: "agents");
+        recorder.Record("fine.example", 443, NetworkDecision.Allowed, null, installer: "agents");
+        recorder.Record("other.example", 443, NetworkDecision.Blocked, null, installer: "toolchains");
+
+        Assert.Equal(["registry.example:443"], refusals.Refused("agents"));
+        refusals.End("agents");
+        Assert.Empty(refusals.Refused("agents"));
     }
 
     [Fact]
@@ -1114,6 +1179,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     {
         private readonly List<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> _entries = new();
         private readonly List<string?> _reasons = new();
+        private readonly List<string?> _installers = new();
 
         public IReadOnlyList<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> Entries
         {
@@ -1125,12 +1191,18 @@ public sealed class EgressProxyTests : IAsyncLifetime
             get { lock (_entries) return _reasons.ToList(); }
         }
 
+        public IReadOnlyList<string?> Installers
+        {
+            get { lock (_entries) return _installers.ToList(); }
+        }
+
         public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
         {
             lock (_entries)
             {
                 _entries.Add((host, port, decision, aiProviderId));
                 _reasons.Add(reason);
+                _installers.Add(installer);
             }
         }
     }
@@ -1272,7 +1344,7 @@ public sealed class EgressPolicyInvalidationTests
 
         public void Release() => _gate.TrySetResult();
 
-        public Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default)
+        public Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default, bool installers = false)
             => throw new NotSupportedException();
 
         public async Task<IReadOnlyList<NetworkPolicyEntry>> GetEntriesAsync(CancellationToken ct = default)
@@ -1287,7 +1359,7 @@ public sealed class EgressPolicyInvalidationTests
         }
 
         public Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default, bool installers = false) => throw new NotSupportedException();
         public Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<NetworkLogEntry>> GetLogAsync(int take, CancellationToken ct = default) => throw new NotSupportedException();

@@ -167,6 +167,44 @@ public sealed class NetworkControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task An_installers_entry_is_its_own_scope_beside_the_global_one_and_is_never_a_provider_entry_too()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var controller = Build();
+
+        var installers = Assert.IsType<CreatedAtActionResult>(await controller.AddEntry(
+            new NetworkController.AddEntryRequest { Host = "registry.example", ListKind = NetworkListKind.Whitelist, Installers = true }, ct));
+        var global = Assert.IsType<CreatedAtActionResult>(await controller.AddEntry(
+            new NetworkController.AddEntryRequest { Host = "registry.example", ListKind = NetworkListKind.Whitelist }, ct));
+        var again = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "registry.example", ListKind = NetworkListKind.Whitelist, Installers = true }, ct);
+        var both = await controller.AddEntry(new NetworkController.AddEntryRequest
+        {
+            Host = "other.example", ListKind = NetworkListKind.Whitelist, Installers = true, AiProviderId = await SeedProviderAsync(),
+        }, ct);
+
+        Assert.NotEqual(Body<EntryView>(installers).Id, Body<EntryView>(global).Id);
+        Assert.IsType<OkObjectResult>(again);
+        Assert.IsType<BadRequestObjectResult>(both);
+        Assert.Equal(1, (await _db.Network.GetEntriesAsync(ct)).Count(e => e.Installers));
+        Assert.Equal(1, (await _db.Network.GetEntriesAsync(ct)).Count(e => !e.Installers));
+    }
+
+    [Fact]
+    public async Task A_log_entry_an_installer_made_is_promoted_to_the_installers_scope_on_request()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var logged = new NetworkLogEntry { Host = "binaries.example", Port = 443, Timestamp = DateTime.UtcNow, Decision = NetworkDecision.Blocked, Installer = "repo-1" };
+        await _db.Network.AppendLogAsync(new[] { logged }, ct);
+        var controller = Build();
+
+        Assert.IsType<CreatedAtActionResult>(await controller.WhitelistFromLog(logged.Id, new NetworkController.AddFromLogRequest { ScopeToInstallers = true }, ct));
+
+        var entry = Assert.Single(await _db.Network.GetEntriesAsync(ct));
+        Assert.True(entry.Installers);
+        Assert.Null(entry.AiProviderId);
+    }
+
+    [Fact]
     public async Task A_log_entry_can_be_promoted_to_either_list_globally_or_scoped_to_its_provider()
     {
         var provider = new AiProvider { Id = Guid.NewGuid(), Name = "claude", Type = "claude-code", BaseUrl = "", Model = "" };
@@ -614,7 +652,7 @@ public sealed class NetworkControllerTests : IDisposable
     public async Task The_unique_index_refusing_the_save_is_answered_like_a_duplicate()
     {
         var store = new Mock<INetworkPolicyStore>();
-        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
             .ThrowsAsync(new DbUpdateException("unique"));
         var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
             Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
@@ -632,7 +670,7 @@ public sealed class NetworkControllerTests : IDisposable
     public async Task A_rule_deleted_between_the_load_and_the_save_is_not_found()
     {
         var store = new Mock<INetworkPolicyStore>();
-        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
             .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
         var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
             Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);

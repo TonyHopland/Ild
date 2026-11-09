@@ -62,14 +62,27 @@ public class AgentIsolationEgressTests
         var uri = new Uri(AgentIsolation.ResolveEgressProxyUrl("3128", id)!);
         var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(uri.UserInfo));
 
-        Assert.Equal(id, EgressProxy.ReadProviderScope(header));
-        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("provider:not-a-guid"))));
+        Assert.Equal((id, (string?)null), EgressProxy.ReadScope(header));
+        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("provider:not-a-guid"))));
         // Credentials some other tool put on the URL never attribute a provider,
         // whatever their password looks like.
-        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"someone:{id}"))));
-        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(id.ToString()))));
-        Assert.Null(EgressProxy.ReadProviderScope("Bearer abc"));
-        Assert.Null(EgressProxy.ReadProviderScope("Basic %%%"));
+        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"someone:{id}"))));
+        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(id.ToString()))));
+        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Bearer abc"));
+        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic %%%"));
+    }
+
+    [Fact]
+    public void The_installer_zone_in_the_url_round_trips_through_Proxy_Authorization()
+    {
+        var url = new Uri(new EgressProxyOptions(true, 3128).InstallerUrl("repo-0123abcd")!);
+        var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(url.UserInfo));
+
+        Assert.Equal(((Guid?)null, (string?)"repo-0123abcd"), EgressProxy.ReadScope(header));
+        // A zone that is not a short lower-case name attributes nothing, so the log column holds only what ILD wrote.
+        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("installer:Not A Zone"))));
+        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("installer:" + new string('a', 65)))));
+        Assert.Null(new EgressProxyOptions(false, 0).InstallerUrl("agents"));
     }
 
     [Fact]
