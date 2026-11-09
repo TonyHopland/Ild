@@ -1125,7 +1125,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
             get { lock (_entries) return _reasons.ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null)
+        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
         {
             lock (_entries)
             {

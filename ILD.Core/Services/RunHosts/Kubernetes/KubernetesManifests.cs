@@ -90,6 +90,44 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     public V1NetworkPolicy ChatPolicy()
         => Policy(ChatMeta(), new Dictionary<string, string> { [RunPaths.RoleLabel] = RunPaths.ChatRole, [RunPaths.InstanceLabel] = options.Instance }, dns: false);
 
+    /// <summary>
+    /// The installer's NetworkPolicy: egress only to the egress proxy on ILD's pod, no DNS and no ingress. Its downloads reach whatever
+    /// the proxy lets through under the installers' scope, and an install script reaches nothing else.
+    /// </summary>
+    public V1NetworkPolicy ToolsPolicy(Guid installer)
+    {
+        var name = KubernetesNames.ToolsName(installer);
+        return new V1NetworkPolicy
+        {
+            Metadata = new V1ObjectMeta
+            {
+                Name = name,
+                NamespaceProperty = namespaceName,
+                Labels = new Dictionary<string, string>
+                {
+                    [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+                    [RunPaths.InstanceLabel] = options.Instance,
+                    [RunPaths.RoleLabel] = RunPaths.ToolsRole,
+                    [KubernetesNames.InstallerLabel] = installer.ToString("N"),
+                },
+            },
+            Spec = new V1NetworkPolicySpec
+            {
+                PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { [KubernetesNames.InstallerLabel] = installer.ToString("N") } },
+                PolicyTypes = ["Ingress", "Egress"],
+                Egress =
+                [
+                    new V1NetworkPolicyEgressRule
+                    {
+                        To = [new V1NetworkPolicyPeer { PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string>(options.IldPodSelector) }, NamespaceSelector = new V1LabelSelector() }],
+                        Ports = [new V1NetworkPolicyPort { Protocol = "TCP", Port = options.EgressProxyPort }],
+                    },
+                ],
+                Ingress = [],
+            },
+        };
+    }
+
     private V1NetworkPolicy Policy(V1ObjectMeta metadata, IDictionary<string, string> podLabels, bool dns)
     {
         var ild = new V1LabelSelector { MatchLabels = new Dictionary<string, string>(options.IldPodSelector) };
@@ -286,25 +324,30 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// A short-lived pod of the runner image that mounts only the zone being installed writable (and the shared
     /// toolchains read-only for a repository's), which ILD runs the store's install script in. A first container of ILD's
     /// own, which runs a fixed <c>mkdir</c> and no repository's code, makes the zone's folder first, since the kubelet
-    /// would make it as root. The pod carries no run label: no run's NetworkPolicy selects it, so it can download, and
-    /// the sweep never takes it for a run's.
+    /// would make it as root. The pod carries no run label, so the sweep never takes it for a run's; its own
+    /// <see cref="ToolsPolicy"/> lets it reach ILD's egress proxy and nothing else.
     /// </summary>
-    public V1Pod ToolsInstaller(string name, RunToolMount writable, RunToolMount? shared, IEnumerable<string> environment) => new()
+    public V1Pod ToolsInstaller(Guid installer, RunToolMount writable, RunToolMount? shared, IEnumerable<string> environment, string? ildAddress) => new()
     {
         Metadata = new V1ObjectMeta
         {
-            Name = name,
+            Name = KubernetesNames.ToolsName(installer),
             NamespaceProperty = namespaceName,
             Labels = new Dictionary<string, string>
             {
                 [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
                 [RunPaths.InstanceLabel] = options.Instance,
                 [RunPaths.RoleLabel] = RunPaths.ToolsRole,
+                [KubernetesNames.InstallerLabel] = installer.ToString("N"),
             },
         },
         Spec = new V1PodSpec
         {
             AutomountServiceAccountToken = false,
+            // Names are resolved only by ILD's egress proxy: ILD's own name is pinned in the pod, and the nameserver is nothing.
+            DnsPolicy = "None",
+            DnsConfig = new V1PodDNSConfig { Nameservers = ["127.0.0.1"] },
+            HostAliases = ildAddress is null ? null : [new V1HostAlias { Ip = ildAddress, Hostnames = IldNames() }],
             EnableServiceLinks = false,
             RestartPolicy = "Never",
             TerminationGracePeriodSeconds = 0,

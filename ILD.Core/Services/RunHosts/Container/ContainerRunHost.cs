@@ -134,13 +134,19 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         if (only?.Volume ?? true)
             await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/volumes/{name}?force=true", null, ct));
         if (!(only?.Network ?? true)) return;
+        await RemoveNetworkAsync(name, ct);
+    }
+
+    /// <summary>Takes ILD off the network, then deletes it.</summary>
+    private async Task RemoveNetworkAsync(string escapedName, CancellationToken ct)
+    {
         if (_options.IldContainer is { } ild)
         {
             // Refused when ILD was never connected (the run failed before that); a connection that stays is what the network delete reports.
-            try { await _api.PostAsync($"/networks/{name}/disconnect", new { Container = ild, Force = true }, ct); }
+            try { await _api.PostAsync($"/networks/{escapedName}/disconnect", new { Container = ild, Force = true }, ct); }
             catch (DockerApiException) { }
         }
-        await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/networks/{name}", null, ct));
+        await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/networks/{escapedName}", null, ct));
     }
 
     private async Task DeleteQuietlyAsync(Guid owner, Made made)
@@ -203,8 +209,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             ?? throw new InvalidOperationException($"the network of {subject} has no gateway address, so it cannot reach ILD");
     }
 
-    /// <summary>Where a container sits on a network of its own: the network, ILD's address on it, whether it has DNS, and the options of its state directory.</summary>
-    private sealed record Placement(string Network, string IldAddress, bool Dns, string StateOptions);
+    /// <summary>Where a container sits on a network of its own: the network, ILD's address on it, whether it has DNS, and the options of its state directory (none for a container that has no state directory).</summary>
+    private sealed record Placement(string Network, string IldAddress, bool Dns, string? StateOptions = null);
 
     /// <summary>
     /// The create request every container ILD makes shares: the runner image as the runner user, with every capability
@@ -241,7 +247,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         }
         if (placement is not null)
         {
-            host["Tmpfs"] = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{placement.StateOptions}" };
+            if (placement.StateOptions is not null)
+                host["Tmpfs"] = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{placement.StateOptions}" };
             host["NetworkMode"] = placement.Network;
             host["ExtraHosts"] = IldHosts(placement.IldAddress);
             host["Dns"] = NameServers(placement.Dns);
@@ -324,24 +331,27 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     /// <summary>
     /// A short-lived container of the runner image with only the zone being installed mounted writable (and the shared
-    /// toolchains read-only for a repository's) and the engine's default network, so mise and npm can download; removed
-    /// when <paramref name="work"/> ends. It carries no run label, so the sweep never takes it for a run's.
+    /// toolchains read-only for a repository's) and a network of its own that is internal and reaches only ILD, so mise and npm download through
+    /// the egress proxy and nothing else; removed, with the network, when <paramref name="work"/> ends. It carries no run label, so the sweep never takes it for a run's.
     /// </summary>
     protected override async Task<T> WithToolInstallerAsync<T>(ToolInstaller toolInstaller, Func<Guid, Task<T>> work, CancellationToken ct)
     {
         var installer = Guid.NewGuid();
         var name = $"ild-tools-{installer:N}";
         _execNames[installer] = name;
+        var labels = ToolsLabels();
+        labels[RunPaths.InstanceLabel] = _options.Instance;
         try
         {
-            var labels = ToolsLabels();
-            labels[RunPaths.InstanceLabel] = _options.Instance;
             string[] binds =
             [
                 $"{toolInstaller.Writable.VolumeName(_options.ToolsVolume)}:{toolInstaller.Writable.MountPath}:rw",
                 .. toolInstaller.ReadOnly is { } shared ? ToolBinds([shared]) : [],
             ];
-            await PostCreateAsync(name, ContainerBody(toolInstaller.Environment, labels, binds), tolerateConflict: false, ct);
+            await _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = labels }, ct);
+            var ild = await IldAddressAsync(name, "the toolchain installer", ct);
+            await PostCreateAsync(
+                name, ContainerBody(toolInstaller.Environment, labels, binds, placement: new Placement(name, ild, Dns: false)), tolerateConflict: false, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             await WaitRunningAsync(name, ct);
             return await work(installer);
@@ -350,6 +360,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         {
             _execNames.TryRemove(installer, out _);
             await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true", null, CancellationToken.None));
+            await RemoveNetworkAsync(Escaped(name), CancellationToken.None);
         }
     }
 
@@ -728,7 +739,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             var containers = await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct);
             Collect(containers, c => c["Labels"]);
             Collect((await _api.GetAsync($"/volumes?filters={filter}", ct))?["Volumes"], v => v["Labels"]);
-            Collect(await _api.GetAsync($"/networks?filters={filter}", ct), n => n["Labels"]);
+            var networks = await _api.GetAsync($"/networks?filters={filter}", ct);
+            Collect(networks, n => n["Labels"]);
             var signIns = new List<string>();
             var open = _execNames.Values.ToHashSet(StringComparer.Ordinal);
             foreach (var listed in containers?.AsArray() ?? [])
@@ -739,6 +751,11 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                     && !_signIns.ContainsKey(name) && !open.Contains(name))
                     signIns.Add(name);
             }
+            // An installer's network is removed with it; one whose container is gone, or never came, is a leftover of its own.
+            foreach (var listed in networks?.AsArray() ?? [])
+                if (listed?["Labels"]?[RunPaths.RoleLabel]?.GetValue<string>() == RunPaths.ToolsRole
+                    && listed["Name"]?.GetValue<string>() is { } network && !open.Contains(network) && !signIns.Contains(network))
+                    signIns.Add(network);
 
             return runs
                 .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
@@ -762,6 +779,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             try
             {
                 await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(leftover.Location)}?force=true&v=true", null, ct));
+                if (leftover.Location.StartsWith("ild-tools-", StringComparison.Ordinal))
+                    await RemoveNetworkAsync(Escaped(leftover.Location), ct);
                 return true;
             }
             catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)

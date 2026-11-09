@@ -62,10 +62,11 @@ public sealed class EgressRelay
         CancellationToken stoppingToken,
         Func<CancellationToken, Task>? onOpen = null,
         Func<NetworkStream, NetworkStream, CancellationToken, Task>? copyRequest = null,
-        Func<NetworkStream, NetworkStream, CancellationToken, Task>? copyResponse = null)
+        Func<NetworkStream, NetworkStream, CancellationToken, Task>? copyResponse = null,
+        string? installer = null)
     {
         var id = Interlocked.Increment(ref _nextTunnelId);
-        using var tunnel = new Tunnel(host, port, aiProviderId, stoppingToken);
+        using var tunnel = new Tunnel(host, port, aiProviderId, installer, stoppingToken);
         _tunnels[id] = tunnel;
         try
         {
@@ -98,9 +99,9 @@ public sealed class EgressRelay
             var snapshot = await _policy.GetAsync().ConfigureAwait(false);
             foreach (var tunnel in _tunnels.Values)
             {
-                if (snapshot.Decide(tunnel.Host, tunnel.AiProviderId) != NetworkDecision.Blocked)
+                if (snapshot.Decide(tunnel.Host, tunnel.AiProviderId, tunnel.Installer) != NetworkDecision.Blocked)
                     continue;
-                _log.Record(tunnel.Host, tunnel.Port, NetworkDecision.Blocked, tunnel.AiProviderId);
+                _log.Record(tunnel.Host, tunnel.Port, NetworkDecision.Blocked, tunnel.AiProviderId, installer: tunnel.Installer);
                 tunnel.Reset();
             }
         }
@@ -138,17 +139,19 @@ public sealed class EgressRelay
     {
         private readonly CancellationTokenSource _cts;
 
-        public Tunnel(string host, int port, Guid? aiProviderId, CancellationToken stopping)
+        public Tunnel(string host, int port, Guid? aiProviderId, string? installer, CancellationToken stopping)
         {
             Host = host;
             Port = port;
             AiProviderId = aiProviderId;
+            Installer = installer;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(stopping);
         }
 
         public string Host { get; }
         public int Port { get; }
         public Guid? AiProviderId { get; }
+        public string? Installer { get; }
         public CancellationToken Token => _cts.Token;
 
         public void Reset()

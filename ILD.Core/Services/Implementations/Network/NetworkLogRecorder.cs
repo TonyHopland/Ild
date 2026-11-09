@@ -17,7 +17,7 @@ namespace ILD.Core.Services.Implementations.Network;
 /// </summary>
 public interface INetworkLogRecorder
 {
-    void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null);
+    void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null);
 }
 
 public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
@@ -33,16 +33,20 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
     private readonly IServiceScopeFactory _scopes;
     private readonly INetworkNotifier _notifier;
     private readonly ILogger<NetworkLogRecorder> _log;
+    private readonly InstallerRefusals? _refusals;
 
-    public NetworkLogRecorder(IServiceScopeFactory scopes, INetworkNotifier notifier, ILogger<NetworkLogRecorder> log)
+    public NetworkLogRecorder(IServiceScopeFactory scopes, INetworkNotifier notifier, ILogger<NetworkLogRecorder> log, InstallerRefusals? refusals = null)
     {
+        _refusals = refusals;
         _scopes = scopes;
         _notifier = notifier;
         _log = log;
     }
 
-    public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null)
-        => _queue.Writer.TryWrite(new NetworkLogEntry
+    public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
+    {
+        if (installer is not null && decision == NetworkDecision.Blocked) _refusals?.Note(installer, host, port);
+        _queue.Writer.TryWrite(new NetworkLogEntry
         {
             Id = Guid.NewGuid(),
             Host = host.Length > EgressRules.MaxHostLength ? host[..EgressRules.MaxHostLength] : host,
@@ -51,7 +55,9 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
             Decision = decision,
             AiProviderId = aiProviderId,
             Reason = reason,
+            Installer = installer,
         });
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

@@ -1435,6 +1435,10 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(253)
                         .HasColumnType("character varying(253)");
 
+                    b.Property<string>("Installer")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<int>("Port")
                         .HasColumnType("integer");
 
@@ -1471,6 +1475,9 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(253)
                         .HasColumnType("character varying(253)");
 
+                    b.Property<bool>("Installers")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("ListKind")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -1480,10 +1487,10 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("AiProviderId");
 
-                    b.HasIndex("ListKind", "Host", "AiProviderId")
+                    b.HasIndex("ListKind", "Host", "AiProviderId", "Installers")
                         .IsUnique();
 
-                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("ListKind", "Host", "AiProviderId"), false);
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("ListKind", "Host", "AiProviderId", "Installers"), false);
 
                     b.ToTable("NetworkPolicyEntries");
                 });

@@ -8,6 +8,9 @@ public static class KubernetesNames
     /// <summary>The name of a toolchain installer pod.</summary>
     public static string ToolsName(Guid id) => $"ild-tools-{id:N}";
 
+    /// <summary>The label that names one installer, so its NetworkPolicy selects that pod alone.</summary>
+    public const string InstallerLabel = "ild/installer";
+
     /// <summary>The annotation that says which pod spec the chat pod was made from.</summary>
     public const string SpecAnnotation = "ild/spec";
 

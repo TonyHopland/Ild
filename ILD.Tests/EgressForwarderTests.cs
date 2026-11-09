@@ -472,7 +472,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
             get { lock (_entries) return _entries.ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null)
+        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
         {
             lock (_entries)
             {

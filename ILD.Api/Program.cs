@@ -240,6 +240,10 @@ try
             if (networkModesRenamed > 0)
                 Log.Information("Renamed the stored network mode off to monitor: it logged every connection, and off now means no proxy");
 
+            var installerDefaults = await ILD.Data.Migrations.InstallerNetworkDefaultsMigrator.MigrateAsync(dbContext);
+            if (installerDefaults > 0)
+                Log.Information("Added {Count} host(s) to the installers' default whitelist", installerDefaults);
+
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also
             // clears dangling paths whose files a redeploy already wiped.

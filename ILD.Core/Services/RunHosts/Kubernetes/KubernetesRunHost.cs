@@ -273,8 +273,10 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         _execNames[installer] = name;
         try
         {
+            // The policy first, so the pod never runs a moment without it.
+            await _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.ToolsPolicy(installer), _namespace, cancellationToken: ct);
             await _client.CoreV1.CreateNamespacedPodAsync(
-                _manifests.ToolsInstaller(name, toolInstaller.Writable, toolInstaller.ReadOnly, toolInstaller.Environment), _namespace, cancellationToken: ct);
+                _manifests.ToolsInstaller(installer, toolInstaller.Writable, toolInstaller.ReadOnly, toolInstaller.Environment, await IldAddressAsync(ct)), _namespace, cancellationToken: ct);
             await WaitReadyAsync(name, "the toolchain installer", ct);
             return await work(installer);
         }
@@ -283,6 +285,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             _execNames.TryRemove(installer, out _);
             await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(
                 name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: CancellationToken.None));
+            await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(name, _namespace, cancellationToken: CancellationToken.None));
         }
     }
 
@@ -550,6 +553,11 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
                         _namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={role}", cancellationToken: ct)).Items
                     .Select(p => p.Metadata.Name)
                     .Where(n => n is not null && !_signIns.ContainsKey(n) && !open.Contains(n)));
+            // An installer's NetworkPolicy goes with its pod; one left without a pod is a leftover of its own.
+            signIns.AddRange((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(
+                    _namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={RunPaths.ToolsRole}", cancellationToken: ct)).Items
+                .Select(p => p.Metadata.Name)
+                .Where(n => n is not null && !open.Contains(n) && !signIns.Contains(n)));
 
             return runs
                 .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
@@ -574,6 +582,8 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             {
                 await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(
                     leftover.Location, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
+                if (leftover.Location.StartsWith("ild-tools-", StringComparison.Ordinal))
+                    await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(leftover.Location, _namespace, cancellationToken: ct));
                 return true;
             }
             catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)

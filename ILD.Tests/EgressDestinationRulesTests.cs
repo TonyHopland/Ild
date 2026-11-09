@@ -323,7 +323,7 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
             get { lock (_entries) return _entries.Select(e => e.Reason).ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null)
+        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
         {
             lock (_entries) _entries.Add((host, port, decision, reason));
         }

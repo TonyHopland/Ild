@@ -129,6 +129,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>Checks, from the first environment made, that the network leaves no way out but the proxy; null runs no probe.</summary>
     public ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe? Probe { get; set; }
 
+    /// <summary>What the egress proxy refused each toolchain installer, to name in a failed install; null where the host has none.</summary>
+    public ILD.Core.Services.Implementations.Network.InstallerRefusals? Refusals { get; set; }
+
     // The environments that were given relays, so one whose forwards all went is cleaned up, and one that never had
     // any costs no extra exec per command.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ExecOwner, bool> _forwarded = new();
@@ -287,11 +290,21 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
             Logger?.LogInformation("{Owner} gets {Arguments} from the {Zone} zone of the toolchain store, {Name}",
                 label, string.Join(", ", arguments), zone.Zone, ToolZoneName(zone));
+            var scope = InstallerScope(zone);
             var installer = new ToolInstaller(
                 zone,
                 toolchains is null ? null : new RunToolMount(RunToolZone.Toolchains),
-                [.. RunToolStore.InstallerEnvironment(root, ignoreScripts), .. toolchains?.ForInstaller() ?? []]);
-            var environment = await WithToolInstallerAsync(installer, id => InstallToolsAsync(id, arguments, root, ct), ct);
+                [.. RunToolStore.InstallerEnvironment(root, ignoreScripts), .. toolchains?.ForInstaller() ?? [], .. InstallerNetwork(scope)]);
+            Refusals?.Begin(scope);
+            RunToolEnvironment environment;
+            try
+            {
+                environment = await WithToolInstallerAsync(installer, id => InstallToolsAsync(id, arguments, root, scope, ct), ct);
+            }
+            finally
+            {
+                Refusals?.End(scope);
+            }
             environment = environment with { Mounts = [zone] };
             Logger?.LogInformation("{Owner} has {Installed}", label, string.Join(", ", environment.Installed));
             return _toolZones[key] = environment;
@@ -303,7 +316,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     /// <summary>Run the store's install script in <paramref name="installer"/> over <paramref name="arguments"/> and return what its output names under <paramref name="root"/>.</summary>
-    private async Task<RunToolEnvironment> InstallToolsAsync(Guid installer, IReadOnlyList<string> arguments, string root, CancellationToken ct)
+    private async Task<RunToolEnvironment> InstallToolsAsync(Guid installer, IReadOnlyList<string> arguments, string root, string scope, CancellationToken ct)
     {
         // The script goes in on stdin, read whole before it runs: as an argument it would be part of the exec's URL on
         // Kubernetes, which a long script makes too long for the API server (414).
@@ -312,7 +325,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         if (!result.Success)
         {
             var tail = string.Join('\n', result.StdErr.Trim().Split('\n').TakeLast(15));
-            throw new InvalidOperationException($"could not install the run's toolchains ({string.Join(", ", arguments)}) in the toolchain store: {tail}");
+            var refused = Refusals?.Refused(scope) ?? [];
+            throw new InvalidOperationException($"could not install the run's toolchains ({string.Join(", ", arguments)}) in the toolchain store: {tail}"
+                + (refused.Count == 0 ? "" : $"\nthe egress proxy refused {string.Join(", ", refused)}; see Settings → Network"));
         }
         return RunToolStore.Parse(result.StdOut, root);
     }
@@ -456,6 +471,27 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
         environment["HOME"] = owner.Home;
         return environment;
+    }
+
+    /// <summary>The name an installer is known by to the egress proxy and the Network Log: its zone, which a repository's is followed by its id.</summary>
+    private static string InstallerScope(RunToolMount zone) => zone.Zone switch
+    {
+        RunToolZone.Agents => "agents",
+        RunToolZone.Toolchains => "toolchains",
+        _ => $"repo-{zone.RepositoryId:N}",
+    };
+
+    /// <summary>
+    /// What points an installer's downloads at the egress proxy under the installers' scope: its network reaches only ILD, so
+    /// there is no other way out. Nothing is installed without a proxy to go through.
+    /// </summary>
+    private IEnumerable<string> InstallerNetwork(string scope)
+    {
+        if (new ILD.Core.Services.Implementations.Network.EgressProxyOptions(EgressProxyPort > 0, EgressProxyPort).InstallerUrl(scope) is not { } proxy)
+            throw new InvalidOperationException(
+                $"could not install the run's toolchains: the egress proxy is not enabled ({AgentIsolation.EgressProxyPortEnvVar} is unset), and a toolchain installer's network reaches only through it");
+        var ild = new Uri(IldUrl).Host;
+        return AgentIsolation.EgressProxyEnvironment(proxy).Select(e => $"{e.Key}={ThroughIldHost(e.Value, ild)}");
     }
 
     // The proxy ILD points a launch at listens on ILD's loopback; a run reaches it at ILD's address.

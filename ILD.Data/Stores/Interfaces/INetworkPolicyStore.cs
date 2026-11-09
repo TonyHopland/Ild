@@ -14,11 +14,11 @@ public interface INetworkPolicyStore
     Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>The one entry with exactly this pattern, list and scope, if it exists.</summary>
-    Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default);
+    Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default, bool installers = false);
     Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default);
 
     /// <summary>Replaces the pattern, list and scope of an entry, keeping its Id and CreatedAt. Null when no entry has this id.</summary>
-    Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default);
+    Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default, bool installers = false);
     Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>Newest first.</summary>

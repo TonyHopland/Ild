@@ -31,10 +31,10 @@ public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<Networ
     /// While an agent holds a model gateway lease for its provider, that provider's model hosts are closed
     /// to it in every mode: the gateway is the only way to the model (ADR-0031).
     /// </summary>
-    public NetworkDecision Decide(string host, Guid? aiProviderId)
+    public NetworkDecision Decide(string host, Guid? aiProviderId, string? installer = null)
         => Gateway?.BlocksHost(aiProviderId, EgressRules.NormalizeHost(host)) == true
             ? NetworkDecision.Blocked
-            : EgressRules.Decide(Mode, Entries, host, aiProviderId);
+            : EgressRules.Decide(Mode, Entries, host, aiProviderId, installer);
 }
 
 /// <summary>
