@@ -18,6 +18,8 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     private const string Instance = "main";
 
     private readonly Guid _run = Guid.NewGuid();
+    private static readonly Guid Repo = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private static readonly Guid OtherRepo = Guid.Parse("22222222-2222-2222-2222-222222222222");
     private readonly string _scratch = Path.Combine(Path.GetTempPath(), $"ild-container-{Guid.NewGuid():N}");
     private readonly RecordingLogger<ContainerRunHost> _log = new();
     private FakeDockerApi _api = null!;
@@ -99,7 +101,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
             await e.ExitAsync(0);
         };
-        return await (host ?? _host).CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+        return await (host ?? _host).CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
     }
 
     private static System.Diagnostics.ProcessStartInfo Command(string workingDirectory, string file, params string[] args)
@@ -278,7 +280,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             await e.ExitAsync(0);
         };
 
-        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
 
         var clone = Assert.Single(_api.Execs, e => e.Joined.Contains("git clone"));
         Assert.Equal(WorkingDirectory, clone.Command[^2]);
@@ -295,7 +297,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var created = _api.Created.ToList();
         var execs = _api.Execs.Count;
 
-        var env = await _host.CreateAsync(new RunEnvironmentRequest(_run, Path.Combine(_scratch, "base"), "b"), TestContext.Current.CancellationToken);
+        var env = await _host.CreateAsync(new RunEnvironmentRequest(_run, Path.Combine(_scratch, "base"), "b", Repo), TestContext.Current.CancellationToken);
 
         Assert.Equal(WorkingDirectory, env.WorkingDirectory);
         Assert.Equal(created, _api.Created);
@@ -315,7 +317,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         };
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b"), TestContext.Current.CancellationToken));
+            () => host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b", Repo), TestContext.Current.CancellationToken));
 
         Assert.Contains("fatal: bad bundle", ex.Message);
         Assert.Equal(["ild-main"], _api.Containers());
@@ -330,7 +332,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         _api.ImagePresent = false;
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b"), TestContext.Current.CancellationToken));
+            () => _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b", Repo), TestContext.Current.CancellationToken));
 
         Assert.Contains("registry.example/ild-runner:1", ex.Message);
         Assert.Contains("build or pull", ex.Message);
@@ -802,10 +804,16 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     private static readonly RunAgent Claude = new(ManagedAgentCatalog.ClaudeCode, "2.1.0");
 
     private const string AgentNodeLine = """{"kind":"agentnode","spec":"node@24","version":"24.22.2","path":["/opt/ild-tools/mise/installs/node/24/bin"],"env":{}}""";
-    private const string NodeLine = """{"kind":"tool","spec":"node@20","version":"20.19.1","path":["/opt/ild-tools/mise/installs/node/20.19.1/bin"],"env":{}}""";
+    private const string NodeLine = """{"kind":"tool","spec":"node@20","version":"20.19.1","path":["/opt/ild-toolchains/mise/installs/node/20.19.1/bin"],"env":{}}""";
+    private static readonly string PrettierFolder = RunToolStore.RepositoryFolder([new RunTool("npm:prettier", "3")], false);
+    private static string PrettierLine(string folder)
+        => $$$"""{"kind":"tool","spec":"npm:prettier@3","version":"3.3.0","path":["{{{folder}}}/mise/installs/npm-prettier/3.3.0/bin"],"env":{}}""";
+    private const string PrettierToml = "[tools]\n\"npm:prettier\" = \"3\"\n";
+
     private const string ClaudeLine = """{"kind":"agent","key":"claude-code","version":"2.1.0","path":["/opt/ild-tools/agents/claude-code/2.1.0/wrap"]}""";
 
-    // Answers the store's installer with what the real script prints, and the run's own commands with success.
+    // Answers each of the store's installers with the lines of the real script's output that are in the zone it installs
+    // into (the installer's ILD_TOOLS_ROOT), and the run's own commands with success.
     private List<IReadOnlyList<string>> AnswerInstaller(params string[] lines)
     {
         var installs = new List<IReadOnlyList<string>>();
@@ -816,7 +824,8 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             {
                 lock (installs) installs.Add(e.Command);
                 Assert.True(_api.Container(e.Container) is not null, "the installer runs while it exists");
-                await e.WriteStdoutAsync(string.Join('\n', lines) + "\n");
+                var root = _api.Container(e.Container)!["Env"]!.AsArray().Select(v => v!.GetValue<string>()).Single(v => v.StartsWith("ILD_TOOLS_ROOT=", StringComparison.Ordinal))["ILD_TOOLS_ROOT=".Length..];
+                await e.WriteStdoutAsync(string.Join('\n', lines.Where(l => l.Contains($"\"{root}/", StringComparison.Ordinal))) + "\n");
             }
             await e.ExitAsync(0);
         };
@@ -824,7 +833,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     private Task<RunEnvironment> CreateRunAsync(ContainerRunHost host, Guid run, string basePath)
-        => host.CreateAsync(new RunEnvironmentRequest(run, basePath, "ild/wi-1-run"), TestContext.Current.CancellationToken);
+        => host.CreateAsync(new RunEnvironmentRequest(run, basePath, "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task Create_installs_the_repositorys_toolchains_and_ilds_agents_into_the_store_and_mounts_it_read_only()
@@ -835,22 +844,24 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         await CreateRunAsync(host, _run, repo);
 
-        var install = Assert.Single(installs);
-        Assert.Equal(["agentnode=node@24", "tool=node@20", "agent=claude-code|@anthropic-ai/claude-code|2.1.0|claude"], install.TakeLast(3));
-        var installer = _api.Created.Single(c => c.StartsWith("containers/ild-tools-", StringComparison.Ordinal));
-        Assert.DoesNotContain(installer["containers/".Length..], _api.Containers());
-        Assert.Contains("volumes/ild-tools", _api.Created);
+        Assert.Equal(2, installs.Count);
+        Assert.Equal(["agentnode=node@24", "agent=claude-code|@anthropic-ai/claude-code|2.1.0|claude"], installs.Single(i => i.Contains("agentnode=node@24")).TakeLast(2));
+        Assert.Equal(["tool=node@20"], installs.Single(i => i.Contains("tool=node@20")).TakeLast(1));
+        foreach (var installer in _api.Created.Where(c => c.StartsWith("containers/ild-tools-", StringComparison.Ordinal)))
+            Assert.DoesNotContain(installer["containers/".Length..], _api.Containers());
+        Assert.Contains("volumes/ild-tools-agents", _api.Created);
+        Assert.Contains("volumes/ild-tools-toolchains", _api.Created);
 
         var container = _api.Container(Name(_run))!;
-        Assert.Contains("ild-tools:/opt/ild-tools:ro", container["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+        Assert.Equal(["ild-tools-agents:/opt/ild-tools:ro", "ild-tools-toolchains:/opt/ild-toolchains:ro"], BindsOf(container).Skip(1).Order(StringComparer.Ordinal));
         var env = container["Env"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
         var home = RunPaths.HomeDirectory(_run);
-        Assert.Contains($"PATH=/opt/ild-tools/mise/installs/node/20.19.1/bin:/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}", env);
+        Assert.Contains($"PATH=/opt/ild-toolchains/mise/installs/node/20.19.1/bin:/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}", env);
         Assert.Contains($"NPM_CONFIG_PREFIX={home}/.local", env);
     }
 
     [Fact]
-    public async Task The_installer_mounts_the_store_writable_as_the_runner_with_no_privileges_and_no_run_label()
+    public async Task The_installer_mounts_only_its_zone_writable_as_the_runner_with_no_privileges_and_no_run_label()
     {
         using var host = NewHost(Options(), [Claude]);
         string? seen = null;
@@ -862,7 +873,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
                 var config = _api.Container(e.Container)!;
                 seen = config.ToJsonString();
                 Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
-                Assert.Equal(["ild-tools:/opt/ild-tools:rw"], config["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+                Assert.Equal(["ild-tools-agents:/opt/ild-tools:rw"], BindsOf(config));
                 Assert.Equal(["ALL"], config["HostConfig"]!["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
                 Assert.Null(config["HostConfig"]!["NetworkMode"]);
                 Assert.Null(config["Labels"]![RunPaths.RunLabel]);
@@ -877,6 +888,116 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.NotNull(seen);
     }
 
+    private static string EnvOf(System.Text.Json.Nodes.JsonObject container, string name)
+        => container["Env"]!.AsArray().Select(v => v!.GetValue<string>()).Single(v => v.StartsWith(name + "=", StringComparison.Ordinal))[(name.Length + 1)..];
+
+    private static bool IgnoresScripts(System.Text.Json.Nodes.JsonObject container)
+        => container["Env"]!.AsArray().Select(v => v!.GetValue<string>()).Contains("npm_config_ignore_scripts=true");
+
+    [Fact]
+    public async Task A_repositorys_own_tools_go_in_a_volume_of_its_own_that_only_its_installer_and_its_runs_mount()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var snapshots = new Dictionary<string, System.Text.Json.Nodes.JsonObject>();
+        var installs = AnswerInstaller(AgentNodeLine, ClaudeLine, NodeLine, PrettierLine(PrettierFolder));
+        var inner = _api.OnExec!;
+        _api.OnExec = e =>
+        {
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal)) snapshots[e.Container] = _api.Container(e.Container)!;
+            return inner(e);
+        };
+        var repo = MakeBaseRepository("base", ("package.json", "{}"), ("mise.toml", PrettierToml));
+
+        await CreateRunAsync(host, _run, repo);
+
+        Assert.Equal(3, installs.Count);
+        var volume = $"ild-tools-repo-{Repo:N}";
+        Assert.Contains($"volumes/{volume}", _api.Created);
+        var byZone = snapshots.Values.ToDictionary(c => EnvOf(c, "ILD_TOOLS_ROOT"));
+        Assert.Equal([$"ild-tools-agents:/opt/ild-tools:rw"], BindsOf(byZone[RunToolStore.Root]));
+        Assert.Equal([$"ild-tools-toolchains:/opt/ild-toolchains:rw"], BindsOf(byZone[RunToolStore.ToolchainsRoot]));
+        // The repository's installer reaches its own volume, and the shared toolchains it builds with read-only: never the agents'.
+        Assert.Equal([$"{volume}:/opt/ild-repo-tools:rw", "ild-tools-toolchains:/opt/ild-toolchains:ro"], BindsOf(byZone[PrettierFolder]));
+        Assert.StartsWith("/opt/ild-toolchains/mise/installs/node/20.19.1/bin:", EnvOf(byZone[PrettierFolder], "PATH"), StringComparison.Ordinal);
+
+        var run = _api.Container(Name(_run))!;
+        Assert.Contains($"{volume}:/opt/ild-repo-tools:ro", BindsOf(run));
+        Assert.All(BindsOf(run).Skip(1), b => Assert.EndsWith(":ro", b, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_agents_zone_is_never_the_volume_of_the_one_store_from_before_the_zones()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var snapshots = new List<System.Text.Json.Nodes.JsonObject>();
+        AnswerInstaller(AgentNodeLine, ClaudeLine, NodeLine);
+        var inner = _api.OnExec!;
+        _api.OnExec = e =>
+        {
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal)) lock (snapshots) snapshots.Add(_api.Container(e.Container)!);
+            return inner(e);
+        };
+
+        await CreateRunAsync(host, _run, MakeBaseRepository("base", ("package.json", "{}")));
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("ild-tools", _api.Volumes());
+        var binds = snapshots.Concat([_api.Container(Name(_run))!, _api.Container(ChatContainer)!]).SelectMany(c => BindsOf(c));
+        Assert.DoesNotContain(binds, b => b.StartsWith("ild-tools:", StringComparison.Ordinal));
+        Assert.Contains("ild-tools-agents:/opt/ild-tools:ro", BindsOf(_api.Container(Name(_run))!));
+    }
+
+    [Fact]
+    public async Task Another_repositorys_run_does_not_mount_the_first_repositorys_volume()
+    {
+        using var host = NewHost(Options(), []);
+        AnswerInstaller(NodeLine, PrettierLine(PrettierFolder));
+        var repo = MakeBaseRepository("base", ("package.json", "{}"), ("mise.toml", PrettierToml));
+        var other = MakeBaseRepository("other", ("package.json", "{}"));
+        var otherRun = Guid.NewGuid();
+
+        await CreateRunAsync(host, _run, repo);
+        await host.CreateAsync(new RunEnvironmentRequest(otherRun, other, "b", OtherRepo), TestContext.Current.CancellationToken);
+
+        Assert.Contains(BindsOf(_api.Container(Name(_run))!), b => b.StartsWith($"ild-tools-repo-{Repo:N}:", StringComparison.Ordinal));
+        Assert.DoesNotContain(BindsOf(_api.Container(Name(otherRun))!), b => b.Contains("repo", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Install_scripts_are_off_in_the_agents_and_toolchain_zones_and_on_in_a_repositorys_unless_it_opts_out()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var snapshots = new List<System.Text.Json.Nodes.JsonObject>();
+        AnswerInstaller(AgentNodeLine, ClaudeLine, NodeLine, PrettierLine(PrettierFolder));
+        var inner = _api.OnExec!;
+        _api.OnExec = e =>
+        {
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal)) lock (snapshots) snapshots.Add(_api.Container(e.Container)!);
+            return inner(e);
+        };
+
+        await CreateRunAsync(host, _run, MakeBaseRepository("base", ("package.json", "{}"), ("mise.toml", PrettierToml)));
+
+        Assert.Equal(3, snapshots.Count);
+        foreach (var installer in snapshots)
+            Assert.Equal(EnvOf(installer, "ILD_TOOLS_ROOT") != PrettierFolder, IgnoresScripts(installer));
+    }
+
+    [Fact]
+    public async Task A_chat_container_never_mounts_a_repositorys_own_tools_and_a_chat_does_not_install_them()
+    {
+        using var host = NewHost(Options(), []);
+        var installs = AnswerInstaller(NodeLine, PrettierLine(PrettierFolder));
+        var repo = MakeBaseRepository("base", ("package.json", "{}"), ("mise.toml", PrettierToml));
+
+        var chat = Guid.NewGuid();
+        await host.CreateChatFolderAsync(chat, "/unused", TestContext.Current.CancellationToken);
+        await host.AddChatToolsAsync(ChatFolder(chat), repo, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(installs, i => i.Any(a => a.Contains("npm:", StringComparison.Ordinal)));
+        Assert.DoesNotContain(BindsOf(_api.Container(ChatContainer)!), b => b.Contains("repo", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task A_second_run_that_needs_the_same_gets_it_without_an_installer()
     {
@@ -888,14 +1009,14 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var other = Guid.NewGuid();
         await CreateRunAsync(host, other, repo);
 
-        Assert.Single(installs);
-        Assert.Contains("ild-tools:/opt/ild-tools:ro", _api.Container(Name(other))!["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+        Assert.Equal(2, installs.Count);
+        Assert.Contains("ild-tools-agents:/opt/ild-tools:ro", _api.Container(Name(other))!["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
     }
 
     [Fact]
     public async Task An_install_that_fails_fails_the_run_saying_what_and_why_and_leaves_no_container()
     {
-        using var host = NewHost(Options(), [Claude]);
+        using var host = NewHost(Options(), []);
         _api.OnExec = async e =>
         {
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
@@ -913,7 +1034,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains("node@99", ex.Message);
         Assert.Contains("no version of node matches 99", ex.Message);
         Assert.Empty(_api.Containers());
-        Assert.Equal(["ild-tools"], _api.Volumes());
+        Assert.Equal(["ild-tools-toolchains"], _api.Volumes());
     }
 
     [Fact]
@@ -926,7 +1047,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await CreateRunAsync(host, _run, MakeBaseRepository("base", ("package.json", "{}")));
 
         Assert.Empty(installs);
-        Assert.DoesNotContain("ild-tools", _api.Volumes());
+        Assert.DoesNotContain("ild-tools-agents", _api.Volumes());
         var env = _api.Container(Name(_run))!["Env"]!.AsArray().Select(e => e!.GetValue<string>());
         Assert.DoesNotContain(env, e => e.StartsWith("PATH=", StringComparison.Ordinal));
     }
@@ -939,7 +1060,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await CreateRunAsync(_host, _run, MakeBaseRepository());
 
         Assert.Empty(installs);
-        Assert.DoesNotContain("ild-tools", _api.Volumes());
+        Assert.DoesNotContain("ild-tools-agents", _api.Volumes());
         var env = _api.Container(Name(_run))!["Env"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
         Assert.Contains($"NPM_CONFIG_PREFIX={RunPaths.HomeDirectory(_run)}/.local", env);
         Assert.Contains($"PATH={RunPaths.HomeDirectory(_run)}/.local/bin:{RunToolEnvironment.ImagePath}", env);
@@ -1262,12 +1383,12 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(ChatFolder(first), firstPath);
         Assert.Equal(ChatFolder(second), secondPath);
         Assert.Equal(
-            [$"volumes/{ChatContainer}", "volumes/ild-tools", $"networks/{ChatContainer}", $"containers/{ChatContainer}"],
+            [$"volumes/{ChatContainer}", "volumes/ild-tools-agents", "volumes/ild-tools-toolchains", $"networks/{ChatContainer}", $"containers/{ChatContainer}"],
             _api.Created);
         var container = _api.Container(ChatContainer)!;
         Assert.Equal("registry.example/ild-runner:1", container["Image"]!.GetValue<string>());
         Assert.Equal("10001:10001", container["User"]!.GetValue<string>());
-        Assert.Equal([$"{ChatContainer}:/ild-chat:rw", "ild-tools:/opt/ild-tools:ro"], BindsOf(container));
+        Assert.Equal([$"{ChatContainer}:/ild-chat:rw", "ild-tools-agents:/opt/ild-tools:ro", "ild-tools-toolchains:/opt/ild-toolchains:ro"], BindsOf(container));
         var host = container["HostConfig"]!;
         Assert.Equal(ChatContainer, host["NetworkMode"]!.GetValue<string>());
         Assert.Equal("ALL", host["CapDrop"]!.AsArray().Single()!.GetValue<string>());
@@ -1383,7 +1504,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var path = _api.Execs.Last().Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal));
-        Assert.StartsWith("PATH=/opt/ild-tools/mise/installs/node/20.19.1/bin:", path, StringComparison.Ordinal);
+        Assert.StartsWith("PATH=/opt/ild-toolchains/mise/installs/node/20.19.1/bin:", path, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1522,14 +1643,14 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var config = _api.Container(name)!;
         Assert.Null(config["HostConfig"]!["NetworkMode"]);
         Assert.Null(config["HostConfig"]!["ExtraHosts"]);
-        Assert.Equal(["ild-tools:/opt/ild-tools:ro"], config["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+        Assert.Equal(["ild-tools-agents:/opt/ild-tools:ro"], config["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
         Assert.Equal(["ALL"], config["HostConfig"]!["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Equal(["no-new-privileges"], config["HostConfig"]!["SecurityOpt"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
         Assert.Equal("signin", config["Labels"]!["ild/role"]!.GetValue<string>());
         Assert.Null(config["Labels"]![RunPaths.RunLabel]);
         Assert.Empty(_api.Networks());
-        Assert.DoesNotContain(_api.Volumes(), v => v != "ild-tools");
+        Assert.DoesNotContain(_api.Volumes(), v => v != "ild-tools-agents");
         Assert.Contains("PATH=/opt/ild-tools/agents/claude-code/2.1.0/wrap:/tmp/home/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:" + RunToolEnvironment.ImagePath,
             config["Env"]!.AsArray().Select(v => v!.GetValue<string>()));
         Assert.NotNull(seen);

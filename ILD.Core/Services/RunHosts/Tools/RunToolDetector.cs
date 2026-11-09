@@ -4,12 +4,24 @@ using System.Text.RegularExpressions;
 
 namespace ILD.Core.Services.RunHosts.Tools;
 
-/// <summary>The toolchains a run gets, and where each came from, for the log and the run's events.</summary>
-public sealed record RunToolPlan(IReadOnlyList<RunTool> Tools, IReadOnlyList<string> Reasons)
+/// <summary>
+/// The toolchains a run gets, and where each came from, for the log and the run's events. <see cref="Reasons"/> is
+/// parallel to <see cref="Tools"/>. A mise core tool goes in the store every run shares; any other goes in a folder of
+/// its repository alone (docs/adr/0035-run-toolchains.md). <see cref="IgnoreScripts"/> is the repository's <c>run.ignoreScripts</c>.
+/// </summary>
+public sealed record RunToolPlan(IReadOnlyList<RunTool> Tools, IReadOnlyList<string> Reasons, bool IgnoreScripts = false)
 {
     public static readonly RunToolPlan Empty = new([], []);
 
-    public override string ToString() => Tools.Count == 0 ? "no toolchains" : string.Join(", ", Reasons);
+    /// <summary>The core tools: the shared toolchain store holds them.</summary>
+    public IReadOnlyList<RunTool> Toolchains => [.. Tools.Where(t => t.IsCore)];
+
+    /// <summary>Every other tool: only its repository's own folder holds them.</summary>
+    public IReadOnlyList<RunTool> RepositoryTools => [.. Tools.Where(t => !t.IsCore)];
+
+    public override string ToString() => Tools.Count == 0
+        ? "no toolchains"
+        : string.Join(", ", Tools.Select((t, i) => $"{(i < Reasons.Count ? Reasons[i] : t.ToString())} -> {(t.IsCore ? "toolchains" : "repository tools")}"));
 }
 
 /// <summary>
@@ -37,7 +49,7 @@ public static partial class RunToolDetector
     {
         if (!Directory.Exists(repositoryRoot)) return RunToolPlan.Empty;
 
-        var (configured, detect) = ReadConfig(repositoryRoot);
+        var (configured, detect, ignoreScripts) = ReadConfig(repositoryRoot);
         var found = new Dictionary<string, (RunTool Tool, string Reason)>(StringComparer.Ordinal);
         if (detect)
         {
@@ -48,16 +60,16 @@ public static partial class RunToolDetector
             found[tool.Name] = (tool, $"{tool} from {ConfigFileName}");
 
         var ordered = found.Values.OrderBy(f => f.Tool.Name, StringComparer.Ordinal).ToList();
-        return new RunToolPlan(ordered.Select(f => f.Tool).ToList(), ordered.Select(f => f.Reason).ToList());
+        return new RunToolPlan(ordered.Select(f => f.Tool).ToList(), ordered.Select(f => f.Reason).ToList(), ignoreScripts);
     }
 
     // -- ild.config.json ---------------------------------------------------------
 
-    /// <summary><c>run.tools</c> as a list (<c>["node@24"]</c>) or a map (<c>{"node": "24"}</c>), and <c>run.detect</c>.</summary>
-    internal static (IReadOnlyList<RunTool> Tools, bool Detect) ReadConfig(string repositoryRoot)
+    /// <summary><c>run.tools</c> as a list (<c>["node@24"]</c>) or a map (<c>{"node": "24"}</c>), <c>run.detect</c>, and <c>run.ignoreScripts</c>.</summary>
+    internal static (IReadOnlyList<RunTool> Tools, bool Detect, bool IgnoreScripts) ReadConfig(string repositoryRoot)
     {
         var path = Path.Combine(repositoryRoot, ConfigFileName);
-        if (!File.Exists(path)) return ([], true);
+        if (!File.Exists(path)) return ([], true, false);
         JsonNode? run;
         try
         {
@@ -69,11 +81,12 @@ public static partial class RunToolDetector
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            return ([], true);
+            return ([], true, false);
         }
-        if (run is not JsonObject section) return ([], true);
+        if (run is not JsonObject section) return ([], true, false);
 
         var detect = section["detect"] is not JsonValue flag || !flag.TryGetValue<bool>(out var value) || value;
+        var ignoreScripts = section["ignoreScripts"] is JsonValue ignore && ignore.TryGetValue<bool>(out var ignored) && ignored;
         var tools = new List<RunTool>();
         switch (section["tools"])
         {
@@ -88,7 +101,7 @@ public static partial class RunToolDetector
                         tools.Add(tool);
                 break;
         }
-        return (tools, detect);
+        return (tools, detect, ignoreScripts);
     }
 
     // -- mise's own files --------------------------------------------------------

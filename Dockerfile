@@ -215,7 +215,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     (getent group ${RUNNER_UID} >/dev/null || groupadd --gid ${RUNNER_UID} runner) && \
     (getent passwd ${RUNNER_UID} >/dev/null || useradd --uid ${RUNNER_UID} --gid ${RUNNER_UID} --no-create-home --home-dir /tmp --shell /bin/bash runner) && \
     git config --system --add safe.directory '*' && \
-    mkdir -p /app /ild-run /ild-chat /opt/ild-tools && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /ild-chat /opt/ild-tools && chmod 0755 /ild-run /ild-chat
+    mkdir -p /app /ild-run /ild-chat /opt/ild-tools /opt/ild-toolchains /opt/ild-repo-tools && chown ${RUNNER_UID}:${RUNNER_UID} /ild-run /ild-chat /opt/ild-tools /opt/ild-toolchains /opt/ild-repo-tools && chmod 0755 /ild-run /ild-chat
 # Chrome, for the chrome-devtools MCP server agents drive a browser with: it needs system libraries the store cannot
 # provide, so it is part of the image, at /opt/google/chrome/chrome where Puppeteer's stable channel looks. Google publishes
 # google-chrome-stable for amd64 and arm64 only. Its recommends are left out and fonts-liberation added back.

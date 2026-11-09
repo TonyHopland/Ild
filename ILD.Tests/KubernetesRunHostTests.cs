@@ -20,6 +20,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     private const string Instance = "main";
 
     private readonly Guid _run = Guid.NewGuid();
+    private static readonly Guid Repo = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private static readonly Guid OtherRepo = Guid.Parse("22222222-2222-2222-2222-222222222222");
     private readonly string _scratch = Path.Combine(Path.GetTempPath(), $"ild-k8s-{Guid.NewGuid():N}");
     private readonly RecordingLogger<KubernetesRunHost> _log = new();
     private FakeKubernetesApi _api = null!;
@@ -57,9 +59,11 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     private static string Name(Guid run) => KubernetesNames.ObjectName(run);
 
-    private string MakeBaseRepository(params (string Path, string Content)[] files)
+    private string MakeBaseRepository(params (string Path, string Content)[] files) => MakeBaseRepositoryIn("base", files);
+
+    private string MakeBaseRepositoryIn(string name, params (string Path, string Content)[] files)
     {
-        var path = Path.Combine(_scratch, "base");
+        var path = Path.Combine(_scratch, name);
         Directory.CreateDirectory(path);
         Git(path, "init", "-q", "-b", "main");
         File.WriteAllText(Path.Combine(path, "a.txt"), "a");
@@ -86,7 +90,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
             await e.ExitAsync(0);
         };
-        return await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+        return await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
     }
 
     private static ProcessStartInfo Command(string workingDirectory, string file, params string[] args)
@@ -153,7 +157,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             await e.ExitAsync(0);
         };
 
-        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
 
         var clone = Assert.Single(_api.Execs, e => e.Joined.Contains("git clone"));
         Assert.Equal(WorkingDirectory, clone.Command[^2]);
@@ -228,7 +232,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         _api.Created.Clear();
         _api.Execs.Clear();
 
-        var again = await _host.CreateAsync(new RunEnvironmentRequest(_run, "/unused", "ild/wi-1-run"), TestContext.Current.CancellationToken);
+        var again = await _host.CreateAsync(new RunEnvironmentRequest(_run, "/unused", "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
 
         Assert.Equal(WorkingDirectory, again.WorkingDirectory);
         Assert.Empty(_api.Created);
@@ -246,7 +250,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         };
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b"), TestContext.Current.CancellationToken));
+            () => _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b", Repo), TestContext.Current.CancellationToken));
 
         Assert.Contains("fatal: bad bundle", ex.Message);
         Assert.Empty(_api.Names("pods"));
@@ -264,7 +268,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             if (!e.Tty) await e.ExitAsync(0);
         };
         var ct = TestContext.Current.CancellationToken;
-        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run"), ct);
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), ct);
         await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
         await using var signIn = await _host.OpenSignInAsync(null, "claude", [], 80, 24, ct);
         var signInPod = SignInPod();
@@ -353,10 +357,14 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     // -- Toolchains --------------------------------------------------------------
 
-    [Fact]
-    public async Task With_a_tools_claim_the_store_is_filled_by_an_installer_pod_and_mounted_read_only_in_the_run()
+    private const string AgentNodeLine = """{"kind":"agentnode","spec":"node@24","version":"24.11.0","path":["/opt/ild-tools/mise/installs/node/24.11.0/bin"],"env":{}}""";
+    private const string PiLine = """{"kind":"agent","key":"pi","version":"1.5.0","path":["/opt/ild-tools/agents/pi/1.5.0/wrap"]}""";
+    private const string NodeLine = """{"kind":"tool","spec":"node@24","version":"24.11.0","path":["/opt/ild-toolchains/mise/installs/node/24.11.0/bin"],"env":{}}""";
+
+    // Answers each installer pod with the lines of the real script's output that are in the zone it installs into (its
+    // ILD_TOOLS_ROOT), and records the pod it ran in with the command.
+    private List<(string Pod, IReadOnlyList<string> Command)> AnswerInstallers(params string[] lines)
     {
-        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
         var installs = new List<(string Pod, IReadOnlyList<string> Command)>();
         _api.OnExec = async e =>
         {
@@ -364,33 +372,116 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             if (e.Pod.StartsWith("ild-tools-", StringComparison.Ordinal))
             {
                 lock (installs) installs.Add((e.Pod, e.Command));
-                var installer = _api.Get<V1Pod>("pods", e.Pod)!;
-                Assert.Equal("ild-tools", installer.Spec.Volumes.Single().PersistentVolumeClaim.ClaimName);
-                Assert.Null(installer.Spec.Volumes.Single().PersistentVolumeClaim.ReadOnlyProperty);
-                Assert.False(installer.Metadata.Labels.ContainsKey(KubernetesNames.RunLabel));
-                await e.WriteStdoutAsync("""
-                    {"kind":"tool","spec":"node@24","version":"24.11.0","path":["/opt/ild-tools/mise/installs/node/24.11.0/bin"],"env":{}}
-                    {"kind":"agent","key":"pi","version":"1.5.0","path":["/opt/ild-tools/agents/pi/1.5.0/wrap"]}
-
-                    """);
+                _installerPods[e.Pod] = _api.Get<V1Pod>("pods", e.Pod)!;
+                var root = EnvOf(_api.Get<V1Pod>("pods", e.Pod)!, "ILD_TOOLS_ROOT");
+                await e.WriteStdoutAsync(string.Join('\n', lines.Where(l => l.Contains($"\"{root}/", StringComparison.Ordinal))) + "\n");
             }
             await e.ExitAsync(0);
         };
+        return installs;
+    }
 
-        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+    // The installer pods as they were while they ran: they are deleted when the install ends.
+    private readonly Dictionary<string, V1Pod> _installerPods = [];
 
-        var (pod, command) = Assert.Single(installs);
-        Assert.Equal(["agentnode=node@24", "tool=node@24", "agent=pi|@earendil-works/pi-coding-agent|1.5.0|pi"], command.TakeLast(3));
-        Assert.Contains($"pods/{pod}", _api.Deleted);
+    private V1Pod Installer(string pod) => _installerPods[pod];
+
+    private static string EnvOf(V1Pod pod, string name) => pod.Spec.Containers.Single().Env.Single(e => e.Name == name).Value;
+
+    private static string RepoZonePath(string folder) => $"{folder}/mise/installs/npm-prettier/3.3.0/bin";
+
+    private static string PrettierLine(string folder)
+        => $$$"""{"kind":"tool","spec":"npm:prettier@3","version":"3.3.0","path":["{{{RepoZonePath(folder)}}}"],"env":{}}""";
+
+    private static readonly string PrettierFolder = RunToolStore.RepositoryFolder([new RunTool("npm:prettier", "3")], false);
+
+    [Fact]
+    public async Task With_a_tools_claim_each_zone_of_the_store_is_filled_by_an_installer_pod_that_mounts_only_it_and_mounted_read_only_in_the_run()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
+        var installs = AnswerInstallers(AgentNodeLine, PiLine, NodeLine);
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, installs.Count);
+        var agents = installs.Single(i => i.Command.Contains("agentnode=node@24"));
+        Assert.Equal(["agentnode=node@24", "agent=pi|@earendil-works/pi-coding-agent|1.5.0|pi"], agents.Command.TakeLast(2));
+        var toolchains = installs.Single(i => i.Command.Contains("tool=node@24"));
+        Assert.DoesNotContain("agentnode=node@24", toolchains.Command);
+        foreach (var (pod, _) in installs) Assert.Contains($"pods/{pod}", _api.Deleted);
+
+        var agentInstaller = Installer(agents.Pod);
+        Assert.Equal("ild-tools", agentInstaller.Spec.Volumes.Single().PersistentVolumeClaim.ClaimName);
+        Assert.Null(agentInstaller.Spec.Volumes.Single().PersistentVolumeClaim.ReadOnlyProperty);
+        Assert.False(agentInstaller.Metadata.Labels.ContainsKey(KubernetesNames.RunLabel));
+        var agentMount = agentInstaller.Spec.Containers.Single().VolumeMounts.Single();
+        Assert.Equal((RunToolStore.Root, "ild", false), (agentMount.MountPath, agentMount.SubPath, agentMount.ReadOnlyProperty));
+        var toolchainMount = Installer(toolchains.Pod).Spec.Containers.Single().VolumeMounts.Single();
+        Assert.Equal((RunToolStore.ToolchainsRoot, "toolchains"), (toolchainMount.MountPath, toolchainMount.SubPath));
 
         var run = _api.Get<V1Pod>("pods", Name(_run))!;
         var claim = run.Spec.Volumes.Single(v => v.PersistentVolumeClaim?.ClaimName == "ild-tools");
         Assert.True(claim.PersistentVolumeClaim.ReadOnlyProperty);
-        var mount = run.Spec.Containers.Single().VolumeMounts.Single(m => m.Name == claim.Name);
-        Assert.Equal(RunToolStore.Root, mount.MountPath);
-        Assert.True(mount.ReadOnlyProperty);
+        var mounts = run.Spec.Containers.Single().VolumeMounts.Where(m => m.Name == claim.Name).ToList();
+        Assert.Equal([(RunToolStore.ToolchainsRoot, "toolchains"), (RunToolStore.Root, "ild")], mounts.Select(m => (m.MountPath, m.SubPath)).OrderBy(m => m.MountPath));
+        Assert.All(mounts, m => Assert.True(m.ReadOnlyProperty));
         var path = run.Spec.Containers.Single().Env.Single(e => e.Name == "PATH").Value;
-        Assert.StartsWith("/opt/ild-tools/mise/installs/node/24.11.0/bin:/opt/ild-tools/agents/pi/1.5.0/wrap:", path);
+        Assert.StartsWith("/opt/ild-toolchains/mise/installs/node/24.11.0/bin:/opt/ild-tools/agents/pi/1.5.0/wrap:", path);
+    }
+
+    [Fact]
+    public async Task A_repositorys_own_tools_are_installed_into_its_own_folder_by_a_pod_that_cannot_see_the_agents_or_another_repository()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
+        var installs = AnswerInstallers(AgentNodeLine, PiLine, NodeLine, PrettierLine(PrettierFolder));
+        var repo = MakeBaseRepository(("package.json", "{}"), ("mise.toml", "[tools]\n\"npm:prettier\" = \"3\"\n"));
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, repo, "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        var installer = Installer(installs.Single(i => i.Command.Contains("tool=npm:prettier@3")).Pod);
+        Assert.Equal(PrettierFolder, EnvOf(installer, "ILD_TOOLS_ROOT"));
+        Assert.DoesNotContain(installer.Spec.Containers.Single().Env, e => e.Name == "npm_config_ignore_scripts");
+        var mounts = installer.Spec.Containers.Single().VolumeMounts;
+        Assert.Equal(
+            [(RunToolStore.RepositoryToolsRoot, $"repo-tools/{Repo:N}", (bool?)false), (RunToolStore.ToolchainsRoot, "toolchains", true)],
+            mounts.Select(m => (m.MountPath, m.SubPath, m.ReadOnlyProperty)).OrderBy(m => m.MountPath));
+        Assert.StartsWith("/opt/ild-toolchains/mise/installs/node/24.11.0/bin:", EnvOf(installer, "PATH"), StringComparison.Ordinal);
+        Assert.DoesNotContain(mounts, m => m.MountPath == RunToolStore.Root);
+
+        var run = _api.Get<V1Pod>("pods", Name(_run))!;
+        Assert.Contains(run.Spec.Containers.Single().VolumeMounts, m => m.SubPath == $"repo-tools/{Repo:N}" && m.ReadOnlyProperty == true);
+        Assert.StartsWith(RepoZonePath(PrettierFolder), run.Spec.Containers.Single().Env.Single(e => e.Name == "PATH").Value.Split(':').Single(p => p.StartsWith(RunToolStore.RepositoryToolsRoot, StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Another_repositorys_run_does_not_mount_the_first_repositorys_folder()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"));
+        AnswerInstallers(NodeLine, PrettierLine(PrettierFolder));
+        var repo = MakeBaseRepository(("package.json", "{}"), ("mise.toml", "[tools]\n\"npm:prettier\" = \"3\"\n"));
+        var other = MakeBaseRepositoryIn("other", ("package.json", "{}"));
+        var otherRun = Guid.NewGuid();
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, repo, "b", Repo), TestContext.Current.CancellationToken);
+        await host.CreateAsync(new RunEnvironmentRequest(otherRun, other, "b", OtherRepo), TestContext.Current.CancellationToken);
+
+        var mounts = _api.Get<V1Pod>("pods", Name(otherRun))!.Spec.Containers.Single().VolumeMounts;
+        Assert.DoesNotContain(mounts, m => m.MountPath == RunToolStore.RepositoryToolsRoot);
+        Assert.DoesNotContain(mounts, m => m.SubPath?.StartsWith("repo-tools", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task The_installer_pod_makes_its_zones_folder_first_with_a_fixed_command_and_never_mounts_the_claims_root_in_the_container_that_installs()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"));
+        var installs = AnswerInstallers(NodeLine);
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "b", Repo), TestContext.Current.CancellationToken);
+
+        var spec = Installer(Assert.Single(installs).Pod).Spec;
+        var init = Assert.Single(spec.InitContainers);
+        Assert.Equal(["mkdir", "-p", "/claim/toolchains"], init.Command);
+        Assert.All(spec.Containers.Single().VolumeMounts, m => Assert.NotNull(m.SubPath));
     }
 
     [Fact]
@@ -398,7 +489,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         var host = NewHost(Options(), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
 
-        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "ild/wi-1-run"), TestContext.Current.CancellationToken);
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
         await host.CheckAsync(TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(_api.Created, c => c.StartsWith("pods/ild-tools-", StringComparison.Ordinal));
@@ -883,7 +974,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_chat_pod_mounts_the_tools_claim_read_only_whenever_there_is_a_store()
+    public async Task The_chat_pod_mounts_the_agents_and_toolchain_zones_read_only_whenever_there_is_a_store_and_never_a_repositorys()
     {
         var host = NewHost(Options(toolsClaim: "ild-tools"));
 
@@ -891,9 +982,55 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         var pod = _api.Get<V1Pod>("pods", ChatPodName)!;
         Assert.True(pod.Spec.Volumes.Single(v => v.Name == "tools").PersistentVolumeClaim.ReadOnlyProperty);
-        var mount = pod.Spec.Containers.Single().VolumeMounts.Single(v => v.Name == "tools");
-        Assert.Equal(RunToolStore.Root, mount.MountPath);
-        Assert.True(mount.ReadOnlyProperty);
+        var mounts = pod.Spec.Containers.Single().VolumeMounts.Where(v => v.Name == "tools").OrderBy(m => m.MountPath).ToList();
+        Assert.Equal([(RunToolStore.ToolchainsRoot, "toolchains"), (RunToolStore.Root, "ild")], mounts.Select(m => (m.MountPath, m.SubPath)));
+        Assert.All(mounts, m => Assert.True(m.ReadOnlyProperty));
+    }
+
+    [Fact]
+    public async Task A_chat_does_not_get_the_tools_only_a_repository_may_hold()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"));
+        var chat = Guid.NewGuid();
+        var installs = AnswerInstallers(NodeLine, PrettierLine(PrettierFolder));
+        var repo = MakeBaseRepository(("package.json", "{}"), ("mise.toml", "[tools]\n\"npm:prettier\" = \"3\"\n"));
+
+        await host.AddChatToolsAsync(ChatFolder(chat), repo, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(installs, i => i.Command.Any(a => a.Contains("npm:", StringComparison.Ordinal)));
+        Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("npm:prettier@3", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Install_scripts_are_off_in_the_agents_and_toolchain_zones_and_on_in_a_repositorys_unless_it_opts_out()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
+        var installs = AnswerInstallers(AgentNodeLine, PiLine, NodeLine, PrettierLine(PrettierFolder));
+        var repo = MakeBaseRepository(("package.json", "{}"), ("mise.toml", "[tools]\n\"npm:prettier\" = \"3\"\n"));
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, repo, "b", Repo), TestContext.Current.CancellationToken);
+
+        foreach (var (pod, command) in installs)
+        {
+            var env = Installer(pod).Spec.Containers.Single().Env;
+            var ignores = env.Any(e => e.Name == "npm_config_ignore_scripts" && e.Value == "true");
+            Assert.Equal(!command.Contains("tool=npm:prettier@3"), ignores);
+        }
+    }
+
+    [Fact]
+    public async Task A_repository_that_opts_out_of_install_scripts_gets_them_off_in_its_zone_too()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"));
+        var folder = RunToolStore.RepositoryFolder([new RunTool("npm:prettier", "3")], true);
+        var installs = AnswerInstallers(NodeLine, PrettierLine(folder));
+        var repo = MakeBaseRepository(("package.json", "{}"), ("mise.toml", "[tools]\n\"npm:prettier\" = \"3\"\n"), ("ild.config.json", """{"run":{"ignoreScripts":true}}"""));
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, repo, "b", Repo), TestContext.Current.CancellationToken);
+
+        var installer = Installer(installs.Single(i => i.Command.Contains("tool=npm:prettier@3")).Pod);
+        Assert.Contains(installer.Spec.Containers.Single().Env, e => e.Name == "npm_config_ignore_scripts" && e.Value == "true");
+        Assert.Equal(folder, EnvOf(installer, "ILD_TOOLS_ROOT"));
     }
 
     [Fact]
@@ -980,7 +1117,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
             if (e.Pod.StartsWith("ild-tools-", StringComparison.Ordinal))
                 await e.WriteStdoutAsync("""
-                    {"kind":"tool","spec":"node@20","version":"20.19.1","path":["/opt/ild-tools/mise/installs/node/20.19.1/bin"],"env":{}}
+                    {"kind":"tool","spec":"node@20","version":"20.19.1","path":["/opt/ild-toolchains/mise/installs/node/20.19.1/bin"],"env":{}}
 
                     """);
             await e.ExitAsync(0);
@@ -994,7 +1131,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         var exec = _api.Execs.Last();
         Assert.Equal(ChatPodName, exec.Pod);
-        Assert.StartsWith("PATH=/opt/ild-tools/mise/installs/node/20.19.1/bin:", exec.Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.StartsWith("PATH=/opt/ild-toolchains/mise/installs/node/20.19.1/bin:", exec.Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1029,7 +1166,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
             await e.ExitAsync(0);
         };
-        return await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b"), TestContext.Current.CancellationToken);
+        return await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b", Repo), TestContext.Current.CancellationToken);
     }
 
     // -- Settings ----------------------------------------------------------------

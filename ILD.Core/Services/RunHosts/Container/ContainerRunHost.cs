@@ -31,9 +31,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     private string? _warning;
     private bool? _podman;
 
-    // What the store gave each set of toolchains and agents asked for, so a run like one before starts without an installer.
-    private readonly ConcurrentDictionary<string, RunToolEnvironment> _tools = new(StringComparer.Ordinal);
-    private readonly SemaphoreSlim _toolsGate = new(1, 1);
     private readonly SemaphoreSlim _chatGate = new(1, 1);
     // Containers that are not a run's, exec'd into by an id of their own: the store's installers.
     private readonly ConcurrentDictionary<Guid, string> _execNames = new();
@@ -92,7 +89,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         try
         {
             var name = ObjectName(owner);
-            var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), ct);
+            var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
             await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
             await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = Labels(owner) }, ct));
             var ild = await IldAddressAsync(name, $"run {owner:N}", ct);
@@ -207,9 +204,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             Labels = Labels(owner),
             HostConfig = new
             {
-                Binds = tools is { Path.Count: > 0 }
-                    ? [$"{name}:{RunPaths.RunsRoot}:rw", $"{_options.ToolsVolume}:{RunToolStore.Root}:ro"]
-                    : new[] { $"{name}:{RunPaths.RunsRoot}:rw" },
+                Binds = new[] { $"{name}:{RunPaths.RunsRoot}:rw" }.Concat(ToolBinds(tools?.Zones ?? [])).ToArray(),
                 Tmpfs = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{await StateOwnerOptionAsync(ct)}" },
                 CapDrop = new[] { "ALL" },
                 SecurityOpt = new[] { "no-new-privileges" },
@@ -245,47 +240,34 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     /// <summary>
     /// What the run's commands get from the toolchain store: the toolchains its repository needs and the agents ILD has
-    /// installed, installed into the store first when it lacks them. Null when toolchains are off, so the run has only
-    /// what the runner image has.
+    /// installed, each zone installed first when it lacks them. Null when toolchains are off, so the run has only what
+    /// the runner image has.
     /// </summary>
-    protected override Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, CancellationToken ct)
-        => ToolsForAsync(owner, plan, Agents(), ct);
+    protected override Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, Guid? repositoryId, CancellationToken ct)
+        => ToolsForAsync(owner, plan, Agents(), repositoryId, ct);
 
     protected override bool ChatToolchains => _options.Toolchains;
 
-    private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, IReadOnlyList<RunAgent> agents, CancellationToken ct)
-    {
-        if (!_options.Toolchains) return null;
+    private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, IReadOnlyList<RunAgent> agents, Guid? repositoryId, CancellationToken ct)
+        => _options.Toolchains ? await ToolZonesAsync(owner, plan, agents, repositoryId, ct) : null;
 
-        var key = string.Join('\n', RunToolStore.Arguments(plan.Tools, agents));
-        // Nothing to give: the run does not mount the store, but still gets its home's .local/bin and npm prefix.
-        if (key.Length == 0) return RunToolEnvironment.None;
-        if (_tools.TryGetValue(key, out var known)) return known;
+    // The zones every chat mounts: the agents' and the shared toolchains.
+    private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];
 
-        await _toolsGate.WaitAsync(ct);
-        try
-        {
-            if (_tools.TryGetValue(key, out known)) return known;
-            await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = _options.ToolsVolume, Labels = ToolsLabels() }, ct));
+    private IEnumerable<string> ToolBinds(IEnumerable<RunToolMount> zones)
+        => zones.Select(z => $"{z.VolumeName(_options.ToolsVolume)}:{z.MountPath}:ro");
 
-            Logger?.LogInformation("{Owner} gets {Plan}, and the agents {Agents}, from the toolchain store {Volume}",
-                owner, plan, string.Join(", ", agents.Select(a => $"{a.Agent.Key}@{a.Version}")), _options.ToolsVolume);
-            var environment = await WithInstallerAsync(installer => InstallToolsAsync(installer, plan.Tools, agents, ct), ct);
-            Logger?.LogInformation("{Owner} has {Installed}", owner, string.Join(", ", environment.Installed));
-            return _tools[key] = environment;
-        }
-        finally
-        {
-            _toolsGate.Release();
-        }
-    }
+    protected override Task PrepareToolZoneAsync(RunToolMount zone, CancellationToken ct)
+        => TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = zone.VolumeName(_options.ToolsVolume), Labels = ToolsLabels() }, ct));
+
+    protected override string ToolZoneName(RunToolMount zone) => zone.VolumeName(_options.ToolsVolume);
 
     /// <summary>
-    /// A short-lived container of the runner image with the store mounted writable and the engine's default network, so
-    /// mise and npm can download; removed when <paramref name="work"/> ends. It carries no run label, so the sweep never
-    /// takes it for a run's.
+    /// A short-lived container of the runner image with only the zone being installed mounted writable (and the shared
+    /// toolchains read-only for a repository's) and the engine's default network, so mise and npm can download; removed
+    /// when <paramref name="work"/> ends. It carries no run label, so the sweep never takes it for a run's.
     /// </summary>
-    private async Task<T> WithInstallerAsync<T>(Func<Guid, Task<T>> work, CancellationToken ct)
+    protected override async Task<T> WithToolInstallerAsync<T>(ToolInstaller toolInstaller, Func<Guid, Task<T>> work, CancellationToken ct)
     {
         var installer = Guid.NewGuid();
         var name = $"ild-tools-{installer:N}";
@@ -294,6 +276,11 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         {
             var labels = ToolsLabels();
             labels[RunPaths.InstanceLabel] = _options.Instance;
+            string[] binds =
+            [
+                $"{toolInstaller.Writable.VolumeName(_options.ToolsVolume)}:{toolInstaller.Writable.MountPath}:rw",
+                .. toolInstaller.ReadOnly is { } shared ? ToolBinds([shared]) : [],
+            ];
             try
             {
                 await _api.PostAsync($"/containers/create?name={Escaped(name)}", new
@@ -302,11 +289,11 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                     Entrypoint = new[] { "/usr/bin/tini", "--" },
                     Cmd = new[] { "sleep", "infinity" },
                     User = $"{RunnerUid}:{RunnerUid}",
-                    Env = RunToolStore.InstallerEnvironment,
+                    Env = toolInstaller.Environment,
                     Labels = labels,
                     HostConfig = new
                     {
-                        Binds = new[] { $"{_options.ToolsVolume}:{RunToolStore.Root}:rw" },
+                        Binds = binds,
                         CapDrop = new[] { "ALL" },
                         SecurityOpt = new[] { "no-new-privileges" },
                         RestartPolicy = new { Name = "no" },
@@ -496,7 +483,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
             await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = ChatName, Labels = ChatLabels() }, ct));
             if (_options.Toolchains)
-                await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = _options.ToolsVolume, Labels = ToolsLabels() }, ct));
+                foreach (var zone in ChatToolZones)
+                    await PrepareToolZoneAsync(zone, ct);
             await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = ChatName, Internal = true, CheckDuplicate = true, Labels = ChatLabels() }, ct));
             // A stopped one is replaced; what it held is in the volume.
             await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(ChatName)}?force=true", null, ct));
@@ -537,7 +525,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         string[] parts =
         [
             image?["Id"]?.GetValue<string>() ?? "", _options.RunnerImage, _options.IldHost, _options.ToolsVolume,
-            _options.Toolchains ? "tools" : "no-tools",
+            _options.Toolchains ? "tool-zones" : "no-tools",
             .. _options.GitIdentity.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => $"{e.Key}={e.Value}"),
         ];
         var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', parts)));
@@ -567,9 +555,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             Labels = new Dictionary<string, string>(ChatLabels()) { [SpecLabel] = await ChatSpecAsync(ct) },
             HostConfig = new
             {
-                Binds = _options.Toolchains
-                    ? [$"{ChatName}:{RunPaths.ChatsRoot}:rw", $"{_options.ToolsVolume}:{RunToolStore.Root}:ro"]
-                    : new[] { $"{ChatName}:{RunPaths.ChatsRoot}:rw" },
+                // Every chat shares this container, so it mounts the agents and the shared toolchains, never a repository's own tools.
+                Binds = new[] { $"{ChatName}:{RunPaths.ChatsRoot}:rw" }.Concat(ToolBinds(_options.Toolchains ? ChatToolZones : [])).ToArray(),
                 Tmpfs = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{await StateOwnerOptionAsync(ct)}" },
                 CapDrop = new[] { "ALL" },
                 SecurityOpt = new[] { "no-new-privileges" },
@@ -635,7 +622,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         try
         {
             var agents = agent is null ? (IReadOnlyList<RunAgent>)[] : Agents().Where(a => a.Agent.Key == agent.Key).ToList();
-            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), agents, ct);
+            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), agents, null, ct);
             try
             {
                 await _api.PostAsync($"/containers/create?name={Escaped(name)}", new
@@ -649,7 +636,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                     // The engine's default network, as the toolchain installer has; no volume of a run or chat, no ILD address.
                     HostConfig = new
                     {
-                        Binds = tools is { Path.Count: > 0 } ? new[] { $"{_options.ToolsVolume}:{RunToolStore.Root}:ro" } : Array.Empty<string>(),
+                        Binds = ToolBinds(tools?.Zones ?? []).ToArray(),
                         CapDrop = new[] { "ALL" },
                         SecurityOpt = new[] { "no-new-privileges" },
                         RestartPolicy = new { Name = "no" },
@@ -888,7 +875,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     public void Dispose()
     {
         _api.Dispose();
-        _toolsGate.Dispose();
         _chatGate.Dispose();
     }
 }

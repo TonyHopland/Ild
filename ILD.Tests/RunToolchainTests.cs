@@ -168,6 +168,102 @@ public sealed class RunToolchainTests : IDisposable
         Assert.Equal(["node@24"], Detected());
     }
 
+    // -- Where a tool is installed ----------------------------------------------
+
+    [Theory]
+    [InlineData("node@20", true)]
+    [InlineData("dotnet@10", true)]
+    [InlineData("python@3.12", true)]
+    [InlineData("npm:x", false)]
+    [InlineData("cargo:x", false)]
+    [InlineData("pipx:black", false)]
+    [InlineData("aqua:cli/cli", false)]
+    [InlineData("prettier", false)]
+    [InlineData("pnpm@9", false)]
+    [InlineData("node:evil@1", false)]
+    public void Only_a_mise_core_tool_by_its_plain_name_is_installed_into_the_shared_toolchains(string spec, bool core)
+        => Assert.Equal(core, RunTool.Parse(spec)!.IsCore);
+
+    [Fact]
+    public void A_plan_routes_core_tools_to_the_toolchains_and_every_other_to_the_repositorys_own_tools()
+    {
+        Write("mise.toml", """
+            [tools]
+            node = "22"
+            "npm:x" = "1"
+            "cargo:x" = "1"
+            prettier = "3"
+            """);
+
+        var plan = RunToolDetector.Resolve(_repo);
+
+        Assert.Equal(["node@22"], plan.Toolchains.Select(t => t.ToString()));
+        Assert.Equal(["cargo:x@1", "npm:x@1", "prettier@3"], plan.RepositoryTools.Select(t => t.ToString()));
+        Assert.Contains("node@22 from mise.toml -> toolchains", plan.ToString());
+        Assert.Contains("npm:x@1 from mise.toml -> repository tools", plan.ToString());
+    }
+
+    [Fact]
+    public void A_repository_can_opt_out_of_install_scripts_in_its_own_zone()
+    {
+        Write("mise.toml", "[tools]\n\"npm:x\" = \"1\"\n");
+        Assert.False(RunToolDetector.Resolve(_repo).IgnoreScripts);
+
+        Write("ild.config.json", """{ "run": { "ignoreScripts": true } }""");
+        Assert.True(RunToolDetector.Resolve(_repo).IgnoreScripts);
+    }
+
+    [Fact]
+    public void A_repositorys_folder_follows_what_it_names_and_not_the_order_or_another_repository()
+    {
+        var a = RunToolStore.RepositoryFolder([new RunTool("npm:x", "1"), new RunTool("cargo:y", "2")], false);
+
+        Assert.Equal(a, RunToolStore.RepositoryFolder([new RunTool("cargo:y", "2"), new RunTool("npm:x", "1")], false));
+        Assert.NotEqual(a, RunToolStore.RepositoryFolder([new RunTool("npm:x", "2"), new RunTool("cargo:y", "2")], false));
+        Assert.NotEqual(a, RunToolStore.RepositoryFolder([new RunTool("npm:x", "1"), new RunTool("cargo:y", "2")], true));
+        Assert.StartsWith(RunToolStore.RepositoryToolsRoot + "/", a);
+    }
+
+    [Fact]
+    public void Install_scripts_are_off_for_the_installers_of_the_agents_and_toolchains_and_for_a_repository_that_opts_out()
+    {
+        Assert.Contains("npm_config_ignore_scripts=true", RunToolStore.InstallerEnvironment(RunToolStore.Root, true));
+        Assert.Contains("npm_config_ignore_scripts=true", RunToolStore.InstallerEnvironment(RunToolStore.ToolchainsRoot, true));
+        Assert.DoesNotContain("npm_config_ignore_scripts=true", RunToolStore.InstallerEnvironment("/opt/ild-repo-tools/abc", false));
+        Assert.Contains("MISE_DATA_DIR=/opt/ild-repo-tools/abc/mise", RunToolStore.InstallerEnvironment("/opt/ild-repo-tools/abc", false));
+        Assert.Contains("ILD_TOOLS_ROOT=/opt/ild-repo-tools/abc", RunToolStore.InstallerEnvironment("/opt/ild-repo-tools/abc", false));
+    }
+
+    [Fact]
+    public void The_agents_own_npm_install_runs_the_scripts_it_approves_whatever_the_installers_default()
+        => Assert.Contains("--ignore-scripts=false", RunToolStore.InstallScript);
+
+    [Fact]
+    public void A_zones_output_names_only_paths_under_that_zone()
+    {
+        var output = """{"kind":"tool","spec":"npm:x@1","version":"1","path":["/opt/ild-tools/agents/pi/1/wrap","/opt/ild-repo-tools/abc/mise/bin","/opt/ild-repo-tools/abcd/bin"],"env":{}}""";
+
+        Assert.Equal(["/opt/ild-repo-tools/abc/mise/bin"], RunToolStore.Parse(output, "/opt/ild-repo-tools/abc").Path);
+    }
+
+    [Fact]
+    public void The_zones_merge_with_the_core_toolchains_then_the_repositorys_then_the_agents_and_the_agents_node_last()
+    {
+        var agents = new RunToolEnvironment(["/opt/ild-tools/agents/pi/wrap"], new Dictionary<string, string>(), ["pi@1"], ["/opt/ild-tools/node/bin"], [new RunToolMount(RunToolZone.Agents)]);
+        var toolchains = new RunToolEnvironment(["/opt/ild-toolchains/node/bin"], new Dictionary<string, string> { ["A"] = "t" }, ["node@24"], null, [new RunToolMount(RunToolZone.Toolchains)]);
+        var repository = new RunToolEnvironment(["/opt/ild-repo-tools/h/x/bin"], new Dictionary<string, string> { ["A"] = "r", ["B"] = "r" }, ["npm:x@1"], null, [new RunToolMount(RunToolZone.Repository, Guid.Empty)]);
+
+        var merged = RunToolEnvironment.Merge(agents, toolchains, repository);
+
+        Assert.Equal(["/opt/ild-toolchains/node/bin", "/opt/ild-repo-tools/h/x/bin", "/opt/ild-tools/agents/pi/wrap"], merged.Path);
+        Assert.Equal(["/opt/ild-tools/node/bin"], merged.Fallback);
+        Assert.Equal(["node@24", "npm:x@1", "pi@1"], merged.Installed);
+        Assert.Equal("t", merged.Variables["A"]);
+        Assert.Equal("r", merged.Variables["B"]);
+        Assert.Equal([RunToolZone.Toolchains, RunToolZone.Repository, RunToolZone.Agents], merged.Zones.Select(z => z.Zone));
+        Assert.Empty(RunToolEnvironment.Merge(null, null, null).Zones);
+    }
+
     // -- The store ---------------------------------------------------------------
 
     [Fact]

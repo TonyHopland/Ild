@@ -187,23 +187,97 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         if command -v corepack >/dev/null 2>&1; then corepack enable --install-directory "$1/.local/bin" >/dev/null 2>&1 || true; fi
         """;
 
+    /// <summary>What a toolchain installer mounts and runs with: one zone writable, the toolchains read-only when it needs them, and its environment.</summary>
+    protected sealed record ToolInstaller(RunToolMount Writable, RunToolMount? ReadOnly, IReadOnlyList<string> Environment);
+
     /// <summary>
-    /// Install the toolchains and agents a run needs into the shared store through <paramref name="installer"/>, a
-    /// container or pod of the runner image that mounts the store writable, and return what the run's commands get.
+    /// Run <paramref name="work"/> in a short-lived installer of the runner image that mounts only what
+    /// <paramref name="installer"/> names, with the network the host gives it, and remove it afterwards. The installer's id
+    /// is what <see cref="ExecAsync"/> takes.
     /// </summary>
-    protected async Task<RunToolEnvironment> InstallToolsAsync(Guid installer, IReadOnlyList<RunTool> tools, IReadOnlyList<RunAgent> agents, CancellationToken ct)
+    protected abstract Task<T> WithToolInstallerAsync<T>(ToolInstaller installer, Func<Guid, Task<T>> work, CancellationToken ct);
+
+    /// <summary>Make the zone's storage exist before its installer mounts it (a volume on a container engine).</summary>
+    protected virtual Task PrepareToolZoneAsync(RunToolMount zone, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>Where the zone is kept, for the log.</summary>
+    protected abstract string ToolZoneName(RunToolMount zone);
+
+    private readonly ConcurrentDictionary<string, RunToolEnvironment> _toolZones = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _toolsGate = new(1, 1);
+
+    /// <summary>
+    /// What a run or chat gets from the store (docs/adr/0035-run-toolchains.md), each zone installed first when it lacks
+    /// what is asked: the agents and their Node in the agents' zone, the plan's core tools in the shared toolchain zone,
+    /// and every other tool of the plan in the zone of <paramref name="repositoryId"/> alone. With no repository (a chat),
+    /// those other tools are not installed.
+    /// </summary>
+    protected async Task<RunToolEnvironment> ToolZonesAsync(string label, RunToolPlan plan, IReadOnlyList<RunAgent> agents, Guid? repositoryId, CancellationToken ct)
+    {
+        RunToolEnvironment? agentZone = null, toolchainZone = null, repositoryZone = null;
+        if (agents.Count > 0)
+            agentZone = await ToolZoneAsync(label, new RunToolMount(RunToolZone.Agents), RunToolStore.Root, RunToolStore.Arguments([], agents), true, null, ct);
+
+        var core = plan.Toolchains;
+        if (core.Count > 0)
+            toolchainZone = await ToolZoneAsync(label, new RunToolMount(RunToolZone.Toolchains), RunToolStore.ToolchainsRoot, RunToolStore.Arguments(core, []), true, null, ct);
+
+        var others = plan.RepositoryTools;
+        if (others.Count > 0)
+        {
+            if (repositoryId is not { } repository)
+                Logger?.LogInformation("{Owner} names {Tools}, which only a run's repository holds; it does not get them", label, string.Join(", ", others));
+            else
+                repositoryZone = await ToolZoneAsync(label, new RunToolMount(RunToolZone.Repository, repository), RunToolStore.RepositoryFolder(others, plan.IgnoreScripts),
+                    RunToolStore.Arguments(others, []), plan.IgnoreScripts, toolchainZone, ct);
+        }
+
+        return RunToolEnvironment.Merge(agentZone, toolchainZone, repositoryZone);
+    }
+
+    private async Task<RunToolEnvironment> ToolZoneAsync(
+        string label, RunToolMount zone, string root, IReadOnlyList<string> arguments, bool ignoreScripts, RunToolEnvironment? toolchains, CancellationToken ct)
+    {
+        var key = string.Join('\n', [zone.Zone.ToString(), zone.RepositoryId.ToString("N"), root, .. arguments]);
+        if (_toolZones.TryGetValue(key, out var known)) return known;
+
+        await _toolsGate.WaitAsync(ct);
+        try
+        {
+            if (_toolZones.TryGetValue(key, out known)) return known;
+            await PrepareToolZoneAsync(zone, ct);
+            if (toolchains is not null) await PrepareToolZoneAsync(new RunToolMount(RunToolZone.Toolchains), ct);
+
+            Logger?.LogInformation("{Owner} gets {Arguments} from the {Zone} zone of the toolchain store, {Name}",
+                label, string.Join(", ", arguments), zone.Zone, ToolZoneName(zone));
+            var installer = new ToolInstaller(
+                zone,
+                toolchains is null ? null : new RunToolMount(RunToolZone.Toolchains),
+                [.. RunToolStore.InstallerEnvironment(root, ignoreScripts), .. toolchains?.ForInstaller() ?? []]);
+            var environment = await WithToolInstallerAsync(installer, id => InstallToolsAsync(id, arguments, root, ct), ct);
+            environment = environment with { Mounts = [zone] };
+            Logger?.LogInformation("{Owner} has {Installed}", label, string.Join(", ", environment.Installed));
+            return _toolZones[key] = environment;
+        }
+        finally
+        {
+            _toolsGate.Release();
+        }
+    }
+
+    /// <summary>Run the store's install script in <paramref name="installer"/> over <paramref name="arguments"/> and return what its output names under <paramref name="root"/>.</summary>
+    private async Task<RunToolEnvironment> InstallToolsAsync(Guid installer, IReadOnlyList<string> arguments, string root, CancellationToken ct)
     {
         // The script goes in on stdin, read whole before it runs: as an argument it would be part of the exec's URL on
         // Kubernetes, which a long script makes too long for the API server (414).
         using var script = new MemoryStream(Encoding.UTF8.GetBytes(RunToolStore.InstallScript));
-        var result = await ExecAsync(installer, [.. ScriptFromStdin, .. RunToolStore.Arguments(tools, agents)], script, null, ct);
+        var result = await ExecAsync(installer, [.. ScriptFromStdin, .. arguments], script, null, ct);
         if (!result.Success)
         {
-            var asked = string.Join(", ", tools.Select(t => t.ToString()).Concat(agents.Select(a => $"{a.Agent.Key}@{a.Version}")));
             var tail = string.Join('\n', result.StdErr.Trim().Split('\n').TakeLast(15));
-            throw new InvalidOperationException($"could not install the run's toolchains ({asked}) in the toolchain store: {tail}");
+            throw new InvalidOperationException($"could not install the run's toolchains ({string.Join(", ", arguments)}) in the toolchain store: {tail}");
         }
-        return RunToolStore.Parse(result.StdOut);
+        return RunToolStore.Parse(result.StdOut, root);
     }
 
     /// <summary>Make the environment ready to work in: the run's home and the code the base repository has.</summary>
@@ -601,8 +675,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     private readonly ConcurrentDictionary<Guid, List<RunTool>> _chatTools = new();
 
-    /// <summary>What the commands of a run or chat get from the toolchain store for <paramref name="plan"/>, installed into it first when it lacks them; null when there is no store.</summary>
-    protected abstract Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, CancellationToken ct);
+    /// <summary>
+    /// What the commands of a run or chat get from the toolchain store for <paramref name="plan"/>, installed into it first
+    /// when it lacks them; null when there is no store. <paramref name="repositoryId"/> is the run's repository, null for a chat.
+    /// </summary>
+    protected abstract Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, Guid? repositoryId, CancellationToken ct);
 
     // What the chat's repositories need, kept on ILD's side: a chat's agent writes everything in the chat's folder, and
     // what is asked of the toolchain store (which every run and chat shares) must not be something it can write.
@@ -630,12 +707,15 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         if (!ChatToolchains || RunPaths.ChatOf(chatPath) is not { } chat) return;
 
+        // Every chat shares one container, so a chat gets the shared toolchains only: what only a repository's own runs hold stays out.
         var plan = RunToolDetector.Resolve(basePath);
+        foreach (var skipped in plan.RepositoryTools)
+            Logger?.LogInformation("Chat {Chat} does not get {Tool} from {BasePath}: only a run's repository holds a tool that is not a mise core tool", chat, skipped, basePath);
         var known = ChatToolsOf(chat);
         var added = false;
         lock (known)
         {
-            foreach (var tool in plan.Tools)
+            foreach (var tool in plan.Toolchains)
             {
                 if (known.FirstOrDefault(t => t.Name == tool.Name) is { } existing)
                 {
@@ -665,7 +745,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         List<RunTool> tools;
         var known = ChatToolsOf(chat);
         lock (known) tools = [.. known];
-        var tooling = await ToolsForAsync($"Chat {chat}", new RunToolPlan(tools, tools.Select(t => t.ToString()).ToList()), ct);
+        var tooling = await ToolsForAsync($"Chat {chat}", new RunToolPlan(tools, tools.Select(t => t.ToString()).ToList()), null, ct);
         return tooling?.For(RunPaths.ChatHome(chat)) ?? [];
     }
 
