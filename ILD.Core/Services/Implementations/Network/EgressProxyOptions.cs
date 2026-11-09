@@ -34,6 +34,7 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
     /// <summary>The Basic-auth user name on an installer-scoped proxy URL, whose password is the toolchain zone the installer fills.</summary>
     public const string InstallerUser = "installer";
 
+    /// <summary>The longest zone name the log column holds.</summary>
     public const int MaxZoneLength = 64;
 
     /// <summary>

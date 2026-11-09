@@ -2193,7 +2193,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         using var host = NewHost(Options(), [Claude]);
         AnswerInstaller(AgentNodeLine, ClaudeLine);
         // An installer is gone once its work is done, so each container's request is kept the first time it is used.
-        var made = new Dictionary<string, string>(StringComparer.Ordinal);
+        var made = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var answer = _api.OnExec;
         _api.OnExec = e =>
         {
