@@ -2024,39 +2024,25 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     /// <summary>
     /// The base environment every preview step starts from, before the service's own
-    /// <c>env</c> and then the repository's <c>.env</c> are layered over it. Takes the
-    /// state directory rather than the whole runtime because that is the only part
-    /// it needs — which also makes what a preview child's <c>HOME</c> and npm prefix
-    /// resolve to assertable without standing up a runtime.
+    /// <c>env</c> and then the repository's <c>.env</c> are layered over it: only what
+    /// belongs to the preview itself, the npm cache in its state directory.
+    /// <para>
+    /// Deliberately not <c>HOME</c>, <c>PATH</c> or the npm prefix. Those belong to
+    /// wherever the step runs, which only the run host knows — a run container sets
+    /// its own when it is made, and the local host gives a command ours
+    /// (<see cref="LocalRunHost.WithUserTools"/>). Built here from ILD's own, they
+    /// named directories a run does not have, and replaced the ones it does.
+    /// </para>
     /// </summary>
-    internal Dictionary<string, string> BuildDefaultEnvironment(string stateDirectory)
+    internal static Dictionary<string, string> BuildDefaultEnvironment(string stateDirectory)
     {
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        var home = ResolveHomeDirectory();
-        var npmPrefix = Path.Combine(home, ".local");
-        var npmBin = GetNpmGlobalBinDirectory();
         var npmCache = Path.Combine(stateDirectory, "npm-cache");
-
-        Directory.CreateDirectory(npmPrefix);
-        Directory.CreateDirectory(npmBin);
         Directory.CreateDirectory(npmCache);
-
-        var currentPath = _environment.Get("PATH") ?? string.Empty;
-
-        environment["HOME"] = home;
-        environment["NPM_CONFIG_PREFIX"] = npmPrefix;
-        environment["NPM_CONFIG_CACHE"] = npmCache;
-        environment["PATH"] = string.IsNullOrWhiteSpace(currentPath)
-            ? npmBin
-            : $"{npmBin}{Path.PathSeparator}{currentPath}";
-
-        return environment;
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["NPM_CONFIG_CACHE"] = npmCache };
     }
 
     /// <summary>
-    /// The <c>HOME</c> a preview step runs with, and the root the npm global prefix
-    /// is derived from: ours.
+    /// ILD's own <c>HOME</c>, the root of the npm global bin added to ILD's own PATH.
     /// </summary>
     private string ResolveHomeDirectory()
     {
@@ -2073,8 +2059,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
-    /// The directory where <c>npm install -g</c> places executables during an
-    /// install step (<see cref="BuildDefaultEnvironment"/> points
+    /// The directory where <c>npm install -g</c> places executables during a local
+    /// install step (<see cref="LocalRunHost.WithUserTools"/> points
     /// <c>NPM_CONFIG_PREFIX</c> at <c>$HOME/.local</c>, so global CLIs such as
     /// <c>vp</c> land in <c>$HOME/.local/bin</c>).
     /// </summary>

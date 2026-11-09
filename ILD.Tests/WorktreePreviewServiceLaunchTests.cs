@@ -82,22 +82,22 @@ public class WorktreePreviewServiceLaunchTests : IDisposable
     }
 
     [Fact]
-    public void The_npm_prefix_is_under_our_home_and_is_created()
+    public void A_step_leaves_home_path_and_the_npm_prefix_to_where_it_runs()
     {
-        var home = RedirectOrchestratorHome();
+        RedirectOrchestratorHome();
 
-        var environment = BuildService().BuildDefaultEnvironment(_stateDirectory);
+        var environment = WorktreePreviewService.BuildDefaultEnvironment(_stateDirectory);
 
-        Assert.Equal(home, environment["HOME"]);
-        Assert.Equal(Path.Combine(home, ".local"), environment["NPM_CONFIG_PREFIX"]);
-        Assert.Contains(Path.Combine(home, ".local", "bin"), environment["PATH"].Split(Path.PathSeparator));
-        Assert.True(Directory.Exists(Path.Combine(home, ".local", "bin")));
+        // Ours would name directories a run container does not have, and hide the ones it does.
+        Assert.DoesNotContain("HOME", environment.Keys);
+        Assert.DoesNotContain("PATH", environment.Keys);
+        Assert.DoesNotContain("NPM_CONFIG_PREFIX", environment.Keys);
     }
 
     [Fact]
     public void The_npm_cache_stays_in_the_state_directory()
     {
-        var environment = BuildService().BuildDefaultEnvironment(_stateDirectory);
+        var environment = WorktreePreviewService.BuildDefaultEnvironment(_stateDirectory);
 
         Assert.Equal(Path.Combine(_stateDirectory, "npm-cache"), environment["NPM_CONFIG_CACHE"]);
     }

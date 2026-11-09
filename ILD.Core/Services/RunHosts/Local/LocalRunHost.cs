@@ -104,9 +104,35 @@ public sealed class LocalRunHost : IRunHost
 
     private static ProcessStartInfo WithEnvironment(ProcessStartInfo psi, IReadOnlyDictionary<string, string>? environment)
     {
+        WithUserTools(psi);
         foreach (var (name, value) in environment ?? new Dictionary<string, string>())
             psi.Environment[name] = value;
         return psi;
+    }
+
+    /// <summary>
+    /// What a run container gives every command when it is made (<see cref="Tools.RunToolEnvironment.For"/>), here: a
+    /// home, an npm prefix in it, so <c>npm install -g</c> needs no write access to the Node install, and its bin first
+    /// on <c>PATH</c>, so what was installed there is found. The caller's own values are applied after, so they win.
+    /// </summary>
+    internal static void WithUserTools(ProcessStartInfo psi)
+    {
+        var home = psi.Environment.TryGetValue("HOME", out var inherited) && !string.IsNullOrWhiteSpace(inherited)
+            ? inherited
+            // Never a fixed path in world-writable /tmp: npm would read a planted ~/.npmrc.
+            : AgentIsolation.CreatePrivateDirectory("home");
+        var local = Path.Combine(home, ".local");
+        var bin = Path.Combine(local, "bin");
+        // Made up front: a tool that walks PATH (Claude Code, for one) warns about an entry that is not there.
+        Directory.CreateDirectory(bin);
+
+        psi.Environment["HOME"] = home;
+        psi.Environment["NPM_CONFIG_PREFIX"] = local;
+        // First even when ILD's own PATH already ends with it, so a tool the command installed beats one ILD's image ships.
+        var rest = (psi.Environment.TryGetValue("PATH", out var current) ? current ?? "" : "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(segment => !string.Equals(segment, bin, StringComparison.Ordinal));
+        psi.Environment["PATH"] = string.Join(Path.PathSeparator, rest.Prepend(bin));
     }
 
     private Action<LocalRunProcess> Forget(Guid ownerId) => process =>

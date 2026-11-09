@@ -191,20 +191,23 @@ public class WorktreePreviewServiceInstallTests : IDisposable
     }
 
     [Fact]
-    public async Task InstallAsync_runs_its_steps_with_npm_global_bin_ahead_of_the_supplied_path()
+    public async Task InstallAsync_runs_its_local_steps_with_npm_global_bin_first_and_the_prefix_in_home()
     {
         // The preview's own children get the directory first (see the ordering test
-        // above for why the host PATH gets it last).
-        var environment = SuppliedEnvironment(out var expectedBin).WithRealPath();
-        var suppliedPath = environment.Get("PATH");
-        WriteConfig("printf '%s' \\\"$HOME|$PATH\\\" > env.marker");
-        var service = BuildService(environment);
+        // above for why the host PATH gets it last). The local host puts it there, from
+        // the HOME the step inherits: the preview service leaves it to the host.
+        var home = Environment.GetEnvironmentVariable("HOME");
+        Assert.False(string.IsNullOrWhiteSpace(home));
+        var expectedBin = Path.Combine(home!, ".local", "bin");
+        WriteConfig("printf '%s' \\\"$HOME|$NPM_CONFIG_PREFIX|$PATH\\\" > env.marker");
+        var service = BuildService();
 
         await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
 
         var seen = File.ReadAllText(Path.Combine(_worktree, "env.marker")).Split('|');
-        Assert.Equal(environment.Get("HOME"), seen[0]);
-        Assert.Equal($"{expectedBin}{Path.PathSeparator}{suppliedPath}", seen[1]);
+        Assert.Equal(home, seen[0]);
+        Assert.Equal(Path.Combine(home!, ".local"), seen[1]);
+        Assert.Equal(expectedBin, seen[2].Split(Path.PathSeparator)[0]);
     }
 
     [Fact]
