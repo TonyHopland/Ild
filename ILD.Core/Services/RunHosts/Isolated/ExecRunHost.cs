@@ -812,6 +812,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         if (!ChatToolchains || RunPaths.ChatOf(chatPath) is not { } chat) return;
 
+        // The installer runs in another container, so nothing in the chat's own would show this work.
+        using var hold = HoldChat(chatPath);
+
         // Every chat shares one container, so a chat gets the shared toolchains only: what only a repository's own runs hold stays out.
         var plan = RunToolDetector.Resolve(basePath);
         foreach (var skipped in plan.RepositoryTools)
@@ -882,6 +885,137 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task<bool> EntryExistsAsync(string path, CancellationToken ct = default)
         => (await RunScriptAsync(OwnerFor(path), "[ -e \"$1\" ] || [ -L \"$1\" ]", [path], ct)).Success;
 
+    // -- Chat idleness -----------------------------------------------------------
+
+    /// <summary>The clock the chat's idleness is measured on.</summary>
+    internal TimeProvider Time { get; init; } = TimeProvider.System;
+
+    /// <summary>How long the chat container may be idle before <see cref="ReapIdleChatAsync"/> removes it; zero never does.</summary>
+    protected virtual TimeSpan ChatIdleTimeout => TimeSpan.Zero;
+
+    // Open chat work: execs (turns, commands, previews, clones) and holds. The reaper sets _chatRemoving, then reads the count;
+    // work adds to the count, then reads the flag (both Interlocked), so one of them always sees the other.
+    private int _chatOpen;
+    private long _chatLast;
+    private int _chatRemoving;
+    private int _removedForIdle;
+
+    /// <summary>Whether the reaper is about to remove, or removing, the chat container: <c>EnsureChat*</c> then waits for the gate instead of trusting what it sees.</summary>
+    protected bool ChatBeingRemoved => Volatile.Read(ref _chatRemoving) != 0;
+
+    /// <summary>Whether the chat container was removed for idleness and has not come back since; reads once.</summary>
+    protected bool TakeRemovedForIdle() => Interlocked.Exchange(ref _removedForIdle, 0) != 0;
+
+    private void BeginChatWork()
+    {
+        Interlocked.Increment(ref _chatOpen);
+        Interlocked.Exchange(ref _chatLast, Time.GetUtcNow().UtcTicks);
+    }
+
+    private void EndChatWork()
+    {
+        // Stamped first, so the reaper never sees no open work together with a stale time.
+        Interlocked.Exchange(ref _chatLast, Time.GetUtcNow().UtcTicks);
+        Interlocked.Decrement(ref _chatOpen);
+    }
+
+    // Idle: nothing open, and the last start or end was at least the timeout ago. The first look only starts the clock, for a
+    // container that was there before this ILD did.
+    private bool IsChatIdle()
+    {
+        var timeout = ChatIdleTimeout;
+        if (timeout <= TimeSpan.Zero || Volatile.Read(ref _chatOpen) != 0) return false;
+        var now = Time.GetUtcNow().UtcTicks;
+        if (Interlocked.CompareExchange(ref _chatLast, now, 0) == 0) return false;
+        return now - Interlocked.Read(ref _chatLast) >= timeout.Ticks;
+    }
+
+    /// <summary>
+    /// Removes the chat container or pod when it has been idle for the timeout; its volume or claim and network stay. Never
+    /// touches a run's container or pod. Does nothing by default.
+    /// </summary>
+    public virtual Task ReapIdleChatAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <summary>The reaper's check and removal, under the chat's <paramref name="gate"/> so it never interleaves with <c>EnsureChat*</c>.</summary>
+    protected async Task ReapChatAsync(SemaphoreSlim gate, string name, Func<CancellationToken, Task> remove, CancellationToken ct)
+    {
+        if (!IsChatIdle()) return;
+
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (!IsChatIdle() || !await RunExistsAsync(new ExecOwner(Guid.Empty, Chat: true), ct)) return;
+
+            Interlocked.Exchange(ref _chatRemoving, 1);
+            try
+            {
+                // Work that began after the check above, and before the flag, is seen here.
+                if (!IsChatIdle()) return;
+                await remove(ct);
+                Interlocked.Exchange(ref _removedForIdle, 1);
+                Logger?.LogInformation("Removed the chat {Noun} {Name}: it was idle for {Minutes} minutes; the next chat makes it again", Noun, name, (int)ChatIdleTimeout.TotalMinutes);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _chatRemoving, 0);
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>Counts the chat that holds <paramref name="chatPath"/> as busy until the result is disposed.</summary>
+    public IDisposable HoldChat(string chatPath)
+    {
+        if (!HostsChats) return ChatWork.None;
+        BeginChatWork();
+        return new ChatWork(EndChatWork);
+    }
+
+    private sealed class ChatWork(Action? end) : IDisposable
+    {
+        public static readonly ChatWork None = new(null);
+        private Action? _end = end;
+
+        public void Dispose() => Interlocked.Exchange(ref _end, null)?.Invoke();
+    }
+
+    // Counts one chat exec as open until its command ends or the stream is disposed, whichever comes first.
+    private sealed class ChatExecStream : IExecStream
+    {
+        private readonly IExecStream _inner;
+        private readonly ChatWork _work;
+
+        public ChatExecStream(IExecStream inner, ChatWork work)
+        {
+            _inner = inner;
+            _work = work;
+            Status = Track(inner.Status);
+        }
+
+        public Stream Stdout => _inner.Stdout;
+        public Stream? Stderr => _inner.Stderr;
+        public Task<int?> Status { get; }
+
+        private async Task<int?> Track(Task<int?> status)
+        {
+            try { return await status.ConfigureAwait(false); }
+            finally { _work.Dispose(); }
+        }
+
+        public Task WriteStdinAsync(ReadOnlyMemory<byte> data, CancellationToken ct) => _inner.WriteStdinAsync(data, ct);
+        public Task CloseStdinAsync(CancellationToken ct = default) => _inner.CloseStdinAsync(ct);
+        public Task ResizeAsync(int cols, int rows, CancellationToken ct = default) => _inner.ResizeAsync(cols, rows, ct);
+
+        public void Dispose()
+        {
+            _inner.Dispose();
+            _work.Dispose();
+        }
+    }
+
     // -- Exec --------------------------------------------------------------------
 
     protected ExecOwner OwnerFor(string path)
@@ -891,13 +1025,27 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     private protected async Task<IExecStream> OpenExecAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
     {
+        // Counted before the stream is opened, since opening it is what makes the chat container when it is missing.
+        ChatWork? work = null;
+        if (owner.Chat)
+        {
+            BeginChatWork();
+            work = new ChatWork(EndChatWork);
+        }
         try
         {
-            return await OpenExecStreamAsync(owner, command, stdin, tty, ct);
+            var stream = await OpenExecStreamAsync(owner, command, stdin, tty, ct);
+            return work is null ? stream : new ChatExecStream(stream, work);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            work?.Dispose();
             throw new InvalidOperationException($"could not run a command in the {Noun} of {(owner.Chat ? "chat" : "run")} {owner.Id:N}: {ex.Message}", ex);
+        }
+        catch
+        {
+            work?.Dispose();
+            throw;
         }
     }
 

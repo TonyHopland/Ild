@@ -58,8 +58,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         _ => null,
     }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
-    private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null)
-        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }) };
+    private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null)
+        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { Time = time ?? TimeProvider.System, ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }) };
 
     private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
 
@@ -1348,6 +1348,183 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var kill = _api.Execs.Last();
         Assert.Equal(ChatPodName, kill.Pod);
         Assert.Equal(ExecRunHost.KillAllScript, kill.Command[2]);
+    }
+
+    // -- Idle chat pod -----------------------------------------------------------
+
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(30);
+
+    private (KubernetesRunHost Host, ManualTimeProvider Clock) IdleHost(TimeSpan? timeout = null)
+    {
+        var clock = new ManualTimeProvider();
+        return (NewHost(Options() with { ChatIdleTimeout = timeout ?? IdleTimeout }, time: clock), clock);
+    }
+
+    [Fact]
+    public async Task An_idle_chat_pod_is_deleted_after_the_timeout_and_its_claim_and_policy_stay_and_the_next_chat_makes_it_again()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        var chat = Guid.NewGuid();
+        await host.CreateChatFolderAsync(chat, "/unused", ct);
+
+        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
+        await host.ReapIdleChatAsync(ct);
+        Assert.Contains(ChatPodName, _api.Names("pods"));
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await host.ReapIdleChatAsync(ct);
+
+        Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
+        Assert.Contains(ChatPodName, _api.Names("persistentvolumeclaims"));
+        Assert.Contains(ChatPodName, _api.Names("networkpolicies"));
+        Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("Removed the chat pod", StringComparison.Ordinal));
+
+        Assert.True(await host.DirectoryExistsAsync(ChatFolder(chat), ct));
+
+        Assert.Contains(ChatPodName, _api.Names("pods"));
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
+        Assert.Equal(1, _api.Created.Count(c => c == $"persistentvolumeclaims/{ChatPodName}"));
+        Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("is back", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_chat_pod_is_not_deleted_while_a_chat_command_runs_or_a_chat_hold_is_open_and_the_time_counts_from_when_they_end()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        var chat = Guid.NewGuid();
+        await host.CreateChatFolderAsync(chat, "/unused", ct);
+        var release = new TaskCompletionSource();
+        _api.OnExec = async e =>
+        {
+            await release.Task;
+            await e.ExitAsync(0);
+        };
+
+        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "npm", "run", "dev"), chat), ct);
+        clock.Advance(IdleTimeout * 2);
+        await host.ReapIdleChatAsync(ct);
+        Assert.Contains(ChatPodName, _api.Names("pods"));
+
+        release.SetResult();
+        await process.WaitForExitAsync(ct);
+        using (host.HoldChat(ChatFolder(chat)))
+        {
+            clock.Advance(IdleTimeout * 2);
+            await host.ReapIdleChatAsync(ct);
+            Assert.Contains(ChatPodName, _api.Names("pods"));
+        }
+
+        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
+        await host.ReapIdleChatAsync(ct);
+        Assert.Contains(ChatPodName, _api.Names("pods"));
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await host.ReapIdleChatAsync(ct);
+        Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
+    }
+
+    [Fact]
+    public async Task A_chat_that_starts_while_the_reaper_deletes_the_chat_pod_waits_for_it_and_gets_a_new_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        var chat = Guid.NewGuid();
+        await host.CreateChatFolderAsync(chat, "/unused", ct);
+        var deleting = new TaskCompletionSource();
+        var proceed = new TaskCompletionSource();
+        _api.BeforeDelete = async what =>
+        {
+            if (what == $"pods/{ChatPodName}" && !deleting.Task.IsCompleted)
+            {
+                deleting.SetResult();
+                await proceed.Task;
+            }
+        };
+        clock.Advance(IdleTimeout);
+
+        var reaping = host.ReapIdleChatAsync(ct);
+        await deleting.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        var starting = host.DirectoryExistsAsync(ChatFolder(chat), ct);
+        await Task.Delay(100, ct);
+        Assert.False(starting.IsCompleted);
+        proceed.SetResult();
+        await reaping;
+
+        Assert.True(await starting);
+        Assert.Contains(ChatPodName, _api.Names("pods"));
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
+    }
+
+    [Fact]
+    public async Task Run_pods_are_never_touched_by_the_idle_deletion_whatever_state_their_run_is_in()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        var running = Guid.NewGuid();
+        var awaitingHuman = Guid.NewGuid();
+        var parked = Guid.NewGuid();
+        _api.Seed("pods", Name(running), Instance, running, podPhase: "Running");
+        _api.Seed("pods", Name(awaitingHuman), Instance, awaitingHuman, podPhase: "Running");
+        _api.Seed("pods", Name(parked), Instance, parked, podPhase: "Succeeded");
+        foreach (var run in new[] { running, awaitingHuman, parked })
+            _api.Seed("persistentvolumeclaims", Name(run), Instance, run);
+        var execs = _api.Execs.Count;
+
+        clock.Advance(IdleTimeout * 10);
+        await host.ReapIdleChatAsync(ct);
+
+        Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
+        Assert.Equal(new[] { Name(awaitingHuman), Name(parked), Name(running) }.Order(), _api.Names("pods").Order());
+        Assert.Equal([$"pods/{ChatPodName}"], _api.Deleted);
+        Assert.Equal(execs, _api.Execs.Count);
+    }
+
+    [Fact]
+    public async Task The_chat_pod_stays_when_the_idle_timeout_is_off()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost(TimeSpan.Zero);
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+
+        clock.Advance(TimeSpan.FromDays(30));
+        await host.ReapIdleChatAsync(ct);
+
+        Assert.Contains(ChatPodName, _api.Names("pods"));
+        Assert.Empty(_api.Deleted);
+    }
+
+    [Fact]
+    public async Task The_sweep_deletes_an_idle_chat_pod()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+
+        clock.Advance(IdleTimeout);
+        await sweeper.SweepAsync(host, ct);
+
+        Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
+    }
+
+    [Fact]
+    public void The_idle_timeout_is_thirty_minutes_unless_set_and_zero_turns_it_off()
+    {
+        KubernetesRunHostOptions From(string? minutes) => KubernetesRunHostOptions.From(name => name switch
+        {
+            "ILD_API_URL" => "http://ild.example:8080",
+            "ILD_K8S_RUNNER_IMAGE" => "img",
+            "ILD_CHAT_IDLE_TIMEOUT_MINUTES" => minutes,
+            _ => null,
+        });
+
+        Assert.Equal(TimeSpan.FromMinutes(30), From(null).ChatIdleTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(5), From("5").ChatIdleTimeout);
+        Assert.Equal(TimeSpan.Zero, From("0").ChatIdleTimeout);
+        Assert.Throws<InvalidOperationException>(() => From("-1"));
     }
 
     [Fact]

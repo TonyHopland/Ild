@@ -24,6 +24,19 @@ public static class RunHostOptions
     /// </summary>
     public const string ToolchainsSetting = "ILD_RUN_TOOLCHAINS";
 
+    /// <summary>Minutes the shared chat container or pod may sit idle before it is removed; <c>0</c> turns the removal off.</summary>
+    public const string ChatIdleTimeoutSetting = "ILD_CHAT_IDLE_TIMEOUT_MINUTES";
+
+    /// <summary><see cref="ChatIdleTimeoutSetting"/>: 30 minutes when unset, <see cref="TimeSpan.Zero"/> when off.</summary>
+    /// <exception cref="InvalidOperationException">The value is not a whole number of minutes, 0 or more.</exception>
+    public static TimeSpan ChatIdleTimeoutOf(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return TimeSpan.FromMinutes(30);
+        return int.TryParse(value.Trim(), out var minutes) && minutes >= 0
+            ? TimeSpan.FromMinutes(minutes)
+            : throw new InvalidOperationException($"{ChatIdleTimeoutSetting} is '{value}'; it must be a whole number of minutes, or 0 to never remove the chat container.");
+    }
+
     /// <summary><see cref="ToolchainsSetting"/>: on when unset.</summary>
     /// <exception cref="InvalidOperationException">The value is neither on nor off.</exception>
     public static bool ToolchainsOn(string? value)

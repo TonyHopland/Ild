@@ -533,6 +533,12 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     // -- Chats -------------------------------------------------------------------
 
+    protected override TimeSpan ChatIdleTimeout => _options.ChatIdleTimeout;
+
+    // By its name, never by what ILD manages: a run's container, parked or waiting for a human, is not the chat's to reap.
+    public override Task ReapIdleChatAsync(CancellationToken ct = default)
+        => ReapChatAsync(_chatGate, ChatName, token => RemoveContainerAsync(ChatName, "the chat container", token), ct);
+
     /// <summary>The chat container, its volume and its network: one of each for the instance, kept running.</summary>
     internal string ChatName => $"ild-chat-{_options.Instance}";
 
@@ -549,7 +555,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     /// <summary>The name of the chat container, made and started first when it is missing or stopped. The volume keeps the chats' folders through that.</summary>
     private async Task<string> EnsureChatContainerAsync(CancellationToken ct)
     {
-        if (await ChatContainerRunningAsync(ct)) return ChatName;
+        if (!ChatBeingRemoved && await ChatContainerRunningAsync(ct)) return ChatName;
 
         await _chatGate.WaitAsync(ct);
         try
@@ -567,6 +573,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             await CreateChatContainerAsync(ild, ct);
             await _api.PostAsync($"/containers/{Escaped(ChatName)}/start", null, ct, HttpStatusCode.NotModified);
             await WaitReadyAsync(ChatName, "the chats", ct);
+            if (TakeRemovedForIdle()) Logger?.LogInformation("The chat container {Name} is back, made for a chat after it was removed for idleness", ChatName);
             return ChatName;
         }
         finally

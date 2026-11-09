@@ -164,6 +164,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
             basePath = path!;
         }
 
+        using var hold = _host.HoldChat(job.ScratchPath);
         try
         {
             return await FillChatCloneAsync(job, basePath, ct);

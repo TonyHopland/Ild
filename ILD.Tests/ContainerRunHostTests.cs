@@ -61,9 +61,10 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             _ => null,
         }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
-    private ContainerRunHost NewHost(ContainerRunHostOptions options, IReadOnlyList<RunAgent>? agents = null)
+    private ContainerRunHost NewHost(ContainerRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null)
         => new(options, new ProcessRunner(), _log)
         {
+            Time = time ?? TimeProvider.System,
             ReadyPollInterval = TimeSpan.FromMilliseconds(10),
             ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
             Agents = () => agents ?? [],
@@ -2149,6 +2150,190 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.Empty(_api.Execs);
         Assert.DoesNotContain(ChatContainer, _api.Containers());
+    }
+
+    // -- Idle chat container -----------------------------------------------------
+
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(30);
+
+    private (ContainerRunHost Host, ManualTimeProvider Clock) IdleHost(TimeSpan? timeout = null)
+    {
+        var clock = new ManualTimeProvider();
+        return (NewHost(Options() with { ChatIdleTimeout = timeout ?? IdleTimeout }, time: clock), clock);
+    }
+
+    [Fact]
+    public async Task An_idle_chat_container_is_removed_after_the_timeout_and_its_volume_and_network_stay_and_the_next_chat_makes_it_again()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        var chat = Guid.NewGuid();
+        await host.CreateChatFolderAsync(chat, "/unused", ct);
+
+        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
+        await host.ReapIdleChatAsync(ct);
+        Assert.Contains(ChatContainer, _api.Containers());
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await host.ReapIdleChatAsync(ct);
+
+        Assert.DoesNotContain(ChatContainer, _api.Containers());
+        Assert.Contains(ChatContainer, _api.Volumes());
+        Assert.Contains(ChatContainer, _api.Networks());
+        Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("Removed the chat container", StringComparison.Ordinal));
+
+        Assert.True(await host.DirectoryExistsAsync(ChatFolder(chat), ct));
+
+        Assert.Contains(ChatContainer, _api.Containers());
+        Assert.Equal(2, _api.Created.Count(c => c == $"containers/{ChatContainer}"));
+        Assert.Equal(1, _api.Created.Count(c => c == $"volumes/{ChatContainer}"));
+        Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("is back", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_chat_container_is_not_removed_while_a_chat_command_runs_or_a_chat_hold_is_open_and_the_time_counts_from_when_they_end()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        var chat = Guid.NewGuid();
+        await host.CreateChatFolderAsync(chat, "/unused", ct);
+        var release = new TaskCompletionSource();
+        _api.OnExec = async e =>
+        {
+            await release.Task;
+            await e.ExitAsync(0);
+        };
+
+        var running = host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "npm", "run", "dev"), chat), ct);
+        using var process = await running;
+        clock.Advance(IdleTimeout * 2);
+        await host.ReapIdleChatAsync(ct);
+        Assert.Contains(ChatContainer, _api.Containers());
+
+        release.SetResult();
+        await process.WaitForExitAsync(ct);
+        using (host.HoldChat(ChatFolder(chat)))
+        {
+            clock.Advance(IdleTimeout * 2);
+            await host.ReapIdleChatAsync(ct);
+            Assert.Contains(ChatContainer, _api.Containers());
+        }
+
+        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
+        await host.ReapIdleChatAsync(ct);
+        Assert.Contains(ChatContainer, _api.Containers());
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await host.ReapIdleChatAsync(ct);
+        Assert.DoesNotContain(ChatContainer, _api.Containers());
+    }
+
+    [Fact]
+    public async Task A_chat_that_starts_while_the_reaper_removes_the_chat_container_waits_for_it_and_gets_a_new_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        var chat = Guid.NewGuid();
+        await host.CreateChatFolderAsync(chat, "/unused", ct);
+        var removing = new TaskCompletionSource();
+        var proceed = new TaskCompletionSource();
+        _api.BeforeRequest = async request =>
+        {
+            if (request.StartsWith("DELETE", StringComparison.Ordinal) && request.Contains($"/containers/{ChatContainer}", StringComparison.Ordinal) && !removing.Task.IsCompleted)
+            {
+                removing.SetResult();
+                await proceed.Task;
+            }
+        };
+        clock.Advance(IdleTimeout);
+
+        var reaping = host.ReapIdleChatAsync(ct);
+        await removing.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        var starting = host.DirectoryExistsAsync(ChatFolder(chat), ct);
+        await Task.Delay(100, ct);
+        Assert.False(starting.IsCompleted);
+        proceed.SetResult();
+        await reaping;
+
+        Assert.True(await starting);
+        Assert.Contains(ChatContainer, _api.Containers());
+        Assert.Equal(2, _api.Created.Count(c => c == $"containers/{ChatContainer}"));
+    }
+
+    [Fact]
+    public async Task Run_containers_are_never_touched_by_the_idle_removal_whatever_state_their_run_is_in()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        var running = Guid.NewGuid();
+        var awaitingHuman = Guid.NewGuid();
+        var parked = Guid.NewGuid();
+        foreach (var run in new[] { running, awaitingHuman, parked }) SeedRun(run, Instance);
+        _api.Stop(Name(parked));
+        var execs = _api.Execs.Count;
+        var requests = _api.Requests.Count;
+
+        clock.Advance(IdleTimeout * 10);
+        await host.ReapIdleChatAsync(ct);
+
+        Assert.DoesNotContain(ChatContainer, _api.Containers());
+        foreach (var run in new[] { running, awaitingHuman, parked })
+        {
+            Assert.Contains(Name(run), _api.Containers());
+            Assert.Contains(Name(run), _api.Volumes());
+            Assert.DoesNotContain(_api.Requests.Skip(requests), r => r.Contains(Name(run), StringComparison.Ordinal));
+        }
+        Assert.True(_api.IsStopped(Name(parked)));
+        Assert.Equal(execs, _api.Execs.Count);
+        Assert.DoesNotContain($"containers/{Name(running)}", _api.Deleted);
+    }
+
+    [Fact]
+    public async Task The_chat_container_stays_when_the_idle_timeout_is_off()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost(TimeSpan.Zero);
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+
+        clock.Advance(TimeSpan.FromDays(30));
+        await host.ReapIdleChatAsync(ct);
+
+        Assert.Contains(ChatContainer, _api.Containers());
+        Assert.DoesNotContain($"containers/{ChatContainer}", _api.Deleted);
+    }
+
+    [Fact]
+    public async Task The_sweep_removes_an_idle_chat_container()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (host, clock) = IdleHost();
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+
+        clock.Advance(IdleTimeout);
+        await sweeper.SweepAsync(host, ct);
+
+        Assert.DoesNotContain(ChatContainer, _api.Containers());
+    }
+
+    [Fact]
+    public void The_idle_timeout_is_thirty_minutes_unless_set_and_zero_turns_it_off()
+    {
+        ContainerRunHostOptions From(string? minutes) => ContainerRunHostOptions.From(name => name switch
+        {
+            "ILD_API_URL" => "http://ild.example:8080",
+            "ILD_CONTAINER_SOCKET" => "/var/run/docker.sock",
+            "ILD_CONTAINER_RUNNER_IMAGE" => "img",
+            "ILD_CHAT_IDLE_TIMEOUT_MINUTES" => minutes,
+            _ => null,
+        });
+
+        Assert.Equal(TimeSpan.FromMinutes(30), From(null).ChatIdleTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(5), From("5").ChatIdleTimeout);
+        Assert.Equal(TimeSpan.Zero, From("0").ChatIdleTimeout);
+        Assert.Throws<InvalidOperationException>(() => From("-1"));
+        Assert.Throws<InvalidOperationException>(() => From("soon"));
     }
 
     [Fact]

@@ -132,6 +132,8 @@ public class ApiFactory : WebApplicationFactory<Program>
             services.RemoveForwardedHostedService<ILD.Core.Services.Implementations.ChatScheduleScheduler>();
             services.RemoveHostedService<ILD.Core.Services.Implementations.SessionSnapshotMigrationService>();
             services.RemoveHostedService<ILD.Core.Services.Implementations.ClaudeProjectFolderSweeper>();
+            // Its startup read of the AI providers runs detached, on the one shared connection, beside the first request.
+            services.RemoveForwardedHostedService<ILD.Core.Services.Implementations.ManagedAgentProvisioner>();
             services.ReplaceSingleton(TestClaudeProjectFolders.Under(_dataRoot));
             services.GuardExternalServices();
             services.ReplaceSingleton<IAgentAdapterRegistry>(new FixedAgentAdapterRegistry());
