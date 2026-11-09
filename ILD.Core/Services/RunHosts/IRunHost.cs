@@ -75,10 +75,9 @@ public interface IRunHost
     // -- Files -------------------------------------------------------------------
 
     /// <summary>
-    /// The text of the file, or null when there is none. Synchronous for the one caller that cannot await, the prompt
-    /// template renderer; a host that is not on this machine blocks the caller for the read.
+    /// The text of the file, or null when there is none.
     /// </summary>
-    string? ReadTextFile(string path);
+    Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default);
 
     /// <summary>The file opened to read while the agent may still change or delete it (shared with writers); null when it is a directory or not there.</summary>
     Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default);

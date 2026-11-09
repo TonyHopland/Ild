@@ -47,6 +47,8 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     /// <summary>What a command does; every command ends at once with code 0 until this is set.</summary>
     public Func<FakeExec, Task> OnExec { get; set; } = exec => exec.ExitAsync(0);
 
+    private readonly HashSet<string> _checkedOut = [];
+
     public List<V1StorageClass> StorageClasses { get; } = [];
 
     /// <summary>How many times a pod reads as Pending before it is Running.</summary>
@@ -283,7 +285,18 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         exec.Protocol = socket.SubProtocol ?? string.Empty;
         lock (_gate) Execs.Add(exec);
         var receive = exec.ReceiveAsync();
-        try { await OnExec(exec); }
+        try
+        {
+            // A real pod has a checkout once a clone has run in it, and not before.
+            if (exec.Command.Any(c => c.Contains("$1/.git", StringComparison.Ordinal)))
+                await exec.ExitAsync(_checkedOut.Contains(pod) ? 0 : 1);
+            else
+            {
+                await OnExec(exec);
+                if (exec.LastExitCode == 0 && exec.Command.Any(c => c.Contains("git clone", StringComparison.Ordinal)))
+                    lock (_gate) _checkedOut.Add(pod);
+            }
+        }
         finally
         {
             await exec.CloseAsync();
@@ -329,8 +342,12 @@ internal sealed class FakeExec(string pod, IReadOnlyList<string> command, bool w
 
     public Task WriteStderrAsync(string text) => SendAsync(2, Encoding.UTF8.GetBytes(text));
 
+    /// <summary>The code the command exited with; null while it has not.</summary>
+    public int? LastExitCode { get; private set; }
+
     public async Task ExitAsync(int code)
     {
+        LastExitCode = code;
         var status = code == 0
             ? "{\"status\":\"Success\"}"
             : JsonSerializer.Serialize(new

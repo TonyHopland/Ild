@@ -21,6 +21,8 @@ internal sealed class DockerApiClient : IDisposable
 {
     private const string ApiVersion = "v1.41";
 
+    private static readonly TimeSpan HandshakeLimit = TimeSpan.FromSeconds(45);
+
     private readonly string _socket;
     private readonly HttpClient _http;
 
@@ -86,14 +88,15 @@ internal sealed class DockerApiClient : IDisposable
     public Task<JsonNode?> PostAsync(string path, object? body, CancellationToken ct, params HttpStatusCode[] tolerate)
         => SendAsync(HttpMethod.Post, path, body, ct, tolerate);
 
-    /// <summary>The engine's own info as <c>/info</c> answers it; the Podman-only <c>/libpod/info</c> when <paramref name="libpod"/>. Null when the endpoint is not there.</summary>
-    public async Task<JsonNode?> InfoAsync(bool libpod, CancellationToken ct)
+    /// <summary>The engine's own info as <c>/info</c> answers it; the Podman-only <c>/libpod/info</c> when <paramref name="libpod"/>. The status says what the engine answered, and the body is null unless it was a JSON success.</summary>
+    public async Task<(HttpStatusCode Status, JsonNode? Body)> InfoAsync(bool libpod, CancellationToken ct)
     {
         // Podman serves its own API under a version prefix only: an unversioned /libpod/info is a 404.
         using var request = new HttpRequestMessage(HttpMethod.Get, libpod ? $"/{ApiVersion}/libpod/info" : $"/{ApiVersion}/info");
         using var response = await _http.SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode) return null;
-        return JsonNode.Parse(await response.Content.ReadAsStringAsync(ct));
+        if (!response.IsSuccessStatusCode) return (response.StatusCode, null);
+        try { return (response.StatusCode, JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))); }
+        catch (JsonException) { return (response.StatusCode, null); }
     }
 
     /// <summary>The query value of an object filter: <c>{"label":["a=b"]}</c>.</summary>
@@ -124,21 +127,24 @@ internal sealed class DockerApiClient : IDisposable
     /// </summary>
     public async Task<(Socket Socket, NetworkStream Network, Stream Reader)> StartExecAsync(string execId, bool tty, CancellationToken ct)
     {
-        var socket = await ConnectAsync(ct);
+        // Connecting, sending and reading the head are bounded; the stream handed back is not.
+        using var handshake = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        handshake.CancelAfter(HandshakeLimit);
+        var socket = await ConnectAsync(handshake.Token);
         try
         {
             var network = new NetworkStream(socket, ownsSocket: false);
             var body = JsonSerializer.Serialize(new { Detach = false, Tty = tty });
             var head = $"POST /{ApiVersion}/exec/{Uri.EscapeDataString(execId)}/start HTTP/1.1\r\nHost: docker\r\nContent-Type: application/json\r\n"
                 + $"Connection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}";
-            await network.WriteAsync(Encoding.UTF8.GetBytes(head), ct);
+            await network.WriteAsync(Encoding.UTF8.GetBytes(head), handshake.Token);
 
             var reader = new BufferedStream(network, 16 * 1024);
-            var (status, headers) = await ReadHeadAsync(reader, ct);
+            var (status, headers) = await ReadHeadAsync(reader, handshake.Token);
             if (status is not (101 or 200))
             {
                 var text = headers.TryGetValue("content-length", out var length) && int.TryParse(length, out var count) && count is > 0 and < 65536
-                    ? await ReadTextAsync(reader, count, ct)
+                    ? await ReadTextAsync(reader, count, handshake.Token)
                     : string.Empty;
                 throw new DockerApiException((HttpStatusCode)status, $"starting the exec: {MessageOf(text) ?? status.ToString()}");
             }

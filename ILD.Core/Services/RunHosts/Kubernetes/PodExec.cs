@@ -76,7 +76,7 @@ internal sealed class PodExec : IExecStream
         return _demuxer.Write(ChannelIndex.Resize, payload, 0, payload.Length, ct);
     }
 
-    private static async Task<int?> ReadStatusAsync(Stream error)
+    internal static async Task<int?> ReadStatusAsync(Stream error)
     {
         try
         {
@@ -84,7 +84,7 @@ internal sealed class PodExec : IExecStream
             var json = await reader.ReadToEndAsync();
             return json.Length == 0 ? null : ExitCodeOf(json);
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException or OperationCanceledException)
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException or OperationCanceledException or JsonException)
         {
             return null;
         }

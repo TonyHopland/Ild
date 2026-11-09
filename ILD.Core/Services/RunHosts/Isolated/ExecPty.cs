@@ -43,24 +43,35 @@ internal sealed class ExecPty : IPtyConnection
 
     private async Task PumpAsync()
     {
-        var buffer = new byte[16 * 1024];
+        int? status = null;
         try
         {
-            int read;
-            while ((read = await _exec.Stdout.ReadAsync(buffer)) > 0)
-                _output.Append(buffer.AsSpan(0, read));
-        }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException)
-        {
-            // Read as the end of the terminal.
-        }
+            var buffer = new byte[16 * 1024];
+            try
+            {
+                int read;
+                while ((read = await _exec.Stdout.ReadAsync(buffer)) > 0)
+                    _output.Append(buffer.AsSpan(0, read));
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException)
+            {
+                // Read as the end of the terminal.
+            }
 
-        var status = await _exec.Status;
-        var code = status ?? ExecRunProcess.ConnectionLostExitCode;
-        _exited.TrySetResult(code);
-        _output.Complete();
-        if (Interlocked.Exchange(ref _exitRaised, 1) == 0)
-            ProcessExited?.Invoke(this, ExitedWith(code));
+            status = await _exec.Status;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // A status that cannot be read is a lost connection.
+        }
+        finally
+        {
+            var code = status ?? ExecRunProcess.ConnectionLostExitCode;
+            _exited.TrySetResult(code);
+            _output.Complete();
+            if (Interlocked.Exchange(ref _exitRaised, 1) == 0)
+                ProcessExited?.Invoke(this, ExitedWith(code));
+        }
     }
 
     private sealed class OutputStream(IExecStream exec) : Stream

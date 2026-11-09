@@ -301,7 +301,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var home = await RunScriptAsync(owner, HomeScript, [RunPaths.HomeDirectory(owner)], ct);
         if (!home.Success)
             throw new InvalidOperationException($"could not make the run's home in its {Noun}: {home.StdErr.Trim()}");
-        await PopulateAsync(owner, request, RunPaths.WorkingDirectory(owner), ct);
+        // A retry reaches an environment that already holds the run's checkout, with commits the bundle does not have:
+        // cloning into it would fail and checking the branch out again would throw those commits away.
+        var workingDirectory = RunPaths.WorkingDirectory(owner);
+        if ((await RunScriptAsync(owner, "[ -e \"$1/.git\" ]", [workingDirectory], ct)).Success) return;
+        await PopulateAsync(owner, request, workingDirectory, ct);
     }
 
     // The base repository's branches come in as a bundle, the same way a bundle from the mirror does: the run holds
@@ -541,15 +545,30 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public Task<bool> IsRunCloneAsync(string path, CancellationToken ct = default)
         => Task.FromResult(RunPaths.OwnerOf(path) is not null);
 
-    public Task<RunHostOutput> RunToolAsync(
+    public async Task<RunHostOutput> RunToolAsync(
         string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default)
-        => ExecAsync(OwnerFor(runPath), [fileName, .. arguments], streams?.StandardInputFrom, streams?.StandardOutputTo, ct);
+    {
+        // Under the wrapper like a started command, so a cancelled tool (git in the run) is killed rather than left running.
+        var owner = OwnerFor(runPath);
+        var id = $"{owner.Id:N}/{Guid.NewGuid():N}";
+        try
+        {
+            return await ExecAsync(owner, ["/bin/sh", "-c", CommandWrapper, "sh", "/", id, fileName, .. arguments], streams?.StandardInputFrom, streams?.StandardOutputTo, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            try { await KillCommandAsync(owner, id, limit.Token); }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { Logger?.LogWarning(ex, "A cancelled tool in the run's {Noun} could not be killed", Noun); }
+            throw;
+        }
+    }
 
     // -- Files -------------------------------------------------------------------
 
-    public string? ReadTextFile(string path)
+    public async Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default)
     {
-        var result = RunScriptAsync(OwnerFor(path), "[ -f \"$1\" ] || exit 3; cat -- \"$1\"", [path], CancellationToken.None).GetAwaiter().GetResult();
+        var result = await RunScriptAsync(OwnerFor(path), "[ -f \"$1\" ] || exit 3; cat -- \"$1\"", [path], ct);
         return result.Success ? result.StdOut : null;
     }
 

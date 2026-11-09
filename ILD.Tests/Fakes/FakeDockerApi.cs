@@ -67,6 +67,19 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     /// <summary>What Podman's <c>/libpod/info</c> answers; null answers 404.</summary>
     public JsonNode? LibpodInfo { get; set; }
 
+    private readonly HashSet<string> _checkedOut = [];
+
+    /// <summary>A status <c>/libpod/info</c> answers with instead of its usual answer (a 503, or a socket proxy's 403).</summary>
+    public int? LibpodInfoStatus { get; set; }
+
+    /// <summary>What <c>/version</c> answers; null answers 404.</summary>
+    public JsonNode? Version { get; set; }
+
+    /// <summary>A status the container listing answers with instead of the list, and the raw body it answers with when that is 200.</summary>
+    public int? ContainerListStatus { get; set; }
+
+    public string? ContainerListBody { get; set; }
+
     /// <summary>Whether the engine refuses every request, as one that has gone away would.</summary>
     public bool Down { get; set; }
 
@@ -247,6 +260,8 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         {
             var path = request.Path;
             // Like Podman: its own API only under a version prefix.
+            if (path == "/v1.41/libpod/info" && LibpodInfoStatus is { } failing)
+                return Failure(failing, "unavailable");
             if (path == "/v1.41/libpod/info")
                 return LibpodInfo is null ? Failure(404, "page not found") : (200, LibpodInfo.ToJsonString());
             if (!path.StartsWith("/v1.41/", StringComparison.Ordinal)) return Failure(404, "page not found");
@@ -254,6 +269,9 @@ internal sealed class FakeDockerApi : IAsyncDisposable
 
             return (request.Method, parts) switch
             {
+                ("GET", ["version"]) => Version is null ? Failure(404, "page not found") : (200, Version.ToJsonString()),
+                ("GET", ["containers", "json"]) when ContainerListStatus is { } status => Failure(status, "listing failed"),
+                ("GET", ["containers", "json"]) when ContainerListBody is { } raw => (200, raw),
                 ("GET", ["info"]) => Info is null ? Failure(404, "page not found") : (200, Info.ToJsonString()),
 
                 ("POST", ["volumes", "create"]) => CreateVolume(request),
@@ -466,7 +484,18 @@ internal sealed class FakeDockerApi : IAsyncDisposable
 
         await network.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"));
         exec.Attach(network, reader, socket);
-        try { await OnExec(exec); }
+        try
+        {
+            // A real container has a checkout once a clone has run in it, and not before.
+            if (exec.Command.Any(c => c.Contains("$1/.git", StringComparison.Ordinal)))
+                await exec.ExitAsync(_checkedOut.Contains(exec.Container) ? 0 : 1);
+            else
+            {
+                await OnExec(exec);
+                if (exec.ExitCode == 0 && exec.Command.Any(c => c.Contains("git clone", StringComparison.Ordinal)))
+                    lock (_gate) _checkedOut.Add(exec.Container);
+            }
+        }
         finally { exec.End(); }
     }
 

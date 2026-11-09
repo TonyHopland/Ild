@@ -241,6 +241,51 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.DoesNotContain(options, o => o.StartsWith("uid=", StringComparison.Ordinal));
     }
 
+    private async Task CreateOtherRunAsync(Guid run)
+        => await _host.CreateAsync(new RunEnvironmentRequest(run, MakeBaseRepository($"base-{run:N}"), "ild/wi-2-run", Repo), TestContext.Current.CancellationToken);
+
+    private string StateOptions(Guid run)
+        => _api.Container(Name(run))!["HostConfig"]!["Tmpfs"]!["/run/ild"]!.GetValue<string>();
+
+    [Theory]
+    [InlineData(503)]
+    [InlineData(403)]
+    public async Task A_failed_podman_probe_is_not_remembered_as_docker(int status)
+    {
+        var other = Guid.NewGuid();
+        _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":true}}}""");
+        _api.LibpodInfoStatus = status;
+
+        // Podman refuses the Docker options this container is given while the probe fails.
+        await Assert.ThrowsAnyAsync<Exception>(() => CreateRunAsync());
+        _api.LibpodInfoStatus = null;
+        await CreateOtherRunAsync(other);
+
+        Assert.Contains("U", StateOptions(other).Split(','));
+    }
+
+    [Fact]
+    public async Task A_failed_podman_probe_is_settled_by_the_engines_version_when_it_names_podman()
+    {
+        _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":true}}}""");
+        _api.LibpodInfoStatus = 403;
+        _api.Version = JsonNode.Parse("""{"Components":[{"Name":"Podman Engine"}]}""");
+
+        await CreateRunAsync();
+
+        Assert.Contains("U", StateOptions(_run).Split(','));
+    }
+
+    [Fact]
+    public async Task A_missing_podman_endpoint_is_asked_about_once()
+    {
+        await CreateRunAsync();
+        await CreateOtherRunAsync(Guid.NewGuid());
+
+        Assert.Equal(1, _api.Requests.Count(r => r.Contains("/libpod/info", StringComparison.Ordinal)));
+        Assert.Contains("uid=10001", StateOptions(_run));
+    }
+
     [Fact]
     public async Task Create_names_ild_by_the_network_gateway_when_ild_runs_on_the_host()
     {
@@ -1486,7 +1531,79 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains(setting, ex.Message);
     }
 
+    [Fact]
+    public async Task A_failed_create_on_an_existing_environment_keeps_the_container_and_volume_it_found()
+    {
+        await CreateRunAsync();
+        _api.Stop(Name(_run));
+        _api.OnExec = e => e.ExitAsync(1);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => _host.CreateAsync(
+            new RunEnvironmentRequest(_run, MakeBaseRepository("base-again"), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken));
+
+        Assert.Contains(Name(_run), _api.Containers());
+        Assert.Contains(Name(_run), _api.Volumes());
+        Assert.DoesNotContain($"containers/{Name(_run)}", _api.Deleted);
+    }
+
+    [Fact]
+    public async Task A_failed_create_of_a_new_environment_removes_what_it_made()
+    {
+        _api.OnExec = e => e.ExitAsync(1);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => _host.CreateAsync(
+            new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(Name(_run), _api.Containers());
+        Assert.DoesNotContain(Name(_run), _api.Volumes());
+        Assert.DoesNotContain(Name(_run), _api.Networks());
+    }
+
+    [Fact]
+    public async Task Create_on_an_environment_that_holds_a_checkout_does_not_clone_into_it_again()
+    {
+        await CreateRunAsync();
+        _api.Stop(Name(_run));
+        var before = _api.Execs.Count;
+        _api.OnExec = e => e.ExitAsync(0);
+
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository("base-again"), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        var after = _api.Execs.Skip(before).ToList();
+        Assert.Contains(after, e => e.Command.Any(c => c.Contains("$1/.git")));
+        Assert.DoesNotContain(after, e => e.WantsStdin);
+        Assert.DoesNotContain(after, e => e.Command.Any(c => c.Contains("checkout")));
+    }
+
     // -- Shutdown ----------------------------------------------------------------
+
+    [Fact]
+    public async Task Shutdown_does_not_throw_when_the_run_listing_fails()
+    {
+        await CreateRunAsync();
+        _api.ContainerListStatus = 500;
+
+        await _host.ShutdownAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Shutdown_does_not_throw_when_the_run_listing_is_not_json()
+    {
+        await CreateRunAsync();
+        _api.ContainerListBody = "not json";
+
+        await _host.ShutdownAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Shutdown_does_not_throw_when_it_is_cancelled()
+    {
+        await CreateRunAsync();
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        await _host.ShutdownAsync(cancelled.Token);
+    }
 
     [Fact]
     public async Task Shutdown_removes_the_chat_container_and_stops_each_run_which_starts_again_on_its_next_command()

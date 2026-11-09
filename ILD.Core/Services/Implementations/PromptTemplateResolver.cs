@@ -1,6 +1,8 @@
+using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -8,7 +10,40 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
 {
     private readonly IRunHost _host;
 
-    public PromptTemplateResolver(IRunHost? host = null) => _host = host ?? LocalRunHost.Shared;
+    private static readonly TimeSpan FileReadLimit = TimeSpan.FromSeconds(30);
+
+    private readonly ILogger<PromptTemplateResolver>? _logger;
+
+    public PromptTemplateResolver(IRunHost? host = null, ILogger<PromptTemplateResolver>? logger = null)
+    {
+        _host = host ?? LocalRunHost.Shared;
+        _logger = logger;
+    }
+
+    public async Task<IReadOnlyDictionary<string, string>> ReadWorkTreeFilesAsync(string template, string? worktreePath, CancellationToken ct = default)
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(template) || string.IsNullOrEmpty(worktreePath)) return files;
+        foreach (Match m in PromptPlaceholderRegistry.Pattern.Matches(template))
+        {
+            var key = m.Groups[1].Value;
+            if (!key.StartsWith(PromptPlaceholderRegistry.WorkTreeFilePrefix, StringComparison.OrdinalIgnoreCase)) continue;
+            var rel = key.Substring(PromptPlaceholderRegistry.WorkTreeFilePrefix.Length);
+            if (files.ContainsKey(rel)) continue;
+            try
+            {
+                using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                limit.CancelAfter(FileReadLimit);
+                var text = await _host.ReadTextFileAsync(Path.Combine(worktreePath, rel), limit.Token);
+                if (text is not null) files[rel] = text;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                _logger?.LogWarning(ex, "{{WorkTree.File:{Path}}} could not be read; it renders empty", rel);
+            }
+        }
+        return files;
+    }
 
     public string Render(string template, PromptContext context)
     {
@@ -36,8 +71,7 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
             if (key.StartsWith(PromptPlaceholderRegistry.WorkTreeFilePrefix, StringComparison.OrdinalIgnoreCase))
             {
                 var rel = key.Substring(PromptPlaceholderRegistry.WorkTreeFilePrefix.Length);
-                var full = string.IsNullOrEmpty(context.WorktreePath) ? null : Path.Combine(context.WorktreePath, rel);
-                return full is null ? "" : _host.ReadTextFile(full) ?? "";
+                return context.WorkTreeFiles is not null && context.WorkTreeFiles.TryGetValue(rel, out var text) ? text : "";
             }
             if (key.StartsWith(PromptPlaceholderRegistry.VariablePrefix, StringComparison.OrdinalIgnoreCase))
             {

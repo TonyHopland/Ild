@@ -76,7 +76,7 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     // -- Files -------------------------------------------------------------------
 
-    public string? ReadTextFile(string path) => For(path).ReadTextFile(path);
+    public Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default) => For(path).ReadTextFileAsync(path, ct);
 
     public Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default) => For(path).OpenFileForReadAsync(path, ct);
 
