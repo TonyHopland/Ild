@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.ModelGateway;
@@ -17,13 +19,15 @@ internal static class CopilotLaunch
         var services = new ServiceCollection();
         services.AddSingleton(host);
         services.AddSingleton<IModelGatewayRegistry>(new ModelGatewayRegistry());
+        using var key = ECDsa.Create();
+        using var certificate = new CertificateRequest("CN=test", key, HashAlgorithmName.SHA256)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+        services.AddSingleton(new GatewayTlsEndpoint(8442, certificate, caFile));
         var scopes = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
         var environment = new TestProcessEnvironment
         {
             { "ILD_AGENT_READ_ROOT", readRoot },
             { "ILD_API_URL", ildUrl },
-            { GatewayTlsEndpoint.PortVariable, "8442" },
-            { GatewayTlsEndpoint.CaFileVariable, caFile },
         };
         var context = new AgentExecutionContext(
             Provider: new AiProvider { Id = Guid.NewGuid(), Name = "copilot", Type = "copilot", BaseUrl = string.Empty, Model = string.Empty, Config = "{\"binaryPath\":\"/bin/copilot\"}" },

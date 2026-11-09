@@ -79,10 +79,9 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     /// host the gateway lease names, the address the run reaches ILD on, and <paramref name="caCopy"/> is this
     /// launch's own copy of the certificate, which the run host stages into the run. False without a listener.
     /// </summary>
-    public static bool TryApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, IProcessEnvironment environment, string caCopy)
+    public static bool TryApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, int? tlsPort, string caCopy)
     {
-        var port = environment.Get(GatewayTlsEndpoint.PortVariable);
-        if (string.IsNullOrEmpty(port) || string.IsNullOrEmpty(caCopy)
+        if (tlsPort is not { } port || string.IsNullOrEmpty(caCopy)
             || !Uri.TryCreate(gateway.BaseUrl, UriKind.Absolute, out var ild)) return false;
         psi.Environment["GH_HOST"] = $"{ild.Host}:{port}";
         psi.Environment["COPILOT_GITHUB_TOKEN"] = gateway.GitHubPlaceholder;
@@ -93,14 +92,22 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         return true;
     }
 
+    /// <summary>The gateway's HTTPS listener, which ILD registers when it is switched on. Null without DI.</summary>
+    private GatewayTlsEndpoint? GatewayTls()
+    {
+        if (ScopeFactory is null) return null;
+        using var scope = ScopeFactory.CreateScope();
+        return scope.ServiceProvider.GetService<GatewayTlsEndpoint>();
+    }
+
     /// <summary>
     /// A copy of the listener's certificate for this launch, in the agent read root under a name that carries the
     /// owner, so a run host that cannot share the file stages it into the run. Null without a certificate file.
     /// </summary>
-    private string? TryWriteCaCopy(AgentExecutionContext ctx)
+    private string? TryWriteCaCopy(AgentExecutionContext ctx, GatewayTlsEndpoint? tls)
     {
-        var source = EnvironmentVariables.Get(GatewayTlsEndpoint.CaFileVariable);
-        if (string.IsNullOrEmpty(source)) return null;
+        if (tls is null) return null;
+        var source = tls.CaFile;
         try
         {
             return IldMcpServer.TryWriteFile("ild-copilot-ca", OwnerOf(ctx), File.ReadAllBytes(source), ".pem", _logger, EnvironmentVariables);
@@ -141,10 +148,11 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
                 if (gateway is not null)
                 {
-                    caCopy = TryWriteCaCopy(ctx);
-                    if (caCopy is null || !TryApplyGateway(psi, gateway, EnvironmentVariables, caCopy))
+                    var tls = GatewayTls();
+                    caCopy = TryWriteCaCopy(ctx, tls);
+                    if (caCopy is null || !TryApplyGateway(psi, gateway, tls?.Port, caCopy))
                         return NodeExecutionResult.Fail(
-                            $"[copilot-error] the model gateway has no HTTPS listener, which the Copilot CLI needs: set {GatewayTlsEndpoint.PortVariable} to a free loopback port.");
+                            $"[copilot-error] the model gateway's HTTPS listener, which the Copilot CLI needs, is switched off or its certificate could not be read: set {GatewayTlsEndpoint.PortVariable} to a free port other than 0.");
                 }
                 proc = await StartAgentProcessAsync(psi, ctx, [mcpConfigPath, caCopy]);
             }

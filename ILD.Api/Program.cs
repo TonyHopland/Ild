@@ -55,7 +55,7 @@ try
         Directory.CreateDirectory(worktreesPath);
 
     // The Copilot CLI only takes an HTTPS endpoint for GitHub, so the model gateway also listens on
-    // loopback over TLS with a certificate of its own (ADR-0031). Port 0 switches it off.
+    // TLS where runs reach ILD, with a certificate of its own on that listener only (ADR-0031). Port 0 switches it off.
     if (!builder.Environment.IsEnvironment("Testing")
         && ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortFrom(
             Environment.GetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortVariable)
@@ -78,12 +78,10 @@ try
                 return path;
             },
             gatewayHostNames);
-        Environment.SetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortVariable, gatewayTlsPort.ToString());
-        Environment.SetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.CaFileVariable, gatewayTls.CaFile);
         builder.Services.AddSingleton(gatewayTls);
-        builder.WebHost.ConfigureKestrel(kestrel => kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = gatewayTls.Certificate));
+        builder.WebHost.ConfigureKestrel(kestrel => GatewayTlsListener.Configure(kestrel, gatewayTls));
         builder.WebHost.UseUrls(string.Join(';',
-            builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey) is { Length: > 0 } urls ? urls : "http://localhost:5000", $"https://{gatewayBind}:{gatewayTlsPort}"));
+            builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey) is { Length: > 0 } urls ? urls : "http://localhost:5000", GatewayTlsListener.Url(gatewayTls, gatewayBind)));
     }
 
     var connectionString = Environment.GetEnvironmentVariable("ILD_DB_CONNECTION_STRING")
