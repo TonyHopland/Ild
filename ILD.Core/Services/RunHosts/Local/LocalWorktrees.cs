@@ -71,7 +71,7 @@ internal static class LocalWorktrees
         if (Directory.Exists(dotGit)) return worktree;
         if (!File.Exists(dotGit)) return null;
 
-        var pointer = ReadSmallText(dotGit);
+        var pointer = ReadSmallText(dotGit, MaxPointerBytes);
         const string prefix = "gitdir:";
         if (pointer is null || !pointer.StartsWith(prefix, StringComparison.Ordinal)) return null;
         var entry = pointer[prefix.Length..].Trim();
@@ -86,7 +86,7 @@ internal static class LocalWorktrees
         if (LinkTargetOf(gitDir) is not null || !Directory.Exists(gitDir)) return null;
         if (LinkTargetOf(worktrees) is not null || LinkTargetOf(entry) is not null || !Directory.Exists(entry)) return null;
 
-        var backlink = ReadSmallText(Path.Combine(entry, "gitdir"))?.Trim();
+        var backlink = ReadSmallText(Path.Combine(entry, "gitdir"), MaxPointerBytes)?.Trim();
         if (backlink is null || !Path.IsPathRooted(backlink)) return null;
         return ResolveLinks(Path.GetFullPath(backlink)) == ResolveLinks(dotGit) ? repository : null;
     }
@@ -100,8 +100,11 @@ internal static class LocalWorktrees
     // file should be reads as empty instead of blocking the orchestrator until something writes to it.
     private static readonly int OpenNonBlocking = OperatingSystem.IsMacOS() ? 0x4 | 0x1000000 : 0x800 | 0x80000;
 
-    /// <summary>The first <see cref="MaxPointerBytes"/> of a regular file, or null for anything else.</summary>
-    private static string? ReadSmallText(string file)
+    /// <summary>
+    /// The text of a regular file shorter than <paramref name="maxBytes"/>, or null for anything else: a link, a
+    /// device, a pipe, or a file that long or longer.
+    /// </summary>
+    internal static string? ReadSmallText(string file, int maxBytes)
     {
         try
         {
@@ -112,9 +115,18 @@ internal static class LocalWorktrees
             var descriptor = OpenFile(file, OpenNonBlocking);
             if (descriptor < 0) return null;
             using var stream = new FileStream(new SafeFileHandle(descriptor, ownsHandle: true), FileAccess.Read, bufferSize: 0);
-            var buffer = new byte[MaxPointerBytes];
-            var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
-            return read == buffer.Length ? null : Encoding.UTF8.GetString(buffer, 0, read);
+            // Grown as it fills rather than sized to the cap up front, so a small file costs a small buffer.
+            var buffer = new byte[Math.Min(maxBytes, 8192)];
+            var read = 0;
+            while (true)
+            {
+                var n = stream.Read(buffer, read, buffer.Length - read);
+                if (n == 0) break;
+                read += n;
+                if (read == maxBytes) return null;
+                if (read == buffer.Length) Array.Resize(ref buffer, (int)Math.Min(maxBytes, buffer.Length * 2L));
+            }
+            return Encoding.UTF8.GetString(buffer, 0, read);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
