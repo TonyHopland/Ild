@@ -87,7 +87,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             var reference = KubernetesManifests.OwnerReference(secret);
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.Claim(owner, reference), _namespace, cancellationToken: ct));
             await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.Policy(owner, reference, request.Dns), _namespace, cancellationToken: ct));
-            var ildAddress = request.Dns ? null : await IldAddressAsync(ct);
+            var ildAddress = request.Dns && RunFacingHost(new Uri(_options.IldUrl).Host) == new Uri(_options.IldUrl).Host ? null : await IldAddressAsync(ct);
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.Pod(owner, reference, tools, ildAddress, request.Dns), _namespace, cancellationToken: ct));
             var pod = await WaitReadyAsync(KubernetesNames.ObjectName(owner), $"run {owner:N}", ct);
             _podAddresses[owner] = pod.Status.PodIP;

@@ -43,6 +43,9 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// </summary>
     protected IProcessEnvironment EnvironmentVariables { get; }
 
+    /// <summary>The environment as a run sees ILD: for the config files that point the agent's MCP server at ILD.</summary>
+    protected IProcessEnvironment RunFacingEnvironment => new RunFacingEnvironment(EnvironmentVariables, RunHost);
+
     protected CliAgentAdapterBase(IProcessEnvironment? environment = null)
     {
         EnvironmentVariables = environment ?? ProcessEnvironment.Current;

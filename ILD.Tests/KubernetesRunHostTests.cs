@@ -650,6 +650,22 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_run_that_asks_for_dns_still_gets_the_alias_cluster_dns_cannot_resolve()
+    {
+        _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
+
+        var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
+        Assert.Null(spec.DnsPolicy);
+        Assert.Contains("ild-api", Assert.Single(spec.HostAliases).Hostnames);
+    }
+
+    [Fact]
     public async Task A_host_that_is_a_suffix_of_the_preview_domain_is_not_put_on_NO_PROXY_and_ild_is_reached_by_another_name()
     {
         _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
@@ -663,6 +679,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Contains("ild-api", noProxy);
         Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
         Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null));
+        var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host));
+        Assert.Contains(new Uri((string)mcp["ILD_API_URL"]!).Host, noProxy);
         var names = Assert.Single(_api.Get<V1Pod>("pods", Name(_run))!.Spec.HostAliases).Hostnames;
         Assert.Contains("ild-api", names);
     }

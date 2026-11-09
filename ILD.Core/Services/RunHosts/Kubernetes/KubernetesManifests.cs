@@ -184,7 +184,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 // Names are resolved only by ILD's egress proxy: ILD's own name is pinned in the pod, and the nameserver is nothing.
                 DnsPolicy = dns ? null : "None",
                 DnsConfig = dns ? null : new V1PodDNSConfig { Nameservers = ["127.0.0.1"] },
-                HostAliases = dns || ildAddress is null ? null : [new V1HostAlias { Ip = ildAddress, Hostnames = IldNames() }],
+                HostAliases = ildAddress is null ? null : [new V1HostAlias { Ip = ildAddress, Hostnames = IldNames() }],
                 EnableServiceLinks = false,
                 RestartPolicy = "Never",
                 TerminationGracePeriodSeconds = 5,
