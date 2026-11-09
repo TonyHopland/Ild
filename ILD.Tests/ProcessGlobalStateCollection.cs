@@ -17,6 +17,9 @@ namespace ILD.Tests;
 /// <item><see cref="PiAdapterAgentDirectoryTests"/> swaps pi's shared, fixed-name
 /// scratch directories for links, which every pi turn in the process goes
 /// through.</item>
+/// <item><see cref="LocalRunHostUserToolsTests"/> sets <c>HOME</c>, <c>PATH</c>, the orchestrator's secrets and the three
+/// root variables in the real process environment, because what it proves is what a launch on the local host is made from
+/// and does not inherit.</item>
 /// <item><see cref="Integration.StorageOverviewTests"/> points the agent scratch
 /// root (<c>ILD_AGENT_SCRATCH_ROOT</c>) at a directory of its own, which every
 /// scratch directory the process creates would then land in, and in another test

@@ -58,9 +58,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         using var feeds = PackageFeedCredentialFiles.Materialize(
             packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
         var mode = await ctx.Services.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken);
-        var psi = IsolateCommand(ShellStartInfo(command, workingDirectory), AgentIsolation.LaunchProxy(mode, aiProviderId: null));
-        foreach (var (name, value) in feeds.Environment)
-            psi.Environment[name] = value;
+        var psi = ShellStartInfo(command, workingDirectory);
         // The pumps append to each buffer under its own lock, so a read takes both.
         string Combined()
         {
@@ -73,7 +71,8 @@ public sealed class CmdNodeExecutor : INodeExecutor
         try
         {
             p = await host.StartCommandAsync(
-                RunCommand.Prepared(psi, ctx.Run.Id, feeds.Environment, feeds.FilePath is null ? null : [feeds.FilePath], mode) with { RunIn = ctx.Run.Id },
+                RunCommand.Prepared(psi, ctx.Run.Id, CommandEnvironment.Of(feeds.Environment), feeds.FilePath is null ? null : [feeds.FilePath], mode)
+                    with { RunIn = ctx.Run.Id, EgressProxy = AgentIsolation.LaunchProxy(mode, aiProviderId: null) },
                 ctx.CancellationToken);
         }
         catch (Exception ex)
@@ -133,15 +132,6 @@ public sealed class CmdNodeExecutor : INodeExecutor
         psi.ArgumentList.Add(command);
         return psi;
     }
-
-    /// <summary>
-    /// The command is loop-authored, but it runs in a worktree the agent just
-    /// wrote — its builds, test suites and scripts — so it gets what an agent
-    /// launch gets (ADR-0016): none of the orchestrator's secrets, and the egress
-    /// proxy of the network mode.
-    /// </summary>
-    internal static ProcessStartInfo IsolateCommand(ProcessStartInfo psi, string? egressProxy)
-        => AgentIsolation.ApplyLaunchEnvironment(AgentIsolation.StripOrchestratorEnvironment(psi), egressProxy);
 
     // Long enough that only a tree genuinely stuck in the kernel — an
     // uninterruptible write to a slow mount — reaches the timeout, short enough

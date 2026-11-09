@@ -110,7 +110,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
                     sessionDirectory,
                     sessionIdToUse,
                     sessionPathToUse,
-                    ExtraCliArgs.ForLaunch(ctx.Provider, _logger)), ctx, [settings.IldExtensionPath]);
+                    ExtraCliArgs.ForLaunch(ctx.Provider, _logger)), ctx, BuildRunEnvironment(settings, sessionDirectory), [settings.IldExtensionPath]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -220,6 +220,25 @@ public sealed class PiAdapter : CliAgentAdapterBase
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
     };
 
+    /// <summary>What pi is launched with: no update check or telemetry, its session and agent directories, and the provider's API key under the name its config reads.</summary>
+    internal static Dictionary<string, string?> BuildRunEnvironment(PiAdapterSettings settings, string sessionDirectory)
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["PI_SKIP_VERSION_CHECK"] = "1",
+            ["PI_TELEMETRY"] = "0",
+            ["PI_CODING_AGENT_SESSION_DIR"] = sessionDirectory,
+        };
+        if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
+            environment["PI_CODING_AGENT_DIR"] = settings.AgentDirectory;
+        if (!string.IsNullOrWhiteSpace(settings.ApiKeyEnvironmentVariableName)
+            && !string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            environment[settings.ApiKeyEnvironmentVariableName] = settings.ApiKey;
+        }
+        return environment;
+    }
+
     // The prompt is not an argument here — pi reads its turn from stdin (see
     // the StandardInput write in ExecuteAsync), so the extra arguments go last.
     internal static ProcessStartInfo BuildRunProcessStartInfo(
@@ -239,19 +258,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
             CreateNoWindow = true,
             WorkingDirectory = worktreePath,
         };
-
-        psi.EnvironmentVariables["PI_SKIP_VERSION_CHECK"] = "1";
-        psi.EnvironmentVariables["PI_TELEMETRY"] = "0";
-        psi.EnvironmentVariables["PI_CODING_AGENT_SESSION_DIR"] = sessionDirectory;
-
-        if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
-            psi.EnvironmentVariables["PI_CODING_AGENT_DIR"] = settings.AgentDirectory;
-
-        if (!string.IsNullOrWhiteSpace(settings.ApiKeyEnvironmentVariableName)
-            && !string.IsNullOrWhiteSpace(settings.ApiKey))
-        {
-            psi.EnvironmentVariables[settings.ApiKeyEnvironmentVariableName] = settings.ApiKey;
-        }
 
         psi.ArgumentList.Add("--mode");
         psi.ArgumentList.Add("json");

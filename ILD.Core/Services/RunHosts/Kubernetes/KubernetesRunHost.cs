@@ -356,7 +356,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
                 _manifests.SignIn(name, SignInHome, tools?.For(SignInHome) ?? [], tools?.Zones ?? []), _namespace, cancellationToken: ct);
             await WaitReadyAsync(name, "the provider sign-in", ct);
 
-            var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), stdin: true, tty: true, ct);
+            var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), environment: null, stdin: true, tty: true, ct);
             var pty = new ExecPty(exec);
             pty.Resize(cols, rows);
             return new SignInTerminal(pty, (path, token) => ReadSignInFileAsync(id, path, token), RemoveAsync);
@@ -398,7 +398,10 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         }
     }
 
-    protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
+    // The exec API has no field for an environment, and its command is part of the request's URL, which the API server's audit log
+    // records: the base class puts the environment in a file in the pod instead, so none is passed here.
+    protected override async Task<IExecStream> OpenExecStreamAsync(
+        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct)
     {
         if (owner.Chat)
             return await PodExec.OpenAsync(_client, _namespace, await EnsureChatPodAsync(ct), command, stdin, tty, ct);

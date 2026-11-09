@@ -79,15 +79,15 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     /// host the gateway lease names, the address the run reaches ILD on, and <paramref name="caCopy"/> is this
     /// launch's own copy of the certificate, which the run host stages into the run. False without a listener.
     /// </summary>
-    public static bool TryApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, int? tlsPort, string caCopy)
+    public static bool TryApplyGateway(ProcessStartInfo psi, IDictionary<string, string?> environment, ModelGatewayLease gateway, int? tlsPort, string caCopy)
     {
         if (tlsPort is not { } port || string.IsNullOrEmpty(caCopy)
             || !Uri.TryCreate(gateway.BaseUrl, UriKind.Absolute, out var ild)) return false;
-        psi.Environment["GH_HOST"] = $"{ild.Host}:{port}";
-        psi.Environment["COPILOT_GITHUB_TOKEN"] = gateway.GitHubPlaceholder;
-        psi.Environment["NODE_EXTRA_CA_CERTS"] = caCopy;
-        psi.Environment.Remove("GH_TOKEN");
-        psi.Environment.Remove("GITHUB_TOKEN");
+        environment["GH_HOST"] = $"{ild.Host}:{port}";
+        environment["COPILOT_GITHUB_TOKEN"] = gateway.GitHubPlaceholder;
+        environment["NODE_EXTRA_CA_CERTS"] = caCopy;
+        environment["GH_TOKEN"] = null;
+        environment["GITHUB_TOKEN"] = null;
         psi.ArgumentList.Insert(0, "--no-auto-update");
         return true;
     }
@@ -145,16 +145,17 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             IRunProcess? proc;
             try
             {
+                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
                 if (gateway is not null)
                 {
                     var tls = GatewayTls();
                     caCopy = TryWriteCaCopy(ctx, tls);
-                    if (caCopy is null || !TryApplyGateway(psi, gateway, tls?.Port, caCopy))
+                    if (caCopy is null || !TryApplyGateway(psi, environment, gateway, tls?.Port, caCopy))
                         return NodeExecutionResult.Fail(
                             $"[copilot-error] the model gateway's HTTPS listener, which the Copilot CLI needs, is switched off or its certificate could not be read: set {GatewayTlsEndpoint.PortVariable} to a free port other than 0.");
                 }
-                proc = await StartAgentProcessAsync(psi, ctx, [mcpConfigPath, caCopy]);
+                proc = await StartAgentProcessAsync(psi, ctx, environment, [mcpConfigPath, caCopy]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

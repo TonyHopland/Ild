@@ -29,10 +29,10 @@ public class AdapterGatewayTests
     private static AiProvider Provider(string type, string? key = RealSecret, string baseUrl = "")
         => new() { Id = Guid.NewGuid(), Name = "p-" + type, Type = type, ApiKey = key, BaseUrl = baseUrl, Model = "m" };
 
-    private static void AssertHoldsNoSecret(ProcessStartInfo psi)
+    private static void AssertHoldsNoSecret(ProcessStartInfo psi, IDictionary<string, string?> environment)
     {
         Assert.DoesNotContain(RealSecret, string.Join('\n', psi.ArgumentList));
-        foreach (var (name, value) in psi.Environment)
+        foreach (var (name, value) in environment)
             Assert.DoesNotContain(RealSecret, value ?? string.Empty);
     }
 
@@ -41,13 +41,14 @@ public class AdapterGatewayTests
     {
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo("claude", Path.GetTempPath(), "hi", null);
 
-        ClaudeCodeAdapter.ApplyGateway(psi, _lease, Provider("claude-code", "sk-ant-oat01-" + RealSecret));
+        var environment = new Dictionary<string, string?>();
+        ClaudeCodeAdapter.ApplyGateway(environment, _lease, Provider("claude-code", "sk-ant-oat01-" + RealSecret));
 
-        Assert.Equal("http://127.0.0.1:8080/gateway/anthropic", psi.Environment["ANTHROPIC_BASE_URL"]);
-        Assert.Equal(_lease.Token, psi.Environment["CLAUDE_CODE_OAUTH_TOKEN"]);
-        Assert.False(psi.Environment.ContainsKey("ANTHROPIC_API_KEY"));
-        Assert.Equal("1", psi.Environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"]);
-        AssertHoldsNoSecret(psi);
+        Assert.Equal("http://127.0.0.1:8080/gateway/anthropic", environment["ANTHROPIC_BASE_URL"]);
+        Assert.Equal(_lease.Token, environment["CLAUDE_CODE_OAUTH_TOKEN"]);
+        Assert.Null(environment["ANTHROPIC_API_KEY"]);
+        Assert.Equal("1", environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"]);
+        AssertHoldsNoSecret(psi, environment);
     }
 
     [Fact]
@@ -55,11 +56,12 @@ public class AdapterGatewayTests
     {
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo("claude", Path.GetTempPath(), "hi", null);
 
-        ClaudeCodeAdapter.ApplyGateway(psi, _lease, Provider("claude-code", "sk-ant-api03-" + RealSecret));
+        var environment = new Dictionary<string, string?>();
+        ClaudeCodeAdapter.ApplyGateway(environment, _lease, Provider("claude-code", "sk-ant-api03-" + RealSecret));
 
-        Assert.Equal(_lease.Token, psi.Environment["ANTHROPIC_API_KEY"]);
-        Assert.False(psi.Environment.ContainsKey("CLAUDE_CODE_OAUTH_TOKEN"));
-        AssertHoldsNoSecret(psi);
+        Assert.Equal(_lease.Token, environment["ANTHROPIC_API_KEY"]);
+        Assert.Null(environment["CLAUDE_CODE_OAUTH_TOKEN"]);
+        AssertHoldsNoSecret(psi, environment);
     }
 
     [Fact]
@@ -67,7 +69,8 @@ public class AdapterGatewayTests
     {
         var psi = CodexAdapter.BuildRunProcessStartInfo("codex", Path.GetTempPath(), "hi", "sess-1", mcpServers: []);
 
-        CodexAdapter.ApplyGateway(psi, _lease, "/scratch/ild-codex-home/run");
+        var environment = new Dictionary<string, string?>();
+        CodexAdapter.ApplyGateway(psi, environment, _lease, "/scratch/ild-codex-home/run");
 
         var arguments = psi.ArgumentList.ToList();
         Assert.Equal("exec", arguments[0]);
@@ -79,9 +82,9 @@ public class AdapterGatewayTests
         Assert.Contains("requires_openai_auth=true", provider);
         Assert.Contains("model_provider=\"ild\"", arguments);
         Assert.True(arguments.IndexOf("resume") > arguments.LastIndexOf("-c"), "options must come before the resume subcommand");
-        Assert.Equal("/scratch/ild-codex-home/run", psi.Environment["CODEX_HOME"]);
+        Assert.Equal("/scratch/ild-codex-home/run", environment["CODEX_HOME"]);
         Assert.DoesNotContain(_lease.Token, string.Join('\n', arguments));
-        AssertHoldsNoSecret(psi);
+        AssertHoldsNoSecret(psi, environment);
     }
 
     [Fact]
@@ -108,13 +111,14 @@ public class AdapterGatewayTests
     public void Copilot_gets_the_https_listener_a_github_shaped_placeholder_and_the_certificate_to_trust()
     {
         var psi = CopilotAdapter.BuildRunProcessStartInfo("copilot", Path.GetTempPath(), "hi");
-        Assert.True(CopilotAdapter.TryApplyGateway(psi, _lease, 8442, "/read/ca-copy.pem"));
+        var environment = new Dictionary<string, string?>();
+        Assert.True(CopilotAdapter.TryApplyGateway(psi, environment, _lease, 8442, "/read/ca-copy.pem"));
 
-        Assert.Equal("127.0.0.1:8442", psi.Environment["GH_HOST"]);
-        Assert.Equal("gho_" + _lease.Token, psi.Environment["COPILOT_GITHUB_TOKEN"]);
-        Assert.Equal("/read/ca-copy.pem", psi.Environment["NODE_EXTRA_CA_CERTS"]);
+        Assert.Equal("127.0.0.1:8442", environment["GH_HOST"]);
+        Assert.Equal("gho_" + _lease.Token, environment["COPILOT_GITHUB_TOKEN"]);
+        Assert.Equal("/read/ca-copy.pem", environment["NODE_EXTRA_CA_CERTS"]);
         Assert.Equal("--no-auto-update", psi.ArgumentList[0]);
-        AssertHoldsNoSecret(psi);
+        AssertHoldsNoSecret(psi, environment);
     }
 
     [Fact]
@@ -122,8 +126,9 @@ public class AdapterGatewayTests
     {
         var psi = CopilotAdapter.BuildRunProcessStartInfo("copilot", Path.GetTempPath(), "hi");
 
-        Assert.False(CopilotAdapter.TryApplyGateway(psi, _lease, null, "/read/ca-copy.pem"));
-        Assert.False(psi.Environment.ContainsKey("GH_HOST"));
+        var environment = new Dictionary<string, string?>();
+        Assert.False(CopilotAdapter.TryApplyGateway(psi, environment, _lease, null, "/read/ca-copy.pem"));
+        Assert.False(environment.ContainsKey("GH_HOST"));
     }
 
     [Fact]
@@ -161,12 +166,14 @@ public class AdapterGatewayTests
         var settings = PiAdapter.ResolveSettings(provider, runContext, null, null, new TestProcessEnvironment(), noTools: true, gateway: _lease);
         var psi = PiAdapter.BuildRunProcessStartInfo(settings, Path.GetTempPath(), Path.GetTempPath(), null, null);
 
-        Assert.Equal(_lease.Token, psi.Environment["ILD_PI_PROVIDER_API_KEY"]);
+        var environment = PiAdapter.BuildRunEnvironment(settings, Path.GetTempPath());
+
+        Assert.Equal(_lease.Token, environment["ILD_PI_PROVIDER_API_KEY"]);
         Assert.DoesNotContain(RealSecret, settings.ModelsJsonContent);
         Assert.DoesNotContain("models.example.test", settings.ModelsJsonContent);
         Assert.Contains("http://127.0.0.1:8080/gateway/upstream", settings.ModelsJsonContent);
         Assert.Null(settings.ReadOnlyAuthJson);
-        AssertHoldsNoSecret(psi);
+        AssertHoldsNoSecret(psi, environment);
     }
 
     [Fact]
@@ -177,10 +184,9 @@ public class AdapterGatewayTests
         var runHome = RunPaths.HomeDirectory(runContext.LoopRunId);
 
         var settings = PiAdapter.ResolveSettings(provider, runContext, null, null, new TestProcessEnvironment(), noTools: true, gateway: _lease, runHome: runHome);
-        var psi = PiAdapter.BuildRunProcessStartInfo(settings, Path.GetTempPath(), Path.GetTempPath(), null, null);
 
         Assert.Equal(Path.Combine(runHome, ".pi", "agent"), settings.AgentDirectory);
-        Assert.Equal(settings.AgentDirectory, psi.Environment["PI_CODING_AGENT_DIR"]);
+        Assert.Equal(settings.AgentDirectory, PiAdapter.BuildRunEnvironment(settings, Path.GetTempPath())["PI_CODING_AGENT_DIR"]);
         Assert.NotNull(RunPaths.OwnerOf(settings.AgentDirectory));
     }
 

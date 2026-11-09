@@ -2048,7 +2048,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// Deliberately not <c>HOME</c>, <c>PATH</c> or the npm prefix. Those belong to
     /// wherever the step runs, which only the run host knows — a run container sets
     /// its own when it is made, and the local host gives a command ours
-    /// (<see cref="LocalRunHost.WithUserTools"/>). Built here from ILD's own, they
+    /// (<see cref="LocalRunHost.Launch"/>). Built here from ILD's own, they
     /// named directories a run does not have, and replaced the ones it does.
     /// </para>
     /// </summary>
@@ -2076,7 +2076,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     /// <summary>
     /// The directory where <c>npm install -g</c> places executables during a local
-    /// install step (<see cref="LocalRunHost.WithUserTools"/> points
+    /// install step (<see cref="LocalRunHost.Launch"/> points
     /// <c>NPM_CONFIG_PREFIX</c> at <c>$HOME/.local</c>, so global CLIs such as
     /// <c>vp</c> land in <c>$HOME/.local/bin</c>).
     /// </summary>
@@ -2204,9 +2204,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
-    /// The one place a preview child's environment is
-    /// decided — both spawn sites (install steps and long-running services) go
-    /// through it, so neither can drift from the other.
+    /// The one place a preview child's process is
+    /// built — both spawn sites (install steps and long-running services) go
+    /// through it, so neither can drift from the other. Its environment is not
+    /// built here: <see cref="PreparedCommand"/> hands the resolved step's to the host once, which merges it.
     ///
     /// <para>
     /// The command text comes from the worktree's <c>ild.config.json</c>, a file the
@@ -2240,22 +2241,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         psi.ArgumentList.Add("-lc");
         psi.ArgumentList.Add(resolved.Command);
 
-        AgentIsolation.StripOrchestratorEnvironment(psi);
-        AgentIsolation.ApplyLaunchEnvironment(psi, AgentIsolation.ResolveLaunchProxy(resolved.NetworkMode, _egressProxy));
-
-        foreach (var entry in resolved.Environment)
-        {
-            psi.Environment[entry.Key] = entry.Value;
-        }
-
         return psi;
     }
 
     // What the caller sets on the process is passed on as such, and the credential file with it, so a host that starts the
     // command in a run of its own keeps the variables and copies the file in. It runs in the worktree's run, or nowhere.
     internal RunCommand PreparedCommand(ResolvedStep resolved)
-        => RunCommand.Prepared(BuildPreviewProcess(resolved), environment: resolved.Environment, files: resolved.Files, networkMode: resolved.NetworkMode)
-            with { RunIn = resolved.RunIn };
+        => RunCommand.Prepared(BuildPreviewProcess(resolved), environment: CommandEnvironment.Of(resolved.Environment), files: resolved.Files, networkMode: resolved.NetworkMode)
+            with { RunIn = resolved.RunIn, EgressProxy = AgentIsolation.ResolveLaunchProxy(resolved.NetworkMode, _egressProxy) };
 
     // The run id leads the name, which is how the run's files are found and what a host checks before it copies one in.
     internal static string FeedFilePrefix(string worktreePath, string kind)

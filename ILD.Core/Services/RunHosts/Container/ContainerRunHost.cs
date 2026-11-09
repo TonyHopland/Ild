@@ -447,18 +447,23 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     protected override async Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
         => owner.Chat ? await ChatContainerRunningAsync(ct) : await _api.GetAsync($"/containers/{Escaped(ObjectName(owner.Id))}/json", ct, HttpStatusCode.NotFound) is not null;
 
-    protected override Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
-        => OpenExecStreamAsync(owner, command, stdin, tty, user: null, ct);
+    // The engine's exec-create takes the environment in its own field, so it never travels in the command.
+    protected override bool ExecTakesEnvironment => true;
 
-    private async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, string? user, CancellationToken ct)
+    protected override Task<IExecStream> OpenExecStreamAsync(
+        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct)
+        => OpenExecStreamAsync(owner, command, environment, stdin, tty, user: null, ct);
+
+    private async Task<IExecStream> OpenExecStreamAsync(
+        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, string? user, CancellationToken ct)
     {
         if (owner.Chat)
-            return await DockerExec.OpenAsync(_api, await EnsureChatContainerAsync(ct), command, stdin, tty, ExitStatusTimeout, ct, user);
+            return await DockerExec.OpenAsync(_api, await EnsureChatContainerAsync(ct), command, stdin, tty, ExitStatusTimeout, ct, user, environment);
         if (_execNames.TryGetValue(owner.Id, out var other))
-            return await DockerExec.OpenAsync(_api, other, command, stdin, tty, ExitStatusTimeout, ct, user);
+            return await DockerExec.OpenAsync(_api, other, command, stdin, tty, ExitStatusTimeout, ct, user, environment);
         try
         {
-            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct, user);
+            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct, user, environment);
         }
         catch (DockerApiException)
         {
@@ -466,7 +471,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             // refuse an exec into a stopped container with different statuses (Docker 409, Podman 500), so its state decides.
             if (!await RunContainerStoppedAsync(owner.Id, ct)) throw;
             await StartStoppedRunAsync(owner.Id, ct);
-            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct, user);
+            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct, user, environment);
         }
     }
 
@@ -474,7 +479,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     // resolv.conf: the container keeps its capabilities and its commands keep their user.
     protected override async Task<RunHostOutput> RunHostsScriptAsync(ExecOwner owner, IReadOnlyList<string> arguments, CancellationToken ct)
     {
-        using var exec = await OpenExecStreamAsync(owner, ["/bin/bash", "-c", HostsScript, "bash", .. arguments], stdin: false, tty: false, user: "0", ct);
+        using var exec = await OpenExecStreamAsync(owner, ["/bin/bash", "-c", HostsScript, "bash", .. arguments], environment: null, stdin: false, tty: false, user: "0", ct);
         var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);
         var error = new StreamReader(exec.Stderr!).ReadToEndAsync(ct);
         var status = await exec.Status;
@@ -806,7 +811,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             await WaitRunningAsync(name, ct);
 
-            var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), stdin: true, tty: true, ct);
+            var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), environment: null, stdin: true, tty: true, ct);
             var pty = new ExecPty(exec);
             pty.Resize(cols, rows);
 

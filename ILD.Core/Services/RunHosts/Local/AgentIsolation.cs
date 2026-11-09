@@ -136,8 +136,11 @@ public static class AgentIsolation
         return keys;
     }
 
+    private static readonly string[] RootEnvironmentKeys = [ScratchRootEnvVar, PrivateRootEnvVar, AgentReadRootEnvVar];
+
     /// <summary>
-    /// Remove the orchestrator's secrets (<see cref="SecretEnvironmentKeys"/>) from what a child inherits.
+    /// Remove the orchestrator's secrets (<see cref="SecretEnvironmentKeys"/>) and the three root variables
+    /// (<see cref="ScratchRootEnvVar"/>, <see cref="PrivateRootEnvVar"/>, <see cref="AgentReadRootEnvVar"/>) from what a child inherits.
     /// .NET pre-populates a child's environment from the current process, so an unprepared
     /// <see cref="ProcessStartInfo"/> hands them over verbatim.
     ///
@@ -151,6 +154,9 @@ public static class AgentIsolation
     public static ProcessStartInfo StripOrchestratorEnvironment(ProcessStartInfo psi)
     {
         foreach (var key in SecretEnvironmentKeys)
+            psi.Environment.Remove(key);
+        // Where ILD keeps what it hides from the agent: a child has no use for the paths, and they say where to look.
+        foreach (var key in RootEnvironmentKeys)
             psi.Environment.Remove(key);
         return psi;
     }

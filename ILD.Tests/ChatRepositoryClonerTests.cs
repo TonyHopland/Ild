@@ -1,3 +1,5 @@
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -38,8 +40,11 @@ public sealed class ChatRepositoryClonerStartInfoTests
             Assert.Equal("git", Path.GetFileName(psi.FileName));
             Assert.Contains("/scratch/chat/repos/widgets", psi.ArgumentList);
             Assert.Equal("/", psi.WorkingDirectory);
+            var launched = LocalRunHost.Launch(RunCommand.Prepared(psi, environment: ChatRepositoryCloner.GitEnvironment("/scratch/chat")));
             foreach (var name in Inherited)
-                Assert.False(psi.Environment.ContainsKey(name), $"{name} reaches git in the agent's clone");
+                Assert.False(launched.Environment.ContainsKey(name), $"{name} reaches git in the agent's clone");
+            Assert.Equal("0", launched.Environment["GIT_TERMINAL_PROMPT"]);
+            Assert.Equal("/scratch/chat", launched.Environment["GIT_CEILING_DIRECTORIES"]);
         }
         finally
         {

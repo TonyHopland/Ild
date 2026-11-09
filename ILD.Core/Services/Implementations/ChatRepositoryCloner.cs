@@ -410,7 +410,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// addressing the clone with <c>-C</c> (the orchestrator never enters a folder
     /// the agent owns), with none of the orchestrator's secrets or git
     /// credentials in its environment, and never looking for a repository above
-    /// <paramref name="ceilingDirectory"/>.
+    /// <paramref name="ceilingDirectory"/>. Its environment is <see cref="GitEnvironment"/>, which the host applies.
     /// </summary>
     internal static ProcessStartInfo BuildStartInfo(
         IReadOnlyList<string> arguments, string? ceilingDirectory = null, string workingDirectory = "/")
@@ -426,14 +426,17 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         foreach (var argument in arguments)
             psi.ArgumentList.Add(argument);
 
-        AgentIsolation.StripOrchestratorEnvironment(psi);
-        foreach (var key in GitEnvironmentKeys)
-            psi.Environment.Remove(key);
-        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        if (ceilingDirectory is not null)
-            psi.Environment["GIT_CEILING_DIRECTORIES"] = ceilingDirectory;
+        return psi;
+    }
 
-        return AgentIsolation.ApplyLaunchEnvironment(psi, egressProxy: null);
+    /// <summary>What git in a chat's clone is set and unset: the git credentials and repository pointers of ILD's own are unset, and it never prompts.</summary>
+    internal static Dictionary<string, string?> GitEnvironment(string? ceilingDirectory = null)
+    {
+        var environment = GitEnvironmentKeys.ToDictionary(key => key, _ => (string?)null, StringComparer.Ordinal);
+        environment["GIT_TERMINAL_PROMPT"] = "0";
+        if (ceilingDirectory is not null)
+            environment["GIT_CEILING_DIRECTORIES"] = ceilingDirectory;
+        return environment;
     }
 
     // Hooks in the clone are off, so a failing post-checkout or post-merge hook
@@ -446,10 +449,8 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         // In the chat container the clone is the working directory, which is what routes the command there; on this disk
         // the orchestrator never enters it.
         var start = BuildStartInfo([.. QuietGitOptions, "-C", folder, .. arguments], ceilingDirectory, inChatContainer ? folder : "/");
-        // What BuildStartInfo sets on purpose, so a host with an environment of its own keeps it.
-        var set = new Dictionary<string, string> { ["GIT_TERMINAL_PROMPT"] = "0", ["GIT_CEILING_DIRECTORIES"] = ceilingDirectory };
         using var process = await _host.StartCommandAsync(
-            RunCommand.Prepared(start, inChatContainer ? chatId : default, set), ct);
+            RunCommand.Prepared(start, inChatContainer ? chatId : default, GitEnvironment(ceilingDirectory)), ct);
         return await AgentProcess.RunAsync(process, stdin: null, ct);
     }
 }

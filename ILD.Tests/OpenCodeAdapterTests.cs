@@ -292,7 +292,7 @@ public class OpenCodeAdapterTests
             useWorktreeAsWorkingDirectory: false);
 
         Assert.True(string.IsNullOrEmpty(psi.WorkingDirectory));
-        Assert.Equal("{\"config\":true}", psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"]);
+        Assert.Equal("{\"config\":true}", OpenCodeAdapter.BuildRunEnvironment("{\"config\":true}")["OPENCODE_CONFIG_CONTENT"]);
         Assert.Equal(new[]
         {
             "run",

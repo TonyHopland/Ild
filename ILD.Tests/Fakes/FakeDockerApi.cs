@@ -489,6 +489,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
             body["AttachStdin"]!.GetValue<bool>(), body["Tty"]!.GetValue<bool>())
         {
             User = body["User"]?.GetValue<string>(),
+            Env = body["Env"]?.AsArray().Select(e => e!.GetValue<string>()).ToList() ?? [],
         };
         _execs[id] = exec;
         Execs.Add(exec);
@@ -587,6 +588,9 @@ internal sealed class FakeDockerExec(string container, IReadOnlyList<string> com
 
     /// <summary>The user the exec was asked to run as; null for the container's own.</summary>
     public string? User { get; init; }
+
+    /// <summary>The environment the exec was created with (its <c>Env</c> field), as <c>NAME=value</c>; empty for none.</summary>
+    public IReadOnlyList<string> Env { get; init; } = [];
     public List<string> Resizes { get; } = [];
     public bool HasExited { get; private set; }
     public int ExitCode { get; private set; }

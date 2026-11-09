@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -63,7 +64,8 @@ public class WorktreePreviewServiceLaunchTests : IDisposable
     [InlineData(NetworkMode.Off, false)]
     public void A_preview_is_proxied_in_every_mode_but_Off(NetworkMode mode, bool proxied)
     {
-        var psi = BuildService("http://127.0.0.1:3128").BuildPreviewProcess(Step(mode));
+        var service = BuildService("http://127.0.0.1:3128");
+        var psi = LocalRunHost.Launch(service.PreparedCommand(Step(mode)));
 
         Assert.Equal(proxied, psi.Environment.TryGetValue("HTTPS_PROXY", out var proxy) && proxy == "http://127.0.0.1:3128");
     }
@@ -76,7 +78,7 @@ public class WorktreePreviewServiceLaunchTests : IDisposable
             _stateDirectory,
             new Dictionary<string, string>(StringComparer.Ordinal) { ["UseSharedCompilation"] = "true" });
 
-        var psi = BuildService().BuildPreviewProcess(step);
+        var psi = LocalRunHost.Launch(BuildService().PreparedCommand(step));
 
         Assert.Equal("true", psi.Environment["UseSharedCompilation"]);
         Assert.Equal("1", psi.Environment["MSBUILDDISABLENODEREUSE"]);

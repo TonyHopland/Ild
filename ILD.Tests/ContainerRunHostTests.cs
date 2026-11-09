@@ -179,7 +179,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         await CopilotLaunch.RunAsync(host, _run, WorkingDirectory, readRoot, ca, "http://ild.example:8080");
 
-        var launch = _api.Execs.Last().Command;
+        var launch = _api.Execs.Last().Env;
         Assert.Contains("GH_HOST=ild.example:8442", launch);
         var staged = Assert.Single(launch, c => c.StartsWith("NODE_EXTRA_CA_CERTS=", StringComparison.Ordinal))["NODE_EXTRA_CA_CERTS=".Length..];
         Assert.StartsWith(RunPaths.AgentReadDirectory + "/", staged);
@@ -517,9 +517,9 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             await e.ExitAsync(3);
         };
         var psi = Command(WorkingDirectory, "make-it", "a b");
-        psi.Environment["ILD_TEST_ONLY"] = "yes";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ILD_TEST_ONLY"] = "yes" }), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("hello\n", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
@@ -527,9 +527,10 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(3, process.ExitCode);
         var exec = _api.Execs.Last();
         Assert.Equal(Name(_run), exec.Container);
-        Assert.Contains("ILD_TEST_ONLY=yes", exec.Command);
-        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
-        Assert.DoesNotContain(exec.Command, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Contains("ILD_TEST_ONLY=yes", exec.Env);
+        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.DoesNotContain(exec.Env, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.DoesNotContain(exec.Command, c => c.Contains("ILD_TEST_ONLY", StringComparison.Ordinal));
         Assert.Equal(["make-it", "a b"], exec.Command.TakeLast(2));
         Assert.Contains(WorkingDirectory, exec.Command);
     }
@@ -579,12 +580,12 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         var psi = Command(WorkingDirectory, "curl");
-        psi.Environment["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128" }), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var proxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
+        var proxy = Assert.Single(_api.Execs.Last().Env, c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
         Assert.Contains("ild.example:3128", proxy);
         Assert.DoesNotContain("127.0.0.1", proxy);
     }
@@ -598,7 +599,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var launch = _api.Execs.Last().Command;
+        var launch = _api.Execs.Last().Env;
         foreach (var name in new[] { "NO_PROXY", "no_proxy" })
             Assert.Contains(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) && c.Split('=', 2)[1].Split(',').Contains("ild.example"));
         Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1", RunPaths.WorkingDirectory(_run)));
@@ -614,7 +615,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var noProxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
+        var noProxy = Assert.Single(_api.Execs.Last().Env, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
         Assert.Contains("ild-api", noProxy);
         Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
         Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
@@ -669,16 +670,15 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var written = new Dictionary<string, string>();
         var host = AgentReadHost(readRoot, written);
         var psi = Command(WorkingDirectory, "/bin/sh", "-c", "npm install");
-        psi.Environment["NPM_CONFIG_USERCONFIG"] = npmrc;
 
         using var process = await host.StartCommandAsync(
-            RunCommand.Prepared(psi, _run, new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, [npmrc]),
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, [npmrc]),
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var staged = $"{RunPaths.AgentReadDirectory}/ild-package-feeds/{_run:N}-cmd-1.npmrc";
         Assert.Equal("//feed/:_password=abc\n", written[staged]);
-        var launch = _api.Execs.Last().Command;
+        var launch = _api.Execs.Last().Env;
         Assert.Contains($"NPM_CONFIG_USERCONFIG={staged}", launch);
         Assert.Contains(launch, c => c.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal) && c.Contains("ild.example:3128", StringComparison.Ordinal));
     }
@@ -693,19 +693,19 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "/bin/sh", "-c", "npm start");
 
         using var process = await host.StartCommandAsync(
-            RunCommand.Prepared(psi, environment: new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, files: [npmrc]),
+            RunCommand.Prepared(psi, environment: new Dictionary<string, string?> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, files: [npmrc]),
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var staged = $"{RunPaths.AgentReadDirectory}/ild-package-feeds/{_run:N}-preview-1.npmrc";
         Assert.True(written.ContainsKey(staged));
-        var launch = _api.Execs.Last().Command;
+        var launch = _api.Execs.Last().Env;
         Assert.Contains($"NPM_CONFIG_USERCONFIG={staged}", launch);
         Assert.Contains(launch, c => c.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal) && c.Contains("ild.example:3128", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task A_variable_the_caller_set_survives_when_ilds_own_environment_has_the_same_value()
+    public async Task A_variable_the_caller_set_reaches_the_run_and_one_only_ilds_own_environment_has_does_not()
     {
         await CreateRunAsync();
         var previous = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
@@ -715,14 +715,13 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         try
         {
             var psi = Command(WorkingDirectory, "dotnet", "run");
-            psi.Environment["ASPNETCORE_HTTP_PORTS"] = "8080";
 
             using var process = await _host.StartCommandAsync(
-                RunCommand.Prepared(psi, _run, new Dictionary<string, string> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }),
+                RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }),
                 TestContext.Current.CancellationToken);
             await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-            var launch = _api.Execs.Last().Command;
+            var launch = _api.Execs.Last().Env;
             Assert.Contains("ASPNETCORE_HTTP_PORTS=8080", launch);
             Assert.DoesNotContain("INHERITED_ONLY_FROM_ILD=8080", launch);
         }
@@ -749,18 +748,22 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             var secrets = AgentIsolation.SecretEnvironmentKeys;
             Assert.Contains(extra, secrets);
             foreach (var name in secrets) psi.Environment[name] = "secret-" + name;
-            psi.Environment["ILD_CALLER_SET"] = "kept";
+            var caller = new Dictionary<string, string?> { ["ILD_CALLER_SET"] = "kept" };
 
             var command = asAgent
-                ? RunCommand.Agent(psi, _run, null, NetworkMode.Whitelist, null)
-                : RunCommand.Prepared(psi, _run);
+                ? RunCommand.Agent(psi, _run, null, NetworkMode.Whitelist, caller)
+                : RunCommand.Prepared(psi, _run, caller);
             using var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
             await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-            var launch = _api.Execs.Last().Command;
+            var exec = _api.Execs.Last();
+            var launch = exec.Env;
             Assert.Contains("ILD_CALLER_SET=kept", launch);
             foreach (var name in secrets)
+            {
                 Assert.DoesNotContain(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) || c.Contains("secret-" + name, StringComparison.Ordinal));
+                Assert.DoesNotContain(exec.Command, c => c.Contains("secret-" + name, StringComparison.Ordinal));
+            }
             Assert.DoesNotContain(launch, c => c.StartsWith("ILD_INHERITED_PROBE=", StringComparison.Ordinal));
         }
         finally
@@ -784,7 +787,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", _api.Execs.Last().Command);
+        Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", _api.Execs.Last().Env);
     }
 
     // -- The direct route (network mode Off) -------------------------------------
@@ -800,7 +803,10 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
     private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
 
-    private IEnumerable<string> LaunchEnvironment() => _api.Execs.Last(e => e.Command.Contains("env")).Command.Where(c => ProxyVariables.Any(v => c.StartsWith(v + "=", StringComparison.Ordinal)));
+    // The exec of a started command: the one that runs the wrapper, whose own environment is the exec's Env field.
+    private FakeDockerExec LaunchExec() => _api.Execs.Last(e => e.Command.Any(c => c.Contains("setsid -w", StringComparison.Ordinal)));
+
+    private IEnumerable<string> LaunchEnvironment() => LaunchExec().Env.Where(c => ProxyVariables.Any(v => c.StartsWith(v + "=", StringComparison.Ordinal)));
 
     [Theory]
     [InlineData(false)]
@@ -814,7 +820,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.Contains(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
         Assert.Empty(LaunchEnvironment());
-        Assert.Contains(_api.Execs.Last(e => e.Command.Contains("env")).Command, c => c.StartsWith($"{_run:N}/{ExecRunHost.OffPrefix}", StringComparison.Ordinal));
+        Assert.Contains(LaunchExec().Command, c => c.StartsWith($"{_run:N}/{ExecRunHost.OffPrefix}", StringComparison.Ordinal));
         var open = _api.Network(_host.OpenNetworkName)!;
         Assert.False(open["Internal"]!.GetValue<bool>());
         Assert.Equal("open", open["Labels"]![RunPaths.RoleLabel]!.GetValue<string>());
@@ -1036,6 +1042,68 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var exec = _api.Execs.Last();
         Assert.True(exec.Tty);
         Assert.Contains("120x30", exec.Resizes);
+    }
+
+    private const string GatewayToken = "gateway-token-value-1";
+    private const string ApiToken = "ild-api-token-value-2";
+
+    private static Dictionary<string, string?> Secrets() => new() { ["ANTHROPIC_API_KEY"] = GatewayToken, ["ILD_API_TOKEN"] = ApiToken };
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task No_secret_of_a_commands_environment_is_in_any_exec_command_it_travels_in_the_exec_create_env_field(bool asAgent)
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "claude", "-p", "hi");
+
+        using var process = await _host.StartCommandAsync(
+            asAgent ? RunCommand.Agent(psi, _run, null, NetworkMode.Monitor, Secrets()) : RunCommand.Prepared(psi, _run, Secrets()),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var exec = LaunchExec();
+        Assert.Contains($"ANTHROPIC_API_KEY={GatewayToken}", exec.Env);
+        Assert.Contains($"ILD_API_TOKEN={ApiToken}", exec.Env);
+        Assert.DoesNotContain(_api.Execs.SelectMany(e => e.Command), c => c.Contains(GatewayToken, StringComparison.Ordinal) || c.Contains(ApiToken, StringComparison.Ordinal));
+        Assert.DoesNotContain(_api.Execs, e => e.StdinSoFar().Contains(GatewayToken, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task No_secret_of_a_terminals_environment_is_in_the_exec_command_or_typed_into_the_terminal()
+    {
+        await CreateRunAsync();
+
+        using var pty = await _host.OpenTerminalAsync(
+            new PtyOptions
+            {
+                Cwd = WorkingDirectory, App = "/bin/bash", Cols = 80, Rows = 24, Name = "t",
+                Environment = new Dictionary<string, string> { ["ILD_API_TOKEN"] = ApiToken },
+            }, TestContext.Current.CancellationToken);
+
+        var exec = _api.Execs.Last();
+        Assert.True(exec.Tty);
+        Assert.Contains($"ILD_API_TOKEN={ApiToken}", exec.Env);
+        Assert.Contains($"HOME={RunPaths.HomeDirectory(_run)}", exec.Env);
+        Assert.DoesNotContain(exec.Command, c => c.Contains(ApiToken, StringComparison.Ordinal));
+        Assert.DoesNotContain(ApiToken, exec.StdinSoFar());
+    }
+
+    [Fact]
+    public async Task A_callers_path_cannot_hide_the_runs_toolchains_and_its_home_is_the_runs()
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "npm", "test");
+
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["PATH"] = "/caller/bin", ["HOME"] = "/caller/home" }),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var exec = LaunchExec();
+        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.DoesNotContain(exec.Env, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Equal("/caller/bin", exec.Command[7]);
     }
 
     [Fact]
@@ -1911,13 +1979,13 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_variable_the_caller_sets_on_purpose_reaches_the_run_but_ilds_own_path_does_not()
+    public async Task A_variable_the_caller_sets_on_purpose_reaches_the_run_and_its_path_goes_in_front_of_the_runs_never_in_place_of_it()
     {
         await CreateRunAsync();
         var psi = Command(WorkingDirectory, "npm", "install");
-        psi.Environment["PATH"] = "/ild/side/bin:/usr/bin";
-        var environment = new Dictionary<string, string>
+        var environment = new Dictionary<string, string?>
         {
+            ["PATH"] = "/caller/bin:/usr/bin",
             ["NPM_CONFIG_PREFIX"] = "/workspace/.npm-global",
             ["NPM_CONFIG_CACHE"] = "/state/npm-cache",
         };
@@ -1926,9 +1994,12 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var exec = _api.Execs.Last();
-        Assert.Contains("NPM_CONFIG_CACHE=/state/npm-cache", exec.Command);
-        Assert.Contains("NPM_CONFIG_PREFIX=/workspace/.npm-global", exec.Command);
-        Assert.DoesNotContain(exec.Command, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Contains("NPM_CONFIG_CACHE=/state/npm-cache", exec.Env);
+        // The run's own prefix was set when it was made; the host owns it.
+        Assert.DoesNotContain(exec.Env, c => c.StartsWith("NPM_CONFIG_PREFIX=", StringComparison.Ordinal));
+        // The run's PATH is the container's: the wrapper puts the caller's entries in front of it, and no exec variable replaces it.
+        Assert.DoesNotContain(exec.Env, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Contains("/caller/bin:/usr/bin", exec.Command);
     }
 
     // -- Socket ------------------------------------------------------------------
@@ -2474,13 +2545,26 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var exec = _api.Execs.Last();
         var home = RunPaths.ChatHome(chat);
         Assert.Equal(ChatContainer, exec.Container);
-        Assert.Equal($"HOME={home}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.Equal($"HOME={home}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
         Assert.Equal(
             $"PATH=/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}",
-            exec.Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)));
+            exec.Env.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)));
         Assert.Contains(folder, exec.Command);
         Assert.Equal(["git", "status"], exec.Command.TakeLast(2));
         Assert.Contains($"{chat:N}/", exec.Command.Single(c => c.StartsWith(chat.ToString("N") + "/", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task A_chat_command_gets_the_chats_npm_prefix_whatever_the_caller_sets()
+    {
+        var chat = Guid.NewGuid();
+        var psi = Command(ChatFolder(chat), "npm", "i", "-g", "x");
+
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(psi, chat, new Dictionary<string, string?> { ["NPM_CONFIG_PREFIX"] = "/caller/prefix" }), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal($"NPM_CONFIG_PREFIX={RunPaths.ChatHome(chat)}/.local", _api.Execs.Last().Env.Single(c => c.StartsWith("NPM_CONFIG_PREFIX=", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -2494,7 +2578,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var exec = _api.Execs.Last();
         Assert.Equal(ChatContainer, exec.Container);
-        Assert.Equal($"HOME={RunPaths.ChatHome(chat)}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.Equal($"HOME={RunPaths.ChatHome(chat)}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
         Assert.Contains(exec.Command, c => c.StartsWith(title.ToString("N") + "/", StringComparison.Ordinal));
     }
 
@@ -2513,7 +2597,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         using var process = await restarted.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "node", "-v"), chat), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var path = _api.Execs.Last().Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        var path = _api.Execs.Last().Env.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal));
         Assert.StartsWith("PATH=/opt/ild-toolchains/mise/installs/node/20.19.1/bin:", path, StringComparison.Ordinal);
     }
 
@@ -2793,7 +2877,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Empty(local.Started);
         var exec = _api.Execs.Last();
         Assert.Equal(ChatContainer, exec.Container);
-        Assert.Contains($"HOME={RunPaths.ChatHome(chat)}", exec.Command);
+        Assert.Contains($"HOME={RunPaths.ChatHome(chat)}", exec.Env);
     }
 
     [Fact]

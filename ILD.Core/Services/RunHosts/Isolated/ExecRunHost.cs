@@ -37,11 +37,36 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 {
     // Each command is a process group of its own, recorded under a name, so it can be killed as a group
     // without a connection to the command: the runtime does not reliably kill what an exec ran when its stream closes.
+    // Arguments: the directory, the command's name, the file its environment is sourced from and removed ("" for none), the entries put in
+    // front of its PATH ("" for none), then the command. The environment travels in the file or in the exec's own field, never in the command.
     private const string CommandWrapper = $$"""
-        dir=$1; id=$2; shift 2
-        cd -- "$dir" || exit 126
+        dir=$1; id=$2; envfile=$3; pathprefix=$4; shift 4
+        cd -- "$dir" || { [ -z "$envfile" ] || rm -f -- "$envfile"; exit 126; }
+        {{EnvironmentPrologue}}
         mkdir -p -- "{{RunPaths.ProcessDirectory}}/${id%/*}"
         exec setsid -w sh -c 'f={{RunPaths.ProcessDirectory}}/$1; shift; echo $$ > "$f"; "$@"; rc=$?; rm -f -- "$f"; exit $rc' sh "$id" "$@"
+        """;
+
+    private const string EnvironmentPrologue = """
+        if [ -n "$envfile" ]; then . "$envfile"; rm -f -- "$envfile"; fi
+        if [ -n "$pathprefix" ]; then PATH="$pathprefix:$PATH"; export PATH; fi
+        """;
+
+    /// <summary>
+    /// Writes stdin to <c>$1</c>, which only its owner can read: the file holds the environment of a command whose wrapper sources and removes it.
+    /// The mode is set before anything is written, whatever the umask of the exec is.
+    /// </summary>
+    internal const string WriteEnvironmentFileScript = """
+        mkdir -p -- "$(dirname -- "$1")" || exit
+        umask 077
+        rm -f -- "$1" && cat > "$1" && chmod 0600 -- "$1"
+        """;
+
+    private const string TerminalWrapper = $$"""
+        cd -- "$1" || { [ -z "$2" ] || rm -f -- "$2"; exit 126; }
+        envfile=$2; pathprefix=$3; shift 3
+        {{EnvironmentPrologue}}
+        exec "$@"
         """;
 
     private const string KillCommandScript = $$"""
@@ -265,7 +290,15 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public virtual bool HostsChats => false;
 
     /// <summary>Start a command in the run's environment, with the streams it needs.</summary>
-    protected abstract Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct);
+    /// <param name="environment">What the exec is started with, when <see cref="ExecTakesEnvironment"/>; otherwise null.</param>
+    protected abstract Task<IExecStream> OpenExecStreamAsync(
+        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct);
+
+    /// <summary>
+    /// Whether the exec transport carries an environment in a field of its own. Where it does not, the environment goes in a file the
+    /// command's wrapper sources: the command is part of what the transport records, and no secret may be in it.
+    /// </summary>
+    protected virtual bool ExecTakesEnvironment => false;
 
     /// <summary>Whether the run has an environment to exec in.</summary>
     protected abstract Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct);
@@ -503,24 +536,19 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var psi = command.Start;
         await SyncForwardsAsync(owner, ct);
         var (fileName, arguments) = (psi.FileName, psi.ArgumentList.ToList());
-        var environment = EnvironmentFor(command, psi, owner, out var network);
-        if (owner.Chat)
-            foreach (var line in await ChatEnvironmentAsync(owner.Id, ct))
-                environment[line[..line.IndexOf('=')]] = line[(line.IndexOf('=') + 1)..];
+        var merged = await EnvironmentForAsync(command, owner, ct);
         if (command.AsAgent && Path.IsPathRooted(fileName)) fileName = Path.GetFileName(fileName);
-        (arguments, environment) = await StageAgentFilesAsync(owner, command, arguments, environment, ct);
-        foreach (var (name, value) in network) environment[name] = value;
+        (arguments, var environment) = await StageAgentFilesAsync(owner, command, arguments, merged.Variables, ct);
 
         var directory = string.IsNullOrEmpty(psi.WorkingDirectory) ? RunPaths.WorkingDirectory(owner.Id) : psi.WorkingDirectory;
         // Only a command started for the run itself is one KillAllAsync ends; a preview service, which has no owner, outlives a retry.
         // A process launched in mode Off is told by its name, which is what says whether the route is still needed.
         var id = $"{(command.OwnerId != Guid.Empty ? command.OwnerId.ToString("N") : "unowned")}/{(direct ? OffPrefix : "")}{Guid.NewGuid():N}";
-        var wrapped = new List<string> { "/bin/sh", "-c", CommandWrapper, "sh", directory, id, "env" };
-        wrapped.AddRange(environment.Select(e => $"{e.Key}={e.Value}"));
-        wrapped.Add(fileName);
+        var (execEnvironment, envFile) = await DeliverEnvironmentAsync(owner, id, environment, ct);
+        var wrapped = new List<string> { "/bin/sh", "-c", CommandWrapper, "sh", directory, id, envFile, merged.PathPrefix, fileName };
         wrapped.AddRange(arguments);
 
-        var exec = await OpenExecAsync(owner, wrapped, stdin: psi.RedirectStandardInput, tty: false, ct);
+        var exec = await OpenExecOrRemoveFileAsync(owner, wrapped, execEnvironment, envFile, stdin: psi.RedirectStandardInput, tty: false, ct);
         return new ExecRunProcess(exec, Noun, id, psi.RedirectStandardInput, (commandId, token) => KillCommandAsync(owner, commandId, token),
             direct ? () => EndOff(owner) : null);
     }
@@ -584,46 +612,74 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     /// <summary>
-    /// What the command needs set in the run: what its caller put on it that the orchestrator's own environment did not
-    /// already hold (a start info begins as a copy of that environment, none of which belongs in the run), with the
-    /// orchestrator's secrets taken out, and the run's own home.
+    /// The environment of a command in the run, merged by <see cref="CommandEnvironment"/>. The run's own defaults are nothing (its
+    /// pod or container has its environment), or for a chat its toolchains. The host owns the home and the proxy, which in a proxied
+    /// mode the run's network reaches only ILD through: a Cmd node or a preview needs it as much as an agent does. One in network mode Off has the
+    /// direct route (OpenDirectRouteAsync) and no proxy, as ADR-0019 says: tools that ignore the proxy variables or are not HTTP work as they
+    /// would on the machine itself. A caller's npm prefix is dropped: a run's own was set when its container was made, and a chat, which shares one, gets its own in its home.
     /// </summary>
-    private Dictionary<string, string> EnvironmentFor(RunCommand command, ProcessStartInfo psi, ExecOwner owner, out Dictionary<string, string> network)
+    private async Task<CommandEnvironment> EnvironmentForAsync(RunCommand command, ExecOwner owner, CancellationToken ct)
     {
-        var own = Environment.GetEnvironmentVariables();
-        var secrets = AgentIsolation.SecretEnvironmentKeys;
-        var environment = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (name, value) in psi.Environment)
-        {
-            if (value is null || secrets.Contains(name)) continue;
-            if (own.Contains(name) && (string?)own[name] == value) continue;
-            // ILD's directories mean nothing in the run, whose PATH is its toolchains', set when it was made.
-            if (name == "PATH") continue;
-            environment[name] = value;
-        }
-        // What the caller set on purpose, which is never ILD's own PATH or home: callers leave those to the run.
-        foreach (var (name, value) in command.Environment ?? new Dictionary<string, string>())
-            environment[name] = value;
+        var defaults = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (owner.Chat)
+            foreach (var line in await ChatEnvironmentAsync(owner.Id, ct))
+                defaults[line[..line.IndexOf('=')]] = line[(line.IndexOf('=') + 1)..];
 
-        network = new Dictionary<string, string>(StringComparer.Ordinal);
-        // The run's network reaches only ILD, so a command in a proxied mode goes through the proxy; a Cmd node or a preview needs
-        // it as much as an agent does. One in network mode Off has the direct route (OpenDirectRouteAsync) and no proxy, as
-        // ADR-0019 says: tools that ignore the proxy variables or are not HTTP work as they would on the machine itself.
+        var hostOwned = new Dictionary<string, string?>(StringComparer.Ordinal) { ["HOME"] = owner.Home, ["NPM_CONFIG_PREFIX"] = owner.Chat ? $"{owner.Home}/.local" : null };
         if (command.NetworkMode != ILD.Data.Enums.NetworkMode.Off && AgentIsolation.EgressProxyUrl(command.ProviderId) is { } proxy)
             foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
-                network[name] = value;
+                hostOwned[name] = value;
 
+        var merged = CommandEnvironment.Merge(defaults, command.Environment, hostOwned);
+        return merged with { Variables = ThroughIld(merged.Variables, hostOwned.Keys) };
+    }
+
+    // ILD is on the run's own network: its address is the one the run reaches it at, and the gateway and the MCP endpoint go direct, not through the proxy.
+    private Dictionary<string, string> ThroughIld(IReadOnlyDictionary<string, string> variables, IEnumerable<string> hostOwned)
+    {
         var ild = new Uri(IldUrl).Host;
-        foreach (var bag in new[] { environment, network })
-            foreach (var (name, value) in bag.ToList())
-                bag[name] = ThroughIldHost(value, ild);
-        // ILD is on the run's own network: the gateway and the MCP endpoint go direct, not through the proxy.
+        var result = variables.ToDictionary(e => e.Key, e => ThroughIldHost(e.Value, ild), StringComparer.Ordinal);
         foreach (var name in new[] { "NO_PROXY", "no_proxy" })
-            if (network.TryGetValue(name, out var noProxy))
-                network[name] = $"{noProxy},{ild}";
+            if (result.TryGetValue(name, out var noProxy) && hostOwned.Contains(name))
+                result[name] = $"{noProxy},{ild}";
+        return result;
+    }
 
-        environment["HOME"] = owner.Home;
-        return environment;
+    /// <summary>
+    /// Where the environment of a command goes: the exec's own field when the transport has one, otherwise a file in the run that only its owner
+    /// can read, which the command's wrapper sources and removes before it runs the command, so the command's stdin and a terminal are untouched.
+    /// </summary>
+    private async Task<(IReadOnlyDictionary<string, string>? Exec, string File)> DeliverEnvironmentAsync(
+        ExecOwner owner, string name, IReadOnlyDictionary<string, string> variables, CancellationToken ct)
+    {
+        if (variables.Count == 0) return (null, "");
+        if (ExecTakesEnvironment) return (variables, "");
+
+        var path = $"{RunPaths.ProcessDirectory}/{name}.env";
+        using var content = new MemoryStream(Encoding.UTF8.GetBytes(CommandEnvironment.ShellExports(variables)));
+        var written = await ExecAsync(owner, ["/bin/sh", "-c", WriteEnvironmentFileScript, "sh", path], content, null, ct);
+        if (!written.Success)
+            throw new IOException($"could not write the command's environment in the run's {Noun}: {written.StdErr.Trim()}");
+        return (null, path);
+    }
+
+    // The file is the command's wrapper's to remove; a command that never started leaves it.
+    private async Task<IExecStream> OpenExecOrRemoveFileAsync(
+        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, string envFile, bool stdin, bool tty, CancellationToken ct)
+    {
+        try
+        {
+            return await OpenExecAsync(owner, command, environment, stdin, tty, ct);
+        }
+        catch
+        {
+            if (envFile.Length > 0)
+            {
+                try { await RunScriptAsync(owner, "rm -f -- \"$1\"", [envFile], CancellationToken.None); }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { Logger?.LogWarning(ex, "A command's environment file could not be removed from the run's {Noun}", Noun); }
+            }
+            throw;
+        }
     }
 
     /// <summary>The name an installer is known by to the egress proxy and the Network Log: its zone, which a repository's is followed by its id.</summary>
@@ -657,12 +713,12 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // directory of ILD's that a run cannot see; exactly the declared ones go to memory in it and the launch is pointed
     // at the copies. Text is never searched for paths: a prompt can say anything.
     private async Task<(List<string> Arguments, Dictionary<string, string> Environment)> StageAgentFilesAsync(
-        ExecOwner owner, RunCommand command, List<string> arguments, Dictionary<string, string> environment, CancellationToken ct)
+        ExecOwner owner, RunCommand command, List<string> arguments, IReadOnlyDictionary<string, string> environment, CancellationToken ct)
     {
-        if (command.Files.Count == 0) return (arguments, environment);
+        if (command.Files.Count == 0) return (arguments, environment.ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal));
         string root;
         try { root = Path.GetFullPath(AgentReadRoot()); }
-        catch (InvalidOperationException) { return (arguments, environment); }
+        catch (InvalidOperationException) { return (arguments, environment.ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal)); }
 
         var ownerSegment = owner.Id.ToString("N");
         var staged = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -725,17 +781,17 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         var owner = RunPaths.OwnerOf(options.Cwd)
             ?? throw new InvalidOperationException($"a terminal for a {Noun} needs a working directory in it");
-        var environment = (options.Environment ?? new Dictionary<string, string>()).ToDictionary(e => e.Key, e => e.Value);
-        environment["HOME"] = RunPaths.HomeDirectory(owner);
-        environment.TryAdd("TERM", "xterm-256color");
+        var caller = CommandEnvironment.Of(options.Environment);
+        caller.TryAdd("TERM", "xterm-256color");
+        var merged = CommandEnvironment.Merge(null, caller, new Dictionary<string, string?> { ["HOME"] = RunPaths.HomeDirectory(owner), ["NPM_CONFIG_PREFIX"] = null });
         await SyncForwardsAsync(owner, ct);
 
-        var command = new List<string> { "/bin/sh", "-c", "cd -- \"$1\" && shift && exec \"$@\"", "sh", options.Cwd, "env" };
-        command.AddRange(environment.Select(e => $"{e.Key}={e.Value}"));
-        command.Add(options.App);
+        // The terminal is the exec's stdin, so its environment never goes through it: the wrapper sources a file, which prints nothing.
+        var (execEnvironment, envFile) = await DeliverEnvironmentAsync(owner, $"{owner:N}/terminal-{Guid.NewGuid():N}", merged.Variables, ct);
+        var command = new List<string> { "/bin/sh", "-c", TerminalWrapper, "sh", options.Cwd, envFile, merged.PathPrefix, options.App };
         command.AddRange(options.CommandLine ?? []);
 
-        var exec = await OpenExecAsync(owner, command, stdin: true, tty: true, ct);
+        var exec = await OpenExecOrRemoveFileAsync(owner, command, execEnvironment, envFile, stdin: true, tty: true, ct);
         var pty = new ExecPty(exec);
         pty.Resize(options.Cols, options.Rows);
         return pty;
@@ -774,7 +830,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var id = $"{owner.Id:N}/{Guid.NewGuid():N}";
         try
         {
-            return await ExecAsync(owner, ["/bin/sh", "-c", CommandWrapper, "sh", "/", id, fileName, .. arguments], streams?.StandardInputFrom, streams?.StandardOutputTo, ct);
+            return await ExecAsync(owner, ["/bin/sh", "-c", CommandWrapper, "sh", "/", id, "", "", fileName, .. arguments], streams?.StandardInputFrom, streams?.StandardOutputTo, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1255,7 +1311,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             : RunPaths.ChatOf(path) is { } chat && HostsChats ? new ExecOwner(chat, Chat: true)
             : throw new InvalidOperationException($"{path} is not a path in a run's or chat's {Noun}");
 
-    private protected async Task<IExecStream> OpenExecAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
+    private protected async Task<IExecStream> OpenExecAsync(
+        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct)
     {
         // Counted before the stream is opened, since opening it is what makes the chat container when it is missing.
         ChatWork? work = null;
@@ -1266,7 +1323,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
         try
         {
-            var stream = await OpenExecStreamAsync(owner, command, stdin, tty, ct);
+            var stream = await OpenExecStreamAsync(owner, command, environment, stdin, tty, ct);
             return work is null ? stream : new ChatExecStream(stream, work);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1324,7 +1381,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// </summary>
     private async Task<RunHostOutput> ExecAsync(ExecOwner owner, IReadOnlyList<string> command, Stream? stdin, Stream? stdout, CancellationToken ct)
     {
-        using var exec = await OpenExecAsync(owner, command, stdin is not null, tty: false, ct);
+        using var exec = await OpenExecAsync(owner, command, environment: null, stdin is not null, tty: false, ct);
         using var collected = new MemoryStream();
         using var errors = new MemoryStream();
         var output = Drain(exec.Stdout, stdout ?? collected, ct);

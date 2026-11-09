@@ -56,21 +56,21 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// an API key travels as <c>x-api-key</c>, a subscription token as a bearer token. Nothing the
     /// gateway swaps in is ever in the CLI's environment, arguments or files (ADR-0031).
     /// </summary>
-    public static void ApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, AiProvider provider)
+    public static void ApplyGateway(IDictionary<string, string?> environment, ModelGatewayLease gateway, AiProvider provider)
     {
-        psi.Environment["ANTHROPIC_BASE_URL"] = gateway.UrlFor(GatewayRoutes.Anthropic);
+        environment["ANTHROPIC_BASE_URL"] = gateway.UrlFor(GatewayRoutes.Anthropic);
         var key = ModelCredentialSource.ClaudeLongLivedToken(provider);
         if (key is not null && key.StartsWith("sk-ant-api", StringComparison.Ordinal))
         {
-            psi.Environment["ANTHROPIC_API_KEY"] = gateway.Token;
-            psi.Environment.Remove("CLAUDE_CODE_OAUTH_TOKEN");
+            environment["ANTHROPIC_API_KEY"] = gateway.Token;
+            environment["CLAUDE_CODE_OAUTH_TOKEN"] = null;
         }
         else
         {
-            psi.Environment["CLAUDE_CODE_OAUTH_TOKEN"] = gateway.Token;
-            psi.Environment.Remove("ANTHROPIC_API_KEY");
+            environment["CLAUDE_CODE_OAUTH_TOKEN"] = gateway.Token;
+            environment["ANTHROPIC_API_KEY"] = null;
         }
-        psi.Environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
+        environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
     }
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
@@ -117,8 +117,9 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             try
             {
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
-                if (gateway is not null) ApplyGateway(psi, gateway, ctx.Provider);
-                proc = await StartAgentProcessAsync(psi, ctx, [mcpConfigPath]);
+                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+                if (gateway is not null) ApplyGateway(environment, gateway, ctx.Provider);
+                proc = await StartAgentProcessAsync(psi, ctx, environment, [mcpConfigPath]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

@@ -128,7 +128,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     opencodeModel,
                     opencodeConfigJson,
                     sessionIdToUse,
-                    extraArgs: extraArgs), ctx);
+                    extraArgs: extraArgs), ctx, BuildRunEnvironment(opencodeConfigJson));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -144,7 +144,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                             opencodeConfigJson,
                             sessionIdToUse,
                             useWorktreeAsWorkingDirectory: false,
-                            extraArgs: extraArgs), ctx);
+                            extraArgs: extraArgs), ctx, BuildRunEnvironment(opencodeConfigJson));
                     }
                     catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
                     {
@@ -472,6 +472,10 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags, ModelHasShortFlag = true },
     };
 
+    /// <summary>What opencode is launched with: its config, in the variable it reads it from.</summary>
+    public static Dictionary<string, string?> BuildRunEnvironment(string opencodeConfigJson)
+        => new(StringComparer.Ordinal) { ["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson };
+
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
@@ -483,7 +487,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         IReadOnlyList<string>? extraArgs = null)
     {
         var psi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory);
-        psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson;
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--dir");
         psi.ArgumentList.Add(worktreePath);

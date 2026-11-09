@@ -604,9 +604,9 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             await e.ExitAsync(3);
         };
         var psi = Command(WorkingDirectory, "make-it", "a b");
-        psi.Environment["ILD_TEST_ONLY"] = "yes";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ILD_TEST_ONLY"] = "yes" }), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("hello\n", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
@@ -614,9 +614,10 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(3, process.ExitCode);
         var exec = _api.Execs.Last();
         Assert.Equal(Name(_run), exec.Pod);
-        Assert.Contains("ILD_TEST_ONLY=yes", exec.Command);
-        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
-        Assert.DoesNotContain(exec.Command, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Contains("ILD_TEST_ONLY=yes", Env(exec));
+        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", Env(exec).Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.DoesNotContain(Env(exec), c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.DoesNotContain(exec.Command, c => c.Contains("ILD_TEST_ONLY", StringComparison.Ordinal));
         Assert.Equal(["make-it", "a b"], exec.Command.TakeLast(2));
         Assert.Contains(WorkingDirectory, exec.Command);
     }
@@ -666,17 +667,19 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         var psi = Command(WorkingDirectory, "/data/agents/claude-code/v1/node_modules/.bin/claude", "-p");
-        psi.Environment["OPENAI_BASE_URL"] = "http://ild.example:8080/gateway";
 
         using var process = await _host.StartCommandAsync(
-            RunCommand.Agent(psi, _run, null, NetworkMode.Off, new Dictionary<string, string> { ["FROM_CONTEXT"] = "1" }), TestContext.Current.CancellationToken);
+            RunCommand.Agent(psi, _run, null, NetworkMode.Off, new Dictionary<string, string?>
+            {
+                ["FROM_CONTEXT"] = "1", ["OPENAI_BASE_URL"] = "http://ild.example:8080/gateway",
+            }), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var command = _api.Execs.Last().Command;
-        Assert.DoesNotContain("/usr/bin/setpriv", command);
-        Assert.Equal(["claude", "-p"], command.TakeLast(2));
-        Assert.Contains("FROM_CONTEXT=1", command);
-        Assert.Contains("OPENAI_BASE_URL=http://ild.example:8080/gateway", command);
+        var exec = _api.Execs.Last();
+        Assert.DoesNotContain("/usr/bin/setpriv", exec.Command);
+        Assert.Equal(["claude", "-p"], exec.Command.TakeLast(2));
+        Assert.Contains("FROM_CONTEXT=1", Env(exec));
+        Assert.Contains("OPENAI_BASE_URL=http://ild.example:8080/gateway", Env(exec));
     }
 
     // -- The direct route (network mode Off) -------------------------------------
@@ -694,8 +697,13 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
 
+    // The exec of a started command: the one that runs the wrapper. Its environment is in the file the wrapper sources.
+    private FakeExec LaunchExec() => _api.Execs.Last(e => e.Command.Any(c => c.Contains("setsid -w", StringComparison.Ordinal)));
+
+    private IReadOnlyList<string> Env(FakeExec exec) => _api.EnvironmentOf(exec);
+
     private IEnumerable<string> LaunchProxyVariables()
-        => _api.Execs.Last(e => e.Command.Contains("env")).Command.Where(c => ProxyVariables.Any(v => c.StartsWith(v + "=", StringComparison.Ordinal)));
+        => Env(LaunchExec()).Where(c => ProxyVariables.Any(v => c.StartsWith(v + "=", StringComparison.Ordinal)));
 
     [Theory]
     [InlineData(false)]
@@ -810,12 +818,12 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         var psi = Command(WorkingDirectory, "curl");
-        psi.Environment["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128";
 
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128" }), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var proxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
+        var proxy = Assert.Single(Env(_api.Execs.Last()), c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
         Assert.Contains("ild.example:3128", proxy);
         Assert.DoesNotContain("127.0.0.1", proxy);
     }
@@ -829,7 +837,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var launch = _api.Execs.Last().Command;
+        var launch = Env(_api.Execs.Last());
         foreach (var name in new[] { "NO_PROXY", "no_proxy" })
             Assert.Contains(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) && c.Split('=', 2)[1].Split(',').Contains("ild.example"));
         Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1", RunPaths.WorkingDirectory(_run)));
@@ -861,7 +869,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var noProxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
+        var noProxy = Assert.Single(Env(_api.Execs.Last()), c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
         Assert.Contains("ild-api", noProxy);
         Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
         Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
@@ -900,16 +908,17 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "claude", "--mcp-config", config);
 
         using var process = await host.StartCommandAsync(
-            RunCommand.Agent(psi, _run, null, NetworkMode.Off, new Dictionary<string, string> { ["CFG"] = "--c=" + config }, [config]),
+            RunCommand.Agent(psi, _run, null, NetworkMode.Off, new Dictionary<string, string?> { ["CFG"] = "--c=" + config }, [config]),
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var staged = $"/run/ild/agent-read/ild-mcp-config/claude-{_run:N}-1.json";
         Assert.Equal("{\"mcp\":true}", written[staged]);
-        var launch = _api.Execs.Last().Command;
-        Assert.Contains(staged, launch);
+        var exec = _api.Execs.Last();
+        var launch = Env(exec);
+        Assert.Contains(staged, exec.Command);
         Assert.Contains("CFG=--c=" + staged, launch);
-        Assert.DoesNotContain(launch, c => c.Contains(readRoot, StringComparison.Ordinal));
+        Assert.DoesNotContain(launch.Concat(exec.Command), c => c.Contains(readRoot, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -934,7 +943,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         await CopilotLaunch.RunAsync(host, _run, WorkingDirectory, readRoot, ca, "http://ild.example:8080");
 
-        var launch = _api.Execs.Last().Command;
+        var launch = Env(_api.Execs.Last());
         Assert.Contains("GH_HOST=ild.example:8442", launch);
         var staged = Assert.Single(launch, c => c.StartsWith("NODE_EXTRA_CA_CERTS=", StringComparison.Ordinal))["NODE_EXTRA_CA_CERTS=".Length..];
         Assert.StartsWith(RunPaths.AgentReadDirectory + "/", staged);
@@ -958,15 +967,15 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         using var process = await host.StartCommandAsync(
             RunCommand.Agent(psi, _run, null, NetworkMode.Off,
-                new Dictionary<string, string> { ["CFG"] = $"{readRoot}/../auth.json" },
+                new Dictionary<string, string?> { ["CFG"] = $"{readRoot}/../auth.json" },
                 [others, $"{readRoot}/ild-mcp-config/../../auth.json", Path.Combine(readRoot, "ild-mcp-config"), readRoot]),
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(written);
-        var launch = _api.Execs.Last().Command;
-        Assert.Contains(prompt, launch);
-        Assert.Contains($"CFG={readRoot}/../auth.json", launch);
+        var exec = _api.Execs.Last();
+        Assert.Contains(prompt, exec.Command);
+        Assert.Contains($"CFG={readRoot}/../auth.json", Env(exec));
     }
 
     // -- Every command gets the proxy and its declared files ----------------------
@@ -988,16 +997,15 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var written = new Dictionary<string, string>();
         var host = AgentReadHost(readRoot, written);
         var psi = Command(WorkingDirectory, "/bin/sh", "-c", "npm install");
-        psi.Environment["NPM_CONFIG_USERCONFIG"] = npmrc;
 
         using var process = await host.StartCommandAsync(
-            RunCommand.Prepared(psi, _run, new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, [npmrc]),
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, [npmrc]),
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var staged = $"{RunPaths.AgentReadDirectory}/ild-package-feeds/{_run:N}-cmd-1.npmrc";
         Assert.Equal("//feed/:_password=abc\n", written[staged]);
-        var launch = _api.Execs.Last().Command;
+        var launch = Env(_api.Execs.Last());
         Assert.Contains($"NPM_CONFIG_USERCONFIG={staged}", launch);
         Assert.Contains(launch, c => c.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal) && c.Contains("ild.example:3128", StringComparison.Ordinal));
     }
@@ -1012,19 +1020,19 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var psi = Command(WorkingDirectory, "/bin/sh", "-c", "npm start");
 
         using var process = await host.StartCommandAsync(
-            RunCommand.Prepared(psi, environment: new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, files: [npmrc]),
+            RunCommand.Prepared(psi, environment: new Dictionary<string, string?> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, files: [npmrc]),
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         var staged = $"{RunPaths.AgentReadDirectory}/ild-package-feeds/{_run:N}-preview-1.npmrc";
         Assert.True(written.ContainsKey(staged));
-        var launch = _api.Execs.Last().Command;
+        var launch = Env(_api.Execs.Last());
         Assert.Contains($"NPM_CONFIG_USERCONFIG={staged}", launch);
         Assert.Contains(launch, c => c.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal) && c.Contains("ild.example:3128", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task A_variable_the_caller_set_survives_when_ilds_own_environment_has_the_same_value()
+    public async Task A_variable_the_caller_set_reaches_the_run_and_one_only_ilds_own_environment_has_does_not()
     {
         await CreateRunAsync();
         var previous = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
@@ -1034,14 +1042,13 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         try
         {
             var psi = Command(WorkingDirectory, "dotnet", "run");
-            psi.Environment["ASPNETCORE_HTTP_PORTS"] = "8080";
 
             using var process = await _host.StartCommandAsync(
-                RunCommand.Prepared(psi, _run, new Dictionary<string, string> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }),
+                RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }),
                 TestContext.Current.CancellationToken);
             await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-            var launch = _api.Execs.Last().Command;
+            var launch = Env(_api.Execs.Last());
             Assert.Contains("ASPNETCORE_HTTP_PORTS=8080", launch);
             Assert.DoesNotContain("INHERITED_ONLY_FROM_ILD=8080", launch);
         }
@@ -1068,18 +1075,22 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             var secrets = AgentIsolation.SecretEnvironmentKeys;
             Assert.Contains(extra, secrets);
             foreach (var name in secrets) psi.Environment[name] = "secret-" + name;
-            psi.Environment["ILD_CALLER_SET"] = "kept";
+            var caller = new Dictionary<string, string?> { ["ILD_CALLER_SET"] = "kept" };
 
             var command = asAgent
-                ? RunCommand.Agent(psi, _run, null, NetworkMode.Whitelist, null)
-                : RunCommand.Prepared(psi, _run);
+                ? RunCommand.Agent(psi, _run, null, NetworkMode.Whitelist, caller)
+                : RunCommand.Prepared(psi, _run, caller);
             using var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
             await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-            var launch = _api.Execs.Last().Command;
+            var exec = _api.Execs.Last();
+            var launch = Env(exec);
             Assert.Contains("ILD_CALLER_SET=kept", launch);
             foreach (var name in secrets)
+            {
                 Assert.DoesNotContain(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) || c.Contains("secret-" + name, StringComparison.Ordinal));
+                Assert.DoesNotContain(exec.Command, c => c.Contains("secret-" + name, StringComparison.Ordinal));
+            }
             Assert.DoesNotContain(launch, c => c.StartsWith("ILD_INHERITED_PROBE=", StringComparison.Ordinal));
         }
         finally
@@ -1103,7 +1114,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", _api.Execs.Last().Command);
+        Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", Env(_api.Execs.Last()));
     }
 
     // -- Kill leftovers ----------------------------------------------------------
@@ -1282,6 +1293,100 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var exec = _api.Execs.Last();
         Assert.True(exec.Tty);
         Assert.Contains(exec.Resizes, r => r.Contains("120") && r.Contains("30"));
+    }
+
+    private const string GatewayToken = "gateway-token-value-1";
+    private const string ApiToken = "ild-api-token-value-2";
+
+    private static Dictionary<string, string?> Secrets() => new() { ["ANTHROPIC_API_KEY"] = GatewayToken, ["ILD_API_TOKEN"] = ApiToken };
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task No_secret_of_a_commands_environment_is_in_any_exec_command_or_url_it_travels_only_in_a_private_file_written_over_stdin(bool asAgent)
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "claude", "-p", "hi");
+
+        using var process = await _host.StartCommandAsync(
+            asAgent ? RunCommand.Agent(psi, _run, null, NetworkMode.Monitor, Secrets()) : RunCommand.Prepared(psi, _run, Secrets()),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(_api.Execs.SelectMany(e => e.Command), c => c.Contains(GatewayToken, StringComparison.Ordinal) || c.Contains(ApiToken, StringComparison.Ordinal));
+        var launch = LaunchExec();
+        Assert.Contains($"ANTHROPIC_API_KEY={GatewayToken}", Env(launch));
+        Assert.Contains($"ILD_API_TOKEN={ApiToken}", Env(launch));
+        // The one place the secret is sent: the write of the file, by a command that has no secret in it, to a path only the command's wrapper is told.
+        var write = Assert.Single(_api.Execs, e => e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript));
+        Assert.Contains(GatewayToken, write.StdinSoFar());
+        Assert.StartsWith(RunPaths.ProcessDirectory + "/", write.Command[^1]);
+        Assert.Equal(write.Command[^1], launch.Command[6]);
+        Assert.Contains("umask 077", ExecRunHost.WriteEnvironmentFileScript);
+        // The command's own stdin is its own.
+        Assert.DoesNotContain(GatewayToken, launch.StdinSoFar());
+    }
+
+    [Fact]
+    public async Task No_secret_of_a_terminals_environment_is_in_the_exec_command_url_or_typed_into_the_terminal()
+    {
+        await CreateRunAsync();
+
+        using var pty = await _host.OpenTerminalAsync(
+            new PtyOptions
+            {
+                Cwd = WorkingDirectory, App = "/bin/bash", Cols = 80, Rows = 24, Name = "t",
+                Environment = new Dictionary<string, string> { ["ILD_API_TOKEN"] = ApiToken },
+            }, TestContext.Current.CancellationToken);
+
+        var terminal = _api.Execs.Last();
+        Assert.True(terminal.Tty);
+        Assert.DoesNotContain(_api.Execs.SelectMany(e => e.Command), c => c.Contains(ApiToken, StringComparison.Ordinal));
+        Assert.DoesNotContain(ApiToken, terminal.StdinSoFar());
+        var write = Assert.Single(_api.Execs, e => e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript));
+        Assert.Contains($"export ILD_API_TOKEN='{ApiToken}'", write.StdinSoFar());
+        Assert.Equal(write.Command[^1], terminal.Command[5]);
+        Assert.StartsWith($"{RunPaths.ProcessDirectory}/{_run:N}/", write.Command[^1]);
+    }
+
+    [Fact]
+    public async Task A_command_that_reads_its_own_stdin_gets_it_and_nothing_else_with_an_environment_too()
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            if (e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript)) { await e.ReadStdinToEndAsync(); await e.ExitAsync(0); return; }
+            var input = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
+            await e.WriteStdoutAsync(input);
+            await e.ExitAsync(0);
+        };
+        var psi = Command(WorkingDirectory, "cat");
+        psi.RedirectStandardInput = true;
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run, Secrets()), TestContext.Current.CancellationToken);
+        await process.StandardInput.WriteAsync("prompt text");
+        process.StandardInput.Close();
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("prompt text", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("prompt text", LaunchExec().StdinSoFar());
+    }
+
+    [Fact]
+    public async Task A_callers_path_cannot_hide_the_runs_toolchains_and_its_home_is_the_runs()
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "npm", "test");
+
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["PATH"] = "/caller/bin", ["HOME"] = "/caller/home" }),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var exec = LaunchExec();
+        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", Env(exec).Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.DoesNotContain(Env(exec), c => c.StartsWith("PATH=", StringComparison.Ordinal));
+        Assert.Equal("/caller/bin", exec.Command[7]);
     }
 
     [Fact]
@@ -1746,7 +1851,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         var exec = _api.Execs.Last();
         Assert.Equal(ChatPodName, exec.Pod);
-        Assert.StartsWith("PATH=/opt/ild-toolchains/mise/installs/node/20.19.1/bin:", exec.Command.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.StartsWith("PATH=/opt/ild-toolchains/mise/installs/node/20.19.1/bin:", Env(exec).Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)), StringComparison.Ordinal);
     }
 
     [Fact]
