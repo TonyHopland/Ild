@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -35,7 +36,8 @@ public class RepositoriesController : ControllerBase
         id = r.Id,
         name = r.Name,
         remoteProviderId = r.RemoteProviderId,
-        cloneUrl = r.CloneUrl,
+        cloneUrl = RepositoryManager.WithoutUserInfo(r.CloneUrl),
+        cloneUrlHasCredentials = RepositoryManager.WithoutUserInfo(r.CloneUrl) != r.CloneUrl,
         defaultBranch = r.DefaultBranch,
         worktreesPath = r.WorktreesPath,
         defaultIntakeStatus = r.DefaultIntakeStatus,
@@ -48,6 +50,11 @@ public class RepositoriesController : ControllerBase
         createdAt = r.CreatedAt,
         updatedAt = r.UpdatedAt,
     };
+
+    private const string CredentialsInUrlError = "Clone URLs can't contain credentials. Put the token in the remote provider's API key.";
+
+    private static bool HasCredentials(string? cloneUrl)
+        => !string.IsNullOrEmpty(cloneUrl) && RepositoryManager.WithoutUserInfo(cloneUrl) != cloneUrl;
 
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
@@ -98,6 +105,8 @@ public class RepositoriesController : ControllerBase
     {
         if (!Guid.TryParse(request.RemoteProviderId, out var providerId))
             return BadRequest(new { error = "Invalid RemoteProviderId" });
+        if (HasCredentials(request.CloneUrl))
+            return BadRequest(new { error = CredentialsInUrlError });
         var repo = new Repository
         {
             Id = Guid.NewGuid(),
@@ -125,10 +134,16 @@ public class RepositoriesController : ControllerBase
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
         var repo = await FindWithFeedsAsync(guid);
         if (repo == null) return NotFound();
+        // The UI only ever receives the URL without its credentials, so a save that
+        // sends that back (or the stored one) leaves the stored URL alone.
+        var urlUnchanged = request.CloneUrl == repo.CloneUrl
+            || request.CloneUrl == RepositoryManager.WithoutUserInfo(repo.CloneUrl);
+        if (!urlUnchanged && HasCredentials(request.CloneUrl))
+            return BadRequest(new { error = CredentialsInUrlError });
         if (await SelectFeedsAsync(repo, request.PackageFeeds) is { } feedsError)
             return BadRequest(new { error = feedsError });
         repo.Name = request.Name;
-        repo.CloneUrl = request.CloneUrl;
+        if (!urlUnchanged) repo.CloneUrl = request.CloneUrl;
         repo.DefaultBranch = request.DefaultBranch;
         repo.WorktreesPath = request.WorktreesPath;
         repo.DefaultIntakeStatus = request.DefaultIntakeStatus;

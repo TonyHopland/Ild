@@ -117,7 +117,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                     prepError = "Failed to commit uncommitted changes";
                 }
             }
-            catch (Exception ex) { prepError = ex.Message; }
+            catch (Exception ex) { prepError = RepositoryManager.RedactUserInfo(ex.Message); }
 
             // A temporary forge failure is waited out here, in the running node,
             // rather than parking the run for a person to press Retry. Pushing a
@@ -131,12 +131,12 @@ public sealed class PRNodeExecutor : INodeExecutor
                 try
                 {
                     var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath, branch, ctx.CancellationToken, gitAuth);
-                    pushError = pushResult.Success ? null : pushResult.Error ?? "unknown error";
+                    pushError = pushResult.Success ? null : RepositoryManager.RedactUserInfo(pushResult.Error ?? "unknown error");
                     transient = pushError is not null && RemoteFailureClassifier.IsTransient(pushError);
                 }
                 catch (Exception ex)
                 {
-                    pushError = ex.Message;
+                    pushError = RepositoryManager.RedactUserInfo(ex.Message);
                     transient = RemoteFailureClassifier.IsTransient(ex, ctx.CancellationToken)
                         || RemoteFailureClassifier.IsTransient(pushError);
                 }
@@ -165,7 +165,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                     if (ahead == 0)
                         prepError = $"Branch '{branch}' has no commits ahead of 'origin/{target}'";
                 }
-                catch (Exception ex) { prepError = ex.Message; }
+                catch (Exception ex) { prepError = RepositoryManager.RedactUserInfo(ex.Message); }
             }
             // The stored result belongs to the previous commit; the pushed one has none yet.
             if (pushed && prExisted)
@@ -228,7 +228,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
             if (err is not null || prResult is null || !string.IsNullOrEmpty(prResult.Error))
             {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"PR creation failed: {err ?? prResult?.Error ?? "unknown"}");
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"PR creation failed: {RepositoryManager.RedactUserInfo(err ?? prResult?.Error ?? "unknown")}");
                 yield break;
             }
             prUrl = prResult.HtmlUrl ?? prResult.Url ?? string.Empty;

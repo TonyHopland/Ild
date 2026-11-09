@@ -125,7 +125,7 @@ internal sealed class GitMirror
             CreateDirectory(building, Closed);
             var init = await _git(_root, ["init", "--quiet", "--bare", "--template=", "--initial-branch=main", building], null, ct);
             if (!init.Success)
-                return init.StdErr;
+                return RepositoryManager.RedactUserInfo(init.StdErr);
             Directory.Move(building, path);
         }
         finally
@@ -176,7 +176,7 @@ internal sealed class GitMirror
             var fetch = await GitAsync(
                 ["fetch", "--quiet", "--no-write-fetch-head", "--prune", "--", auth.RemoteUrl, "+refs/heads/*:refs/heads/*"], auth, ct);
             if (!fetch.Success)
-                return (false, fetch.StdErr);
+                return (false, RepositoryManager.RedactUserInfo(fetch.StdErr));
 
             if (defaultBranch is not null)
                 await GitAsync(["symbolic-ref", "HEAD", $"refs/heads/{defaultBranch}"], null, ct);
@@ -208,11 +208,11 @@ internal sealed class GitMirror
             {
                 var track = await GitAsync(["update-ref", $"refs/heads/{branch}", sha], null, ct);
                 if (!track.Success)
-                    _owner._logger?.LogWarning("The mirror could not record {Branch} at {Sha}: {Error}", branch, sha, track.StdErr.Trim());
+                    _owner._logger?.LogWarning("The mirror could not record {Branch} at {Sha}: {Error}", branch, sha, RepositoryManager.RedactUserInfo(track.StdErr.Trim()));
             }
             if (imported)
                 await GitAsync(["update-ref", "-d", StagingRef], null, ct);
-            return push.Success ? (true, null) : (false, push.StdErr);
+            return push.Success ? (true, null) : (false, RepositoryManager.RedactUserInfo(push.StdErr));
         }
 
         private async Task<bool> HasCommitAsync(string sha, CancellationToken ct)
@@ -240,7 +240,7 @@ internal sealed class GitMirror
                         written = await createBundle(incremental, sink);
                     }
                     if (!written.Success)
-                        return (false, written.StdErr, null);
+                        return (false, RepositoryManager.RedactUserInfo(written.StdErr), null);
                 }
                 catch (IOException ex)
                 {
@@ -261,10 +261,10 @@ internal sealed class GitMirror
 
                 var index = await GitAsync(["index-pack", "--stdin", "--fix-thin", "--fsck-objects"], null, ct, bundle);
                 if (!index.Success)
-                    return (false, index.StdErr, null);
+                    return (false, RepositoryManager.RedactUserInfo(index.StdErr), null);
 
                 var staged = await GitAsync(["update-ref", StagingRef, tip], null, ct);
-                return staged.Success ? (true, null, tip) : (false, staged.StdErr, null);
+                return staged.Success ? (true, null, tip) : (false, RepositoryManager.RedactUserInfo(staged.StdErr), null);
             }
             finally
             {
@@ -336,7 +336,7 @@ internal sealed class GitMirror
         {
             var list = await GitAsync(["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads"], null, ct);
             if (!list.Success)
-                return (null, list.StdErr);
+                return (null, RepositoryManager.RedactUserInfo(list.StdErr));
             var branches = new List<MirrorBranch>();
             foreach (var line in list.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -372,7 +372,7 @@ internal sealed class GitMirror
                         var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.DeleteOnClose | FileOptions.Asynchronous);
                         return (new MirrorBundle(branches, headBranch, stream, narrow), null);
                     }
-                    error = made.StdErr;
+                    error = RepositoryManager.RedactUserInfo(made.StdErr);
                 }
                 catch
                 {

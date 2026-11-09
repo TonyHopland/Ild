@@ -594,7 +594,8 @@ public class ConnectionTesterTests : IDisposable
             Repo("https://git.example.com/team/app.git", "main", provider.Id), provider, CancellationToken.None);
 
         AssertOutcome(expected, result);
-        Assert.Contains(stderr.Trim(), result.Detail);
+        // Credentials a URL in the output carries are not carried into the detail.
+        Assert.Contains(RepositoryManager.RedactUserInfo(stderr.Trim()), result.Detail);
     }
 
     [Fact]

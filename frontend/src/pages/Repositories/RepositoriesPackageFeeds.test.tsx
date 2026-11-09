@@ -48,6 +48,21 @@ function repo(packageFeeds?: { name: string; missing: boolean }[]) {
   };
 }
 
+test("warns on a repository whose clone URL carries a credential, and only then", async () => {
+  mockServices([
+    { ...repo(), cloneUrlHasCredentials: true },
+    { ...repo(), id: "repo-2", name: "clean-repo" },
+  ]);
+  render(
+    <MemoryRouter>
+      <Repositories />
+    </MemoryRouter>,
+  );
+  await screen.findByText("clean-repo");
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.getByRole("alert").textContent).toContain("API key");
+});
+
 function mockServices(repos: unknown[]) {
   vi.spyOn(services.repositoryService, "getAll").mockResolvedValue(repos as any);
   vi.spyOn(services.remoteProviderService, "getAll").mockResolvedValue([provider] as any);

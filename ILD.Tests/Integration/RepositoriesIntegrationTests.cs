@@ -76,6 +76,75 @@ public class RepositoriesIntegrationTests(SharedApiFactory factory) : IClassFixt
         Assert.Equal(env, await ReadStoredPreviewEnvAsync(factory, id));
     }
 
+    private const string CredentialUrl = "https://u:secret@git.example.com/my-repo.git";
+
+    private static async Task<string> SeedRepoWithCredentialsAsync(ApiFactory factory)
+    {
+        var providerId = await SeedProviderAsync(factory);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "legacy", CloneUrl = CredentialUrl, RemoteProviderId = Guid.Parse(providerId), DefaultBranch = "main" };
+        db.Repositories.Add(repo);
+        await db.SaveChangesAsync();
+        return repo.Id.ToString();
+    }
+
+    private static object RepoPayload(string providerId, string cloneUrl) => new
+    {
+        name = "legacy",
+        cloneUrl,
+        defaultBranch = "main",
+        remoteProviderId = providerId,
+        defaultIntakeStatus = "Backlog",
+    };
+
+    [Fact]
+    public async Task Create_with_credentials_in_the_clone_url_is_refused()
+    {
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var providerId = await SeedProviderAsync(factory);
+        var response = await client.PostAsJsonAsync("/api/v1/repositories", RepoPayload(providerId, CredentialUrl), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("API key", body);
+        Assert.DoesNotContain("secret", body);
+    }
+
+    [Fact]
+    public async Task Update_to_a_new_url_with_credentials_is_refused()
+    {
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var providerId = await SeedProviderAsync(factory);
+        var created = await client.PostAsJsonAsync("/api/v1/repositories", RepoPayload(providerId, "https://git.example.com/a.git"), cancellationToken: TestContext.Current.CancellationToken);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
+        var response = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", RepoPayload(providerId, "https://x:tok@git.example.com/b.git"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Resaving_a_stored_credential_url_unchanged_is_accepted_and_keeps_it(bool sendStripped)
+    {
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var id = await SeedRepoWithCredentialsAsync(factory);
+        var get = await client.GetAsync($"/api/v1/repositories/{id}", TestContext.Current.CancellationToken);
+        var text = await get.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("secret", text);
+        var fetched = JsonDocument.Parse(text).RootElement;
+        Assert.True(fetched.GetProperty("cloneUrlHasCredentials").GetBoolean());
+        var providerId = fetched.GetProperty("remoteProviderId").GetString()!;
+
+        var url = sendStripped ? fetched.GetProperty("cloneUrl").GetString()! : CredentialUrl;
+        var put = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", RepoPayload(providerId, url), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        Assert.DoesNotContain("secret", await put.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.Equal(CredentialUrl, (await db.Repositories.AsNoTracking().FirstAsync(r => r.Id == Guid.Parse(id), TestContext.Current.CancellationToken)).CloneUrl);
+    }
+
     [Fact]
     public async Task Update_with_blank_preview_env_keeps_the_stored_value()
     {

@@ -830,6 +830,8 @@ export interface Repository {
   name: string;
   remoteProviderId: string;
   cloneUrl: string;
+  // True when the stored URL carries a credential; the URL itself arrives without it.
+  cloneUrlHasCredentials?: boolean;
   defaultBranch: string | null;
   worktreesPath: string | null;
   defaultIntakeStatus: WorkItemStatus;

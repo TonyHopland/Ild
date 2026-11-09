@@ -88,8 +88,8 @@ public class RepositoryManager : IRepositoryManager
             {
                 var r = await _host.PushBundleAsync(target, WithoutUserInfo(cloneUrl), bundle.Bundle ?? Stream.Null, cancellationToken);
                 if (!r.Success)
-                    _logger?.LogDebug("Cloning {Target} from the bundle exited {Code}: {Err}", target, r.ExitCode, r.StdErr);
-                return r.Success ? (true, null) : (false, r.StdErr);
+                    _logger?.LogDebug("Cloning {Target} from the bundle exited {Code}: {Err}", target, r.ExitCode, RedactUserInfo(r.StdErr));
+                return r.Success ? (true, null) : (false, RedactUserInfo(r.StdErr));
             }
         }
     }
@@ -501,7 +501,7 @@ public class RepositoryManager : IRepositoryManager
             new RunToolStreams(StandardInputFrom: line), ct);
         if (result.Success) return null;
 
-        var output = (string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr).Trim();
+        var output = RedactUserInfo((string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr).Trim());
         return $"pre-push hook failed: {(output.Length > HookOutputTail ? output[^HookOutputTail..] : output)}";
     }
 
@@ -811,10 +811,15 @@ public class RepositoryManager : IRepositoryManager
     }
 
     /// <summary>The clone URL with any credentials in it removed.</summary>
-    internal static string WithoutUserInfo(string cloneUrl)
+    public static string WithoutUserInfo(string cloneUrl)
         => Uri.TryCreate(cloneUrl, UriKind.Absolute, out var uri) && uri.UserInfo.Length > 0
             ? new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty }.Uri.AbsoluteUri
             : cloneUrl;
+
+    private static readonly System.Text.RegularExpressions.Regex UserInfoInText = new(@"(?<=[a-zA-Z][a-zA-Z0-9+.-]*://)[^\s/@]+@", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Free text (git output, an error) with the credentials of every URL in it removed.</summary>
+    public static string RedactUserInfo(string text) => UserInfoInText.Replace(text, string.Empty);
 
     internal static bool IsCommitSha(string value)
         => value.Length is 40 or 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
@@ -874,7 +879,7 @@ public class RepositoryManager : IRepositoryManager
         // so "main*" or "x/refs/heads/main" can satisfy "main": only the exact
         // ref in its listing counts as found, anything else is an answer without it.
         var found = r.ExitCode == 0 && ListsRef(r.StdOut, target);
-        return new GitRemoteProbe(r.ExitCode == 0 && !found ? 2 : r.ExitCode, r.StdErr);
+        return new GitRemoteProbe(r.ExitCode == 0 && !found ? 2 : r.ExitCode, RedactUserInfo(r.StdErr));
     }
 
     private static bool ListsRef(string lsRemoteOutput, string refName)
@@ -1075,8 +1080,8 @@ public class RepositoryManager : IRepositoryManager
         // one the agent owns.
         var r = await _host.RunToolAsync(runPath, "git", args, new RunToolStreams(stdinFrom, stdoutTo), ct);
         if (!r.Success)
-            _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), r.ExitCode, r.StdErr);
-        return (r.ExitCode, r.StdOut, r.StdErr);
+            _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args.Select(RedactUserInfo)), r.ExitCode, RedactUserInfo(r.StdErr));
+        return (r.ExitCode, r.StdOut, RedactUserInfo(r.StdErr));
     }
 
     private Task<ProcessResult> LsRemoteAsync(IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct)
@@ -1135,8 +1140,8 @@ public class RepositoryManager : IRepositoryManager
 
         var r = await _runner.RunAsync("git", args, cwd, ct, environment, new ProcessRunOptions(CleanEnvironment: true, StandardInputFrom: standardInput));
         if (!r.Success)
-            _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), r.ExitCode, r.StdErr);
-        return r;
+            _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args.Select(RedactUserInfo)), r.ExitCode, RedactUserInfo(r.StdErr));
+        return r with { StdErr = RedactUserInfo(r.StdErr) };
     }
 
     private static IReadOnlyDictionary<string, string?>? BuildGitEnvironment(GitAuthOptions? auth)
@@ -1220,5 +1225,5 @@ public class RepositoryManager : IRepositoryManager
     }
 
     private static string FormatGitError(string stderr)
-        => string.IsNullOrWhiteSpace(stderr) ? "<empty>" : stderr.Trim().Replace(Environment.NewLine, " | ");
+        => string.IsNullOrWhiteSpace(stderr) ? "<empty>" : RedactUserInfo(stderr.Trim()).Replace(Environment.NewLine, " | ");
 }
