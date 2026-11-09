@@ -10,40 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Runs can no longer reach ILD's database, the WorkItem Server or the Kubernetes API**, unless you switch that protection off in Settings → Network or declare a forward to it.
-- **A repository can no longer plant code that every other run executes through the shared toolchain store.** A tool that is not a mise core tool installs into a folder only that repository's runs mount, and install scripts are off in the shared parts. The first run after upgrading installs its toolchains again.
+- **A repository can no longer plant code that every other run executes through the shared toolchain store.**
 
 ### Added
 
 - **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets. Settings warns when the container socket is not rootless or cannot be reached.
-- **`ILD_CONTAINER_SOCKET_HOST` is empty in `.env.example`**, so a fresh copy makes compose ask for the socket instead of mounting `/run/podman/podman.sock`.
-- **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart. The socket goes to a dedicated gid, `ILD_CONTAINER_SOCKET_GID` (default 10099), not ILD's own 10001; the host sees the socket under it. ILD warns when a socket's group is unmapped by `userns-remap`. A rootful Podman machine's socket works as it is.
-- **A run in a container or pod gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows**; `run.tools` in `ild.config.json` names them when finding them is not enough.
-- **Network forwards work in run and chat containers and pods**: `127.0.0.1:<local port>` there reaches the forward's destination through the egress proxy.
-- **A run restores NuGet packages from a private Azure Artifacts feed**: the toolchain store installs the credential provider with each .NET SDK from 9.0.200 on.
+- **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart.
+- **A run in a container or pod gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows.**
+- **Network forwards work in run and chat containers and pods.**
+- **A run restores NuGet packages from a private Azure Artifacts feed.**
 - **Chats share one container, or one pod in Kubernetes, and the provider sign-in terminal runs in a short-lived container, or pod, that keeps the login when it closes.**
 - **Open in VS Code on a work item's Terminal tab opens the run's worktree in VS Code, attached to its Docker or Podman container.**
 
 ### Changed
 
-- **Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` (`.env.example` lists the paths), then `docker compose up -d --build`, which also builds the runner image. On the first start, ILD takes back the files its agent user left in its volumes.
-- **On Kubernetes, ILD runs every loop run and chat in a pod.** Give it the RBAC, `ILD_API_URL`, `ILD_K8S_RUNNER_IMAGE` and a ReadWriteMany `ILD_K8S_TOOLS_CLAIM` from the deployment guide before you upgrade. Without the claim, runs get only what the slim `ild-runner` image holds.
-- **The ILD image is smaller: it no longer has the .NET SDK, Chrome or a second user**, since agents never run in it.
-- **ILD runs as uid 10001, as documented.** The .NET base image had silently made it 1654; the first start after the upgrade gives the volumes to the new uid.- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials**; Claude subscriptions now use a long-lived token that the provider terminal creates once.
+- **Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` before you upgrade.
+- **On Kubernetes, ILD runs every loop run and chat in a pod.** Set up the RBAC and the shared tools claim from the deployment guide before you upgrade.
+- **The ILD image is smaller.**
+- **ILD and the WorkItem Server run as uid 10001, as documented.** They had silently run as 1654; the first start after the upgrade gives their volumes to the new uid.
+- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials.** Open each Claude subscription provider's terminal once after upgrading.
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
 
 ### Fixed
 
-- **Containers and pods no longer hang on a malformed exit status, and a retried start keeps the run's checkout.** A command whose status cannot be read ends as a lost connection, Podman is recognised only on a definite answer, a failed start removes only what it made, shutdown cannot throw, and `{{WorkTree.File:…}}` files are read asynchronously with a 30 s limit.
-- Cmd nodes and previews in containers can install packages again: they get the egress proxy in network mode Off and their private npm feed file.
-- **The model gateway only forwards the model API calls each agent needs**, and a double-encoded `..` in the path can no longer reach other endpoints with the real credential.
-- **ILD no longer leaves its containers running while it is down.** On shutdown it stops each run's container, which it starts again when the run next needs it, and removes the chat and sign-in containers. The chat container or pod is also replaced when the runner image or ILD's settings changed, so chats no longer keep an old image.
+- **Containers and pods no longer hang on a malformed exit status, and a retried start keeps the run's checkout.**
+- **Cmd nodes and previews in containers can install packages again.**
+- **The model gateway only forwards the model API calls each agent needs.**
+- **ILD no longer leaves its containers running while it is down.**
+- **A chat's container or pod is replaced when the runner image or ILD's settings change.**
 - **A Codex login no longer dies when its refreshed token cannot be saved, a request disconnects mid-refresh, or you sign in again during one**, and a failing refresh backs off instead of retrying on every request.
 
 ### Removed
 
-- **`ILD_RUN_HOST`.** ILD started from its image always runs agents in containers, or pods in Kubernetes; only `dotnet run` runs them as ILD's own processes.
-- **The agent user and its firewall (`AGENT_USER`, `NET_ADMIN`, network mode Off's group).** A run's network, which reaches only ILD, now keeps agents behind the egress proxy.
-- **The `WITH_NODE`, `WITH_DOTNET_SDK` and `WITH_CHROME` build arguments, the `ild-runner-full` image and `docker-compose.container-runs.yml`.**
+- **The agent user and its firewall (`AGENT_USER`, `NET_ADMIN`, network mode Off's group).** Agents now stay behind the egress proxy.
+- **The `WITH_NODE`, `WITH_DOTNET_SDK` and `WITH_CHROME` build arguments.**
 
 ## [0.23.0] - 2026-11-04
 
