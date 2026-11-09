@@ -113,7 +113,18 @@ public sealed class PreviewProxyMiddleware
         context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
         var host = context.RequestServices.GetService<IRunHost>() ?? LocalRunHost.Shared;
-        var previewTarget = await host.PreviewTargetAsync(target.WorktreePath, target.Port, context.RequestAborted);
+        Uri previewTarget;
+        try
+        {
+            previewTarget = await host.PreviewTargetAsync(target.WorktreePath, target.Port, context.RequestAborted);
+        }
+        catch (Exception ex) when (!context.RequestAborted.IsCancellationRequested)
+        {
+            // A stopped or starting run has no address yet; that is "not served", not a fault.
+            _logger.LogWarning(ex, "Preview {HostLabel} ({Service}) has no reachable target", hostLabel, target.ServiceName);
+            await WriteNotFoundAsync(context);
+            return;
+        }
         var transformer = new PreviewProxyTransformer(target.Port, target.RewriteHost, _proxyBase.Scheme);
         var error = await _forwarder.SendAsync(
             context,

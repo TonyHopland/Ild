@@ -292,7 +292,7 @@ internal sealed class FakeRunHost : IRunHost
 }
 
 /// <summary>What a fake command prints and how it ends.</summary>
-internal sealed record FakeCommandScript(string Stdout, string Stderr, int? ExitCode)
+internal sealed record FakeCommandScript(string Stdout, string Stderr, int? ExitCode, FakeKill Kill = FakeKill.Ends)
 {
     /// <summary>Prints nothing and ends with <paramref name="code"/>.</summary>
     public static FakeCommandScript Exits(int code) => new(string.Empty, string.Empty, code);
@@ -302,17 +302,28 @@ internal sealed record FakeCommandScript(string Stdout, string Stderr, int? Exit
 
     /// <summary>Never ends by itself; only a kill ends it, with code 137.</summary>
     public static FakeCommandScript Hangs() => new(string.Empty, string.Empty, null);
+
+    /// <summary>Never ends, and a kill fails to signal it.</summary>
+    public static FakeCommandScript RefusesKill() => new(string.Empty, string.Empty, null, FakeKill.Fails);
+
+    /// <summary>Never ends; a kill signals it fine and it carries on regardless.</summary>
+    public static FakeCommandScript SurvivesKill() => new(string.Empty, string.Empty, null, FakeKill.Ignored);
 }
+
+/// <summary>What a kill does to a fake command.</summary>
+internal enum FakeKill { Ends, Fails, Ignored }
 
 internal sealed class FakeRunProcess : IRunProcess
 {
     private static int _nextId = 1000;
     private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _exitCode;
+    private readonly FakeKill _kill;
 
     public FakeRunProcess(RunCommand command, FakeCommandScript script)
     {
         Command = command;
+        _kill = script.Kill;
         Id = Interlocked.Increment(ref _nextId);
         StandardOutput = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(script.Stdout)));
         StandardError = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(script.Stderr)));
@@ -341,6 +352,14 @@ internal sealed class FakeRunProcess : IRunProcess
     {
         failure = null;
         if (HasExited) return true;
+        if (_kill == FakeKill.Fails)
+        {
+            failure = "the fake process refuses to die";
+            return false;
+        }
+
+        if (_kill == FakeKill.Ignored) return true;
+
         WasKilled = true;
         _exitCode = 137;
         _exited.TrySetResult();

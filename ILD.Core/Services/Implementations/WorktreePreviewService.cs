@@ -687,7 +687,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException($"Preview service '{serviceName}' not found in profile '{resolvedProfileName}'.");
 
         services[index] = JsonNode.Parse(serviceConfigJson);
-        await File.WriteAllTextAsync(loaded.ConfigPath!, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await _host.WriteFileAsync(loaded.ConfigPath!, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     public async Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
@@ -1496,6 +1496,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         runtime.ClearProcesses();
     }
 
+    /// <summary>How long a stop waits for a killed service to exit. Tests shorten it.</summary>
+    internal TimeSpan KillGrace { get; set; } = TimeSpan.FromSeconds(5);
+
     private async Task StopProcessAsync(ManagedPreviewProcess process, CancellationToken cancellationToken)
     {
         // Claim it first: from here on the Process gets killed and disposed, so an
@@ -1506,8 +1509,26 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             if (!process.Process.HasExited)
             {
-                process.Process.TryKill();
-                await process.Process.WaitForExitAsync(cancellationToken);
+                if (!process.Process.TryKill(out var failure))
+                {
+                    _logger.LogWarning("Failed to kill preview service {Service}: {Failure}", process.Service.Name, failure);
+                }
+                else
+                {
+                    // Kill only signals; bound the wait so a process that never
+                    // exits cannot hold the preview gate (or a teardown that has
+                    // no cancellation) forever.
+                    using var grace = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    grace.CancelAfter(KillGrace);
+                    try
+                    {
+                        await process.Process.WaitForExitAsync(grace.Token);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        _logger.LogWarning("Preview service {Service} was still alive {Seconds:0.###}s after being killed", process.Service.Name, KillGrace.TotalSeconds);
+                    }
+                }
             }
         }
         catch (InvalidOperationException)
@@ -2244,7 +2265,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
         catch (OperationCanceledException)
         {
-            process.TryKill();
+            if (!process.TryKill(out var failure))
+                _logger.LogWarning("Failed to kill cancelled preview command: {Failure}", failure);
             throw;
         }
 
