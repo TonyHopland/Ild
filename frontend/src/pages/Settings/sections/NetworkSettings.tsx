@@ -172,6 +172,14 @@ export default function NetworkSettings() {
   const [modeError, setModeError] = useState<string | null>(null);
   const [entries, setEntries] = useState<NetworkPolicyEntry[]>([]);
   const [forwards, setForwards] = useState<NetworkForward[]>([]);
+  // Only a container host maps a forward's name; nothing is claimed while the host is unknown.
+  const [answersRealName, setAnswersRealName] = useState(false);
+  useEffect(() => {
+    void settingsService
+      .getRunHost()
+      .then((host) => setAnswersRealName(host.kind === "container"))
+      .catch(() => {});
+  }, []);
   const [protectedDestinations, setProtectedDestinations] = useState<NetworkProtectedDestination[]>(
     [],
   );
@@ -603,9 +611,11 @@ export default function NetworkSettings() {
         <p className="settings-card-note">
           A named destination the orchestrator relays on loopback, for clients that cannot be
           pointed at a proxy — databases, caches, mail. Point the client at{" "}
-          <code>127.0.0.1:&lt;local port&gt;</code>; the rules above still decide whether the
-          connection is made, and the log below still records it under the destination&apos;s host
-          name.
+          <code>127.0.0.1:&lt;local port&gt;</code>. In a run&apos;s container the
+          destination&apos;s own name and port also answer, so a TLS client can verify the host
+          name; in a Kubernetes pod, under <code>dotnet run</code> and for an IP address only the
+          loopback form exists. The rules above still decide whether the connection is made, and the
+          log below still records it under the destination&apos;s host name.
         </p>
         {forwardError && <div className="settings-error">{forwardError}</div>}
         <ForwardTable
@@ -613,6 +623,7 @@ export default function NetworkSettings() {
           onUpdate={updateForward}
           onRemove={removeForward}
           onWhitelist={whitelistForwardHost}
+          answersRealName={answersRealName}
         />
         <AddForwardRow onAdd={addForward} />
       </section>

@@ -6,7 +6,10 @@ import { EditActions, useFormRequest, useRowEdit } from "./networkShared";
  * Where a forward stands right now. The local port not being bound outranks
  * everything — nothing reaches the policy through a port that does not answer.
  */
-function forwardState(forward: NetworkForward): {
+function forwardState(
+  forward: NetworkForward,
+  answersRealName: boolean,
+): {
   tone: "ok" | "warn" | "blocked";
   label: string;
   detail: string;
@@ -24,9 +27,10 @@ function forwardState(forward: NetworkForward): {
   return {
     tone: "ok",
     label: "Listening",
-    detail: isIpAddress(forward.host)
-      ? `Point a client at 127.0.0.1:${forward.localPort}.`
-      : `Point a client at ${forward.host}:${forward.port}, or at 127.0.0.1:${forward.localPort}.`,
+    detail:
+      answersRealName && !isIpAddress(forward.host)
+        ? `Point a client at ${forward.host}:${forward.port}, or at 127.0.0.1:${forward.localPort}.`
+        : `Point a client at 127.0.0.1:${forward.localPort}.`,
   };
 }
 
@@ -72,9 +76,17 @@ interface ForwardTableProps {
   ) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
   onWhitelist: (host: string) => Promise<void>;
+  /** Whether the run host maps a forward's name in each run's container; false when it does not or is not known. */
+  answersRealName: boolean;
 }
 
-export function ForwardTable({ forwards, onUpdate, onRemove, onWhitelist }: ForwardTableProps) {
+export function ForwardTable({
+  forwards,
+  onUpdate,
+  onRemove,
+  onWhitelist,
+  answersRealName,
+}: ForwardTableProps) {
   if (forwards.length === 0) {
     return <p className="settings-card-note">No forwards yet.</p>;
   }
@@ -97,6 +109,7 @@ export function ForwardTable({ forwards, onUpdate, onRemove, onWhitelist }: Forw
             onUpdate={onUpdate}
             onRemove={onRemove}
             onWhitelist={onWhitelist}
+            answersRealName={answersRealName}
           />
         ))}
       </tbody>
@@ -109,10 +122,18 @@ interface ForwardRowProps {
   onUpdate: ForwardTableProps["onUpdate"];
   onRemove: ForwardTableProps["onRemove"];
   onWhitelist: ForwardTableProps["onWhitelist"];
+  answersRealName: boolean;
 }
 
-function ForwardRow({ forward, onUpdate, onRemove, onWhitelist }: ForwardRowProps) {
-  const state = forwardState(forward);
+function ForwardRow({
+  forward,
+  onUpdate,
+  onRemove,
+  onWhitelist,
+  answersRealName,
+}: ForwardRowProps) {
+  const state = forwardState(forward, answersRealName);
+  const ip = isIpAddress(forward.host);
   const row = useRowEdit("Failed to save the forward.");
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
@@ -208,7 +229,7 @@ function ForwardRow({ forward, onUpdate, onRemove, onWhitelist }: ForwardRowProp
           </div>
         ) : (
           <>
-            {!isIpAddress(forward.host) && (
+            {answersRealName && !ip && (
               <div>
                 <span className="net-host">
                   {forward.host}
