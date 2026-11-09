@@ -21,6 +21,7 @@ internal sealed class DockerExec : IExecStream
     private readonly ByteChannelStream _stdout = new();
     private readonly ByteChannelStream? _stderr;
     private readonly CancellationTokenSource _disposed = new();
+    private readonly CancellationToken _gone;
     private int _closed;
 
     private DockerExec(DockerApiClient api, string execId, bool tty, TimeSpan statusTimeout, (Socket Socket, NetworkStream Network, Stream Reader) connection)
@@ -30,6 +31,7 @@ internal sealed class DockerExec : IExecStream
         _tty = tty;
         _statusTimeout = statusTimeout;
         (_socket, _network, _reader) = connection;
+        _gone = _disposed.Token;
         _stderr = tty ? null : new ByteChannelStream();
         Status = Task.Run(PumpAsync);
     }
@@ -88,7 +90,7 @@ internal sealed class DockerExec : IExecStream
     {
         var buffer = new byte[16 * 1024];
         int read;
-        while ((read = await _reader.ReadAsync(buffer, _disposed.Token)) > 0)
+        while ((read = await _reader.ReadAsync(buffer, _gone)) > 0)
             _stdout.Append(buffer.AsSpan(0, read));
     }
 
@@ -98,16 +100,17 @@ internal sealed class DockerExec : IExecStream
         var buffer = new byte[16 * 1024];
         while (true)
         {
-            try { await _reader.ReadExactlyAsync(header, _disposed.Token); }
+            try { await _reader.ReadExactlyAsync(header, _gone); }
             catch (EndOfStreamException) { return; }
 
             var remaining = BinaryPrimitives.ReadUInt32BigEndian(header.AsSpan(4));
-            var target = header[0] == 2 ? _stderr! : _stdout;
+            // Type 3 carries the daemon's own error text; it goes where the command's errors go.
+            var target = header[0] is 2 or 3 && _stderr is not null ? _stderr : _stdout;
             while (remaining > 0)
             {
-                var read = await _reader.ReadAsync(buffer.AsMemory(0, (int)Math.Min(remaining, (uint)buffer.Length)), _disposed.Token);
+                var read = await _reader.ReadAsync(buffer.AsMemory(0, (int)Math.Min(remaining, (uint)buffer.Length)), _gone);
                 if (read == 0) return;
-                if (header[0] is 1 or 2) target.Append(buffer.AsSpan(0, read));
+                if (header[0] is 1 or 2 or 3) target.Append(buffer.AsSpan(0, read));
                 remaining -= (uint)read;
             }
         }
@@ -116,7 +119,7 @@ internal sealed class DockerExec : IExecStream
     // The engine marks the exec finished a moment after its stream ends. A command still running when the stream is gone was cut off.
     private async Task<int?> ExitCodeAsync()
     {
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(_gone);
         limit.CancelAfter(_statusTimeout);
         try
         {
@@ -136,6 +139,7 @@ internal sealed class DockerExec : IExecStream
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
         _disposed.Cancel();
+        _disposed.Dispose();
         _reader.Dispose();
         _network.Dispose();
         _socket.Dispose();

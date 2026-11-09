@@ -15,6 +15,13 @@ public interface IPromptTemplateResolver
     /// template-save time).
     /// </summary>
     string Render(string template, PromptContext context);
+
+    /// <summary>
+    /// Reads the files the <c>{{WorkTree.File:&lt;rel&gt;}}</c> placeholders of <paramref name="template"/> name, keyed by
+    /// the relative path, for <see cref="PromptContext.WorkTreeFiles"/>. Each read is bounded; one that fails, times out or
+    /// finds no file is left out and renders empty.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>> ReadWorkTreeFilesAsync(string template, string? worktreePath, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -31,4 +38,5 @@ public sealed record PromptContext(
     string? ConversationAI = null,
     string? ConversationHuman = null,
     IReadOnlyDictionary<string, string>? RunVariables = null,
-    IReadOnlyDictionary<string, string>? GlobalVariables = null);
+    IReadOnlyDictionary<string, string>? GlobalVariables = null,
+    IReadOnlyDictionary<string, string>? WorkTreeFiles = null);

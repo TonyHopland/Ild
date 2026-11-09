@@ -67,17 +67,28 @@ internal sealed class ExecRunProcess : IRunProcess
 
     private async Task PumpAsync()
     {
-        var stdout = Forward(_exec.Stdout, _stdout);
-        var stderr = _exec.Stderr is null ? Task.CompletedTask : Forward(_exec.Stderr, _stderr);
-        var status = await _exec.Status;
-        await Task.WhenAll(stdout, stderr);
-
-        if (status is null)
-            _stderr.Append(Encoding.UTF8.GetBytes($"the connection to the run's {_where} ended before the command did\n"));
-        _exitCode = status ?? ConnectionLostExitCode;
-        _stdout.Complete();
-        _stderr.Complete();
-        _exited.TrySetResult();
+        int? status = null;
+        try
+        {
+            var stdout = Forward(_exec.Stdout, _stdout);
+            var stderr = _exec.Stderr is null ? Task.CompletedTask : Forward(_exec.Stderr, _stderr);
+            status = await _exec.Status;
+            await Task.WhenAll(stdout, stderr);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // A status that cannot be read is a lost connection.
+            status = null;
+        }
+        finally
+        {
+            if (status is null)
+                _stderr.Append(Encoding.UTF8.GetBytes($"the connection to the run's {_where} ended before the command did\n"));
+            _exitCode = status ?? ConnectionLostExitCode;
+            _stdout.Complete();
+            _stderr.Complete();
+            _exited.TrySetResult();
+        }
     }
 
     private static async Task Forward(Stream from, ByteChannelStream to)

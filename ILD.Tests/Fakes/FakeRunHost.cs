@@ -143,7 +143,7 @@ internal sealed class FakeRunHost : IRunHost
         lock (_gate) return Task.FromResult<Stream?>(_files.TryGetValue(path, out var bytes) ? new MemoryStream(bytes, writable: false) : null);
     }
 
-    public string? ReadTextFile(string path) => ReadText(path);
+    public Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default) => Task.FromResult(ReadText(path));
 
     public Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default) => OpenReadAsync(path, ct);
 

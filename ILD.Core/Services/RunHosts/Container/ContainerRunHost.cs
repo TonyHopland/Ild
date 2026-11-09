@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations.Adapters;
@@ -86,14 +87,16 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         if (await IsHealthyAsync(owner, ct))
             return new RunEnvironment(owner, workingDirectory);
 
+        // Only what this call made is removed when it fails: an environment a retry reached keeps its run's checkout.
+        var made = new Made();
         try
         {
             var name = ObjectName(owner);
             var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
-            await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
-            await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = Labels(owner) }, ct));
+            made.Volume = await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
+            made.Network = await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = Labels(owner) }, ct));
             var ild = await IldAddressAsync(name, $"run {owner:N}", ct);
-            await CreateContainerAsync(owner, ild, tools, ct);
+            made.Container = await CreateContainerAsync(owner, ild, tools, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             _addresses[owner] = await WaitReadyAsync(name, $"run {owner:N}", ct);
 
@@ -101,7 +104,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         }
         catch
         {
-            await DeleteQuietlyAsync(owner);
+            await DeleteQuietlyAsync(owner, made);
             throw;
         }
 
@@ -114,12 +117,23 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         await DeleteObjectsAsync(environment.OwnerId, ct);
     }
 
+    /// <summary>Which of a run's objects one <see cref="CreateAsync"/> call made, as opposed to found.</summary>
+    private sealed class Made
+    {
+        public bool Container { get; set; }
+        public bool Volume { get; set; }
+        public bool Network { get; set; }
+    }
+
     // Container first, then the volume it held, then the network once ILD has left it.
-    private async Task DeleteObjectsAsync(Guid owner, CancellationToken ct)
+    private async Task DeleteObjectsAsync(Guid owner, CancellationToken ct, Made? only = null)
     {
         var name = Escaped(ObjectName(owner));
-        await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{name}?force=true&v=true", null, ct));
-        await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/volumes/{name}?force=true", null, ct));
+        if (only?.Container ?? true)
+            await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{name}?force=true&v=true", null, ct));
+        if (only?.Volume ?? true)
+            await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/volumes/{name}?force=true", null, ct));
+        if (!(only?.Network ?? true)) return;
         if (_options.IldContainer is { } ild)
         {
             // Refused when ILD was never connected (the run failed before that); a connection that stays is what the network delete reports.
@@ -129,16 +143,21 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/networks/{name}", null, ct));
     }
 
-    private async Task DeleteQuietlyAsync(Guid owner)
+    private async Task DeleteQuietlyAsync(Guid owner, Made made)
     {
-        try { await DeleteAsync(new RunEnvironment(owner, RunPaths.WorkingDirectory(owner)), CancellationToken.None); }
+        try
+        {
+            _addresses.TryRemove(owner, out _);
+            await DeleteObjectsAsync(owner, CancellationToken.None, made);
+        }
         catch (Exception ex) { Logger?.LogWarning(ex, "Could not remove the objects of run {Run} after its container failed to start; the next sweep removes them", owner); }
     }
 
-    private static async Task TolerateConflictAsync(Func<Task<JsonNode?>> create)
+    /// <summary>Makes the object; false when it was there already.</summary>
+    private static async Task<bool> TolerateConflictAsync(Func<Task<JsonNode?>> create)
     {
-        try { await create(); }
-        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.Conflict) { }
+        try { await create(); return true; }
+        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.Conflict) { return false; }
     }
 
     private static async Task IgnoreNotFoundAsync(Func<Task<JsonNode?>> call)
@@ -184,7 +203,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             ?? throw new InvalidOperationException($"the network of {subject} has no gateway address, so it cannot reach ILD");
     }
 
-    private async Task CreateContainerAsync(Guid owner, string ildAddress, RunToolEnvironment? tools, CancellationToken ct)
+    /// <summary>Makes the run's container; false when an attempt had left it.</summary>
+    private async Task<bool> CreateContainerAsync(Guid owner, string ildAddress, RunToolEnvironment? tools, CancellationToken ct)
     {
         var name = ObjectName(owner);
         var memory = _options.MemoryBytes ?? 0;
@@ -219,10 +239,12 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         try
         {
             await _api.PostAsync($"/containers/create?name={Escaped(name)}", body, ct);
+            return true;
         }
         catch (DockerApiException ex) when (ex.Status == HttpStatusCode.Conflict)
         {
-            // Left by an attempt that failed after making it: started below.
+            // Left by an attempt that failed after making it, or the run's own on a retry: started by the caller.
+            return false;
         }
         catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
         {
@@ -337,8 +359,33 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     /// </summary>
     private async Task<string> StateOwnerOptionAsync(CancellationToken ct)
     {
-        _podman ??= await _api.InfoAsync(libpod: true, ct) is not null;
-        return _podman.Value ? "U" : $"uid={RunnerUid},gid={RunnerUid}";
+        var podman = _podman ?? await DetectPodmanAsync(ct);
+        return podman ? "U" : $"uid={RunnerUid},gid={RunnerUid}";
+    }
+
+    // Only a definite answer is kept: a 5xx or a socket proxy's 403 says nothing about the engine, and a wrong "Docker"
+    // would hand every container options Podman refuses until ILD restarts.
+    private async Task<bool> DetectPodmanAsync(CancellationToken ct)
+    {
+        var (status, _) = await _api.InfoAsync(libpod: true, ct);
+        if ((int)status is >= 200 and < 300) { _podman = true; return true; }
+        if (status == HttpStatusCode.NotFound) { _podman = false; return false; }
+
+        // The Docker-compatible API names its engine: Podman lists a "Podman Engine" component.
+        try
+        {
+            if (await _api.GetAsync("/version", ct) is { } version && version["Components"] is JsonArray components)
+            {
+                var podman = components.Any(c => c?["Name"]?.GetValue<string>()?.Contains("Podman", StringComparison.OrdinalIgnoreCase) == true);
+                _podman = podman;
+                return podman;
+            }
+        }
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException or JsonException or InvalidOperationException)
+        {
+            Logger?.LogWarning(ex, "Could not tell whether the engine is Podman; this container gets the Docker state options");
+        }
+        return false;
     }
 
     private async Task<string> WaitReadyAsync(string name, string subject, CancellationToken ct)
@@ -425,7 +472,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                 if (listed?["Labels"]?[RunPaths.RunLabel]?.GetValue<string>() is { } run && Guid.TryParseExact(run, "N", out var owner))
                     work.Add(StopRunAsync(owner, ct));
         }
-        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException)
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or SocketException or OperationCanceledException or JsonException)
         {
             Logger?.LogWarning(ex, "Could not list the containers of the runs to stop them; they keep running until ILD next needs them");
         }
@@ -867,11 +914,11 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     private async Task<bool?> IsRootlessAsync(CancellationToken ct)
     {
-        var podman = await _api.InfoAsync(libpod: true, ct);
+        var (_, podman) = await _api.InfoAsync(libpod: true, ct);
         if (podman?["host"]?["security"]?["rootless"] is JsonValue flag && flag.TryGetValue<bool>(out var rootless))
             return rootless;
 
-        var docker = await _api.InfoAsync(libpod: false, ct);
+        var (_, docker) = await _api.InfoAsync(libpod: false, ct);
         if (docker?["SecurityOptions"] is JsonArray options)
             return options.Any(o => o?.GetValue<string>() == "name=rootless");
         return null;

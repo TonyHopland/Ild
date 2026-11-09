@@ -82,6 +82,8 @@ public sealed class PromptRenderingService : IPromptRenderingService
             globals = (await _globals.GetAllAsync())
                 .ToDictionary(g => g.Name, g => g.Value, StringComparer.OrdinalIgnoreCase);
 
+        var workTreeFiles = await _resolver.ReadWorkTreeFilesAsync(template, workItem.WorktreePath);
+
         return _resolver.Render(template, new PromptContext(
             WorkItemTitle: workItem.Title,
             WorkItemDescription: workItem.Description,
@@ -92,7 +94,8 @@ public sealed class PromptRenderingService : IPromptRenderingService
             ConversationAI: conversationAi,
             ConversationHuman: conversationHuman,
             RunVariables: variables,
-            GlobalVariables: globals));
+            GlobalVariables: globals,
+            WorkTreeFiles: workTreeFiles));
     }
 
     // Attribution for the Full and AI views: author plus source node, stable and

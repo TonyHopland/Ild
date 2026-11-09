@@ -216,7 +216,8 @@ public sealed class LocalRunHost : IRunHost
     public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default)
         => Task.FromResult<Stream?>(File.Exists(path) ? File.OpenRead(path) : null);
 
-    public string? ReadTextFile(string path) => File.Exists(path) ? File.ReadAllText(path) : null;
+    public async Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default)
+        => File.Exists(path) ? await File.ReadAllTextAsync(path, ct) : null;
 
     public Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default)
     {
