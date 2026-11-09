@@ -444,15 +444,18 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     protected override async Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
         => owner.Chat ? await ChatContainerRunningAsync(ct) : await _api.GetAsync($"/containers/{Escaped(ObjectName(owner.Id))}/json", ct, HttpStatusCode.NotFound) is not null;
 
-    protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
+    protected override Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
+        => OpenExecStreamAsync(owner, command, stdin, tty, user: null, ct);
+
+    private async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, string? user, CancellationToken ct)
     {
         if (owner.Chat)
-            return await DockerExec.OpenAsync(_api, await EnsureChatContainerAsync(ct), command, stdin, tty, ExitStatusTimeout, ct);
+            return await DockerExec.OpenAsync(_api, await EnsureChatContainerAsync(ct), command, stdin, tty, ExitStatusTimeout, ct, user);
         if (_execNames.TryGetValue(owner.Id, out var other))
-            return await DockerExec.OpenAsync(_api, other, command, stdin, tty, ExitStatusTimeout, ct);
+            return await DockerExec.OpenAsync(_api, other, command, stdin, tty, ExitStatusTimeout, ct, user);
         try
         {
-            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct);
+            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct, user);
         }
         catch (DockerApiException)
         {
@@ -460,8 +463,20 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             // refuse an exec into a stopped container with different statuses (Docker 409, Podman 500), so its state decides.
             if (!await RunContainerStoppedAsync(owner.Id, ct)) throw;
             await StartStoppedRunAsync(owner.Id, ct);
-            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct);
+            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct, user);
         }
+    }
+
+    // Docker and Podman make the hosts file root's in each container, and root writes it without a capability, as it does
+    // resolv.conf: the container keeps its capabilities and its commands keep their user.
+    protected override async Task<RunHostOutput> RunHostsScriptAsync(ExecOwner owner, IReadOnlyList<string> arguments, CancellationToken ct)
+    {
+        using var exec = await OpenExecStreamAsync(owner, ["/bin/bash", "-c", HostsScript, "bash", .. arguments], stdin: false, tty: false, user: "0", ct);
+        var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);
+        var error = new StreamReader(exec.Stderr!).ReadToEndAsync(ct);
+        var status = await exec.Status;
+        await Task.WhenAll(output, error);
+        return new RunHostOutput(status ?? -1, await output, await error);
     }
 
     private async Task<bool> RunContainerStoppedAsync(Guid owner, CancellationToken ct)

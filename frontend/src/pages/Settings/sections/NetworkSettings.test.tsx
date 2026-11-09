@@ -77,7 +77,9 @@ function mockServices(
   status: NetworkStatus = enforced,
   mode = "monitor",
   forwards: NetworkForward[] = [postgres],
+  runHost: "local" | "container" | "kubernetes" = "container",
 ) {
+  vi.spyOn(services.settingsService, "getRunHost").mockResolvedValue({ kind: runHost });
   routeHubs(signalRHook, { "/hubs/work-item": hub });
   vi.spyOn(services.networkService, "getStatus").mockResolvedValue(status);
   vi.spyOn(services.networkService, "getEntries").mockResolvedValue([github, evil]);
@@ -480,10 +482,47 @@ describe("Network settings", () => {
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const row = await forwardRow("postgres");
-    expect(row.getByText(":5432")).toBeTruthy();
+    expect(await row.findByText(/Preferred: a TLS client/)).toBeTruthy();
+    // The destination column and the preferred real-name form both show host:port.
+    expect(row.getAllByText(":5432")).toHaveLength(2);
     expect(row.getByText("127.0.0.1")).toBeTruthy();
     expect(row.getByText(":15432")).toBeTruthy();
+    expect(row.getByText(/Preferred: a TLS client/)).toBeTruthy();
     expect(row.getByText("Listening")).toBeTruthy();
+  });
+
+  test("a forward to an IP address says it has the loopback form only", async () => {
+    mockServices(enforced, "monitor", [{ ...postgres, host: "10.0.0.5" }]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = await forwardRow("postgres");
+    expect(await row.findByText(/loopback only/)).toBeTruthy();
+    expect(row.queryByText(/Preferred:/)).toBeNull();
+  });
+
+  test.each(["local", "kubernetes"] as const)(
+    "a forward under the %s run host shows the loopback form only",
+    async (kind) => {
+      mockServices(enforced, "monitor", [postgres], kind);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+      const row = await forwardRow("postgres");
+      await waitFor(() => expect(services.settingsService.getRunHost).toHaveBeenCalled());
+      expect(row.queryByText(/Preferred:/)).toBeNull();
+      expect(row.getAllByText(":5432")).toHaveLength(1);
+      expect(row.getByText("Point a client at 127.0.0.1:15432.")).toBeTruthy();
+    },
+  );
+
+  test("a forward shows no real-name form while the run host is unknown", async () => {
+    mockServices();
+    vi.spyOn(services.settingsService, "getRunHost").mockRejectedValue(new Error("down"));
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = await forwardRow("postgres");
+    await waitFor(() => expect(services.settingsService.getRunHost).toHaveBeenCalled());
+    expect(row.getByText("Point a client at 127.0.0.1:15432.")).toBeTruthy();
+    expect(row.queryByText(/Preferred:/)).toBeNull();
   });
 
   test("a forward whose local port will not bind says so on its own row", async () => {
@@ -1159,7 +1198,7 @@ describe("Editing a network forward", () => {
     );
     const table = await forwardTable();
     expect(await table.findByText("primary")).toBeTruthy();
-    expect(table.getByText("db.example")).toBeTruthy();
+    expect(table.getAllByText("db.example")[0]).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull();
     expect(screen.getByRole("button", { name: "Edit the primary forward" })).toBeTruthy();
     // The other row is untouched.

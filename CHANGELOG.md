@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Forwards answer on their real host name and port inside a run's container**, so TLS host name verification (`Verify-Full`) works; the `127.0.0.1` form stays.
 - **A repository clone URL can no longer carry a credential.** A new or changed URL with one is refused, an existing one shows a warning on the Repositories page, and agents never see it; put the token in the remote provider's API key.
 - **Toolchain installers go through the egress proxy**, under an Installers scope in Settings → Network whose allow list starts with the hosts installs need.
 - **Runs can no longer reach ILD's database, the WorkItem Server or the Kubernetes API**, unless you switch that protection off in Settings → Network or declare a forward to it.

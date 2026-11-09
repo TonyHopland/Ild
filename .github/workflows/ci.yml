@@ -76,6 +76,9 @@ jobs:
       - name: Backend build
         run: dotnet build --no-restore --configuration Release
 
+      - name: Install socat for the forwards test
+        run: sudo apt-get update && sudo apt-get install -y socat
+
       - name: Backend tests
         run: dotnet test --project ILD.Tests/ILD.Tests.csproj --no-build --configuration Release
 

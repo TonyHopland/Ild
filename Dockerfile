@@ -212,6 +212,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     echo "$mise_sha  /tmp/mise.deb" | sha256sum -c - && \
     apt-get install -y --no-install-recommends /tmp/mise.deb && rm /tmp/mise.deb && \
     rm -rf /var/lib/apt/lists/* && \
+    # A forward's host name is answered from /etc/hosts, which a run with DNS off still has to read: fail the build if the resolver stops doing that.
+    grep -Eq '^hosts:.*[[:space:]]files([[:space:]]|$)' /etc/nsswitch.conf && \
     (getent group ${RUNNER_UID} >/dev/null || groupadd --gid ${RUNNER_UID} runner) && \
     (getent passwd ${RUNNER_UID} >/dev/null || useradd --uid ${RUNNER_UID} --gid ${RUNNER_UID} --no-create-home --home-dir /tmp --shell /bin/bash runner) && \
     git config --system --add safe.directory '*' && \
