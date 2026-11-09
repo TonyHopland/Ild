@@ -228,6 +228,134 @@ public sealed class ModelCredentialSourceTests : IDisposable
         Assert.Equal(before, File.ReadAllText(path));
     }
 
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task Codex_keeps_serving_the_rotated_login_when_the_write_fails_and_writes_it_once_the_file_is_writable()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux() && !Environment.IsPrivilegedProcess, "needs Linux and a non-root user");
+        var path = WriteCodexLogin(Jwt(_clock.GetUtcNow().AddDays(9)), _clock.GetUtcNow().AddDays(-9));
+        var directory = Path.GetDirectoryName(path)!;
+        _handler.Reply = """{"access_token":"new-access","refresh_token":"refresh-2"}""";
+        var provider = Provider("codex");
+        File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            Assert.Equal("new-access", (await _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken))!.Secret);
+            Assert.Equal("new-access", (await _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken))!.Secret);
+            Assert.Single(_handler.Requests);
+            Assert.Equal("refresh-1", (string?)JsonNode.Parse(File.ReadAllText(path))!["tokens"]!["refresh_token"]);
+        }
+        finally
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        Assert.Equal("new-access", (await _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken))!.Secret);
+        Assert.Single(_handler.Requests);
+        var stored = JsonNode.Parse(File.ReadAllText(path))!;
+        Assert.Equal("new-access", (string?)stored["tokens"]!["access_token"]);
+        Assert.Equal("refresh-2", (string?)stored["tokens"]!["refresh_token"]);
+    }
+
+    [Fact]
+    public async Task A_request_cancelled_during_a_codex_refresh_gets_its_own_cancellation_and_the_rotation_is_kept()
+    {
+        var path = WriteCodexLogin(Jwt(_clock.GetUtcNow().AddDays(9)), _clock.GetUtcNow().AddDays(-9));
+        _handler.Reply = """{"access_token":"new-access","refresh_token":"refresh-2"}""";
+        _handler.Arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _handler.Hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+
+        var request = _source.ResolveAsync(Provider("codex"), GatewayRoutes.ChatGpt, cts.Token);
+        await _handler.Arrived.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+
+        _handler.Hold.SetResult();
+        var next = await _source.ResolveAsync(Provider("codex"), GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken);
+
+        Assert.Equal("new-access", next!.Secret);
+        Assert.Single(_handler.Requests);
+        Assert.Equal("refresh-2", (string?)JsonNode.Parse(File.ReadAllText(path))!["tokens"]!["refresh_token"]);
+    }
+
+    [Fact]
+    public async Task A_failing_codex_refresh_backs_off_with_a_doubling_delay_and_resets_on_success()
+    {
+        WriteCodexLogin(Jwt(_clock.GetUtcNow().AddDays(9)), _clock.GetUtcNow().AddDays(-9));
+        var provider = Provider("codex");
+        _handler.Status = HttpStatusCode.BadRequest;
+
+        async Task<string> Resolve() => (await _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken))!.Secret;
+
+        await Resolve();
+        Assert.Single(_handler.Requests);
+        for (var i = 0; i < 3; i++)
+        {
+            _source.Rejected(provider, GatewayRoutes.ChatGpt);
+            await Resolve();
+        }
+        Assert.Single(_handler.Requests);
+
+        _clock.Now += CodexLoginStore.FirstBackoff + TimeSpan.FromSeconds(1);
+        await Resolve();
+        Assert.Equal(2, _handler.Requests.Count);
+
+        _clock.Now += CodexLoginStore.FirstBackoff + TimeSpan.FromSeconds(1);
+        await Resolve();
+        Assert.Equal(2, _handler.Requests.Count);
+
+        _clock.Now += CodexLoginStore.FirstBackoff;
+        _handler.Status = HttpStatusCode.OK;
+        _handler.Reply = """{"access_token":"new-access","refresh_token":"refresh-2"}""";
+        Assert.Equal("new-access", await Resolve());
+        Assert.Equal(3, _handler.Requests.Count);
+
+        _handler.Status = HttpStatusCode.BadRequest;
+        _clock.Now += CodexLoginStore.MaxAge + TimeSpan.FromDays(1);
+        await Resolve();
+        Assert.Equal(4, _handler.Requests.Count);
+        _clock.Now += CodexLoginStore.FirstBackoff + TimeSpan.FromSeconds(1);
+        await Resolve();
+        Assert.Equal(5, _handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_sign_in_imported_during_a_codex_refresh_wins_over_the_refreshed_tokens()
+    {
+        var path = WriteCodexLogin(Jwt(_clock.GetUtcNow().AddDays(9)), _clock.GetUtcNow().AddDays(-9));
+        _handler.Reply = """{"access_token":"old-account-access","refresh_token":"refresh-2"}""";
+        _handler.Arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _handler.Hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = Provider("codex");
+
+        var request = _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken);
+        await _handler.Arrived.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        var throwaway = Path.Combine(_home, "throwaway");
+        Directory.CreateDirectory(Path.Combine(throwaway, ".codex"));
+        File.WriteAllText(Path.Combine(throwaway, ".codex", "auth.json"), new JsonObject
+        {
+            ["tokens"] = new JsonObject
+            {
+                ["access_token"] = Jwt(_clock.GetUtcNow().AddDays(9)),
+                ["refresh_token"] = "refresh-new-account",
+                ["account_id"] = "acct-2",
+            },
+            ["last_refresh"] = _clock.GetUtcNow().UtcDateTime.ToString("O"),
+        }.ToJsonString());
+        await CredentialImport.ImportAsync(throwaway, _home, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, TestContext.Current.CancellationToken);
+        _handler.Hold.SetResult();
+
+        var credential = await request;
+
+        Assert.StartsWith("ey", credential!.Secret);
+        Assert.Equal("acct-2", credential.Headers["ChatGPT-Account-ID"]);
+        Assert.Equal("refresh-new-account", (string?)JsonNode.Parse(File.ReadAllText(path))!["tokens"]!["refresh_token"]);
+        Assert.Equal("acct-2", (await _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken))!.Headers["ChatGPT-Account-ID"]);
+        Assert.Single(_handler.Requests);
+    }
+
     private sealed class Clock : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = new(2026, 11, 6, 12, 0, 0, TimeSpan.Zero);
@@ -240,10 +368,14 @@ public sealed class ModelCredentialSourceTests : IDisposable
         public List<(string Uri, string Body)> Requests { get; } = [];
         public string Reply { get; set; } = "{}";
         public HttpStatusCode Status { get; set; } = HttpStatusCode.OK;
+        public TaskCompletionSource? Arrived { get; set; }
+        public TaskCompletionSource? Hold { get; set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add((request.RequestUri!.ToString(), await request.Content!.ReadAsStringAsync(cancellationToken)));
+            Arrived?.TrySetResult();
+            if (Hold is { } hold) await hold.Task;
             return new HttpResponseMessage(Status) { Content = new StringContent(Reply, Encoding.UTF8, "application/json") };
         }
     }

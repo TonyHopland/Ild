@@ -18,7 +18,16 @@ internal sealed class CodexLoginStore
     internal const string RefreshUrl = "https://auth.openai.com/oauth/token";
     private const string DefaultClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
     internal static readonly TimeSpan MaxAge = TimeSpan.FromDays(8);
+    internal static readonly TimeSpan RefreshTimeout = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan FirstBackoff = TimeSpan.FromMinutes(1);
+    internal static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan ExpiryMargin = TimeSpan.FromHours(24);
+
+    private enum WriteOutcome { Written, Failed, Superseded }
+
+    private sealed record Stored(JsonNode Root, JsonObject Tokens, string Access, string? Refresh);
+
+    private sealed record Pending(JsonNode Root, string FileRefresh);
 
     private readonly string _path;
     private readonly HttpClient _http;
@@ -26,6 +35,11 @@ internal sealed class CodexLoginStore
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private volatile bool _refreshNext;
+    private Task? _inFlight;
+    private Pending? _pending;
+    private DateTimeOffset? _retryAfter;
+    private TimeSpan _delay;
+    private string? _failedFor;
 
     public CodexLoginStore(string path, HttpClient http, TimeProvider clock, ILogger logger)
     {
@@ -42,16 +56,20 @@ internal sealed class CodexLoginStore
         await _lock.WaitAsync(ct);
         try
         {
-            var root = Read();
-            if (root?["tokens"] is not JsonObject tokens || tokens["access_token"]?.GetValue<string>() is not { Length: > 0 } access)
-                return null;
+            if (_inFlight is not null) await AwaitRefreshAsync(ct);
+            FlushPending();
 
-            if (NeedsRefresh(root, access) && tokens["refresh_token"]?.GetValue<string>() is { Length: > 0 } refresh)
+            var stored = Load();
+            if (stored is null) return null;
+
+            if (stored.Refresh is { Length: > 0 } refresh && NeedsRefresh(stored.Root, stored.Access))
             {
-                var renewed = await TryRefreshAsync(root, tokens, refresh, ct);
-                if (renewed is not null) access = renewed;
+                _inFlight = RefreshAsync(stored.Root, stored.Tokens, refresh, _pending?.FileRefresh ?? refresh);
+                await AwaitRefreshAsync(ct);
+                stored = Load();
+                if (stored is null) return null;
             }
-            return new CodexLogin(access, tokens["account_id"]?.GetValue<string>());
+            return new CodexLogin(stored.Access, stored.Tokens["account_id"]?.GetValue<string>());
         }
         finally
         {
@@ -59,16 +77,42 @@ internal sealed class CodexLoginStore
         }
     }
 
+    private async Task AwaitRefreshAsync(CancellationToken ct)
+    {
+        var task = _inFlight!;
+        try
+        {
+            await task.WaitAsync(ct);
+        }
+        finally
+        {
+            if (task.IsCompleted) _inFlight = null;
+        }
+    }
+
+    private Stored? Load()
+    {
+        var root = _pending?.Root ?? Read();
+        if (root?["tokens"] is not JsonObject tokens || tokens["access_token"]?.GetValue<string>() is not { Length: > 0 } access)
+            return null;
+
+        var refresh = tokens["refresh_token"]?.GetValue<string>();
+        if (_failedFor is not null && refresh != _failedFor) ResetBackoff();
+        return new Stored(root, tokens, access, refresh);
+    }
+
     private bool NeedsRefresh(JsonNode root, string access)
     {
-        if (_refreshNext) return true;
         var now = _clock.GetUtcNow();
+        if (_retryAfter is { } retryAfter && now < retryAfter) return false;
+        if (_refreshNext) return true;
         if (DateTimeOffset.TryParse(root["last_refresh"]?.GetValue<string>(), out var last) && now - last > MaxAge) return true;
         return JwtExpiry(access) is { } expiry && expiry - now < ExpiryMargin;
     }
 
-    private async Task<string?> TryRefreshAsync(JsonNode root, JsonObject tokens, string refresh, CancellationToken ct)
+    private async Task RefreshAsync(JsonNode root, JsonObject tokens, string refresh, string fileRefresh)
     {
+        using var timeout = new CancellationTokenSource(RefreshTimeout, _clock);
         try
         {
             var clientId = tokens["oauth_provenance"]?["client_id"]?.GetValue<string>() ?? DefaultClientId;
@@ -78,30 +122,82 @@ internal sealed class CodexLoginStore
                 grant_type = "refresh_token",
                 refresh_token = refresh,
                 scope = "openid profile email",
-            }, ct);
+            }, timeout.Token);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("Refreshing the Codex login was refused with {Status}", (int)response.StatusCode);
-                return null;
+                BackOff(refresh);
+                return;
             }
 
-            var body = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct));
+            var body = JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
             var access = body?["access_token"]?.GetValue<string>();
-            if (string.IsNullOrEmpty(access)) return null;
+            if (string.IsNullOrEmpty(access))
+            {
+                BackOff(refresh);
+                return;
+            }
 
             tokens["access_token"] = access;
             if (body?["refresh_token"]?.GetValue<string>() is { Length: > 0 } newRefresh) tokens["refresh_token"] = newRefresh;
             if (body?["id_token"]?.GetValue<string>() is { Length: > 0 } idToken) tokens["id_token"] = idToken;
             root["last_refresh"] = _clock.GetUtcNow().UtcDateTime.ToString("O");
-            WriteAtomically(root);
-            _refreshNext = false;
-            return access;
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or IOException or UnauthorizedAccessException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
         {
             _logger.LogWarning(ex, "Refreshing the Codex login failed: {Reason}", ex.Message);
-            return null;
+            BackOff(refresh);
+            return;
         }
+
+        _refreshNext = false;
+        ResetBackoff();
+        _pending = TryWrite(root, fileRefresh) == WriteOutcome.Failed ? new Pending(root, fileRefresh) : null;
+    }
+
+    private void FlushPending()
+    {
+        if (_pending is not { } pending) return;
+        if (TryWrite(pending.Root, pending.FileRefresh) != WriteOutcome.Failed) _pending = null;
+    }
+
+    private WriteOutcome TryWrite(JsonNode root, string fileRefresh)
+    {
+        lock (CodexAuthFileLock.Gate)
+        {
+            if (Read()?["tokens"]?["refresh_token"]?.GetValue<string>() is { } onDisk && onDisk != fileRefresh)
+            {
+                _logger.LogInformation("The Codex login was replaced by a new sign-in; the refreshed tokens are dropped");
+                ResetBackoff();
+                _refreshNext = false;
+                return WriteOutcome.Superseded;
+            }
+
+            try
+            {
+                WriteAtomically(root);
+                return WriteOutcome.Written;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Writing the refreshed Codex login failed, keeping it in memory: {Reason}", ex.Message);
+                return WriteOutcome.Failed;
+            }
+        }
+    }
+
+    private void BackOff(string refresh)
+    {
+        _delay = _delay == TimeSpan.Zero ? FirstBackoff : TimeSpan.FromTicks(Math.Min(_delay.Ticks * 2, MaxBackoff.Ticks));
+        _retryAfter = _clock.GetUtcNow() + _delay;
+        _failedFor = refresh;
+    }
+
+    private void ResetBackoff()
+    {
+        _delay = TimeSpan.Zero;
+        _retryAfter = null;
+        _failedFor = null;
     }
 
     private JsonNode? Read()
