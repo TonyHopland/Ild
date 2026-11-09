@@ -21,12 +21,14 @@ const enforced: NetworkStatus = {
   reason: "nftables rules drop everything uid 10002 sends except loopback and DNS.",
   proxyEnabled: true,
   proxyPort: 3128,
+  directRoutes: [],
 };
 const advisory: NetworkStatus = {
   enforcement: "advisory",
   reason: "NET_ADMIN is not granted to the container.",
   proxyEnabled: true,
   proxyPort: 3128,
+  directRoutes: [],
 };
 
 const github: NetworkPolicyEntry = {
@@ -919,7 +921,10 @@ describe("Network modes", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain(
-      "they can reach any host, including your LAN and cloud metadata",
+      "they connect directly and can reach any host, including your LAN and cloud metadata",
+    );
+    expect(dialog.textContent).toContain(
+      "ILD's database, the WorkItem Server and the Kubernetes API",
     );
     expect(put).not.toHaveBeenCalled();
 
@@ -1054,11 +1059,13 @@ describe("Network modes", () => {
     },
   );
 
-  test("Off says agents in containers still go through the proxy, and under dotnet run that they bypass it", async () => {
+  test("Off says agents connect directly, and in a container that the route is the run's and protected destinations do not apply", async () => {
     mockServices(enforced, "off");
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
     const contained = (await screen.findByText(/Network mode is Off/)).closest("div")!;
-    expect(contained.textContent).toMatch(/still logged/i);
+    expect(contained.textContent).toMatch(/connect directly/i);
+    expect(contained.textContent).toMatch(/every process of that run/i);
+    expect(contained.textContent).toMatch(/database, the WorkItem Server and the Kubernetes API/);
     expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
     cleanup();
 
@@ -1067,6 +1074,34 @@ describe("Network modes", () => {
     const local = (await screen.findByText(/Network mode is Off/)).closest("div")!;
     expect(local.textContent).toMatch(/connect directly/i);
     expect(screen.getByText(/only forwards are logged/i)).toBeTruthy();
+  });
+});
+
+describe("Direct routes", () => {
+  test("lists the runs and the chats that have a direct route, whatever the mode is now", async () => {
+    mockServices(
+      {
+        ...enforced,
+        directRoutes: [
+          { ownerId: "0123456789abcdef0123456789abcdef", chat: false },
+          { ownerId: "00000000-0000-0000-0000-000000000000", chat: true },
+        ],
+      },
+      "monitor",
+    );
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const banner = (await screen.findByText(/Direct route:/)).closest("div")!;
+    expect(banner.textContent).toContain("run 01234567");
+    expect(banner.textContent).toContain("all chats");
+  });
+
+  test("says nothing when no run has one", async () => {
+    mockServices(enforced, "monitor");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByLabelText("Network rules");
+
+    expect(screen.queryByText(/Direct route:/)).toBeNull();
   });
 });
 

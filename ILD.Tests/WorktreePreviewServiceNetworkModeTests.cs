@@ -124,6 +124,26 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
         Assert.Equal(expected, Written("web.out"));
     }
 
+    [Theory]
+    [InlineData(NetworkMode.Off)]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Blacklist)]
+    public async Task A_preview_hands_its_run_host_the_mode_it_was_launched_in(NetworkMode mode)
+    {
+        WriteConfig();
+        var config = Path.Combine(_worktree, "ild.config.json");
+        var host = new ILD.Tests.Fakes.FakeRunHost().WithDirectory(_worktree).WithFile(config, File.ReadAllText(config));
+        var factory = new Mock<IHttpClientFactory>();
+        using var service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
+            NullLogger<WorktreePreviewService>.Instance,
+            egressProxy: Proxy, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: EgressPolicies.Reporting(mode), host: host);
+
+        await service.InstallAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.All(host.Started, c => Assert.Equal(mode, c.NetworkMode));
+        Assert.NotEmpty(host.Started);
+    }
+
     [Fact]
     public async Task A_preview_without_a_policy_launches_proxied_as_Monitor()
     {

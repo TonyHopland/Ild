@@ -479,6 +479,96 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         _addresses[owner] = await WaitReadyAsync(name, $"run {owner:N}", ct);
     }
 
+    // -- Direct route (network mode Off) ------------------------------------------
+
+    /// <summary>The network that gives a container in network mode Off its route out: not internal, with DNS, and one for every run and the chats.</summary>
+    internal string OpenNetworkName => $"ild-open-{_options.Instance}";
+
+    private IDictionary<string, string> OpenLabels() => new Dictionary<string, string>
+    {
+        [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+        [RunPaths.InstanceLabel] = _options.Instance,
+        [RunPaths.RoleLabel] = RunPaths.OpenRole,
+    };
+
+    private string ContainerOf(ExecOwner owner) => owner.Chat ? ChatName : ObjectName(owner.Id);
+
+    private async Task<bool> OnOpenNetworkAsync(string container, CancellationToken ct)
+        => (await _api.GetAsync($"/containers/{Escaped(container)}/json", ct, HttpStatusCode.NotFound))?["NetworkSettings"]?["Networks"]?[OpenNetworkName] is not null;
+
+    // A run made with DNS on has the engine's own nameserver (no Dns in its HostConfig), which closing the route writes back.
+    private async Task<bool> UsesEngineDnsAsync(string container, CancellationToken ct)
+        => (await _api.GetAsync($"/containers/{Escaped(container)}/json", ct))?["HostConfig"]?["Dns"] is not JsonArray { Count: > 0 };
+
+    protected override async Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+    {
+        if (owner.Chat) await EnsureChatContainerAsync(ct);
+        var container = ContainerOf(owner);
+        await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = OpenNetworkName, Internal = false, CheckDuplicate = true, Labels = OpenLabels() }, ct));
+        if (!await OnOpenNetworkAsync(container, ct))
+        {
+            try { await _api.PostAsync($"/networks/{Escaped(OpenNetworkName)}/connect", new { Container = container }, ct); }
+            // Another launch, or an earlier attempt, connected it first.
+            catch (DockerApiException)
+            {
+                if (!await OnOpenNetworkAsync(container, ct)) throw;
+            }
+        }
+        // The container was made with no nameserver, which HostConfig fixes; root, who owns the file, writes one for as long as it has the route.
+        await SetNameServerAsync(container, await GatewayNameServerAsync(OpenNetworkName, ct), ct);
+    }
+
+    protected override async Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+    {
+        var container = ContainerOf(owner);
+        if (!await OnOpenNetworkAsync(container, ct)) return;
+        // What the container was made with: nothing when its HostConfig has a nameserver, else the engine's own for its network.
+        await SetNameServerAsync(container, await UsesEngineDnsAsync(container, ct) ? await GatewayNameServerAsync(container, ct) : NameServers(dns: false)[0], ct);
+        await _api.PostAsync($"/networks/{Escaped(OpenNetworkName)}/disconnect", new { Container = container }, ct);
+    }
+
+    protected override async Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+        => await OnOpenNetworkAsync(ContainerOf(owner), ct);
+
+    public override async Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default)
+    {
+        var routes = new List<DirectRoute>();
+        var network = await _api.GetAsync($"/networks/{Escaped(OpenNetworkName)}", ct, HttpStatusCode.NotFound);
+        foreach (var attached in (network?["Containers"] as JsonObject)?.Select(c => c.Value?["Name"]?.GetValue<string>()?.TrimStart('/')) ?? [])
+        {
+            if (attached == ChatName) routes.Add(new DirectRoute(Guid.Empty, Chat: true));
+            else if (attached?.StartsWith("ild-run-", StringComparison.Ordinal) == true && Guid.TryParseExact(attached["ild-run-".Length..], "N", out var run))
+                routes.Add(new DirectRoute(run, Chat: false));
+        }
+        return routes;
+    }
+
+    /// <summary>
+    /// Where a container on the open network resolves names: Podman's DNS answers on the network's gateway; Docker's resolver is in
+    /// every container on a network of its own, at 127.0.0.11.
+    /// </summary>
+    private async Task<string> GatewayNameServerAsync(string network, CancellationToken ct)
+    {
+        if (!(_podman ?? await DetectPodmanAsync(ct))) return "127.0.0.11";
+        var inspected = await _api.GetAsync($"/networks/{Escaped(network)}", ct);
+        return inspected?["IPAM"]?["Config"]?.AsArray().Select(c => c?["Gateway"]?.GetValue<string>()).FirstOrDefault(g => !string.IsNullOrEmpty(g))
+            ?? throw new InvalidOperationException($"the network {network} has no gateway address, which is where names are resolved on it");
+    }
+
+    // Root owns the file and needs no capability to write it; a failed write is reported, since the redirect's status is the script's.
+    private async Task SetNameServerAsync(string container, string nameServer, CancellationToken ct)
+    {
+        const string script = "printf 'nameserver %s\\n' \"$1\" > /etc/resolv.conf";
+        using var exec = await DockerExec.OpenAsync(
+            _api, container, ["/bin/sh", "-c", script, "sh", nameServer], stdin: false, tty: false, ExitStatusTimeout, ct, user: "0");
+        var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);
+        var error = new StreamReader(exec.Stderr!).ReadToEndAsync(ct);
+        var status = await exec.Status;
+        await Task.WhenAll(output, error);
+        if (status != 0)
+            throw new InvalidOperationException($"could not set the nameserver of {container}: {(await error).Trim()}");
+    }
+
     // -- Shutdown ----------------------------------------------------------------
 
     /// <summary>
@@ -764,6 +854,11 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                     && listed["Name"]?.GetValue<string>() is { } network && !open.Contains(network) && !signIns.Contains(network))
                     signIns.Add(network);
 
+            // The open network is shared; it is a leftover once nothing is on it, and made again by the next launch in mode Off.
+            if (networks?.AsArray().Any(n => n?["Name"]?.GetValue<string>() == OpenNetworkName) == true
+                && ((await _api.GetAsync($"/networks/{Escaped(OpenNetworkName)}", ct, HttpStatusCode.NotFound))?["Containers"] as JsonObject)?.Count is null or 0)
+                signIns.Add(OpenNetworkName);
+
             return runs
                 .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
                 .Select(run => new RunLeftover(RunLeftoverKind, run))
@@ -793,6 +888,19 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
             {
                 Logger?.LogWarning(ex, "Could not delete the sign-in or installer container {Name}; the next sweep tries again", leftover.Location);
+                return false;
+            }
+        }
+        if (leftover.Location == OpenNetworkName)
+        {
+            try
+            {
+                await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/networks/{Escaped(OpenNetworkName)}", null, ct));
+                return true;
+            }
+            catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
+            {
+                Logger?.LogWarning(ex, "Could not delete the network {Name}; the next sweep tries again", OpenNetworkName);
                 return false;
             }
         }

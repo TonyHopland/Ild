@@ -73,7 +73,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         try
         {
             p = await host.StartCommandAsync(
-                RunCommand.Prepared(psi, ctx.Run.Id, feeds.Environment, feeds.FilePath is null ? null : [feeds.FilePath]), ctx.CancellationToken);
+                RunCommand.Prepared(psi, ctx.Run.Id, feeds.Environment, feeds.FilePath is null ? null : [feeds.FilePath], mode), ctx.CancellationToken);
         }
         catch (Exception ex)
         {

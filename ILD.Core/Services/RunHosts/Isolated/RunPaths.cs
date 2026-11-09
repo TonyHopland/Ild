@@ -23,6 +23,9 @@ public static class RunPaths
     /// <summary>The role of a toolchain installer's pod or container, which the sweep removes once ILD no longer has it open.</summary>
     public const string ToolsRole = "tools";
 
+    /// <summary>The role of the network (or NetworkPolicy) that gives a run or chat a direct route in network mode Off.</summary>
+    public const string OpenRole = "open";
+
     public static string RunRoot(Guid ownerId) => $"{RunsRoot}/{ownerId:N}";
 
     public static string WorkingDirectory(Guid ownerId) => $"{RunRoot(ownerId)}/repo";

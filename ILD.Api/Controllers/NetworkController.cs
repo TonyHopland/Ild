@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -95,14 +96,26 @@ public class NetworkController : ControllerBase
     }
 
     [HttpGet("status")]
-    public IActionResult GetStatus()
+    public async Task<IActionResult> GetStatus(CancellationToken ct)
         => Ok(new
         {
             enforcement = _enforcement.EnforcementFor(_runHost.Kind),
             reason = _enforcement.ReasonFor(_runHost.Kind),
             proxyEnabled = _enforcement.ProxyEnabled,
             proxyPort = _enforcement.ProxyPort,
+            directRoutes = (await DirectRoutesAsync(ct)).Select(r => new { ownerId = r.OwnerId, chat = r.Chat }),
         });
+
+    // The runs and chats that have a direct route (network mode Off) now. The page shows the rest of the status when the engine or cluster cannot say.
+    private async Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct)
+    {
+        if (_runHost is not RoutingRunHost routing) return [];
+        try { return await routing.Isolated.DirectRoutesAsync(ct); }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return [];
+        }
+    }
 
     public sealed class SetProtectedRequest
     {

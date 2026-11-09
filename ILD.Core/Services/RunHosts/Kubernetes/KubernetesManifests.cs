@@ -86,6 +86,38 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     public V1NetworkPolicy Policy(Guid ownerId, V1OwnerReference owner, bool dns = false)
         => Policy(Meta(ownerId, owner), new Dictionary<string, string> { [RunPaths.RunLabel] = ownerId.ToString("N"), [RunPaths.InstanceLabel] = options.Instance }, dns);
 
+    /// <summary>
+    /// What a run's pod has while a launch is in network mode Off: egress to anywhere, DNS included. NetworkPolicies add up, so this
+    /// opens what <see cref="Policy(Guid, V1OwnerReference, bool)"/> closes; deleting it closes it again. It belongs to the run's Secret like the others.
+    /// </summary>
+    public V1NetworkPolicy OpenPolicy(Guid ownerId, V1OwnerReference owner)
+    {
+        var meta = Meta(ownerId, owner);
+        meta.Name = KubernetesNames.OpenName(meta.Name);
+        meta.Labels[RunPaths.RoleLabel] = RunPaths.OpenRole;
+        return Open(meta, new Dictionary<string, string> { [RunPaths.RunLabel] = ownerId.ToString("N"), [RunPaths.InstanceLabel] = options.Instance });
+    }
+
+    /// <summary>The same for the chat pod. It has no run label and no owner: it is deleted when the route goes, and the sweep removes one that outlived its pod.</summary>
+    public V1NetworkPolicy ChatOpenPolicy()
+    {
+        var meta = ChatMeta();
+        meta.Name = KubernetesNames.OpenName(meta.Name);
+        meta.Labels[RunPaths.RoleLabel] = RunPaths.OpenRole;
+        return Open(meta, new Dictionary<string, string> { [RunPaths.RoleLabel] = RunPaths.ChatRole, [RunPaths.InstanceLabel] = options.Instance });
+    }
+
+    private static V1NetworkPolicy Open(V1ObjectMeta metadata, IDictionary<string, string> podLabels) => new()
+    {
+        Metadata = metadata,
+        Spec = new V1NetworkPolicySpec
+        {
+            PodSelector = new V1LabelSelector { MatchLabels = podLabels },
+            PolicyTypes = ["Egress"],
+            Egress = [new V1NetworkPolicyEgressRule()],
+        },
+    };
+
     /// <summary>The same rules for the chat pod, which no run's policy selects.</summary>
     public V1NetworkPolicy ChatPolicy()
         => Policy(ChatMeta(), new Dictionary<string, string> { [RunPaths.RoleLabel] = RunPaths.ChatRole, [RunPaths.InstanceLabel] = options.Instance }, dns: false);
@@ -183,8 +215,8 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         return facing == host ? [host] : [host, facing];
     }
 
-    public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false)
-        => BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns);
+    public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false, string? nameServer = null)
+        => BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
 
     // The zones every chat mounts: the agents' and the shared toolchains, never a repository's own tools.
     private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];
@@ -194,9 +226,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// zones of the store's claim read-only whenever there is a store, since a pod's volumes are fixed when it is made and
     /// a chat may need toolchains later. No CPU or memory limit, as chats had in ILD's own container.
     /// </summary>
-    public V1Pod ChatPod(string? ildAddress = null)
+    public V1Pod ChatPod(string? ildAddress = null, string? nameServer = null)
     {
-        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore ? ChatToolZones : [], limits: false, ildAddress, dns: false);
+        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore ? ChatToolZones : [], limits: false, ildAddress, dns: false, nameServer);
         pod.Metadata.Annotations = new Dictionary<string, string> { [KubernetesNames.SpecAnnotation] = SpecOf(pod) };
         return pod;
     }
@@ -211,7 +243,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
     }
 
-    private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, IReadOnlyList<RunToolMount> zones, bool limits, string? ildAddress, bool dns)
+    private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, IReadOnlyList<RunToolMount> zones, bool limits, string? ildAddress, bool dns, string? nameServer = null)
     {
         return new V1Pod
         {
@@ -220,8 +252,14 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
             {
                 AutomountServiceAccountToken = false,
                 // Names are resolved only by ILD's egress proxy: ILD's own name is pinned in the pod, and the nameserver is nothing.
+                // Nothing but the cluster's own DNS, which the policy lets a pod reach only while it has the direct route (network
+                // mode Off): a pod's DNS cannot be changed once it is made, and what a launch in Off reaches by name needs it.
                 DnsPolicy = dns ? null : "None",
-                DnsConfig = dns ? null : new V1PodDNSConfig { Nameservers = ["127.0.0.1"] },
+                DnsConfig = dns ? null : new V1PodDNSConfig
+                {
+                    Nameservers = [nameServer ?? "127.0.0.1"],
+                    Options = nameServer is null ? null : [new V1PodDNSConfigOption { Name = "timeout", Value = "1" }, new V1PodDNSConfigOption { Name = "attempts", Value = "1" }],
+                },
                 HostAliases = ildAddress is null ? null : [new V1HostAlias { Ip = ildAddress, Hostnames = IldNames() }],
                 EnableServiceLinks = false,
                 RestartPolicy = "Never",

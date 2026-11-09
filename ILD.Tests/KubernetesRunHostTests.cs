@@ -59,7 +59,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
     private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null)
-        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { Time = time ?? TimeProvider.System, ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }) };
+        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { Time = time ?? TimeProvider.System, ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }), ClusterNameServer = () => "10.96.0.10" };
 
     private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
 
@@ -216,13 +216,13 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Create_gives_the_pod_no_nameserver_and_ilds_service_address_for_ilds_name()
+    public async Task Create_gives_the_pod_the_clusters_nameserver_the_policy_shuts_and_ilds_service_address_for_ilds_name()
     {
         await CreateRunAsync();
 
         var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
         Assert.Equal("None", spec.DnsPolicy);
-        Assert.Equal(["127.0.0.1"], spec.DnsConfig.Nameservers);
+        Assert.Equal(["10.96.0.10"], spec.DnsConfig.Nameservers);
         var alias = Assert.Single(spec.HostAliases);
         Assert.Equal("10.96.0.20", alias.Ip);
         Assert.Equal(["ild.example"], alias.Hostnames);
@@ -656,6 +656,132 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(["claude", "-p"], command.TakeLast(2));
         Assert.Contains("FROM_CONTEXT=1", command);
         Assert.Contains("OPENAI_BASE_URL=http://ild.example:8080/gateway", command);
+    }
+
+    // -- The direct route (network mode Off) -------------------------------------
+
+    private string OpenPolicyName => KubernetesNames.OpenName(Name(_run));
+
+    private async Task<IRunProcess> StartAsync(NetworkMode mode, bool prepared = false)
+    {
+        var psi = Command(WorkingDirectory, "ssh", "-T", "git@github.com");
+        var command = prepared ? RunCommand.Prepared(psi, _run, networkMode: mode) : RunCommand.Agent(psi, _run, Guid.NewGuid(), mode, null);
+        var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        return process;
+    }
+
+    private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
+
+    private IEnumerable<string> LaunchProxyVariables()
+        => _api.Execs.Last(e => e.Command.Contains("env")).Command.Where(c => ProxyVariables.Any(v => c.StartsWith(v + "=", StringComparison.Ordinal)));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_launch_in_off_makes_an_allow_all_egress_policy_owned_by_the_runs_secret_and_gets_no_proxy_variables(bool prepared)
+    {
+        await CreateRunAsync();
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+
+        using var process = await StartAsync(NetworkMode.Off, prepared);
+
+        var policy = _api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName)!;
+        Assert.Equal(["Egress"], policy.Spec.PolicyTypes);
+        Assert.Empty(Assert.Single(policy.Spec.Egress).To ?? []);
+        Assert.Empty(Assert.Single(policy.Spec.Egress).Ports ?? []);
+        Assert.Equal(_run.ToString("N"), policy.Spec.PodSelector.MatchLabels["ild/run"]);
+        Assert.Equal("ild", policy.Metadata.Labels["app.kubernetes.io/managed-by"]);
+        Assert.Equal(Instance, policy.Metadata.Labels["ild/instance"]);
+        Assert.Equal(_run.ToString("N"), policy.Metadata.Labels["ild/run"]);
+        Assert.Equal("open", policy.Metadata.Labels["ild/role"]);
+        var owner = Assert.Single(policy.Metadata.OwnerReferences);
+        Assert.Equal("Secret", owner.Kind);
+        Assert.Equal(Name(_run), owner.Name);
+        Assert.Empty(LaunchProxyVariables());
+        // The run's own policy is untouched: the route is another policy on top of it.
+        Assert.Equal(["Ingress", "Egress"], _api.Get<V1NetworkPolicy>("networkpolicies", Name(_run))!.Spec.PolicyTypes);
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
+    public async Task Returning_to_a_proxied_mode_with_no_off_process_left_deletes_the_open_policy(NetworkMode mode)
+    {
+        await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+
+        using var process = await StartAsync(mode);
+
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+        Assert.Contains($"networkpolicies/{OpenPolicyName}", _api.Deleted);
+        Assert.NotEmpty(LaunchProxyVariables());
+    }
+
+    [Fact]
+    public async Task Returning_to_a_proxied_mode_with_an_off_process_still_running_keeps_the_open_policy()
+    {
+        await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+        _api.OnExec = async e => await e.ExitAsync(e.Command.Count > 2 && e.Command[2] == ExecRunHost.OffRunningScript ? 1 : 0);
+
+        using var process = await StartAsync(NetworkMode.Monitor);
+
+        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+    }
+
+    [Fact]
+    public async Task The_runs_that_have_a_direct_route_are_the_ones_with_an_open_policy()
+    {
+        await CreateRunAsync();
+        Assert.Empty(await _host.DirectRoutesAsync(TestContext.Current.CancellationToken));
+
+        using var process = await StartAsync(NetworkMode.Off);
+
+        Assert.Equal([new DirectRoute(_run, Chat: false)], await _host.DirectRoutesAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task The_sweep_removes_an_open_policy_a_dead_run_left_and_deleting_the_run_removes_it_too()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var dead = Guid.NewGuid();
+        _api.Seed("networkpolicies", KubernetesNames.OpenName(Name(dead)), Instance, dead);
+
+        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct));
+        Assert.Equal(dead.ToString("N"), leftover.Location);
+        Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
+
+        Assert.Contains($"networkpolicies/{KubernetesNames.OpenName(Name(dead))}", _api.Deleted);
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", KubernetesNames.OpenName(Name(dead))));
+    }
+
+    [Fact]
+    public async Task Ending_the_run_takes_the_open_policy_with_its_secret()
+    {
+        var env = await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+
+        await _host.DeleteAsync(env, TestContext.Current.CancellationToken);
+
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+    }
+
+    [Fact]
+    public async Task The_sweep_removes_the_chat_pods_open_policy_when_the_pod_is_gone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var name = KubernetesNames.OpenName(KubernetesNames.ChatName(Instance));
+        _api.Seed("networkpolicies", name, Instance, Guid.Empty);
+        // Not a run's: it carries no run label.
+        _api.Get<V1NetworkPolicy>("networkpolicies", name)!.Metadata.Labels.Remove("ild/run");
+        _api.Get<V1NetworkPolicy>("networkpolicies", name)!.Metadata.Labels["ild/role"] = "open";
+
+        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct), l => l.Location == name);
+        Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
+
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", name));
     }
 
     [Fact]

@@ -759,6 +759,178 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", _api.Execs.Last().Command);
     }
 
+    // -- The direct route (network mode Off) -------------------------------------
+
+    private async Task<IRunProcess> StartAsync(NetworkMode mode, bool prepared = false)
+    {
+        var psi = Command(WorkingDirectory, "ssh", "-T", "git@github.com");
+        var command = prepared ? RunCommand.Prepared(psi, _run, networkMode: mode) : RunCommand.Agent(psi, _run, Guid.NewGuid(), mode, null);
+        var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        return process;
+    }
+
+    private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
+
+    private IEnumerable<string> LaunchEnvironment() => _api.Execs.Last(e => e.Command.Contains("env")).Command.Where(c => ProxyVariables.Any(v => c.StartsWith(v + "=", StringComparison.Ordinal)));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_launch_in_off_connects_the_container_to_the_open_network_and_gets_no_proxy_variables(bool prepared)
+    {
+        await CreateRunAsync();
+        Assert.DoesNotContain(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+
+        using var process = await StartAsync(NetworkMode.Off, prepared);
+
+        Assert.Contains(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+        Assert.Empty(LaunchEnvironment());
+        Assert.Contains(_api.Execs.Last(e => e.Command.Contains("env")).Command, c => c.StartsWith($"{_run:N}/{ExecRunHost.OffPrefix}", StringComparison.Ordinal));
+        var open = _api.Network(_host.OpenNetworkName)!;
+        Assert.False(open["Internal"]!.GetValue<bool>());
+        Assert.Equal("open", open["Labels"]![RunPaths.RoleLabel]!.GetValue<string>());
+        Assert.Equal(Instance, open["Labels"]![RunPaths.InstanceLabel]!.GetValue<string>());
+        Assert.Equal(RunPaths.ManagedByValue, open["Labels"]![RunPaths.ManagedByLabel]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_launch_in_off_gives_the_container_a_nameserver_that_works_while_the_route_is_open()
+    {
+        await CreateRunAsync();
+
+        using var process = await StartAsync(NetworkMode.Off);
+
+        var write = _api.Execs.Single(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal));
+        Assert.Equal("0", write.User);
+        // Docker's resolver is in every container on a network of its own.
+        Assert.Equal("127.0.0.11", write.Command[^1]);
+        Assert.Equal("127.0.0.1", _api.Container(Name(_run))!["HostConfig"]!["Dns"]![0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task On_podman_the_nameserver_while_the_route_is_open_is_the_open_networks_gateway()
+    {
+        _api.LibpodInfo = new JsonObject();
+        await CreateRunAsync();
+
+        using var process = await StartAsync(NetworkMode.Off);
+
+        var nameserver = _api.Execs.Single(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal)).Command[^1];
+        Assert.Matches(@"^10\.89\.\d+\.1$", nameserver);
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
+    [InlineData(NetworkMode.Blacklist)]
+    public async Task Returning_to_a_proxied_mode_with_no_off_process_left_disconnects_the_container_and_restores_the_nameserver(NetworkMode mode)
+    {
+        await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+        Assert.Contains(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+
+        using var process = await StartAsync(mode);
+
+        Assert.DoesNotContain(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+        var restore = _api.Execs.Last(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal));
+        Assert.Equal("127.0.0.1", restore.Command[^1]);
+        Assert.NotEmpty(LaunchEnvironment());
+    }
+
+    [Theory]
+    [InlineData(false, "127.0.0.11")]
+    [InlineData(true, @"^10\.89\.\d+\.1$")]
+    public async Task A_run_with_its_own_dns_gets_the_engines_nameserver_back_when_the_route_closes(bool podman, string expected)
+    {
+        if (podman) _api.LibpodInfo = new JsonObject();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
+        using (await StartAsync(NetworkMode.Off)) { }
+        var openGateway = _api.Execs.Single(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal)).Command[^1];
+
+        using var process = await StartAsync(NetworkMode.Monitor);
+
+        var close = _api.Execs.Last(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal));
+        Assert.Equal("0", close.User);
+        Assert.Matches(expected, close.Command[^1]);
+        Assert.NotEqual("127.0.0.1", close.Command[^1]);
+        if (podman) Assert.NotEqual(openGateway, close.Command[^1]);
+    }
+
+    [Fact]
+    public async Task Two_launches_in_off_at_once_both_start_and_the_container_is_connected_once()
+    {
+        await CreateRunAsync();
+        var ct = TestContext.Current.CancellationToken;
+
+        var both = await Task.WhenAll(StartAsync(NetworkMode.Off), StartAsync(NetworkMode.Off));
+
+        Assert.Equal(2, both.Length);
+        Assert.Single(_api.Connects, c => c["Container"]!.GetValue<string>() == Name(_run));
+        foreach (var p in both) p.Dispose();
+    }
+
+    [Fact]
+    public async Task Returning_to_a_proxied_mode_with_an_off_process_still_running_keeps_the_route()
+    {
+        await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+        // The pid file of a process launched in Off, whose process group is alive.
+        _api.OnExec = async e =>
+        {
+            if (e.Command.Count > 2 && e.Command[2] == ExecRunHost.OffRunningScript) await e.ExitAsync(1);
+            else await e.ExitAsync(0);
+        };
+
+        using var process = await StartAsync(NetworkMode.Monitor);
+
+        Assert.Contains(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+        Assert.NotEmpty(LaunchEnvironment());
+    }
+
+    [Fact]
+    public async Task A_proxied_launch_in_a_run_that_never_had_the_route_asks_nothing_of_the_network()
+    {
+        await CreateRunAsync();
+        var execs = _api.Execs.Count;
+
+        using var process = await StartAsync(NetworkMode.Monitor);
+
+        Assert.DoesNotContain(_host.OpenNetworkName, _api.Networks());
+        Assert.DoesNotContain(_api.Execs.Skip(execs), e => e.Command.Count > 2 && e.Command[2] == ExecRunHost.OffRunningScript);
+    }
+
+    [Fact]
+    public async Task The_runs_that_have_a_direct_route_are_the_containers_on_the_open_network()
+    {
+        await CreateRunAsync();
+        Assert.Empty(await _host.DirectRoutesAsync(TestContext.Current.CancellationToken));
+
+        using var process = await StartAsync(NetworkMode.Off);
+
+        Assert.Equal([new DirectRoute(_run, Chat: false)], await _host.DirectRoutesAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task The_sweep_removes_the_open_network_once_nothing_is_on_it_and_not_before()
+    {
+        await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+        var ct = TestContext.Current.CancellationToken;
+
+        Assert.DoesNotContain(await _host.ListLeftoversAsync(new HashSet<Guid> { _run }, ct), l => l.Location == _host.OpenNetworkName);
+
+        using (await StartAsync(NetworkMode.Monitor)) { }
+        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid> { _run }, ct), l => l.Location == _host.OpenNetworkName);
+        Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
+        Assert.DoesNotContain(_host.OpenNetworkName, _api.Networks());
+    }
+
     // -- Kill leftovers ----------------------------------------------------------
 
     [Fact]
