@@ -287,6 +287,46 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Create_gives_the_container_no_working_nameserver_unless_the_run_asks_for_dns()
+    {
+        await CreateRunAsync();
+
+        Assert.Equal(["127.0.0.1"], _api.Container(Name(_run))!["HostConfig"]!["Dns"]!.AsArray().Select(c => c!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_run_that_asks_for_dns_gets_the_engines_resolver()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
+
+        Assert.Empty(_api.Container(Name(_run))!["HostConfig"]!["Dns"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task A_new_environment_probes_for_a_direct_way_out_and_a_refused_connect_makes_the_rules_enforced()
+    {
+        var probe = new ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe(_ => null, ildReaches: (_, _, _) => Task.FromResult(true));
+        _host.Probe = probe;
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Command.Any(c => c.Contains("/dev/tcp/", StringComparison.Ordinal))) await e.WriteStdoutAsync("1\n");
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (probe.EscapeObserved is null && DateTime.UtcNow < deadline) await Task.Delay(20, TestContext.Current.CancellationToken);
+
+        Assert.False(probe.EscapeObserved);
+    }
+
+    [Fact]
     public async Task Create_names_ild_by_the_network_gateway_when_ild_runs_on_the_host()
     {
         await CreateRunAsync();

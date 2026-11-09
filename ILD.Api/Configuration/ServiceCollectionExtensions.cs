@@ -76,6 +76,7 @@ public static class ServiceCollectionExtensions
             var host = kind == RunHostKind.Kubernetes
                 ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp))
                 : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp));
+            host.Isolated.Probe = sp.GetRequiredService<NetworkEnforcementProbe>();
             // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
             host.Isolated.Forwards = async ct =>
             {
@@ -202,7 +203,8 @@ public static class ServiceCollectionExtensions
         {
             BindAddress = EgressProxyOptions.BindAddressFor(RunHostOptions.Detect(name => sp.GetRequiredService<IConfiguration>()[name])),
         });
-        services.AddSingleton(sp => NetworkEnforcementStatus.FromEnvironment(sp.GetRequiredService<EgressProxyOptions>()));
+        services.AddSingleton(sp => new NetworkEnforcementProbe(name => Environment.GetEnvironmentVariable(name) ?? sp.GetRequiredService<IConfiguration>()[name]));
+        services.AddSingleton(sp => NetworkEnforcementStatus.FromEnvironment(sp.GetRequiredService<EgressProxyOptions>()) with { Probe = sp.GetRequiredService<NetworkEnforcementProbe>() });
         services.AddSingleton<IProtectedDestinationSource>(sp =>
         {
             var config = sp.GetRequiredService<IConfiguration>();

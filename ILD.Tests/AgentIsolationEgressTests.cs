@@ -158,11 +158,11 @@ public class AgentIsolationEgressTests
 
     [Theory]
     [InlineData(RunHostKind.Local, "advisory")]
-    [InlineData(RunHostKind.Container, "enforced")]
-    [InlineData(RunHostKind.Kubernetes, "enforced")]
-    public void Rules_are_enforced_only_where_runs_sit_on_a_network_that_reaches_only_ILD(RunHostKind kind, string enforcement)
+    [InlineData(RunHostKind.Container, "unverified")]
+    [InlineData(RunHostKind.Kubernetes, "unverified")]
+    public void Rules_are_claimed_enforced_only_after_a_probe_has_failed_to_get_out(RunHostKind kind, string enforcement)
     {
-        Assert.Equal(enforcement, NetworkEnforcementStatus.EnforcementFor(kind));
+        Assert.Equal(enforcement, NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128")).EnforcementFor(kind));
         Assert.NotEmpty(NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128")).ReasonFor(kind));
         Assert.NotEmpty(NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Disabled).ReasonFor(kind));
     }

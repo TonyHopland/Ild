@@ -92,7 +92,7 @@ public class NetworkController : ControllerBase
     public IActionResult GetStatus()
         => Ok(new
         {
-            enforcement = NetworkEnforcementStatus.EnforcementFor(_runHost.Kind),
+            enforcement = _enforcement.EnforcementFor(_runHost.Kind),
             reason = _enforcement.ReasonFor(_runHost.Kind),
             proxyEnabled = _enforcement.ProxyEnabled,
             proxyPort = _enforcement.ProxyPort,

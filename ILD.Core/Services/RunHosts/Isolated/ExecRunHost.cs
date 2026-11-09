@@ -124,6 +124,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>The declared forwards, read when a command or terminal starts in a run or chat; null runs with none.</summary>
     public Func<CancellationToken, Task<IReadOnlyList<RunForward>>>? Forwards { get; set; }
 
+    /// <summary>Checks, from the first environment made, that the network leaves no way out but the proxy; null runs no probe.</summary>
+    public ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe? Probe { get; set; }
+
     // The environments that were given relays, so one whose forwards all went is cleaned up, and one that never had
     // any costs no extra exec per command.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ExecOwner, bool> _forwarded = new();
@@ -295,9 +298,19 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return RunToolStore.Parse(result.StdOut, root);
     }
 
+    /// <summary>Tries, from inside the environment and without the proxy, to connect out; true when it connected.</summary>
+    private async Task<bool?> ConnectDirectlyAsync(Guid owner, string host, int port, CancellationToken ct)
+    {
+        var result = await RunScriptAsync(owner, "timeout 3 bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' probe \"$1\" \"$2\" 2>/dev/null; echo $?",
+            [host, port.ToString(System.Globalization.CultureInfo.InvariantCulture)], ct);
+        if (!result.Success) return null;
+        return result.StdOut.Trim() switch { "0" => true, "1" or "124" => false, _ => null };
+    }
+
     /// <summary>Make the environment ready to work in: the run's home and the code the base repository has.</summary>
     protected async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
     {
+        if (Probe is { } probe) _ = probe.ProbeAsync((host, port, token) => ConnectDirectlyAsync(owner, host, port, token));
         var home = await RunScriptAsync(owner, HomeScript, [RunPaths.HomeDirectory(owner)], ct);
         if (!home.Success)
             throw new InvalidOperationException($"could not make the run's home in its {Noun}: {home.StdErr.Trim()}");

@@ -463,8 +463,8 @@ public sealed class NetworkControllerTests : IDisposable
 
     [Theory]
     [InlineData(RunHostKind.Local, "advisory")]
-    [InlineData(RunHostKind.Container, "enforced")]
-    [InlineData(RunHostKind.Kubernetes, "enforced")]
+    [InlineData(RunHostKind.Container, "unverified")]
+    [InlineData(RunHostKind.Kubernetes, "unverified")]
     public void Status_reports_enforcement_by_where_runs_execute_and_Off_as_always_available(RunHostKind kind, string enforcement)
     {
         var status = Body<Dictionary<string, object>>(Build(kind).GetStatus());

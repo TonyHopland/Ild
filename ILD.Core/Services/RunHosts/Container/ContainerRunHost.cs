@@ -96,7 +96,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             made.Volume = await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
             made.Network = await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = Labels(owner) }, ct));
             var ild = await IldAddressAsync(name, $"run {owner:N}", ct);
-            made.Container = await CreateContainerAsync(owner, ild, tools, ct);
+            made.Container = await CreateContainerAsync(owner, ild, tools, request.Dns, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             _addresses[owner] = await WaitReadyAsync(name, $"run {owner:N}", ct);
 
@@ -204,7 +204,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     }
 
     /// <summary>Makes the run's container; false when an attempt had left it.</summary>
-    private async Task<bool> CreateContainerAsync(Guid owner, string ildAddress, RunToolEnvironment? tools, CancellationToken ct)
+    private async Task<bool> CreateContainerAsync(Guid owner, string ildAddress, RunToolEnvironment? tools, bool dns, CancellationToken ct)
     {
         var name = ObjectName(owner);
         var memory = _options.MemoryBytes ?? 0;
@@ -230,6 +230,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                 SecurityOpt = new[] { "no-new-privileges" },
                 NetworkMode = name,
                 ExtraHosts = new[] { $"{_options.IldHost}:{ildAddress}" },
+                Dns = NameServers(dns),
                 RestartPolicy = new { Name = "no" },
                 Memory = memory,
                 NanoCpus = _options.NanoCpus ?? 0,
@@ -573,7 +574,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         string[] parts =
         [
             image?["Id"]?.GetValue<string>() ?? "", _options.RunnerImage, _options.IldHost, _options.ToolsVolume,
-            _options.Toolchains ? "tool-zones" : "no-tools",
+            _options.Toolchains ? "tool-zones" : "no-tools", "no-dns",
             .. _options.GitIdentity.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => $"{e.Key}={e.Value}"),
         ];
         var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', parts)));
@@ -588,6 +589,10 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         Logger?.LogInformation("Replacing the chat container: the runner image or ILD's settings changed since it was made");
         await RemoveContainerAsync(ChatName, "the chat container", ct);
     }
+
+    // Names are resolved only by ILD's egress proxy: ILD's own name comes from ExtraHosts, and the nameserver is nothing, so an
+    // engine that forwards DNS out of an internal network has nowhere to forward to.
+    private static string[] NameServers(bool dns) => dns ? [] : ["127.0.0.1"];
 
     private async Task CreateChatContainerAsync(string ildAddress, CancellationToken ct)
     {
@@ -610,6 +615,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                 SecurityOpt = new[] { "no-new-privileges" },
                 NetworkMode = ChatName,
                 ExtraHosts = new[] { $"{_options.IldHost}:{ildAddress}" },
+                Dns = NameServers(dns: false),
                 RestartPolicy = new { Name = "no" },
             },
             NetworkingConfig = new { EndpointsConfig = new Dictionary<string, object> { [ChatName] = new { } } },

@@ -57,7 +57,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
     private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null)
-        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools") };
+        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }) };
 
     private string WorkingDirectory => KubernetesNames.WorkingDirectory(_run);
 
@@ -214,7 +214,37 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Create_lets_the_pod_reach_only_ild_and_dns_and_be_reached_only_by_ild()
+    public async Task Create_gives_the_pod_no_nameserver_and_ilds_service_address_for_ilds_name()
+    {
+        await CreateRunAsync();
+
+        var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
+        Assert.Equal("None", spec.DnsPolicy);
+        Assert.Equal(["127.0.0.1"], spec.DnsConfig.Nameservers);
+        var alias = Assert.Single(spec.HostAliases);
+        Assert.Equal("10.96.0.20", alias.Ip);
+        Assert.Equal(["ild.example"], alias.Hostnames);
+    }
+
+    [Fact]
+    public async Task A_run_that_asks_for_dns_keeps_the_clusters_resolver_and_may_reach_it()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
+
+        var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
+        Assert.Null(spec.DnsPolicy);
+        Assert.Null(spec.HostAliases);
+        var policy = _api.Get<V1NetworkPolicy>("networkpolicies", Name(_run))!.Spec;
+        Assert.Equal([53, 53], policy.Egress[1].Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
+    }
+
+    [Fact]
+    public async Task Create_lets_the_pod_reach_only_ild_and_be_reached_only_by_ild()
     {
         await CreateRunAsync();
 
@@ -224,8 +254,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var toIld = policy.Egress[0];
         Assert.Equal("ild", toIld.To.Single().PodSelector.MatchLabels["app.kubernetes.io/name"]);
         Assert.Equal([8080, 3128], toIld.Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
-        Assert.Equal([53, 53], policy.Egress[1].Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
-        Assert.Equal(2, policy.Egress.Count);
+        Assert.Single(policy.Egress);
         Assert.Equal("ild", policy.Ingress.Single().FromProperty.Single().PodSelector.MatchLabels["app.kubernetes.io/name"]);
     }
 
