@@ -1145,7 +1145,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var goes = Task.Run(async () =>
         {
             await Task.Delay(100, TestContext.Current.CancellationToken);
-            await client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, FakeKubernetesApi.Namespace, cancellationToken: TestContext.Current.CancellationToken);
+            await client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, FakeKubernetesApi.Namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: TestContext.Current.CancellationToken);
         }, TestContext.Current.CancellationToken);
 
         await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
@@ -1337,6 +1337,34 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.DoesNotContain($"persistentvolumeclaims/{Name(_run)}", _api.Deleted);
         Assert.Single(_api.Names("secrets"));
         Assert.Single(_api.Names("persistentvolumeclaims"));
+    }
+
+    [Fact]
+    public async Task A_run_pod_stuck_terminating_on_a_lost_node_is_removed_with_a_grace_period_of_0_and_made_again()
+    {
+        var ended = await EndRunPodAsync("Failed");
+        ended.Metadata.DeletionTimestamp = DateTime.UtcNow;
+        var ct = TestContext.Current.CancellationToken;
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct);
+        await process.WaitForExitAsync(ct);
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepositoryIn("again"), "ild/wi-1-run", Repo), ct);
+
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
+        Assert.Null(_api.Get<V1Pod>("pods", Name(_run))!.Metadata.DeletionTimestamp);
+        Assert.Single(_api.Names("persistentvolumeclaims"));
+    }
+
+    [Fact]
+    public async Task A_start_retried_on_a_run_pod_stuck_terminating_removes_it_with_a_grace_period_of_0()
+    {
+        var ended = await EndRunPodAsync("Failed");
+        ended.Metadata.DeletionTimestamp = DateTime.UtcNow;
+
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepositoryIn("again"), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
+        Assert.Single(_api.Names("secrets"));
     }
 
     [Fact]

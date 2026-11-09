@@ -148,7 +148,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
             app.MapPost(root, (Func<HttpContext, Task<IResult>>)(http => Create(http, kind)));
             app.MapGet(root, (HttpContext http) => List(http, kind));
             app.MapGet(root + "/{name}", (string name) => Read(kind, name));
-            app.MapDelete(root + "/{name}", (string name) => Delete(kind, name));
+            app.MapDelete(root + "/{name}", async (HttpContext http, string name) => await Delete(http, kind, name));
         }
         app.MapGet("/apis/storage.k8s.io/v1/storageclasses", () => Json(new V1StorageClassList { Items = StorageClasses }));
         app.MapGet("/api/v1/namespaces/{ns}/pods/{name}/exec", async (HttpContext http, string name) => await Exec(http, name));
@@ -228,11 +228,19 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         }
     }
 
-    private IResult Delete(string kind, string name)
+    private async Task<IResult> Delete(HttpContext http, string kind, string name)
     {
+        using var reader = new StreamReader(http.Request.Body);
+        var graceless = (await reader.ReadToEndAsync()).Replace(" ", "").Contains("\"gracePeriodSeconds\":0", StringComparison.Ordinal);
         object removed;
         lock (_gate)
         {
+            // A pod that is terminating on a node that never confirms goes only when it is deleted with a grace period of 0.
+            if (_objects.TryGetValue((kind, name), out var terminating) && terminating is V1Pod { Metadata.DeletionTimestamp: not null } && !graceless)
+            {
+                Deleted.Add($"{kind}/{name}");
+                return Json(terminating);
+            }
             if (!_objects.Remove((kind, name), out removed!))
                 return Failure(404, "NotFound", $"{kind} \"{name}\" not found");
             Deleted.Add($"{kind}/{name}");

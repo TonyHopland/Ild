@@ -123,7 +123,8 @@ public sealed record ContainerRunHostOptions
         return bytes == 0 ? null : bytes;
     }
 
-    // Both name engine objects and sit in label filters, so they must be a name the engine accepts.
+    // Both name engine objects and sit in label filters, so they must be a name the engine accepts. The 50-character cap is ILD's own,
+    // to leave room for the prefixes and suffixes of the names made from them.
     private static string? DockerName(string? value, string setting)
         => value is null || System.Text.RegularExpressions.Regex.IsMatch(value, "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,49}$")
             ? value

@@ -4,6 +4,7 @@ using ILD.Api.Services;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Container;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using ILD.Tests.Fakes;
@@ -26,6 +27,7 @@ public sealed class InteractiveProviderSessionContainerTests : IAsyncLifetime
     public ValueTask InitializeAsync()
     {
         _api = FakeDockerApi.Start();
+        InstallClaude();
         _container = new ContainerRunHost(
             ContainerRunHostOptions.From(name => name switch
             {
@@ -48,6 +50,7 @@ public sealed class InteractiveProviderSessionContainerTests : IAsyncLifetime
         _container.Dispose();
         await _api.DisposeAsync();
         Directory.Delete(_home, recursive: true);
+        Directory.Delete(_agents, recursive: true);
     }
 
     private static AiProvider Claude() => new()
@@ -57,15 +60,27 @@ public sealed class InteractiveProviderSessionContainerTests : IAsyncLifetime
         Type = "claude-code",
         BaseUrl = "http://localhost",
         Model = "n/a",
-        Config = """{"binaryPath":"claude"}""",
+        Config = "{}",
     };
+
+    private readonly string _agents = Directory.CreateTempSubdirectory("ild-signin-agents-").FullName;
+
+    private string DataRoot => _agents;
+
+    // The managed CLI the container installs from the store: a current install on ILD's side is what lets the sign-in start.
+    private void InstallClaude()
+    {
+        var pointer = ManagedAgentInstall.PointerFile(DataRoot, ManagedAgentCatalog.ClaudeCode);
+        Directory.CreateDirectory(Path.GetDirectoryName(pointer)!);
+        File.WriteAllText(pointer, "v1");
+    }
 
     private InteractiveProviderSessionService Service(IProviderStore? store = null, IRunHost? host = null)
     {
         var scopes = new ServiceCollection().AddSingleton(store ?? Mock.Of<IProviderStore>()).BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
         return new InteractiveProviderSessionService(
             NullLogger<InteractiveProviderSessionService>.Instance, scopes: scopes, host: host ?? new RoutingRunHost(new FakeRunHost(), _container))
-        { StoreHome = _home, DataRoot = Path.Combine(_home, "no-agents") };
+        { StoreHome = _home, DataRoot = DataRoot };
     }
 
     private async Task RunToCloseAsync(InteractiveProviderSessionService service, AiProvider provider)
@@ -97,6 +112,30 @@ public sealed class InteractiveProviderSessionContainerTests : IAsyncLifetime
                 await e.WriteStdoutAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes(Login)));
             await e.ExitAsync(e.Command.TakeLast(2).First() == ".claude/.credentials.json" ? 0 : 3);
         };
+    }
+
+    [Fact]
+    public async Task A_provider_with_a_custom_binary_path_is_refused_and_no_sign_in_container_is_opened()
+    {
+        var provider = Claude();
+        provider.Config = """{"binaryPath":"/opt/claude/bin/claude"}""";
+        var (server, client) = WebSocketPair.Create();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var runTask = Service().RunAsync(server, provider, initialCols: 200, initialRows: 24, cancellationToken: cts.Token);
+        var text = new StringBuilder();
+        var buffer = new byte[4096];
+        WebSocketReceiveResult result;
+        do
+        {
+            result = await client.ReceiveAsync(buffer, cts.Token);
+            text.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+        }
+        while (result.MessageType != WebSocketMessageType.Close);
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        await runTask;
+
+        Assert.Contains("custom binary path", text.ToString() + result.CloseStatusDescription);
+        Assert.DoesNotContain(_api.Created, c => c.StartsWith("containers/ild-signin-", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -149,8 +188,8 @@ public sealed class InteractiveProviderSessionContainerTests : IAsyncLifetime
     [Fact]
     public async Task A_managed_agent_ild_has_not_installed_gets_the_install_message_and_no_container()
     {
+        File.Delete(ManagedAgentInstall.PointerFile(DataRoot, ManagedAgentCatalog.ClaudeCode));
         var provider = Claude();
-        provider.Config = "{}";
         var (server, client) = WebSocketPair.Create();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var runTask = Service().RunAsync(server, provider, 80, 24, cts.Token);

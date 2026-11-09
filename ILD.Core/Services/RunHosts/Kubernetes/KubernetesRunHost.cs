@@ -139,13 +139,13 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     {
         var pod = await ReadPodOrNullAsync(name, ct);
         if (pod is null || pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return;
-        await DeletePodAndWaitAsync(pod, name, ct);
+        await DeletePodAndWaitAsync(name, ct);
     }
 
-    private async Task DeletePodAndWaitAsync(V1Pod pod, string name, CancellationToken ct)
+    private async Task DeletePodAndWaitAsync(string name, CancellationToken ct)
     {
-        if (pod.Metadata.DeletionTimestamp is null)
-            await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
+        // Also when it is already terminating: on a lost node the kubelet never confirms the delete, and only a grace period of 0 removes the pod.
+        await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
         await WaitPodGoneAsync(name, ct);
     }
 
@@ -165,7 +165,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             if (pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return false;
 
             Logger?.LogInformation("The pod of run {Run} ended ({Why}); making it again on its volume", owner, WhyNotReady(pod));
-            await DeletePodAndWaitAsync(pod, name, ct);
+            await DeletePodAndWaitAsync(name, ct);
             var fresh = new V1Pod
             {
                 Metadata = new V1ObjectMeta

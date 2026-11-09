@@ -1434,8 +1434,8 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal("3Gi", shared.MemoryLimit);
     }
 
-[Fact]
-    public async Task The_sweep_removes_installer_containers_a_killed_ild_left_and_shutdown_removes_the_open_ones()
+    [Fact]
+    public async Task The_sweep_removes_installer_containers_a_killed_ild_left()
     {
         _api.SeedSignIn("ild-tools-left", Instance, role: "tools");
         _api.SeedSignIn("ild-tools-other", "other", role: "tools");
@@ -1446,6 +1446,27 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.DoesNotContain("ild-tools-left", _api.Containers());
         Assert.Contains("ild-tools-other", _api.Containers());
+    }
+
+    [Fact]
+    public async Task Shutdown_removes_the_installer_containers_that_are_open()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var ct = TestContext.Current.CancellationToken;
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                await host.ShutdownAsync(ct);
+                await e.WriteStdoutAsync(AgentNodeLine + "\n");
+            }
+            await e.ExitAsync(0);
+        };
+
+        await host.CreateAsync(new RunEnvironmentRequest(Guid.NewGuid(), MakeBaseRepository("shut", ("package.json", "{}")), "b", Repo), ct);
+
+        Assert.Contains(_api.Deleted, d => d.StartsWith("containers/ild-tools-", StringComparison.Ordinal));
     }
 
     [Theory]
