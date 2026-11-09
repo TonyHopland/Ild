@@ -275,7 +275,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         {
             await _client.CoreV1.CreateNamespacedPodAsync(
                 _manifests.ToolsInstaller(name, toolInstaller.Writable, toolInstaller.ReadOnly, toolInstaller.Environment), _namespace, cancellationToken: ct);
-            await WaitInstallerReadyAsync(name, ct);
+            await WaitReadyAsync(name, "the toolchain installer", ct);
             return await work(installer);
         }
         finally
@@ -283,21 +283,6 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             _execNames.TryRemove(installer, out _);
             await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(
                 name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: CancellationToken.None));
-        }
-    }
-
-    private async Task WaitInstallerReadyAsync(string name, CancellationToken ct)
-    {
-        var started = Stopwatch.StartNew();
-        while (true)
-        {
-            var pod = await _client.CoreV1.ReadNamespacedPodAsync(name, _namespace, cancellationToken: ct);
-            if (IsReady(pod)) return;
-            if (pod.Status?.Phase is "Failed" or "Succeeded")
-                throw new InvalidOperationException($"the toolchain installer {name} ended before it was ready: {WhyNotReady(pod)}");
-            if (started.Elapsed > _options.ReadyTimeout)
-                throw new InvalidOperationException($"the toolchain installer {name} was not ready after {_options.ReadyTimeout.TotalSeconds:0} s: {WhyNotReady(pod)}");
-            await Task.Delay(ReadyPollInterval, ct);
         }
     }
 

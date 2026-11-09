@@ -192,13 +192,13 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)
     {
         var reposDir = Path.Combine(job.ScratchPath, ReposFolder);
-        var (folderName, exists) = await FindFolderAsync(reposDir, job.Repo.Id, Clean(job.Repo.Name), job.ChatSessionId, RunPaths.ChatOf(job.ScratchPath) is not null, ct);
+        var inChatContainer = RunPaths.ChatOf(job.ScratchPath) is not null;
+        var (folderName, exists) = await FindFolderAsync(reposDir, job.Repo.Id, Clean(job.Repo.Name), job.ChatSessionId, inChatContainer, ct);
         var folder = Path.Combine(reposDir, folderName);
         var relativePath = $"{ReposFolder}/{folderName}";
         var branch = job.Branch;
         var remoteRef = $"refs/remotes/origin/{branch}";
 
-        var inChatContainer = RunPaths.ChatOf(job.ScratchPath) is not null;
         Task<AgentProcessResult> Git(params string[] args) => RunGitAsync(folder, reposDir, args, job.ChatSessionId, inChatContainer, ct);
 
         if (!exists)

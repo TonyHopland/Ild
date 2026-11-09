@@ -203,54 +203,91 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             ?? throw new InvalidOperationException($"the network of {subject} has no gateway address, so it cannot reach ILD");
     }
 
-    /// <summary>Makes the run's container; false when an attempt had left it.</summary>
-    private async Task<bool> CreateContainerAsync(Guid owner, string ildAddress, RunToolEnvironment? tools, bool dns, CancellationToken ct)
+    /// <summary>Where a container sits on a network of its own: the network, ILD's address on it, whether it has DNS, and the options of its state directory.</summary>
+    private sealed record Placement(string Network, string IldAddress, bool Dns, string StateOptions);
+
+    /// <summary>
+    /// The create request every container ILD makes shares: the runner image as the runner user, with every capability
+    /// dropped and no new privileges. A <paramref name="placement"/> puts it on a network of its own, reaching only ILD;
+    /// without one it is on the engine's default network, as the installers and sign-ins need to download. A run's
+    /// <paramref name="limits"/> are its memory and CPU.
+    /// </summary>
+    private object ContainerBody(
+        IEnumerable<string> env, IDictionary<string, string> labels, IEnumerable<string> binds,
+        string? workingDirectory = null, Placement? placement = null, (long Memory, long NanoCpus)? limits = null)
     {
-        var name = ObjectName(owner);
-        var memory = _options.MemoryBytes ?? 0;
-        var body = new
+        var host = new Dictionary<string, object>
         {
-            Image = _options.RunnerImage,
-            Entrypoint = new[] { "/usr/bin/tini", "--" },
-            Cmd = new[] { "sleep", "infinity" },
-            User = $"{RunnerUid}:{RunnerUid}",
-            // The volume's root, which the image gives the runner. An engine makes a missing working directory as root
-            // (Podman does), and the runner could then not make the run's own directory in it: the runner makes that.
-            WorkingDir = RunPaths.RunsRoot,
-            Env = new[] { $"HOME={RunPaths.HomeDirectory(owner)}" }
-                .Concat(_options.GitIdentity.Select(e => $"{e.Key}={e.Value}"))
-                .Concat(tools?.For(RunPaths.HomeDirectory(owner)) ?? [])
-                .ToArray(),
-            Labels = Labels(owner),
-            HostConfig = new
-            {
-                Binds = new[] { $"{name}:{RunPaths.RunsRoot}:rw" }.Concat(ToolBinds(tools?.Zones ?? [])).ToArray(),
-                Tmpfs = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{await StateOwnerOptionAsync(ct)}" },
-                CapDrop = new[] { "ALL" },
-                SecurityOpt = new[] { "no-new-privileges" },
-                NetworkMode = name,
-                ExtraHosts = IldHosts(ildAddress),
-                Dns = NameServers(dns),
-                RestartPolicy = new { Name = "no" },
-                Memory = memory,
-                NanoCpus = _options.NanoCpus ?? 0,
-            },
-            NetworkingConfig = new { EndpointsConfig = new Dictionary<string, object> { [name] = new { } } },
+            ["Binds"] = binds.ToArray(),
+            ["CapDrop"] = new[] { "ALL" },
+            ["SecurityOpt"] = new[] { "no-new-privileges" },
+            ["RestartPolicy"] = new { Name = "no" },
         };
+        var body = new Dictionary<string, object>
+        {
+            ["Image"] = _options.RunnerImage,
+            ["Entrypoint"] = new[] { "/usr/bin/tini", "--" },
+            ["Cmd"] = new[] { "sleep", "infinity" },
+            ["User"] = $"{RunnerUid}:{RunnerUid}",
+            ["Env"] = env.ToArray(),
+            ["Labels"] = labels,
+            ["HostConfig"] = host,
+        };
+        if (workingDirectory is not null) body["WorkingDir"] = workingDirectory;
+        if (limits is { } l)
+        {
+            host["Memory"] = l.Memory;
+            host["NanoCpus"] = l.NanoCpus;
+        }
+        if (placement is not null)
+        {
+            host["Tmpfs"] = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{placement.StateOptions}" };
+            host["NetworkMode"] = placement.Network;
+            host["ExtraHosts"] = IldHosts(placement.IldAddress);
+            host["Dns"] = NameServers(placement.Dns);
+            body["NetworkingConfig"] = new { EndpointsConfig = new Dictionary<string, object> { [placement.Network] = new { } } };
+        }
+        return body;
+    }
+
+    /// <summary>
+    /// Creates the container; false when it is there already and <paramref name="tolerateConflict"/> says that is all right.
+    /// A missing runner image is reported as what to do about it.
+    /// </summary>
+    private async Task<bool> PostCreateAsync(string name, object body, bool tolerateConflict, CancellationToken ct)
+    {
         try
         {
             await _api.PostAsync($"/containers/create?name={Escaped(name)}", body, ct);
             return true;
         }
-        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.Conflict)
+        catch (DockerApiException ex) when (tolerateConflict && ex.Status == HttpStatusCode.Conflict)
         {
-            // Left by an attempt that failed after making it, or the run's own on a retry: started by the caller.
             return false;
         }
         catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
         {
             throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
         }
+    }
+
+    /// <summary>Makes the run's container; false when an attempt had left it.</summary>
+    private async Task<bool> CreateContainerAsync(Guid owner, string ildAddress, RunToolEnvironment? tools, bool dns, CancellationToken ct)
+    {
+        var name = ObjectName(owner);
+        var body = ContainerBody(
+            env: new[] { $"HOME={RunPaths.HomeDirectory(owner)}" }
+                .Concat(_options.GitIdentity.Select(e => $"{e.Key}={e.Value}"))
+                .Concat(tools?.For(RunPaths.HomeDirectory(owner)) ?? []),
+            labels: Labels(owner),
+            binds: new[] { $"{name}:{RunPaths.RunsRoot}:rw" }.Concat(ToolBinds(tools?.Zones ?? [])),
+            // The volume's root, which the image gives the runner. An engine makes a missing working directory as root
+            // (Podman does), and the runner could then not make the run's own directory in it: the runner makes that.
+            workingDirectory: RunPaths.RunsRoot,
+            placement: new Placement(name, ildAddress, dns, await StateOwnerOptionAsync(ct)),
+            limits: (_options.MemoryBytes ?? 0, _options.NanoCpus ?? 0));
+        // False when an attempt had left the container, or it is the run's own on a retry: started by the caller.
+        return await PostCreateAsync(name, body, tolerateConflict: true, ct);
     }
 
     // -- Toolchains --------------------------------------------------------------
@@ -304,29 +341,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                 $"{toolInstaller.Writable.VolumeName(_options.ToolsVolume)}:{toolInstaller.Writable.MountPath}:rw",
                 .. toolInstaller.ReadOnly is { } shared ? ToolBinds([shared]) : [],
             ];
-            try
-            {
-                await _api.PostAsync($"/containers/create?name={Escaped(name)}", new
-                {
-                    Image = _options.RunnerImage,
-                    Entrypoint = new[] { "/usr/bin/tini", "--" },
-                    Cmd = new[] { "sleep", "infinity" },
-                    User = $"{RunnerUid}:{RunnerUid}",
-                    Env = toolInstaller.Environment,
-                    Labels = labels,
-                    HostConfig = new
-                    {
-                        Binds = binds,
-                        CapDrop = new[] { "ALL" },
-                        SecurityOpt = new[] { "no-new-privileges" },
-                        RestartPolicy = new { Name = "no" },
-                    },
-                }, ct);
-            }
-            catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
-            {
-                throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
-            }
+            await PostCreateAsync(name, ContainerBody(toolInstaller.Environment, labels, binds), tolerateConflict: false, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             await WaitRunningAsync(name, ct);
             return await work(installer);
@@ -416,7 +431,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     // A chat container that is stopped has nothing running to kill, and asking would start it again.
     protected override async Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
-        => owner.Chat ? await ChatContainerRunningAsync(ct) : await _api.GetAsync($"/containers/{Escaped(owner.Chat ? ChatName : ObjectName(owner.Id))}/json", ct, HttpStatusCode.NotFound) is not null;
+        => owner.Chat ? await ChatContainerRunningAsync(ct) : await _api.GetAsync($"/containers/{Escaped(ObjectName(owner.Id))}/json", ct, HttpStatusCode.NotFound) is not null;
 
     protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
     {
@@ -602,41 +617,15 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     private async Task CreateChatContainerAsync(string ildAddress, CancellationToken ct)
     {
         // The same settings as a run's container, but no memory or CPU limit, as chats had in ILD's own container.
-        var body = new
-        {
-            Image = _options.RunnerImage,
-            Entrypoint = new[] { "/usr/bin/tini", "--" },
-            Cmd = new[] { "sleep", "infinity" },
-            User = $"{RunnerUid}:{RunnerUid}",
-            WorkingDir = RunPaths.ChatsRoot,
-            Env = _options.GitIdentity.Select(e => $"{e.Key}={e.Value}").ToArray(),
-            Labels = new Dictionary<string, string>(ChatLabels()) { [SpecLabel] = await ChatSpecAsync(ct) },
-            HostConfig = new
-            {
-                // Every chat shares this container, so it mounts the agents and the shared toolchains, never a repository's own tools.
-                Binds = new[] { $"{ChatName}:{RunPaths.ChatsRoot}:rw" }.Concat(ToolBinds(_options.Toolchains ? ChatToolZones : [])).ToArray(),
-                Tmpfs = new Dictionary<string, string> { [RunPaths.StateDirectory] = $"rw,nosuid,nodev,size=64m,mode=0700,{await StateOwnerOptionAsync(ct)}" },
-                CapDrop = new[] { "ALL" },
-                SecurityOpt = new[] { "no-new-privileges" },
-                NetworkMode = ChatName,
-                ExtraHosts = IldHosts(ildAddress),
-                Dns = NameServers(dns: false),
-                RestartPolicy = new { Name = "no" },
-            },
-            NetworkingConfig = new { EndpointsConfig = new Dictionary<string, object> { [ChatName] = new { } } },
-        };
-        try
-        {
-            await _api.PostAsync($"/containers/create?name={Escaped(ChatName)}", body, ct);
-        }
-        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.Conflict)
-        {
-            // Made by another request a moment ago: started above.
-        }
-        catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
-        {
-            throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
-        }
+        var body = ContainerBody(
+            env: _options.GitIdentity.Select(e => $"{e.Key}={e.Value}"),
+            labels: new Dictionary<string, string>(ChatLabels()) { [SpecLabel] = await ChatSpecAsync(ct) },
+            // Every chat shares this container, so it mounts the agents and the shared toolchains, never a repository's own tools.
+            binds: new[] { $"{ChatName}:{RunPaths.ChatsRoot}:rw" }.Concat(ToolBinds(_options.Toolchains ? ChatToolZones : [])),
+            workingDirectory: RunPaths.ChatsRoot,
+            placement: new Placement(ChatName, ildAddress, Dns: false, await StateOwnerOptionAsync(ct)));
+        // Made by another request a moment ago, when it is there already: started by the caller.
+        await PostCreateAsync(ChatName, body, tolerateConflict: true, ct);
     }
 
     // -- Provider sign-in --------------------------------------------------------
@@ -682,30 +671,12 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         {
             var agents = agent is null ? (IReadOnlyList<RunAgent>)[] : Agents().Where(a => a.Agent.Key == agent.Key).ToList();
             var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), agents, null, ct);
-            try
-            {
-                await _api.PostAsync($"/containers/create?name={Escaped(name)}", new
-                {
-                    Image = _options.RunnerImage,
-                    Entrypoint = new[] { "/usr/bin/tini", "--" },
-                    Cmd = new[] { "sleep", "infinity" },
-                    User = $"{RunnerUid}:{RunnerUid}",
-                    Env = new[] { $"HOME={SignInHome}" }.Concat(tools?.For(SignInHome) ?? []).ToArray(),
-                    Labels = SignInLabels(),
-                    // The engine's default network, as the toolchain installer has; no volume of a run or chat, no ILD address.
-                    HostConfig = new
-                    {
-                        Binds = ToolBinds(tools?.Zones ?? []).ToArray(),
-                        CapDrop = new[] { "ALL" },
-                        SecurityOpt = new[] { "no-new-privileges" },
-                        RestartPolicy = new { Name = "no" },
-                    },
-                }, ct);
-            }
-            catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound)
-            {
-                throw new InvalidOperationException($"the runner image {_options.RunnerImage} is not on this machine; build or pull it first ({ex.Message})", ex);
-            }
+            // The engine's default network, as the toolchain installer has; no volume of a run or chat, no ILD address.
+            await PostCreateAsync(
+                name,
+                ContainerBody(new[] { $"HOME={SignInHome}" }.Concat(tools?.For(SignInHome) ?? []), SignInLabels(), ToolBinds(tools?.Zones ?? [])),
+                tolerateConflict: false,
+                ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             await WaitRunningAsync(name, ct);
 
@@ -754,12 +725,13 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                         runs.Add(run);
             }
 
-            Collect(await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct), c => c["Labels"]);
+            var containers = await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct);
+            Collect(containers, c => c["Labels"]);
             Collect((await _api.GetAsync($"/volumes?filters={filter}", ct))?["Volumes"], v => v["Labels"]);
             Collect(await _api.GetAsync($"/networks?filters={filter}", ct), n => n["Labels"]);
             var signIns = new List<string>();
             var open = _execNames.Values.ToHashSet(StringComparer.Ordinal);
-            foreach (var listed in (await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct))?.AsArray() ?? [])
+            foreach (var listed in containers?.AsArray() ?? [])
             {
                 var role = listed?["Labels"]?[RunPaths.RoleLabel]?.GetValue<string>();
                 if (role is SignInRole or RunPaths.ToolsRole
