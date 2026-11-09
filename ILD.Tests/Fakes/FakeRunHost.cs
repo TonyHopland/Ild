@@ -382,17 +382,19 @@ internal sealed class FakeRunProcess : IRunProcess
 internal sealed class WriteBackStream : MemoryStream
 {
     private readonly Action<byte[]> _store;
+    private readonly byte[] _initial;
 
     public WriteBackStream(byte[] initial, Action<byte[]> store)
     {
         _store = store;
+        _initial = initial;
         Write(initial);
         Position = 0;
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _store(ToArray());
+        if (disposing && !ToArray().AsSpan().SequenceEqual(_initial)) _store(ToArray());
         base.Dispose(disposing);
     }
 }

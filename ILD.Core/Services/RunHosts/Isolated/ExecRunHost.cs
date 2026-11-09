@@ -72,6 +72,21 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         """;
 
     /// <summary>
+    /// Writes stdin to <c>$1</c>. A normal write (<c>$2</c> = rw) truncates and writes the file in place, so its mode and
+    /// hard links stay, and refuses a symbolic link, whose target ILD cannot check from outside. A read-only write
+    /// (<c>$2</c> = ro) replaces the file with a 0444 one.
+    /// </summary>
+    internal const string WriteFileScript = """
+        mkdir -p -- "$(dirname -- "$1")" || exit
+        if [ "$2" = ro ]; then
+            rm -f -- "$1" && cat > "$1" && chmod 0444 -- "$1"
+        else
+            [ ! -L "$1" ] || { echo "$1 is a symbolic link" >&2; exit 4; }
+            cat > "$1"
+        fi
+        """;
+
+    /// <summary>
     /// Makes the run's or chat's environment answer the declared forwards (docs/adr/0020) on its own loopback, as ILD
     /// does under <c>dotnet run</c>: one socat per forward listens on <c>127.0.0.1:&lt;local port&gt;</c> and tunnels each
     /// connection to the destination through ILD's egress proxy with <c>CONNECT</c>, so the proxy judges and logs it
@@ -601,7 +616,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         var result = await ExecAsync(
             owner,
-            ["/bin/sh", "-c", "mkdir -p -- \"$(dirname -- \"$1\")\" && rm -f -- \"$1\" && cat > \"$1\" && { [ \"$2\" != ro ] || chmod 0444 -- \"$1\"; }", "sh", path, readOnly ? "ro" : "rw"],
+            ["/bin/sh", "-c", WriteFileScript, "sh", path, readOnly ? "ro" : "rw"],
             content, null, ct);
         if (!result.Success)
             throw new IOException($"could not write {path} in the run's {Noun}: {result.StdErr.Trim()}");
@@ -880,13 +895,22 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private sealed class WriteBackStream : MemoryStream
     {
         private readonly Func<byte[], CancellationToken, Task> _store;
+        private readonly byte[] _original;
         private bool _stored;
 
         public WriteBackStream(byte[] content, Func<byte[], CancellationToken, Task> store)
         {
             _store = store;
+            _original = content;
             Write(content);
             Position = 0;
+        }
+
+        /// <summary>Only an edit is stored back: a stream nobody wrote to, or saved with the same bytes, leaves the file alone.</summary>
+        private bool Changed(out byte[] edited)
+        {
+            edited = ToArray();
+            return !edited.AsSpan().SequenceEqual(_original);
         }
 
         public override async ValueTask DisposeAsync()
@@ -894,7 +918,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             if (!_stored)
             {
                 _stored = true;
-                await _store(ToArray(), CancellationToken.None);
+                if (Changed(out var edited)) await _store(edited, CancellationToken.None);
             }
             await base.DisposeAsync();
         }
@@ -904,7 +928,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             if (disposing && !_stored)
             {
                 _stored = true;
-                _store(ToArray(), CancellationToken.None).GetAwaiter().GetResult();
+                if (Changed(out var edited)) _store(edited, CancellationToken.None).GetAwaiter().GetResult();
             }
             base.Dispose(disposing);
         }

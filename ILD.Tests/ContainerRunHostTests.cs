@@ -664,6 +664,45 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(path, write.Command[^2]);
     }
 
+    private async Task<int> WritesAfterOpeningForWrite(string existing, string? written)
+    {
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Joined.Contains("cat --")) await e.WriteStdoutAsync(existing);
+            await e.ExitAsync(0);
+        };
+        var path = $"{WorkingDirectory}/scripts/build.sh";
+        var before = _api.Execs.Count;
+        await using (var stream = await _host.OpenFileForWriteAsync(path, TestContext.Current.CancellationToken))
+        {
+            if (written is not null)
+            {
+                stream.SetLength(0);
+                await stream.WriteAsync(Encoding.UTF8.GetBytes(written), TestContext.Current.CancellationToken);
+            }
+        }
+        return _api.Execs.Skip(before).Count(e => e.Command.Contains(ExecRunHost.WriteFileScript));
+    }
+
+    [Fact]
+    public async Task A_file_opened_for_write_but_not_written_is_not_rewritten()
+        => Assert.Equal(0, await WritesAfterOpeningForWrite("abc", null));
+
+    [Fact]
+    public async Task A_file_saved_with_the_same_bytes_is_not_rewritten()
+        => Assert.Equal(0, await WritesAfterOpeningForWrite("abc", "abc"));
+
+    [Fact]
+    public async Task An_edited_file_is_written_back_once_in_place()
+    {
+        Assert.Equal(1, await WritesAfterOpeningForWrite("abc", "changed"));
+        var write = _api.Execs.Last();
+        Assert.Equal("changed", Encoding.UTF8.GetString(await write.ReadStdinToEndAsync()));
+        Assert.Equal("rw", write.Command[^1]);
+    }
+
     [Fact]
     public async Task A_bundle_comes_out_of_the_container_into_the_sink()
     {
