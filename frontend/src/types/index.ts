@@ -1576,6 +1576,8 @@ export interface NetworkPolicyEntry {
   listKind: NetworkListKind;
   /** Null applies to every agent launch; set, only to launches of that provider. */
   aiProviderId: string | null;
+  /** The installers' scope: applies to toolchain installers alone (global entries apply to them too). */
+  installers?: boolean;
   createdAt: string;
 }
 
@@ -1587,6 +1589,8 @@ export interface NetworkLogEntry {
   timestamp: string;
   decision: NetworkDecision;
   aiProviderId: string | null;
+  /** The toolchain zone (`agents`, `toolchains`, `repo-<id>`) whose installer made the connection. */
+  installer?: string | null;
   /** Why ILD refused it when the lists were not the reason: `loopback` or `protected: <name>`. */
   reason?: string | null;
 }

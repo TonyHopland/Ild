@@ -238,6 +238,75 @@ describe("Network settings", () => {
     expect(await rules.findByText("api.anthropic.com")).toBeTruthy();
   });
 
+  test("adds a rule to the installers' scope and shows it as such", async () => {
+    mockServices();
+    const created: NetworkPolicyEntry = {
+      id: "e5",
+      host: "binaries.example",
+      listKind: "Whitelist",
+      aiProviderId: null,
+      installers: true,
+      createdAt: "2026-09-02T12:00:00Z",
+    };
+    const add = vi.spyOn(services.networkService, "addEntry").mockResolvedValue(created);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    fireEvent.change(await screen.findByLabelText("Host pattern"), {
+      target: { value: "binaries.example" },
+    });
+    fireEvent.change(screen.getByLabelText("Scope for the new rule"), {
+      target: { value: "installers" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith({
+        host: "binaries.example",
+        listKind: "Whitelist",
+        aiProviderId: null,
+        installers: true,
+      }),
+    );
+    const row = (
+      await within(screen.getByLabelText("Network rules")).findByText("binaries.example")
+    ).closest("tr")!;
+    expect(within(row).getByText("Installers")).toBeTruthy();
+  });
+
+  test("names the zone of an installer's connection and promotes it to the installers' scope", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([
+      {
+        id: "l2",
+        host: "binaries.example",
+        port: 443,
+        timestamp: "2026-09-02T12:00:00Z",
+        decision: "Blocked",
+        aiProviderId: null,
+        installer: "repo-0123",
+      },
+    ]);
+    const promoted: NetworkPolicyEntry = {
+      id: "e6",
+      host: "binaries.example",
+      listKind: "Whitelist",
+      aiProviderId: null,
+      installers: true,
+      createdAt: "2026-09-02T12:00:00Z",
+    };
+    const promote = vi
+      .spyOn(services.networkService, "addLogEntryToList")
+      .mockResolvedValue(promoted);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    expect(await screen.findByText("Installer: repo-0123")).toBeTruthy();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add binaries.example to whitelist" }),
+    );
+
+    await waitFor(() => expect(promote).toHaveBeenCalledWith("l2", "Whitelist", false, true));
+  });
+
   test("spells out what the pattern being typed will match", async () => {
     mockServices();
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });

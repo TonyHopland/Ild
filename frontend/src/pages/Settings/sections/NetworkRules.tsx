@@ -3,6 +3,16 @@ import type { AiProvider, NetworkListKind, NetworkMode, NetworkPolicyEntry } fro
 import { Segmented } from "../controls";
 import { EditActions, listInEffect, useFormRequest, useRowEdit } from "./networkShared";
 
+/** The scope value of the installers' rules; any other non-empty scope is a provider id. */
+export const INSTALLERS_SCOPE = "installers";
+
+/** The fields of a rule request that a scope picks: a provider, the installers, or neither. */
+export function scopeFields(scope: string): { aiProviderId: string | null; installers?: true } {
+  return scope === INSTALLERS_SCOPE
+    ? { aiProviderId: null, installers: true }
+    : { aiProviderId: scope || null };
+}
+
 /** What a pattern covers, spelled out so a leading dot is not a thing to know. */
 function describePattern(host: string): string {
   const trimmed = host.trim();
@@ -17,12 +27,7 @@ interface RuleTableProps {
   mode: NetworkMode | null;
   /** True when a filter is hiding rules, so "none" reads as "none matching". */
   filtered: boolean;
-  onUpdate: (
-    id: string,
-    host: string,
-    kind: NetworkListKind,
-    aiProviderId: string | null,
-  ) => Promise<void>;
+  onUpdate: (id: string, host: string, kind: NetworkListKind, scope: string) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
 }
 
@@ -91,12 +96,12 @@ function RuleRow({ entry, providers, mode, onUpdate, onRemove }: RuleRowProps) {
     row.start(() => {
       setHost(entry.host);
       setKind(entry.listKind);
-      setScope(entry.aiProviderId ?? "");
+      setScope(entry.installers ? INSTALLERS_SCOPE : (entry.aiProviderId ?? ""));
     });
 
   const save = () => {
     if (host.trim() === "") return;
-    void row.save(() => onUpdate(entry.id, host, kind, scope || null));
+    void row.save(() => onUpdate(entry.id, host, kind, scope));
   };
 
   return (
@@ -144,6 +149,8 @@ function RuleRow({ entry, providers, mode, onUpdate, onRemove }: RuleRowProps) {
             onChange={setScope}
             label={`Scope of the ${subject}`}
           />
+        ) : entry.installers ? (
+          "Installers"
         ) : entry.aiProviderId ? (
           (providers.find((p) => p.id === entry.aiProviderId)?.name ?? "one provider")
         ) : (
@@ -225,6 +232,7 @@ function ProviderScopeSelect({
       aria-label={label}
     >
       <option value="">All providers</option>
+      <option value={INSTALLERS_SCOPE}>Installers</option>
       {value !== "" && !providers.some((p) => p.id === value) && (
         <option value={value}>one provider</option>
       )}
@@ -241,7 +249,7 @@ interface AddRuleRowProps {
   providers: AiProvider[];
   /** A host loaded from the log, to be edited before it becomes a rule. */
   draft: { host: string; kind: NetworkListKind } | null;
-  onAdd: (host: string, kind: NetworkListKind, aiProviderId: string | null) => Promise<void>;
+  onAdd: (host: string, kind: NetworkListKind, scope: string) => Promise<void>;
 }
 
 export function AddRuleRow({ providers, draft, onAdd }: AddRuleRowProps) {
@@ -262,7 +270,7 @@ export function AddRuleRow({ providers, draft, onAdd }: AddRuleRowProps) {
 
   const add = async () => {
     if (host.trim() === "") return;
-    if (await send(() => onAdd(host, kind, scope || null))) setHost("");
+    if (await send(() => onAdd(host, kind, scope))) setHost("");
   };
 
   return (
