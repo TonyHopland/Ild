@@ -61,8 +61,7 @@ is expected and costs a re-login.
 
 A stack from before agents always ran in containers needs `ILD_CONTAINER_SOCKET_HOST`
 in `.env` (and `ILD_CONTAINER_SOCKET_GRANT=1` for a socket of the host's `root` group),
-and is started with `docker-compose.yml` alone: `docker-compose.container-runs.yml` is
-gone. On its first start ILD's entrypoint gives ILD back the files the old agent user
+and is started with `docker-compose.yml`. On its first start ILD's entrypoint gives ILD back the files the old agent user
 left in `/data` and `/worktrees`, which can take a while on a large volume.
 
 The release that stores saved AI sessions in compressed chunks converts the existing
@@ -232,14 +231,14 @@ and add the preview wildcard to their own allowed-hosts list.
 
 ILD's image always runs agents apart from ILD: every loop run, chat and provider sign-in in a container on the engine whose socket it is given, or in pods when the image runs in a Kubernetes cluster. This is not a setting ([ADR-0036](adr/0036-runs-always-in-containers.md)). ILD started with `dotnet run` runs agents as its own processes, which is for development only ([Configuration](configuration.md#where-runs-execute)).
 
-| | Containers | Kubernetes |
-| --- | --- | --- |
-| A run is | A container, a volume and a network on the engine, through the Docker-compatible API ([ADR-0034](adr/0034-container-run-host.md)) | A pod and a volume claim, spread across nodes ([ADR-0033](adr/0033-kubernetes-run-host.md)) |
-| Needs | A Docker or Podman socket (rootless Podman preferred) and the runner image | A cluster, RBAC, a CNI that enforces NetworkPolicy, and a ReadWriteMany claim for toolchains |
-| Isolates the agent from ILD | By container: its own filesystem, process and network namespaces, no capabilities, no route but to ILD | The same, by pod and network policy |
-| Isolates runs from each other | Yes: a volume, a container and a network each | Yes |
-| Spreads load | No: one machine | Yes |
-| Trust you hand over | Whoever holds the socket controls every container on the engine | The service account's Role in the run namespace |
+|                               | Containers                                                                                                                        | Kubernetes                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| A run is                      | A container, a volume and a network on the engine, through the Docker-compatible API ([ADR-0034](adr/0034-container-run-host.md)) | A pod and a volume claim, spread across nodes ([ADR-0033](adr/0033-kubernetes-run-host.md))  |
+| Needs                         | A Docker or Podman socket (rootless Podman preferred) and the runner image                                                        | A cluster, RBAC, a CNI that enforces NetworkPolicy, and a ReadWriteMany claim for toolchains |
+| Isolates the agent from ILD   | By container: its own filesystem, process and network namespaces, no capabilities, no route but to ILD                            | The same, by pod and network policy                                                          |
+| Isolates runs from each other | Yes: a volume, a container and a network each                                                                                     | Yes                                                                                          |
+| Spreads load                  | No: one machine                                                                                                                   | Yes                                                                                          |
+| Trust you hand over           | Whoever holds the socket controls every container on the engine                                                                   | The service account's Role in the run namespace                                              |
 
 ## Kubernetes run host
 
@@ -268,6 +267,7 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
    The runner image is published with the same tags as the ILD image; pin the version ILD runs. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have.
 
    `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains), in folders (`ild`, `toolchains`, `repo-tools/<repository id>`) that pods mount as `subPath`s, so a run never mounts the claim's root: ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs to reach the internet, so allow that label egress if the namespace denies it by default. The provider sign-in terminal's short-lived pod, labelled `ild/role=signin`, needs the same. Without a ReadWriteMany class, build a runner image of your own `FROM ghcr.io/tonyhopland/ild-runner` with the toolchains and agent CLIs your runs need, and set `ILD_RUN_TOOLCHAINS=off`.
+
 4. The preview proxy forwards to the pod's address, so ILD must be able to reach pod IPs, as any pod in the cluster can.
 
 ### Storage
@@ -327,13 +327,13 @@ The first run of a repository installs its toolchains and ILD's agents into the 
 
 `ILD_CONTAINER_SOCKET_HOST` is the socket's path on the machine the engine runs on:
 
-| Engine | `ILD_CONTAINER_SOCKET_HOST` | Notes |
-| --- | --- | --- |
-| Rootless Podman on Linux | `/run/user/<uid>/podman/podman.sock` (`$XDG_RUNTIME_DIR/podman/podman.sock`) | The supported setup. Needs `systemctl --user enable --now podman.socket` |
-| Podman machine (Windows, macOS), rootless | `/run/user/1000/podman/podman.sock` | The path inside the machine's VM, where the containers run |
-| Podman machine, rootful | `/run/podman/podman.sock` | The machine makes it `root:wheel` on every start, and ILD's user joins a group of that gid: nothing to do |
-| Rootful Podman on Linux | `/run/podman/podman.sock` | Belongs to the host's `root` group: also set `ILD_CONTAINER_SOCKET_GRANT=1` (below) |
-| Rootful Docker | `/var/run/docker.sock` | ILD's user joins its `docker` group |
+| Engine                                    | `ILD_CONTAINER_SOCKET_HOST`                                                  | Notes                                                                                                     |
+| ----------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Rootless Podman on Linux                  | `/run/user/<uid>/podman/podman.sock` (`$XDG_RUNTIME_DIR/podman/podman.sock`) | The supported setup. Needs `systemctl --user enable --now podman.socket`                                  |
+| Podman machine (Windows, macOS), rootless | `/run/user/1000/podman/podman.sock`                                          | The path inside the machine's VM, where the containers run                                                |
+| Podman machine, rootful                   | `/run/podman/podman.sock`                                                    | The machine makes it `root:wheel` on every start, and ILD's user joins a group of that gid: nothing to do |
+| Rootful Podman on Linux                   | `/run/podman/podman.sock`                                                    | Belongs to the host's `root` group: also set `ILD_CONTAINER_SOCKET_GRANT=1` (below)                       |
+| Rootful Docker                            | `/var/run/docker.sock`                                                       | ILD's user joins its `docker` group                                                                       |
 
 On a Podman machine, compose talks to whichever of the two engines the machine forwards its API to: the rootful one when the machine is rootful (`podman machine inspect --format '{{.Rootful}}'`), the rootless one otherwise. The stack, its volumes and the runner image all live on that engine, and the socket you mount must be that engine's. `podman machine set --rootful=false` switches a stopped machine to rootless; containers and volumes made on the rootful side stay there.
 
@@ -441,11 +441,11 @@ it always did.
 After the drain, ILD puts away what it made, within a few seconds of the grace
 period:
 
-| | Docker or Podman | Kubernetes |
-| --- | --- | --- |
-| A run's container or pod | **Stopped**, with its volume and network kept: nothing runs while ILD is down, a preview included. ILD starts it again when the run next needs it, which also covers a restart of the engine or the machine | **Kept running**: a pod cannot be stopped, and it is what a parked run resumes in |
-| The chat container or pod | **Removed**. The chats' folders are in its volume or claim; the next chat makes it again from the runner image as it is then | **Deleted**, the same way |
-| A sign-in container or pod | **Removed** | **Deleted** |
+|                            | Docker or Podman                                                                                                                                                                                            | Kubernetes                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| A run's container or pod   | **Stopped**, with its volume and network kept: nothing runs while ILD is down, a preview included. ILD starts it again when the run next needs it, which also covers a restart of the engine or the machine | **Kept running**: a pod cannot be stopped, and it is what a parked run resumes in |
+| The chat container or pod  | **Removed**. The chats' folders are in its volume or claim; the next chat makes it again from the runner image as it is then                                                                                | **Deleted**, the same way                                                         |
+| A sign-in container or pod | **Removed**                                                                                                                                                                                                 | **Deleted**                                                                       |
 
 The chat container or pod is long-lived, so ILD also replaces one that was made
 from another runner image or with other settings: at startup, and before a chat
