@@ -66,6 +66,15 @@ Two parts, deliberately separate.
 
 ## Off: no proxy, no log
 
+> **In a container or pod** (ADR-0036) there is no uid firewall or open group: `off` instead
+> gives the run's container or pod a direct route to the network (a second, non-internal
+> network on Docker and Podman; a second, allow-all egress NetworkPolicy on Kubernetes) and
+> its launches no proxy variables, so the sentence below holds there too. The route belongs to
+> the whole container or pod, not to the process: every process in the run can use it while
+> it is attached, one in a proxied mode launched earlier included. It is removed at the first
+> launch in a proxied mode once no process launched in `off` is still running; chats share one
+> container, so one chat in `off` opens it for all. Protected destinations do not apply to it.
+
 Some tools cannot use the funnel: those that ignore `HTTP(S)_PROXY`, and
 anything that is not HTTP (SSH, gRPC, UDP, QUIC). `off` lets them out. Its
 agents connect directly, to any host and any port, and nothing is logged. Before

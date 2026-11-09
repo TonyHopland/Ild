@@ -1629,6 +1629,13 @@ export interface NetworkStatus {
   reason: string;
   proxyEnabled: boolean;
   proxyPort: number | null;
+  /** The runs (and the chats' shared container) that have a direct route to the network now, which network mode Off gives and a later launch in another mode takes away. */
+  directRoutes: DirectRoute[];
+}
+
+export interface DirectRoute {
+  ownerId: string;
+  chat: boolean;
 }
 
 export type NetworkPolicyChangedPayload = Record<string, never>;

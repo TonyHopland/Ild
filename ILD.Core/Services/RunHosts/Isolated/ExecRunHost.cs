@@ -24,6 +24,9 @@ public readonly record struct ExecOwner(Guid Id, bool Chat)
     public string Home => Chat ? RunPaths.ChatHome(Id) : RunPaths.HomeDirectory(Id);
 }
 
+/// <summary>A run (or, with <paramref name="Chat"/>, the container every chat shares) whose pod or container has a direct route to the network now: network mode Off.</summary>
+public sealed record DirectRoute(Guid OwnerId, bool Chat);
+
 /// <summary>
 /// What the run hosts that put each loop run in an environment of its own (a Kubernetes pod, a container) share: the
 /// agent's processes are commands exec'd there, its files are read and written the same way, and code goes in and out
@@ -410,6 +413,12 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             : command.OwnerId != Guid.Empty ? command.OwnerId : RunPaths.OwnerOf(psi.WorkingDirectory)
                 ?? throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to"));
 
+        // The direct route first, so the launch never runs a moment without it; a proxied launch is where a route that no process
+        // of mode Off needs any more is taken away.
+        var direct = command.NetworkMode == ILD.Data.Enums.NetworkMode.Off;
+        if (direct) await OpenDirectRouteAsync(owner, ct);
+        else await CloseDirectRouteIfUnusedAsync(owner, ct);
+
         await SyncForwardsAsync(owner, ct);
         var (fileName, arguments) = (psi.FileName, psi.ArgumentList.ToList());
         var environment = EnvironmentFor(command, psi, owner, out var network);
@@ -422,14 +431,68 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
         var directory = string.IsNullOrEmpty(psi.WorkingDirectory) ? RunPaths.WorkingDirectory(owner.Id) : psi.WorkingDirectory;
         // Only a command started for the run itself is one KillAllAsync ends; a preview service, which has no owner, outlives a retry.
-        var id = $"{(command.OwnerId != Guid.Empty ? command.OwnerId.ToString("N") : "unowned")}/{Guid.NewGuid():N}";
+        // A process launched in mode Off is told by its name, which is what says whether the route is still needed.
+        var id = $"{(command.OwnerId != Guid.Empty ? command.OwnerId.ToString("N") : "unowned")}/{(direct ? OffPrefix : "")}{Guid.NewGuid():N}";
         var wrapped = new List<string> { "/bin/sh", "-c", CommandWrapper, "sh", directory, id, "env" };
         wrapped.AddRange(environment.Select(e => $"{e.Key}={e.Value}"));
         wrapped.Add(fileName);
         wrapped.AddRange(arguments);
 
-        var exec = await OpenExecAsync(owner, wrapped, stdin: psi.RedirectStandardInput, tty: false, ct);
-        return new ExecRunProcess(exec, Noun, id, psi.RedirectStandardInput, (commandId, token) => KillCommandAsync(owner, commandId, token));
+        if (direct) _liveOff.AddOrUpdate(owner, 1, (_, n) => n + 1);
+        IExecStream exec;
+        try
+        {
+            exec = await OpenExecAsync(owner, wrapped, stdin: psi.RedirectStandardInput, tty: false, ct);
+        }
+        catch
+        {
+            if (direct) EndOff(owner);
+            throw;
+        }
+        return new ExecRunProcess(exec, Noun, id, psi.RedirectStandardInput, (commandId, token) => KillCommandAsync(owner, commandId, token),
+            direct ? () => EndOff(owner) : null);
+    }
+
+    // -- The direct route (network mode Off) ---------------------------------------
+
+    /// <summary>What the name of a process launched in network mode Off starts with, after its owner's directory in the run's process directory.</summary>
+    internal const string OffPrefix = "off-";
+
+    // Exits 1 when a process launched in mode Off is still running anywhere in the pod or container (a chat container is every chat's).
+    internal const string OffRunningScript = $$"""
+        for f in "{{RunPaths.ProcessDirectory}}"/*/{{OffPrefix}}*; do
+            [ -f "$f" ] || continue
+            pid=$(cat -- "$f" 2>/dev/null)
+            case "$pid" in ''|*[!0-9]*) continue ;; esac
+            kill -0 -- "-$pid" 2>/dev/null && exit 1
+        done
+        exit 0
+        """;
+
+    // Off processes this ILD has started and not seen end: they cover the moment between the launch and its pid file.
+    private readonly ConcurrentDictionary<ExecOwner, int> _liveOff = new();
+
+    private void EndOff(ExecOwner owner) => _liveOff.AddOrUpdate(owner, 0, (_, n) => Math.Max(0, n - 1));
+
+    /// <summary>Give the run's pod or container a route to the network that does not go through ILD. Idempotent. The route is the pod's or container's, not a process's.</summary>
+    protected abstract Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct);
+
+    /// <summary>Take the direct route away. Idempotent, and nothing when there is none.</summary>
+    protected abstract Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct);
+
+    /// <summary>Whether the run's pod or container has the direct route now, as the engine or cluster says.</summary>
+    protected abstract Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct);
+
+    /// <summary>The runs and the chat container that have a direct route now.</summary>
+    public abstract Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default);
+
+    private async Task CloseDirectRouteIfUnusedAsync(ExecOwner owner, CancellationToken ct)
+    {
+        if (!await HasDirectRouteAsync(owner, ct)) return;
+        // A chat container is every chat's, so one chat's Off process keeps it for all.
+        if (_liveOff.Any(e => e.Value > 0 && (owner.Chat ? e.Key.Chat : e.Key == owner))) return;
+        if (!(await RunScriptAsync(owner, OffRunningScript, [], ct)).Success) return;
+        await CloseDirectRouteAsync(owner, ct);
     }
 
     /// <summary>
@@ -455,9 +518,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             environment[name] = value;
 
         network = new Dictionary<string, string>(StringComparer.Ordinal);
-        // The run's network reaches only ILD, so even a command in network mode Off goes through the proxy, which lets every
-        // request of that mode through; a Cmd node or a preview needs it as much as an agent does.
-        if (AgentIsolation.EgressProxyUrl(command.ProviderId) is { } proxy)
+        // The run's network reaches only ILD, so a command in a proxied mode goes through the proxy; a Cmd node or a preview needs
+        // it as much as an agent does. One in network mode Off has the direct route (OpenDirectRouteAsync) and no proxy, as
+        // ADR-0019 says: tools that ignore the proxy variables or are not HTTP work as they would on the machine itself.
+        if (command.NetworkMode != ILD.Data.Enums.NetworkMode.Off && AgentIsolation.EgressProxyUrl(command.ProviderId) is { } proxy)
             foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
                 network[name] = value;
 

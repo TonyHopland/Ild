@@ -80,7 +80,7 @@ What a run's pod gets:
 
 - **Objects.** A Secret (the owner), a PersistentVolumeClaim, a NetworkPolicy and the Pod, all labelled `app.kubernetes.io/managed-by=ild`, `ild/instance` and `ild/run`. The claim, policy and pod carry an `ownerReference` to the Secret, so deleting the Secret deletes them all.
 - **Hardening.** No service account token, all capabilities dropped, non-root, `RuntimeDefault` seccomp, no privilege escalation. Pods are spread across nodes with a topology spread constraint.
-- **Network.** Egress only to ILD's pods (the gateway and the MCP endpoint on the port of `ILD_API_URL`, the egress proxy); no DNS, so ILD's Service address is pinned in the pod (`hostAliases`) and every other name is resolved by the egress proxy; ingress only from ILD's pods. A pod cannot reach another run directly. It cannot reach Postgres, the WorkItem Server or the Kubernetes API through the egress proxy either while their [protection](#agent-network-limits) is on, which it is unless you switch it off. Everything else an agent connects to goes through the egress proxy and its [network limits](#agent-network-limits), network mode `off` included. ILD's Service address is looked up when the pod is made: a Service that is deleted and recreated gets a new address, and a pod made before that must be replaced (ILD replaces the chat pod when it restarts).
+- **Network.** Egress only to ILD's pods (the gateway and the MCP endpoint on the port of `ILD_API_URL`, the egress proxy); no DNS (except with the `off` route, below), so ILD's Service address is pinned in the pod (`hostAliases`) and every other name is resolved by the egress proxy; ingress only from ILD's pods. A pod cannot reach another run directly. It cannot reach Postgres, the WorkItem Server or the Kubernetes API through the egress proxy either while their [protection](#agent-network-limits) is on, which it is unless you switch it off. Everything else an agent connects to goes through the egress proxy and its [network limits](#agent-network-limits), except in network mode `off`, which adds a second NetworkPolicy, `<run object>-open`, that allows all egress for as long as the run has the direct route ([details](#agent-network-limits)). Run and chat pods get the cluster's DNS as their nameserver, which only that policy lets them reach. ILD's Service address is looked up when the pod is made: a Service that is deleted and recreated gets a new address, and a pod made before that must be replaced (ILD replaces the chat pod when it restarts).
 - **Git.** Code goes in and out as bundles over exec. The pod never holds the git credential or the mirror. It has no `.gitconfig`: set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` on ILD and they are set on every pod, so commits have an author.
 - **Models.** The agent CLIs reach the model through ILD's gateway with a placeholder credential. A provider that needs a read-only copy of its credential is not supported in a pod yet.
 - **Agent CLIs** are run by name from the pod image's `PATH`, not from the ILD data volume.
@@ -844,17 +844,44 @@ a host that is newly blacklisted has its open connections reset.
 
 **How it is enforced.** A run's or chat's container (or pod) is on a network that
 reaches only ILD: an `internal` network on Docker or Podman, a NetworkPolicy on
-Kubernetes. The egress proxy is therefore its only way out, and a client that
+Kubernetes. In a proxied mode the egress proxy is therefore its only way out, and a client that
 ignores `HTTP(S)_PROXY` or speaks something other than HTTP (SSH, gRPC, UDP, QUIC)
-has no route at all.
+has no route at all. Network mode `off` is the way to give such a client one: see below.
 
-**`off` is not a filter.** In a container or pod, agents launched in `off` still
-go through the proxy, which then lets everything through, like `monitor`, to any
-host and any port the proxy can carry; it still cannot give them a direct route.
-With no list, an `off` agent can reach your LAN and cloud
-metadata. Settings asks you to confirm it and shows a warning while it is active.
-`off` is always available. Under `dotnet run`, `off` means no proxy at all: agents
-connect directly, and only what they send through a forward is logged.
+**`off` is not a filter.** Agents launched in `off` get no proxy variables and
+connect directly, to any host, any port and any protocol (SSH, UDP, QUIC, raw TCP),
+and nothing is logged except what goes through a declared forward (whose
+relay still goes through the proxy). In a container or pod that takes a direct route
+for the run, which is a hole in the network described above:
+
+- **Docker and Podman:** ILD connects the run's container (or the chat container) to a
+  second network, `ild-open-<instance>`, that is not internal and has DNS, and
+  points the container's `/etc/resolv.conf` at that network's resolver. The network
+  is labelled like the others and the sweep removes it once nothing is on it.
+- **Kubernetes:** ILD adds a second NetworkPolicy, `<run object>-open`, that allows all
+  egress, DNS included, for the run's (or the chat's) pod, owned by the run's Secret
+  like the others. It needs a CNI that enforces NetworkPolicy, as the run's own
+  policy always did, and a namespace-wide default-deny egress policy you added
+  still applies. Run and chat pods are given the cluster's DNS as their nameserver (the first
+  non-loopback one in ILD's own `/etc/resolv.conf`), which their own policy keeps
+  out of reach; only the open policy opens it. A CNI that ignores NetworkPolicy lets
+  that DNS through in every mode, which is the cluster [Settings already marks as advisory](#agent-network-limits).
+- The [protected destinations](#agent-network-limits) do not apply to a direct
+  connection: an `off` agent can reach ILD's database, the WorkItem Server and the
+  Kubernetes API, as well as your LAN and cloud metadata. Loopback is the run's
+  own, so ILD's is not reachable. Toolchain installers are not affected by `off`.
+
+The route is **per container or pod, not per process**: every process in that run,
+including one launched earlier in a proxied mode, can use it while it is attached.
+Switching away from `off` applies to the next launch; at the first launch in a
+proxied mode, ILD removes the route if no process launched in `off` is still running in
+that run (it tells them by name), and until then the run keeps it. Settings → Network
+shows which runs have a direct route now. **Chats share one container**, so one chat
+launched in `off` opens the route for every chat until it ends.
+
+Settings asks you to confirm `off` and shows a warning while it is active.
+`off` is always available. Under `dotnet run` there is no container: agents
+connect directly the same way.
 
 - **Upgrading renames the old `off`.** Before `monitor` existed, `off` meant "log
   everything and block nothing". On upgrade a stored `off` becomes `monitor`,
@@ -862,7 +889,8 @@ connect directly, and only what they send through a forward is logged.
   A database restored from a backup taken before the upgrade is migrated the same
   way on the next restart. An unrecognised stored value is treated as `monitor`.
 - **Switching to or from `off` applies to the next agent launch.** Running agents
-  and preview services keep the network they started with; a preview service
+  and preview services keep the proxy variables they started with (and, in a container or pod, the direct route stays while
+  an `off` process runs, as above); a preview service
   follows the new mode once it is started again. Changes between `monitor`, `whitelist` and
   `blacklist`, and list edits, apply to the next connection. Previews, Cmd nodes
   and the provider terminal follow the mode when they start; git run for the
@@ -886,9 +914,9 @@ next connection. A declared forward is exempt (not from the loopback rule), sinc
 declaring it is your decision, and is judged by the mode and lists. A private or
 link-local range is not blocked as such: see below.
 
-**Names.** Run and chat environments have no working DNS: ILD's own name comes from
+**Names.** Run and chat environments have no working DNS in a proxied mode: ILD's own name comes from
 the container's hosts file (or the pod's `hostAliases`), and every other name is
-resolved by the proxy. ILD reaches its own gateway and MCP endpoint directly, over
+resolved by the proxy. While a run has the direct route (`off`) its DNS works. ILD reaches its own gateway and MCP endpoint directly, over
 the run's network, so ILD's host is on `NO_PROXY`, and a `whitelist` needs no entry
 for it.
 

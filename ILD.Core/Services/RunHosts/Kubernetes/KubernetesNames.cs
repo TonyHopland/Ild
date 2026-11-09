@@ -26,6 +26,9 @@ public static class KubernetesNames
     /// <summary>The name of the chat pod, its volume claim and its network policy: one of each for the instance.</summary>
     public static string ChatName(string instance) => $"ild-chat-{instance}";
 
+    /// <summary>The name of the NetworkPolicy that gives a pod a direct route (network mode Off), after the policy <paramref name="objectName"/> of the same pod.</summary>
+    public static string OpenName(string objectName) => $"{objectName}-open";
+
     public static string SelectorFor(string instance) => $"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue},{RunPaths.InstanceLabel}={instance}";
 
 }

@@ -8,6 +8,7 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -126,6 +127,31 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     [InlineData(NetworkMode.Whitelist)]
     public async Task A_Cmd_node_runs_proxied_in_every_other_mode(NetworkMode mode)
         => Assert.Equal("http://127.0.0.1:3128", (await RunCmdNodeAsync(EgressPolicies.Reporting(mode))).Trim());
+
+    // What an isolated host reads to leave the proxy off (and open the direct route) for a command it runs in the run's own environment.
+    [Theory]
+    [InlineData(NetworkMode.Off)]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
+    public async Task A_Cmd_node_hands_its_run_host_the_mode_it_was_launched_in(NetworkMode mode)
+    {
+        var host = new ILD.Tests.Fakes.FakeRunHost();
+        host.WithDirectory(_worktree);
+        var services = new ServiceCollection();
+        services.AddSingleton<IRunHost>(host);
+        services.AddSingleton(new Mock<IWorkItemManager>().Object);
+        services.AddSingleton(NoPackageFeeds.Resolver);
+        services.AddSingleton(EgressPolicies.Reporting(mode));
+        var ctx = new NodeExecutionContext(
+            new LoopRun { Id = Guid.NewGuid(), WorktreePath = _worktree },
+            new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Cmd, Label = "cmd", Config = System.Text.Json.JsonSerializer.Serialize(new { command = "true" }) },
+            services.BuildServiceProvider(),
+            CancellationToken.None);
+
+        await foreach (var _ in new CmdNodeExecutor().ExecuteAsync(ctx)) { }
+
+        Assert.Equal(mode, Assert.Single(host.Started).NetworkMode);
+    }
 
     [Fact]
     public async Task A_Cmd_node_without_a_policy_runs_proxied_as_Monitor()

@@ -218,12 +218,12 @@ public sealed record RunCommand
 
     /// <summary>
     /// A command the caller has already given its environment and proxy (a Cmd node, a preview, a git command in a
-    /// chat clone), started as it is. <paramref name="environment"/> is what the caller set on purpose, which a host that
+    /// chat clone), started as it is. <paramref name="networkMode"/> is the mode it was launched in: a host that runs it in an environment of its own gives it a proxy in every mode but Off, which gets a direct route (a command ILD starts for itself is proxied, which Monitor says). <paramref name="environment"/> is what the caller set on purpose, which a host that
     /// starts the command in an environment of its own keeps even where it equals a value of the host's.
     /// </summary>
     public static RunCommand Prepared(
-        ProcessStartInfo prepared, Guid ownerId = default, IReadOnlyDictionary<string, string>? environment = null, IReadOnlyList<string>? files = null)
-        => new(prepared, ownerId, asAgent: false, providerId: null, NetworkMode.Off, environment, files);
+        ProcessStartInfo prepared, Guid ownerId = default, IReadOnlyDictionary<string, string>? environment = null, IReadOnlyList<string>? files = null, NetworkMode networkMode = NetworkMode.Monitor)
+        => new(prepared, ownerId, asAgent: false, providerId: null, networkMode, environment, files);
 }
 
 /// <summary>The outcome of a command that moved code.</summary>

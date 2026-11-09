@@ -376,7 +376,15 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     private (int, object?) InspectNetwork(string name)
     {
         if (!_networks.TryGetValue(name, out var network)) return Failure(404, $"network {name} not found");
-        return (200, new { network.Name, IPAM = new { Config = new[] { new { Subnet = $"10.89.{network.Index}.0/24", Gateway = $"10.89.{network.Index}.1" } } } });
+        var attached = _containers.Values.Where(c => c.Networks.Contains(name)).ToDictionary(c => c.Name, c => new { Name = c.Name });
+        return (200, new
+        {
+            network.Name,
+            Internal = network.Config["Internal"]?.GetValue<bool>() ?? false,
+            Labels = network.Labels,
+            Containers = attached,
+            IPAM = new { Config = new[] { new { Subnet = $"10.89.{network.Index}.0/24", Gateway = $"10.89.{network.Index}.1" } } },
+        });
     }
 
     private (int, object?) DeleteNetwork(string name)
@@ -477,7 +485,10 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         var id = $"exec-{++_nextExec}";
         var exec = new FakeDockerExec(
             container, body["Cmd"]!.AsArray().Select(c => c!.GetValue<string>()).ToList(),
-            body["AttachStdin"]!.GetValue<bool>(), body["Tty"]!.GetValue<bool>());
+            body["AttachStdin"]!.GetValue<bool>(), body["Tty"]!.GetValue<bool>())
+        {
+            User = body["User"]?.GetValue<string>(),
+        };
         _execs[id] = exec;
         Execs.Add(exec);
         return (201, new { Id = id });
@@ -572,6 +583,9 @@ internal sealed class FakeDockerExec(string container, IReadOnlyList<string> com
     public bool WantsStdin { get; } = wantsStdin;
     public bool Tty { get; } = tty;
     public string Joined => string.Join(' ', Command);
+
+    /// <summary>The user the exec was asked to run as; null for the container's own.</summary>
+    public string? User { get; init; }
     public List<string> Resizes { get; } = [];
     public bool HasExited { get; private set; }
     public int ExitCode { get; private set; }

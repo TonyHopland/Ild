@@ -18,8 +18,12 @@ internal sealed class ExecRunProcess : IRunProcess
     private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _exitCode;
 
-    public ExecRunProcess(IExecStream exec, string where, string commandId, bool redirectInput, Func<string, CancellationToken, Task<bool>> kill)
+    private readonly Action? _onExit;
+
+    /// <param name="onExit">Called once the command has ended, whatever way it did.</param>
+    public ExecRunProcess(IExecStream exec, string where, string commandId, bool redirectInput, Func<string, CancellationToken, Task<bool>> kill, Action? onExit = null)
     {
+        _onExit = onExit;
         _exec = exec;
         _where = where;
         CommandId = commandId;
@@ -87,6 +91,7 @@ internal sealed class ExecRunProcess : IRunProcess
             _exitCode = status ?? ConnectionLostExitCode;
             _stdout.Complete();
             _stderr.Complete();
+            _onExit?.Invoke();
             _exited.TrySetResult();
         }
     }

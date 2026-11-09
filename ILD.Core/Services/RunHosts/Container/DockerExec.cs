@@ -46,9 +46,9 @@ internal sealed class DockerExec : IExecStream
     public static readonly TimeSpan DefaultStatusTimeout = TimeSpan.FromSeconds(5);
 
     public static async Task<DockerExec> OpenAsync(
-        DockerApiClient api, string container, IReadOnlyList<string> command, bool stdin, bool tty, TimeSpan statusTimeout, CancellationToken ct)
+        DockerApiClient api, string container, IReadOnlyList<string> command, bool stdin, bool tty, TimeSpan statusTimeout, CancellationToken ct, string? user = null)
     {
-        var id = await api.CreateExecAsync(container, command, stdin, tty, ct);
+        var id = await api.CreateExecAsync(container, command, stdin, tty, ct, user);
         return new DockerExec(api, id, tty, statusTimeout, await api.StartExecAsync(id, tty, ct));
     }
 

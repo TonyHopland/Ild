@@ -28,7 +28,7 @@ const MODES: { value: NetworkMode; label: string; help: string }[] = [
   {
     value: "off",
     label: "Off",
-    help: "Neither list is in effect. Agents in a run's or chat's container still reach the network only through the proxy, which lets everything through and logs it.",
+    help: "Neither list is in effect. Agents connect directly, to any host, any port and any protocol (SSH, UDP and raw TCP too), with no proxy, and nothing is logged except what goes through a forward.",
   },
   {
     value: "monitor",
@@ -447,6 +447,7 @@ export default function NetworkSettings() {
   const activeMode = MODES.find((m) => m.value === mode);
   // Agents run in containers or pods (enforced) unless ILD itself runs under dotnet run.
   const contained = status?.enforcement === "enforced";
+  const routes = status?.directRoutes ?? [];
   const filtering = mode === "whitelist" || mode === "blacklist";
   const inEffect = entries.filter(
     (e) => (e.listKind === "Whitelist" ? "whitelist" : "blacklist") === mode,
@@ -471,18 +472,25 @@ export default function NetworkSettings() {
       )}
       {mode === "off" && (
         <div className="net-banner">
-          <strong>Network mode is Off.</strong>{" "}
-          {contained ? (
+          <strong>Network mode is Off.</strong> Agents launched in it connect directly and can reach
+          any host, with no proxy, and only their connections through a forward are logged.
+          {contained && (
             <>
-              Agents launched in it can reach any host the proxy can, including your LAN and cloud
-              metadata. Their connections are still logged.
-            </>
-          ) : (
-            <>
-              Agents launched in it connect directly to any host, with no proxy, and only their
-              connections through a forward are logged.
+              {" "}
+              In a run's container or pod that is a route out of the run itself, so every process of
+              that run can use it while it is attached, and the Protected destinations do not apply:
+              agents can reach ILD's database, the WorkItem Server and the Kubernetes API directly.
             </>
           )}
+        </div>
+      )}
+      {routes.length > 0 && (
+        <div className="net-banner" role="status">
+          <strong>Direct route:</strong>{" "}
+          {routes.map((r) => (r.chat ? "all chats" : `run ${r.ownerId.slice(0, 8)}`)).join(", ")}. A
+          run keeps its direct route until the next agent launch after Off, and then only once no
+          process launched in Off is still running in it. Chats share one container, so one chat
+          launched in Off opens it for all of them.
         </div>
       )}
       {listError && <div className="settings-error">{listError}</div>}
@@ -523,7 +531,7 @@ export default function NetworkSettings() {
       <ConfirmModal
         isOpen={confirmingOff}
         title="Turn the network proxy off?"
-        message="Agents launched from now on are not filtered: they can reach any host, including your LAN and cloud metadata. Agents already running keep the network they started with."
+        message="Agents launched from now on are not filtered: they connect directly and can reach any host, including your LAN and cloud metadata. Protected destinations do not apply to a direct connection, so they can also reach ILD's database, the WorkItem Server and the Kubernetes API. In a container or pod the route belongs to the whole run, not just the agent. Agents already running keep the network they started with."
         confirmText="Turn off"
         onCancel={() => setConfirmingOff(false)}
         onConfirm={() => {
@@ -554,9 +562,7 @@ export default function NetworkSettings() {
         )}
         {mode === "off" && (
           <p className="settings-card-note">
-            {contained
-              ? "Off filters nothing, so no rule is in effect. Every destination is still logged."
-              : "Agents bypass the proxy, so no rule is in effect and only forwards are logged."}
+            Agents bypass the proxy, so no rule is in effect and only forwards are logged.
           </p>
         )}
         <div className="net-toolbar">
