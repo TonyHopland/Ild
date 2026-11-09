@@ -76,7 +76,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     /// <c>CODEX_HOME</c> of its own whose login holds the run's token as the access token, so every
     /// request codex makes carries it; the real login stays in the credential store (ADR-0031).
     /// </summary>
-    public static void ApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, string codexHome)
+    public static void ApplyGateway(ProcessStartInfo psi, IDictionary<string, string?> environment, ModelGatewayLease gateway, string codexHome)
     {
         var chatGpt = gateway.UrlFor(GatewayRoutes.ChatGpt);
         string[] settings =
@@ -90,8 +90,8 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             psi.ArgumentList.Insert(1 + 2 * i, "-c");
             psi.ArgumentList.Insert(2 + 2 * i, settings[i]);
         }
-        psi.Environment["CODEX_HOME"] = codexHome;
-        psi.Environment.Remove("OPENAI_API_KEY");
+        environment["CODEX_HOME"] = codexHome;
+        environment["OPENAI_API_KEY"] = null;
     }
 
     /// <summary>The directory removed with the run: codex's home for a gateway run.</summary>
@@ -190,15 +190,16 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             IRunProcess? proc;
             try
             {
+                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
                 if (gateway is not null && codexHome is not null)
                 {
                     await RunHost.CreateDirectoryAsync(codexHome, ctx.Cancel);
                     await RunHost.WriteFileAsync(
                         Path.Combine(codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, gateway.Token), ctx.Cancel);
-                    ApplyGateway(psi, gateway, codexHome);
+                    ApplyGateway(psi, environment, gateway, codexHome);
                 }
-                proc = await StartAgentProcessAsync(psi, ctx, mcpServers.Select(server => server.ConfigFile));
+                proc = await StartAgentProcessAsync(psi, ctx, environment, mcpServers.Select(server => server.ConfigFile));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

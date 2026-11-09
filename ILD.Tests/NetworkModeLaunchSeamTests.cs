@@ -61,7 +61,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         NetworkMode: mode);
 
     private static ProcessStartInfo Prepare(ProcessStartInfo psi, AgentExecutionContext ctx)
-        => LocalRunHost.PrepareAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment);
+        => LocalRunHost.PrepareAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment is null ? null : CommandEnvironment.Of(ctx.Environment));
 
     [Theory]
     [InlineData(NetworkMode.Monitor)]

@@ -123,8 +123,8 @@ public sealed class WorktreePreviewServiceRunHostTests
         Assert.Equal(RunId, step.RunIn);
         var root = RunPaths.RunRoot(RunId) + "/";
         Assert.StartsWith(root, step.Start.WorkingDirectory);
-        Assert.Equal(root + "preview-state/npm-cache", step.Start.Environment["NPM_CONFIG_CACHE"]);
-        Assert.Equal(keep ? root + "preview-volumes/data" : root + "preview-state/volumes/data", step.Start.Environment["DATA"]);
+        Assert.Equal(root + "preview-state/npm-cache", step.Environment!["NPM_CONFIG_CACHE"]);
+        Assert.Equal(keep ? root + "preview-volumes/data" : root + "preview-state/volumes/data", step.Environment!["DATA"]);
         if (cwd.StartsWith("${STATE_DIR}", StringComparison.Ordinal))
             Assert.Equal(root + "preview-state/work", step.Start.WorkingDirectory);
     }

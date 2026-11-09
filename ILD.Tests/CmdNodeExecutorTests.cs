@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
@@ -126,61 +127,19 @@ public class CmdNodeExecutorTests : IDisposable
     private const string TrickyCommand = "echo \"a  b\" 'it'\\''s' $HOME \\";
 
     [Fact]
-    public void The_command_inherits_none_of_the_orchestrators_secrets()
-    {
-        var psi = CmdNodeExecutor.ShellStartInfo("echo hi", _worktree);
-        var seeded = AgentIsolation.SecretEnvironmentKeys.ToList();
-        foreach (var name in seeded)
-            psi.Environment[name] = "orchestrator-only";
-        // Seeded for real, so the absence checked below is the strip's doing.
-        Assert.All(seeded, name => Assert.True(psi.Environment.ContainsKey(name)));
-        Assert.Contains("ILD_SECRET_KEY", seeded);
-        Assert.Contains("ILD_DB_CONNECTION_STRING", seeded);
-        Assert.Contains("WORKITEM_DB_CONNECTION_STRING", seeded);
-        Assert.Contains("ILD_SESSION_TOKEN_PEPPER", seeded);
-        Assert.Contains("ILD_API_TOKEN", seeded);
-        Assert.Contains("ILD_AGENT_TOKEN", seeded);
-        psi.Environment["GIT_AUTHOR_NAME"] = "ILD Agent";
-        psi.Environment["PATH"] = "/usr/bin:/bin";
-
-        var spawned = CmdNodeExecutor.IsolateCommand(psi, null);
-
-        var leaked = seeded.Where(spawned.Environment.ContainsKey).ToList();
-        Assert.True(leaked.Count == 0, "leaked to the Cmd node's shell: " + string.Join(", ", leaked));
-        Assert.Equal("ILD Agent", spawned.Environment["GIT_AUTHOR_NAME"]);
-        Assert.Equal("/usr/bin:/bin", spawned.Environment["PATH"]);
-    }
-
-    [Fact]
-    public void The_command_carries_the_egress_proxy_over_a_stale_inherited_one()
-    {
-        const string proxy = "http://127.0.0.1:1";
-        var psi = CmdNodeExecutor.ShellStartInfo("echo hi", _worktree);
-        foreach (var (key, _) in AgentIsolation.EgressProxyEnvironment(proxy))
-            psi.Environment[key] = "http://stale.invalid:9";
-
-        var spawned = CmdNodeExecutor.IsolateCommand(psi, proxy);
-
-        foreach (var (key, value) in AgentIsolation.EgressProxyEnvironment(proxy))
-            Assert.Equal(value, spawned.Environment[key]);
-        Assert.Equal(proxy, spawned.Environment["HTTP_PROXY"]);
-        Assert.Equal("1", spawned.Environment["NODE_USE_ENV_PROXY"]);
-    }
-
-    [Fact]
-    public void The_command_is_a_plain_shell_in_the_worktree_with_path_and_home_as_inherited()
+    public void The_command_is_a_plain_shell_in_the_worktree_and_carries_no_environment_of_its_own()
     {
         var psi = CmdNodeExecutor.ShellStartInfo(TrickyCommand, _worktree);
-        psi.Environment["PATH"] = "/usr/bin:/bin";
-        psi.Environment["HOME"] = "/home/ild";
+        psi.Environment["ILD_ONLY_ON_THE_START_INFO"] = "x";
 
-        var spawned = CmdNodeExecutor.IsolateCommand(psi, null);
+        Assert.Equal("/bin/sh", psi.FileName);
+        Assert.Equal(new[] { "-c", TrickyCommand }, psi.ArgumentList);
+        Assert.Equal(_worktree, psi.WorkingDirectory);
 
-        Assert.Equal("/bin/sh", spawned.FileName);
-        Assert.Equal(new[] { "-c", TrickyCommand }, spawned.ArgumentList);
-        Assert.Equal(_worktree, spawned.WorkingDirectory);
-        Assert.Equal("/usr/bin:/bin", spawned.Environment["PATH"]);
-        Assert.Equal("/home/ild", spawned.Environment["HOME"]);
+        // What reaches the command is the environment its caller names (the package feeds), merged by the host.
+        var launched = LocalRunHost.Launch(RunCommand.Prepared(psi, environment: new Dictionary<string, string?> { ["FEED"] = "f" }));
+        Assert.Equal("f", launched.Environment["FEED"]);
+        Assert.False(launched.Environment.ContainsKey("ILD_ONLY_ON_THE_START_INFO"));
     }
 
     // The grandchild is not our child, so there is no exit to await: poll /proc

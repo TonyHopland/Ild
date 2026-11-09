@@ -77,8 +77,7 @@ public sealed class LocalRunHost : IRunHost
 
     public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
-        var psi = command.AsAgent ? PrepareAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : WithEnvironment(command.Start, command.Environment);
-        var process = await StartAsync(psi, ct);
+        var process = await StartAsync(Launch(command), ct);
         var tracked = new LocalRunProcess(process, Forget(command.OwnerId));
         if (command.OwnerId != Guid.Empty)
             _running.GetOrAdd(command.OwnerId, _ => new()).TryAdd(tracked, 0);
@@ -109,44 +108,50 @@ public sealed class LocalRunHost : IRunHost
 
     /// <summary>The launch of an agent CLI: <paramref name="psi"/> with the execution's environment and its network mode's proxy.</summary>
     internal static ProcessStartInfo PrepareAgentLaunch(
-        ProcessStartInfo psi, Guid? providerId, ILD.Data.Enums.NetworkMode mode, IReadOnlyDictionary<string, string>? environment)
-    {
-        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
-            psi.Environment[name] = value;
-        return AgentIsolation.ApplyLaunchEnvironment(psi, providerId, mode);
-    }
-
-    private static ProcessStartInfo WithEnvironment(ProcessStartInfo psi, IReadOnlyDictionary<string, string>? environment)
-    {
-        WithUserTools(psi);
-        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
-            psi.Environment[name] = value;
-        return psi;
-    }
+        ProcessStartInfo psi, Guid? providerId, ILD.Data.Enums.NetworkMode mode, IReadOnlyDictionary<string, string?>? environment)
+        => Launch(RunCommand.Agent(psi, Guid.Empty, providerId, mode, environment));
 
     /// <summary>
-    /// What a run container gives every command when it is made (<see cref="Tools.RunToolEnvironment.For"/>), here: a
-    /// home, an npm prefix in it, so <c>npm install -g</c> needs no write access to the Node install, and its bin first
-    /// on <c>PATH</c>, so what was installed there is found. The caller's own values are applied after, so they win.
+    /// <paramref name="command"/>'s start info with the environment the command runs in, merged by <see cref="CommandEnvironment"/>.
+    /// The run's defaults are ILD's own environment without the orchestrator's secrets (<see cref="AgentIsolation.StripOrchestratorEnvironment"/>)
+    /// plus the build-server switches, and a home with an npm prefix in it, so <c>npm install -g</c> needs no write access to the
+    /// Node install, and its bin first on <c>PATH</c>, so what was installed there is found (what a run container gives every
+    /// command when it is made, <see cref="Tools.RunToolEnvironment.For"/>). The host owns the home, the npm prefix and the proxy.
     /// </summary>
-    internal static void WithUserTools(ProcessStartInfo psi)
+    internal static ProcessStartInfo Launch(RunCommand command)
     {
-        var home = psi.Environment.TryGetValue("HOME", out var inherited) && !string.IsNullOrWhiteSpace(inherited)
-            ? inherited
+        var psi = command.Start;
+        var inherited = new ProcessStartInfo();
+        AgentIsolation.StripOrchestratorEnvironment(inherited);
+        var defaults = inherited.Environment.ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal);
+        foreach (var (name, value) in AgentIsolation.BuildServerEnvironment)
+            defaults.TryAdd(name, value);
+
+        var home = defaults.TryGetValue("HOME", out var own) && !string.IsNullOrWhiteSpace(own)
+            ? own
             // Never a fixed path in world-writable /tmp: npm would read a planted ~/.npmrc.
             : AgentIsolation.CreatePrivateDirectory("home");
         var local = Path.Combine(home, ".local");
         var bin = Path.Combine(local, "bin");
         // Made up front: a tool that walks PATH (Claude Code, for one) warns about an entry that is not there.
         Directory.CreateDirectory(bin);
-
-        psi.Environment["HOME"] = home;
-        psi.Environment["NPM_CONFIG_PREFIX"] = local;
         // First even when ILD's own PATH already ends with it, so a tool the command installed beats one ILD's image ships.
-        var rest = (psi.Environment.TryGetValue("PATH", out var current) ? current ?? "" : "")
+        var rest = (defaults.GetValueOrDefault("PATH") ?? "")
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
             .Where(segment => !string.Equals(segment, bin, StringComparison.Ordinal));
-        psi.Environment["PATH"] = string.Join(Path.PathSeparator, rest.Prepend(bin));
+        defaults["PATH"] = string.Join(Path.PathSeparator, rest.Prepend(bin));
+
+        var hostOwned = new Dictionary<string, string?> { ["HOME"] = home, ["NPM_CONFIG_PREFIX"] = local };
+        var proxy = command.AsAgent ? AgentIsolation.LaunchProxy(command.NetworkMode, command.ProviderId) : command.EgressProxy;
+        if (!string.IsNullOrWhiteSpace(proxy))
+            foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
+                hostOwned[name] = value;
+
+        var merged = CommandEnvironment.Merge(defaults!, command.Environment, hostOwned);
+        psi.Environment.Clear();
+        foreach (var (name, value) in merged.Variables)
+            psi.Environment[name] = value;
+        return psi;
     }
 
     private Action<LocalRunProcess> Forget(Guid ownerId) => process =>

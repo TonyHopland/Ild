@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Isolated;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -43,6 +44,24 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     public List<string> Deleted { get; } = [];
 
     public List<FakeExec> Execs { get; } = [];
+
+    /// <summary>The environment files commands were given, by path in the pod: <c>export NAME='value'</c> lines.</summary>
+    public Dictionary<string, string> EnvironmentFiles { get; } = [];
+
+    /// <summary>
+    /// The environment <paramref name="command"/> starts with, as <c>NAME=value</c>: the lines of the file its wrapper sources (the third
+    /// argument after the script, see <c>ExecRunHost</c>'s wrapper), or none for a command that has no such file.
+    /// </summary>
+    public IReadOnlyList<string> EnvironmentOf(FakeExec command)
+    {
+        var file = command.Command.Count > 6 ? command.Command[6] : "";
+        string text;
+        lock (_gate) text = EnvironmentFiles.GetValueOrDefault(file) ?? "";
+        return text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line["export ".Length..])
+            .Select(line => line[..line.IndexOf('=')] + "=" + line[(line.IndexOf('=') + 2)..^1].Replace("'\\''", "'"))
+            .ToList();
+    }
 
     /// <summary>Awaited, with "kind/name", before a delete is carried out; a test holds one back with it.</summary>
     public Func<string, Task>? BeforeDelete { get; set; }
@@ -298,6 +317,13 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
             // A real pod has a checkout once a clone has run in it, and not before.
             if (exec.Command.Any(c => c.Contains("$1/.git", StringComparison.Ordinal)))
                 await exec.ExitAsync(_checkedOut.Contains(pod) ? 0 : 1);
+            // The write of a command's environment file, which a pod keeps: the fake keeps it too, and the command's wrapper "sources" it.
+            else if (exec.Command.Contains(ExecRunHost.WriteEnvironmentFileScript))
+            {
+                var text = Encoding.UTF8.GetString(await exec.ReadStdinToEndAsync());
+                lock (_gate) EnvironmentFiles[exec.Command[^1]] = text;
+                await exec.ExitAsync(0);
+            }
             else
             {
                 await OnExec(exec);

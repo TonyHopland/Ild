@@ -202,15 +202,15 @@ public sealed record RunEnvironment(Guid OwnerId, string WorkingDirectory, Guid?
 public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string BranchName, Guid RepositoryId, bool Dns = false, bool KeepPreviewData = false);
 
 /// <summary>
-/// A command to start. <see cref="Start"/> carries the program, arguments, working directory,
-/// environment and which streams are redirected. An agent CLI launch (<see cref="Agent"/>) is started
-/// by the host with the provider's egress rules under <see cref="NetworkMode"/> and
-/// <see cref="Environment"/> set over what <see cref="Start"/> carries; any other command is started as
-/// the caller built it. <see cref="OwnerId"/> is the run or chat it belongs to, for <see cref="IRunHost.KillAllAsync"/>.
+/// A command to start. <see cref="Start"/> carries the program, arguments, working directory and which streams are
+/// redirected; its <see cref="ProcessStartInfo.Environment"/> is ignored. The command's whole environment is
+/// <see cref="Environment"/>, the variables the caller means to set, merged by the host (<see cref="CommandEnvironment"/>).
+/// An agent CLI launch (<see cref="Agent"/>) is also given the provider's egress rules under <see cref="NetworkMode"/>.
+/// <see cref="OwnerId"/> is the run or chat it belongs to, for <see cref="IRunHost.KillAllAsync"/>.
 /// </summary>
 public sealed record RunCommand
 {
-    private RunCommand(ProcessStartInfo start, Guid ownerId, bool asAgent, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment, IReadOnlyList<string>? files = null)
+    private RunCommand(ProcessStartInfo start, Guid ownerId, bool asAgent, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string?>? environment, IReadOnlyList<string>? files = null)
     {
         Start = start;
         OwnerId = ownerId;
@@ -226,7 +226,12 @@ public sealed record RunCommand
     public bool AsAgent { get; }
     public Guid? ProviderId { get; }
     public NetworkMode NetworkMode { get; }
-    public IReadOnlyDictionary<string, string>? Environment { get; }
+
+    /// <summary>The variables the caller sets, and with a null value unsets; nothing else of the caller's reaches the command.</summary>
+    public IReadOnlyDictionary<string, string?>? Environment { get; }
+
+    /// <summary>The proxy URL the local host points a prepared command at, as its host-owned proxy variables; an isolated host chooses its own. Null for none.</summary>
+    public string? EgressProxy { get; init; }
 
     /// <summary>
     /// The run or chat the command must run in, for a command the agent can shape (a Cmd node, a preview step). An isolated host refuses it
@@ -243,16 +248,16 @@ public sealed record RunCommand
 
     /// <summary>An agent CLI launch: the host gives it the provider's egress rules and environment.</summary>
     public static RunCommand Agent(
-        ProcessStartInfo start, Guid ownerId, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment, IReadOnlyList<string>? files = null)
+        ProcessStartInfo start, Guid ownerId, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string?>? environment, IReadOnlyList<string>? files = null)
         => new(start, ownerId, asAgent: true, providerId, networkMode, environment, files);
 
     /// <summary>
-    /// A command the caller has already given its environment and proxy (a Cmd node, a preview, a git command in a
-    /// chat clone), started as it is. <paramref name="networkMode"/> is the mode it was launched in: a host that runs it in an environment of its own gives it a proxy in every mode but Off, which gets a direct route (a command ILD starts for itself is proxied, which Monitor says). <paramref name="environment"/> is what the caller set on purpose, which a host that
-    /// starts the command in an environment of its own keeps even where it equals a value of the host's.
+    /// A command that is not an agent CLI (a Cmd node, a preview, a git command in a chat clone). <paramref name="networkMode"/> is the mode it
+    /// is launched in: a host that runs it in an environment of its own gives it a proxy in every mode but Off, which gets a direct route (a command
+    /// ILD starts for itself is proxied, which Monitor says). <paramref name="environment"/> is what the caller sets.
     /// </summary>
     public static RunCommand Prepared(
-        ProcessStartInfo prepared, Guid ownerId = default, IReadOnlyDictionary<string, string>? environment = null, IReadOnlyList<string>? files = null, NetworkMode networkMode = NetworkMode.Monitor)
+        ProcessStartInfo prepared, Guid ownerId = default, IReadOnlyDictionary<string, string?>? environment = null, IReadOnlyList<string>? files = null, NetworkMode networkMode = NetworkMode.Monitor)
         => new(prepared, ownerId, asAgent: false, providerId: null, networkMode, environment, files);
 }
 

@@ -112,11 +112,13 @@ internal sealed class DockerApiClient : IDisposable
     // -- Exec --------------------------------------------------------------------
 
     /// <summary>Make an exec in the container and return its id.</summary>
-    public async Task<string> CreateExecAsync(string container, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct, string? user = null)
+    public async Task<string> CreateExecAsync(string container, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct, string? user = null, IReadOnlyDictionary<string, string>? environment = null)
     {
+        // In the request's body, never in the command: the engine shows an exec's command to whoever can inspect it.
+        var env = environment?.Select(e => $"{e.Key}={e.Value}").ToArray();
         var created = await PostAsync(
             $"/containers/{Uri.EscapeDataString(container)}/exec",
-            new { AttachStdin = stdin, AttachStdout = true, AttachStderr = !tty, Tty = tty, Cmd = command, User = user },
+            new { AttachStdin = stdin, AttachStdout = true, AttachStderr = !tty, Tty = tty, Cmd = command, User = user, Env = env },
             ct);
         return created?["Id"]?.GetValue<string>() ?? throw new InvalidOperationException("the engine made an exec and did not name it");
     }
