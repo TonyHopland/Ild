@@ -444,9 +444,11 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     {
         // In the chat container the clone is the working directory, which is what routes the command there; on this disk
         // the orchestrator never enters it.
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(BuildStartInfo(
-            [.. QuietGitOptions, "-C", folder, .. arguments], ceilingDirectory,
-            inChatContainer ? folder : "/"), inChatContainer ? chatId : default), ct);
+        var start = BuildStartInfo([.. QuietGitOptions, "-C", folder, .. arguments], ceilingDirectory, inChatContainer ? folder : "/");
+        // What BuildStartInfo sets on purpose, so a host with an environment of its own keeps it.
+        var set = new Dictionary<string, string> { ["GIT_TERMINAL_PROMPT"] = "0", ["GIT_CEILING_DIRECTORIES"] = ceilingDirectory };
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(start, inChatContainer ? chatId : default, set), ct);
         return await AgentProcess.RunAsync(process, stdin: null, ct);
     }
 }

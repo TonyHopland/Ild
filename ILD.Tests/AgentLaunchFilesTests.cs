@@ -67,7 +67,7 @@ public class AgentLaunchFilesTests : IDisposable
         await new ClaudeCodeAdapter(_scopes, environment: _environment).ExecuteAsync(Context("claude-code"));
 
         var command = Assert.Single(_host.Started);
-        var file = Assert.Single(command.AgentFiles);
+        var file = Assert.Single(command.Files);
         Assert.StartsWith(_readRoot, file);
         Assert.Contains(file, command.Start.ArgumentList);
     }
@@ -78,7 +78,7 @@ public class AgentLaunchFilesTests : IDisposable
         await new CopilotAdapter(_scopes, environment: _environment).ExecuteAsync(Context("copilot"));
 
         var command = Assert.Single(_host.Started);
-        var file = Assert.Single(command.AgentFiles);
+        var file = Assert.Single(command.Files);
         Assert.StartsWith(_readRoot, file);
         Assert.Contains("@" + file, command.Start.ArgumentList);
     }
@@ -91,7 +91,7 @@ public class AgentLaunchFilesTests : IDisposable
         await new ClaudeCodeAdapter(_scopes, environment: _environment).ExecuteAsync(Context("claude-code", [feed]));
 
         var command = Assert.Single(_host.Started);
-        Assert.Equal(2, command.AgentFiles.Count);
-        Assert.Equal(feed, command.AgentFiles[0]);
+        Assert.Equal(2, command.Files.Count);
+        Assert.Equal(feed, command.Files[0]);
     }
 }

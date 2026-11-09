@@ -15,10 +15,12 @@ using Porta.Pty;
 
 namespace ILD.Tests;
 
+[Collection(ProcessGlobalStateCollection.Name)]
 public sealed class KubernetesRunHostTests : IAsyncLifetime
 {
     private const string Instance = "main";
 
+    private readonly string? _previousProxyPort = Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar);
     private readonly Guid _run = Guid.NewGuid();
     private static readonly Guid Repo = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid OtherRepo = Guid.Parse("22222222-2222-2222-2222-222222222222");
@@ -29,6 +31,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
+        Environment.SetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar, "3128");
         Directory.CreateDirectory(_scratch);
         _api = await FakeKubernetesApi.StartAsync();
         _host = NewHost(Options());
@@ -37,6 +40,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     public async ValueTask DisposeAsync()
     {
         await _api.DisposeAsync();
+        Environment.SetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar, _previousProxyPort);
         if (Directory.Exists(_scratch)) Directory.Delete(_scratch, recursive: true);
     }
 
@@ -596,7 +600,9 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Contains("HTTP_PROXY=http://scope:abc@ild.example:3128", _api.Execs.Last().Command);
+        var proxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
+        Assert.Contains("ild.example:3128", proxy);
+        Assert.DoesNotContain("127.0.0.1", proxy);
     }
 
     private KubernetesRunHost AgentReadHost(string readRoot, Dictionary<string, string> written)
@@ -666,6 +672,88 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var launch = _api.Execs.Last().Command;
         Assert.Contains(prompt, launch);
         Assert.Contains($"CFG={readRoot}/../auth.json", launch);
+    }
+
+    // -- Every command gets the proxy and its declared files ----------------------
+
+    private (string ReadRoot, string Npmrc) WriteNpmrc(string kind)
+    {
+        var readRoot = Path.Combine(_scratch, "agent-read");
+        Directory.CreateDirectory(Path.Combine(readRoot, "ild-package-feeds"));
+        var npmrc = Path.Combine(readRoot, "ild-package-feeds", $"{_run:N}-{kind}-1.npmrc");
+        File.WriteAllText(npmrc, "//feed/:_password=abc\n");
+        return (readRoot, npmrc);
+    }
+
+    [Fact]
+    public async Task A_cmd_node_in_network_mode_off_gets_the_proxy_and_its_npm_config_inside_the_run()
+    {
+        await CreateRunAsync();
+        var (readRoot, npmrc) = WriteNpmrc("cmd");
+        var written = new Dictionary<string, string>();
+        var host = AgentReadHost(readRoot, written);
+        var psi = Command(WorkingDirectory, "/bin/sh", "-c", "npm install");
+        psi.Environment["NPM_CONFIG_USERCONFIG"] = npmrc;
+
+        using var process = await host.StartCommandAsync(
+            RunCommand.Prepared(psi, _run, new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, [npmrc]),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var staged = $"{RunPaths.AgentReadDirectory}/ild-package-feeds/{_run:N}-cmd-1.npmrc";
+        Assert.Equal("//feed/:_password=abc\n", written[staged]);
+        var launch = _api.Execs.Last().Command;
+        Assert.Contains($"NPM_CONFIG_USERCONFIG={staged}", launch);
+        Assert.Contains(launch, c => c.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal) && c.Contains("ild.example:3128", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_preview_command_with_no_owner_gets_the_proxy_and_its_npm_config_inside_the_run()
+    {
+        await CreateRunAsync();
+        var (readRoot, npmrc) = WriteNpmrc("preview");
+        var written = new Dictionary<string, string>();
+        var host = AgentReadHost(readRoot, written);
+        var psi = Command(WorkingDirectory, "/bin/sh", "-c", "npm start");
+
+        using var process = await host.StartCommandAsync(
+            RunCommand.Prepared(psi, environment: new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, files: [npmrc]),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var staged = $"{RunPaths.AgentReadDirectory}/ild-package-feeds/{_run:N}-preview-1.npmrc";
+        Assert.True(written.ContainsKey(staged));
+        var launch = _api.Execs.Last().Command;
+        Assert.Contains($"NPM_CONFIG_USERCONFIG={staged}", launch);
+        Assert.Contains(launch, c => c.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal) && c.Contains("ild.example:3128", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_variable_the_caller_set_survives_when_ilds_own_environment_has_the_same_value()
+    {
+        await CreateRunAsync();
+        var previous = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
+        Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", "8080");
+        try
+        {
+            var psi = Command(WorkingDirectory, "dotnet", "run");
+            psi.Environment["ASPNETCORE_HTTP_PORTS"] = "8080";
+            Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", "8080");
+
+            using var process = await _host.StartCommandAsync(
+                RunCommand.Prepared(psi, _run, new Dictionary<string, string> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }),
+                TestContext.Current.CancellationToken);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+            var launch = _api.Execs.Last().Command;
+            Assert.Contains("ASPNETCORE_HTTP_PORTS=8080", launch);
+            Assert.DoesNotContain("INHERITED_ONLY_FROM_ILD=8080", launch);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", previous);
+            Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", null);
+        }
     }
 
     // -- Kill leftovers ----------------------------------------------------------

@@ -11,6 +11,7 @@ using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
@@ -761,7 +762,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
                 new List<ManagedPreviewProcess>(),
                 DotEnvParser.Parse(customEnv),
-                new PackageFeedFileShare(packageFeeds ?? [], "install", _logger),
+                new PackageFeedFileShare(packageFeeds ?? [], FeedFilePrefix(normalized, "install"), _logger),
                 await PreviewVolumes.CreateFoldersAsync(_configuration, profile.Volumes, volumes, stateDirectory, cancellationToken));
 
             await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken);
@@ -1194,7 +1195,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ports,
             new List<ManagedPreviewProcess>(),
             DotEnvParser.Parse(options.CustomEnv),
-            new PackageFeedFileShare(options.PackageFeeds ?? [], "preview", _logger),
+            new PackageFeedFileShare(options.PackageFeeds ?? [], FeedFilePrefix(normalized, "preview"), _logger),
             await PreviewVolumes.CreateFoldersAsync(_configuration, profile.Volumes, options.Volumes, stateDirectory, cancellationToken),
             lease,
             options.WorkItemId);
@@ -1407,7 +1408,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 await onProgress(new WorktreePreviewInstallProgress { Index = index + 1, Total = installSteps.Count, Command = step.Command });
             }
 
-            var resolved = await BuildResolvedStepAsync(step, runtime, null, feeds.Environment, mode, cancellationToken);
+            var resolved = await BuildResolvedStepAsync(step, runtime, null, feeds, mode, cancellationToken);
             var result = await RunCommandAsync(resolved, cancellationToken);
 
             var builder = new StringBuilder();
@@ -1444,7 +1445,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         try
         {
-            var resolved = await BuildResolvedStepAsync(service, runtime, service.Port, feeds.Environment, mode, cancellationToken);
+            var resolved = await BuildResolvedStepAsync(service, runtime, service.Port, feeds, mode, cancellationToken);
             var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
             writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
             {
@@ -1459,7 +1460,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             // the gate the pumps contend for.
             await writer.WriteLineAsync($"> {resolved.Command}");
 
-            var process = await _host.StartCommandAsync(RunCommand.Prepared(BuildPreviewProcess(resolved)), cancellationToken);
+            var process = await _host.StartCommandAsync(PreparedCommand(resolved), cancellationToken);
 
             // Subscribed before the check, so an exit that has already happened and
             // one still to come both let go (the lease ignores the second).
@@ -1931,7 +1932,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task<ResolvedStep> BuildResolvedStepAsync(
         PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias,
-        IReadOnlyDictionary<string, string> feedEnvironment, NetworkMode mode, CancellationToken cancellationToken)
+        PackageFeedFileShare.Lease feeds, NetworkMode mode, CancellationToken cancellationToken)
     {
         var workingDirectory = await ResolveWorkingDirectoryAsync(step.Cwd, runtime, currentPortAlias, cancellationToken);
         var environment = MergePreviewEnvironment(
@@ -1939,13 +1940,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             step.Env,
             value => ResolveTemplate(value, runtime, currentPortAlias),
             runtime.CustomEnv,
-            feedEnvironment);
+            feeds.Environment);
 
         return new ResolvedStep(
             ResolveTemplate(step.Command, runtime, currentPortAlias),
             workingDirectory,
             environment,
-            mode);
+            mode,
+            feeds.Path is null ? [] : [feeds.Path]);
     }
 
     /// <summary>
@@ -2220,9 +2222,18 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return psi;
     }
 
+    // What the caller sets on the process is passed on as such, and the credential file with it, so a host that starts the
+    // command in a run of its own keeps the variables and copies the file in.
+    internal RunCommand PreparedCommand(ResolvedStep resolved)
+        => RunCommand.Prepared(BuildPreviewProcess(resolved), environment: resolved.Environment, files: resolved.Files);
+
+    // The run id leads the name, which is how the run's files are found and what a host checks before it copies one in.
+    internal static string FeedFilePrefix(string worktreePath, string kind)
+        => RunPaths.OwnerOf(worktreePath) is { } run ? $"{run:N}-{kind}" : kind;
+
     private async Task<CommandResult> RunCommandAsync(ResolvedStep resolved, CancellationToken cancellationToken)
     {
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(BuildPreviewProcess(resolved)), cancellationToken);
+        using var process = await _host.StartCommandAsync(PreparedCommand(resolved), cancellationToken);
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
@@ -2307,7 +2318,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     internal sealed record ResolvedStep(
         string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment,
-        NetworkMode NetworkMode = NetworkMode.Monitor);
+        NetworkMode NetworkMode = NetworkMode.Monitor, IReadOnlyList<string>? Files = null);
     private sealed record CommandResult(int ExitCode, string StdOut, string StdErr);
 
     private sealed class PreviewRuntime

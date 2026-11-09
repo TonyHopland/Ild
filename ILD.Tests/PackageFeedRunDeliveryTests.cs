@@ -202,7 +202,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
 
     private NodeExecutionContext CmdContext(
         string command, Guid? runRepositoryId, Guid? workItemRepositoryId = null,
-        CancellationToken cancel = default, Func<string, Task>? progress = null)
+        CancellationToken cancel = default, Func<string, Task>? progress = null, ILD.Core.Services.RunHosts.IRunHost? host = null)
     {
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>()))
@@ -210,6 +210,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton(workItems.Object);
         services.AddSingleton(Resolver());
+        if (host is not null) services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(host);
         return new NodeExecutionContext(
             new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", RepositoryId = runRepositoryId, WorktreePath = _worktree },
             new LoopNode
@@ -252,6 +253,43 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
 
         var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success or NodeOutcome.Fail));
         AssertDelivered(success.Output!);
+    }
+
+    [Fact]
+    public async Task A_cmd_node_hands_the_host_its_feed_variables_and_the_file_named_after_the_run()
+    {
+        var repoId = await RepositoryWithCompanyAndAMissingFeedAsync();
+        var host = new FakeRunHost().WithDirectory(_worktree);
+        var ctx = CmdContext("true", repoId, cancel: Ct, host: host);
+
+        await RunCmdAsync(ctx);
+
+        var command = Assert.Single(host.Started);
+        var file = Assert.Single(command.Files);
+        Assert.StartsWith(ctx.Run.Id.ToString("N") + "-", Path.GetFileName(file), StringComparison.Ordinal);
+        Assert.Equal(file, command.Environment!["NPM_CONFIG_USERCONFIG"]);
+        Assert.Contains("VSS_NUGET_EXTERNAL_FEED_ENDPOINTS", command.Environment!.Keys);
+    }
+
+    [Fact]
+    public void A_previews_feed_file_is_named_after_the_run_whose_worktree_it_serves_and_its_command_carries_the_file()
+    {
+        var run = Guid.NewGuid();
+        var worktree = ILD.Core.Services.RunHosts.Isolated.RunPaths.WorkingDirectory(run);
+
+        Assert.Equal($"{run:N}-preview", WorktreePreviewService.FeedFilePrefix(worktree, "preview"));
+        Assert.Equal($"{run:N}-install", WorktreePreviewService.FeedFilePrefix(worktree, "install"));
+        Assert.Equal("preview", WorktreePreviewService.FeedFilePrefix(_worktree, "preview"));
+
+        var service = new WorktreePreviewService(
+            new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
+        var environment = new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = "/feeds/x.npmrc" };
+        var command = service.PreparedCommand(new WorktreePreviewService.ResolvedStep(
+            "npm start", _worktree, environment, NetworkMode.Off, ["/feeds/x.npmrc"]));
+
+        Assert.Equal(["/feeds/x.npmrc"], command.Files);
+        Assert.Equal("/feeds/x.npmrc", command.Environment!["NPM_CONFIG_USERCONFIG"]);
     }
 
     [Fact]

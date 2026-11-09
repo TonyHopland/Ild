@@ -34,8 +34,15 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     // -- Commands ----------------------------------------------------------------
 
-    public Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
-        => For(command.Start.WorkingDirectory).StartCommandAsync(command, ct);
+    // A command with no working directory goes where the run or chat it is for lives; without one it would start on this machine.
+    public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
+    {
+        var directory = command.Start.WorkingDirectory;
+        var onIsolated = string.IsNullOrEmpty(directory) && command.OwnerId != Guid.Empty
+            ? await isolated.HeldOwnerAsync(command.OwnerId, ct) is not null
+            : OnIsolated(directory);
+        return await (onIsolated ? isolated : local).StartCommandAsync(command, ct);
+    }
 
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
         => await local.KillAllAsync(ownerId, ct) + await isolated.KillAllAsync(ownerId, ct);
