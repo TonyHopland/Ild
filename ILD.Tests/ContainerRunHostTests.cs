@@ -1691,6 +1691,24 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_command_with_no_working_directory_for_a_chat_goes_to_the_chat_container_as_that_chat()
+    {
+        var chat = Guid.NewGuid();
+        var local = new FakeRunHost();
+        var routing = new RoutingRunHost(local, _host);
+        await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", TestContext.Current.CancellationToken);
+
+        using var process = await routing.StartCommandAsync(
+            RunCommand.Prepared(Command("", "ls"), chat), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(local.Started);
+        var exec = _api.Execs.Last();
+        Assert.Equal(ChatContainer, exec.Container);
+        Assert.Contains($"HOME={RunPaths.ChatHome(chat)}", exec.Command);
+    }
+
+    [Fact]
     public async Task The_routing_host_keeps_chats_in_the_container_and_chats_from_before_on_the_local_host()
     {
         var chat = Guid.NewGuid();

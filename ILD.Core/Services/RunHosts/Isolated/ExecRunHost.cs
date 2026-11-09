@@ -339,10 +339,14 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         var psi = command.Start;
         // A command in a chat's folder is the chat's, whatever run or chat id its caller names to kill it by (a title is made under an id of its own).
-        var owner = RunPaths.ChatOf(psi.WorkingDirectory) is { } chat && HostsChats
+        // With no directory the id alone says whose command it is, and it is a chat's as readily as a run's.
+        var held = string.IsNullOrEmpty(psi.WorkingDirectory) && command.OwnerId != Guid.Empty
+            ? await HeldOwnerAsync(command.OwnerId, ct)
+            : null;
+        var owner = held ?? (RunPaths.ChatOf(psi.WorkingDirectory) is { } chat && HostsChats
             ? new ExecOwner(chat, Chat: true)
             : command.OwnerId != Guid.Empty ? command.OwnerId : RunPaths.OwnerOf(psi.WorkingDirectory)
-                ?? throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to");
+                ?? throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to"));
 
         await SyncForwardsAsync(owner, ct);
         var (fileName, arguments) = (psi.FileName, psi.ArgumentList.ToList());

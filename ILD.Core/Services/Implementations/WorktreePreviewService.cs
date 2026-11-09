@@ -2224,11 +2224,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     // What the caller sets on the process is passed on as such, and the credential file with it, so a host that starts the
     // command in a run of its own keeps the variables and copies the file in.
-    private RunCommand PreparedCommand(ResolvedStep resolved)
+    internal RunCommand PreparedCommand(ResolvedStep resolved)
         => RunCommand.Prepared(BuildPreviewProcess(resolved), environment: resolved.Environment, files: resolved.Files);
 
     // The run id leads the name, which is how the run's files are found and what a host checks before it copies one in.
-    private static string FeedFilePrefix(string worktreePath, string kind)
+    internal static string FeedFilePrefix(string worktreePath, string kind)
         => RunPaths.OwnerOf(worktreePath) is { } run ? $"{run:N}-{kind}" : kind;
 
     private async Task<CommandResult> RunCommandAsync(ResolvedStep resolved, CancellationToken cancellationToken)
