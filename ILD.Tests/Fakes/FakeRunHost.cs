@@ -292,7 +292,7 @@ internal sealed class FakeRunHost : IRunHost
 }
 
 /// <summary>What a fake command prints and how it ends.</summary>
-internal sealed record FakeCommandScript(string Stdout, string Stderr, int? ExitCode)
+internal sealed record FakeCommandScript(string Stdout, string Stderr, int? ExitCode, FakeKill Kill = FakeKill.Ends)
 {
     /// <summary>Prints nothing and ends with <paramref name="code"/>.</summary>
     public static FakeCommandScript Exits(int code) => new(string.Empty, string.Empty, code);
@@ -302,26 +302,44 @@ internal sealed record FakeCommandScript(string Stdout, string Stderr, int? Exit
 
     /// <summary>Never ends by itself; only a kill ends it, with code 137.</summary>
     public static FakeCommandScript Hangs() => new(string.Empty, string.Empty, null);
+
+    /// <summary>Never ends, and a kill fails to signal it.</summary>
+    public static FakeCommandScript RefusesKill() => new(string.Empty, string.Empty, null, FakeKill.Fails);
+
+    /// <summary>Never ends; a kill signals it fine and it carries on regardless.</summary>
+    public static FakeCommandScript SurvivesKill() => new(string.Empty, string.Empty, null, FakeKill.Ignored);
 }
+
+/// <summary>What a kill does to a fake command.</summary>
+internal enum FakeKill { Ends, Fails, Ignored }
 
 internal sealed class FakeRunProcess : IRunProcess
 {
     private static int _nextId = 1000;
     private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _exitCode;
+    private readonly FakeKill _kill;
 
     public FakeRunProcess(RunCommand command, FakeCommandScript script)
     {
         Command = command;
+        _kill = script.Kill;
         Id = Interlocked.Increment(ref _nextId);
-        StandardOutput = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(script.Stdout)));
-        StandardError = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(script.Stderr)));
+        StandardOutput = new StreamReader(Output(script.Stdout, script));
+        StandardError = new StreamReader(Output(script.Stderr, script));
         StandardInput = new StreamWriter(new MemoryStream());
         if (script.ExitCode is { } code)
         {
             _exitCode = code;
             _exited.TrySetResult();
         }
+    }
+
+    /// <summary>A command that has not ended keeps its output open, as a real pipe does, until it exits.</summary>
+    private Stream Output(string text, FakeCommandScript script)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        return script.ExitCode is null ? new OpenUntilExitStream(bytes, _exited.Task) : new MemoryStream(bytes);
     }
 
     public RunCommand Command { get; }
@@ -341,6 +359,14 @@ internal sealed class FakeRunProcess : IRunProcess
     {
         failure = null;
         if (HasExited) return true;
+        if (_kill == FakeKill.Fails)
+        {
+            failure = "the fake process refuses to die";
+            return false;
+        }
+
+        if (_kill == FakeKill.Ignored) return true;
+
         WasKilled = true;
         _exitCode = 137;
         _exited.TrySetResult();
@@ -369,4 +395,38 @@ internal sealed class WriteBackStream : MemoryStream
         if (disposing) _store(ToArray());
         base.Dispose(disposing);
     }
+}
+
+/// <summary>Yields its bytes, then blocks instead of reporting the end until <c>exited</c> completes.</summary>
+internal sealed class OpenUntilExitStream(byte[] data, Task exited) : Stream
+{
+    private int _position;
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override int Read(byte[] buffer, int offset, int count)
+        => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        if (_position >= data.Length)
+        {
+            await exited.WaitAsync(cancellationToken);
+            return 0;
+        }
+
+        var n = Math.Min(buffer.Length, data.Length - _position);
+        data.AsMemory(_position, n).CopyTo(buffer);
+        _position += n;
+        return n;
+    }
+
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

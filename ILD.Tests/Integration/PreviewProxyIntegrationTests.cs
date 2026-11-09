@@ -37,6 +37,9 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     /// <summary>Resolution the stubbed preview service returns; swapped per test.</summary>
     private Func<string, PreviewTarget> _resolve = null!;
 
+    /// <summary>The run host the proxy asks for the target address; unset means the local one.</summary>
+    private ILD.Core.Services.RunHosts.IRunHost? _runHost;
+
     public async ValueTask InitializeAsync()
     {
         _backend = await PreviewBackend.StartAsync();
@@ -61,6 +64,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         builder.Services.AddSingleton(PreviewProxyBase.Parse(proxyBase));
         builder.Services.AddSingleton<IWorktreePreviewService>(new StubPreviewService(label => _resolve(label)));
         builder.Services.AddScoped(_ => Mock.Of<IWorkItemManager>());
+        if (_runHost is not null) builder.Services.AddSingleton(_runHost);
 
         _proxy = builder.Build();
         _proxy.UseWebSockets();
@@ -262,6 +266,23 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
 
         Assert.Equal("hello preview", Encoding.UTF8.GetString(buffer, 0, received.Count));
         await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task A_run_host_with_no_address_yet_is_the_same_404_not_a_500()
+    {
+        var host = new Mock<ILD.Core.Services.RunHosts.IRunHost>();
+        host.Setup(h => h.PreviewTargetAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("no address yet"));
+        _runHost = host.Object;
+        await UseProxyBaseAsync($"http://{BaseHost}");
+
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/"), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain("no address yet", body);
     }
 
     [Theory]
