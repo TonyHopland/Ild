@@ -143,7 +143,7 @@ internal sealed class CodexLoginStore
             if (body?["id_token"]?.GetValue<string>() is { Length: > 0 } idToken) tokens["id_token"] = idToken;
             root["last_refresh"] = _clock.GetUtcNow().UtcDateTime.ToString("O");
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidOperationException or TaskCanceledException)
         {
             _logger.LogWarning(ex, "Refreshing the Codex login failed: {Reason}", ex.Message);
             BackOff(refresh);
@@ -165,7 +165,18 @@ internal sealed class CodexLoginStore
     {
         lock (CodexAuthFileLock.Gate)
         {
-            if (Read()?["tokens"]?["refresh_token"]?.GetValue<string>() is { } onDisk && onDisk != fileRefresh)
+            string? onDisk;
+            try
+            {
+                onDisk = File.Exists(_path) ? JsonNode.Parse(File.ReadAllText(_path))?["tokens"]?["refresh_token"]?.GetValue<string>() : null;
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Reading the Codex login before writing the refreshed one failed, keeping it in memory: {Reason}", ex.Message);
+                return WriteOutcome.Failed;
+            }
+
+            if (onDisk != fileRefresh)
             {
                 _logger.LogInformation("The Codex login was replaced by a new sign-in; the refreshed tokens are dropped");
                 ResetBackoff();

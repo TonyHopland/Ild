@@ -356,6 +356,30 @@ public sealed class ModelCredentialSourceTests : IDisposable
         Assert.Single(_handler.Requests);
     }
 
+    [Fact]
+    public async Task An_api_key_sign_in_imported_during_a_codex_refresh_is_not_overwritten()
+    {
+        var path = WriteCodexLogin(Jwt(_clock.GetUtcNow().AddDays(9)), _clock.GetUtcNow().AddDays(-9));
+        _handler.Reply = """{"access_token":"old-account-access","refresh_token":"refresh-2"}""";
+        _handler.Arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _handler.Hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = Provider("codex");
+
+        var request = _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken);
+        await _handler.Arrived.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        var throwaway = Path.Combine(_home, "throwaway");
+        Directory.CreateDirectory(Path.Combine(throwaway, ".codex"));
+        const string apiKeyLogin = """{"OPENAI_API_KEY":"sk-new"}""";
+        File.WriteAllText(Path.Combine(throwaway, ".codex", "auth.json"), apiKeyLogin);
+        await CredentialImport.ImportAsync(throwaway, _home, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, TestContext.Current.CancellationToken);
+        _handler.Hold.SetResult();
+
+        Assert.Null(await request);
+        Assert.Null(await _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken));
+        Assert.Equal(apiKeyLogin, File.ReadAllText(path));
+    }
+
     private sealed class Clock : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = new(2026, 11, 6, 12, 0, 0, TimeSpan.Zero);
