@@ -436,7 +436,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             environment[name] = value;
         }
         foreach (var (name, value) in command.Environment ?? new Dictionary<string, string>())
+        {
+            // The same holds for a PATH the caller sets explicitly: it is built from ILD's, and would hide the run's toolchains.
+            if (name == "PATH") continue;
             environment[name] = value;
+        }
 
         network = new Dictionary<string, string>(StringComparer.Ordinal);
         // The run's network reaches only ILD, so even a command in network mode Off goes through the proxy, which lets every

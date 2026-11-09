@@ -1408,6 +1408,25 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.DoesNotContain(commands, c => c.Contains("/ild/side/bin", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task A_path_the_caller_sets_on_a_command_never_replaces_the_runs_own()
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "npm", "install");
+        var environment = new Dictionary<string, string>
+        {
+            ["PATH"] = "/home/ild/.local/bin:/usr/local/bin:/usr/bin",
+            ["NPM_CONFIG_CACHE"] = "/state/npm-cache",
+        };
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, environment: environment), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var exec = _api.Execs.Last();
+        Assert.Contains("NPM_CONFIG_CACHE=/state/npm-cache", exec.Command);
+        Assert.DoesNotContain(exec.Command, c => c.StartsWith("PATH=", StringComparison.Ordinal));
+    }
+
     // -- Socket ------------------------------------------------------------------
 
     [Fact]
