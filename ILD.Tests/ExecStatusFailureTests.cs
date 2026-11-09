@@ -19,18 +19,17 @@ public sealed class ExecStatusFailureTests
         public void Dispose() { }
     }
 
-    public static TheoryData<Task<int?>> Failures => new()
-    {
-        Task.FromResult<int?>(null),
-        Task.FromException<int?>(new JsonException("not json")),
-    };
+    public static TheoryData<bool> Failures => new() { false, true };
+
+    private static Task<int?> StatusFailing(bool unreadable)
+        => unreadable ? Task.FromException<int?>(new JsonException("not json")) : Task.FromResult<int?>(null);
 
     [Theory]
     [MemberData(nameof(Failures))]
-    public async Task A_command_whose_status_is_missing_or_unreadable_exits_as_a_lost_connection(Task<int?> status)
+    public async Task A_command_whose_status_is_missing_or_unreadable_exits_as_a_lost_connection(bool unreadable)
     {
         var ct = TestContext.Current.CancellationToken;
-        using var process = new ExecRunProcess(new StubExec(status), "pod", "owner/id", redirectInput: false, (_, _) => Task.FromResult(true));
+        using var process = new ExecRunProcess(new StubExec(StatusFailing(unreadable)), "pod", "owner/id", redirectInput: false, (_, _) => Task.FromResult(true));
 
         await process.WaitForExitAsync(ct).WaitAsync(TimeSpan.FromSeconds(10), ct);
 
@@ -41,15 +40,16 @@ public sealed class ExecStatusFailureTests
 
     [Theory]
     [MemberData(nameof(Failures))]
-    public async Task A_terminal_whose_status_is_missing_or_unreadable_reports_its_exit(Task<int?> status)
+    public async Task A_terminal_whose_status_is_missing_or_unreadable_reports_its_exit(bool unreadable)
     {
-        var ct = TestContext.Current.CancellationToken;
         var raised = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var pty = new ExecPty(new StubExec(status));
+        var release = new TaskCompletionSource<int?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var pty = new ExecPty(new StubExec(release.Task));
         pty.ProcessExited += (_, e) => raised.TrySetResult(e.ExitCode);
 
-        // The exit may have been raised before the handler was added; the exit code says it too.
-        Assert.True(pty.WaitForExit(10_000));
+        if (unreadable) release.SetException(new JsonException("not json")); else release.SetResult(null);
+
+        Assert.Equal(ExecRunProcess.ConnectionLostExitCode, await raised.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         Assert.Equal(ExecRunProcess.ConnectionLostExitCode, pty.ExitCode);
     }
 

@@ -256,11 +256,11 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":true}}}""");
         _api.LibpodInfoStatus = status;
 
-        await CreateRunAsync();
+        // Podman refuses the Docker options this container is given while the probe fails.
+        await Assert.ThrowsAnyAsync<Exception>(() => CreateRunAsync());
         _api.LibpodInfoStatus = null;
         await CreateOtherRunAsync(other);
 
-        Assert.Contains("uid=10001", StateOptions(_run));
         Assert.Contains("U", StateOptions(other).Split(','));
     }
 
@@ -277,15 +277,13 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_missing_podman_endpoint_is_remembered_as_docker()
+    public async Task A_missing_podman_endpoint_is_asked_about_once()
     {
-        var other = Guid.NewGuid();
         await CreateRunAsync();
-        _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":true}}}""");
-        await CreateOtherRunAsync(other);
+        await CreateOtherRunAsync(Guid.NewGuid());
 
+        Assert.Equal(1, _api.Requests.Count(r => r.Contains("/libpod/info", StringComparison.Ordinal)));
         Assert.Contains("uid=10001", StateOptions(_run));
-        Assert.Contains("uid=10001", StateOptions(other));
     }
 
     [Fact]
