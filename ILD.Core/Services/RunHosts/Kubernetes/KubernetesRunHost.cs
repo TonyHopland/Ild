@@ -28,6 +28,8 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
 
     // What the store gave each set of toolchains and agents asked for, and the pods exec'd into that are not a run's.
     private readonly SemaphoreSlim _chatGate = new(1, 1);
+    // One replacement of an ended run pod at a time, so concurrent commands on a dead pod make it once.
+    private readonly SemaphoreSlim _runPodGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, string> _execNames = new();
     // The sign-in pods open now, which the sweep leaves alone.
     private readonly ConcurrentDictionary<string, byte> _signIns = new(StringComparer.Ordinal);
@@ -74,9 +76,11 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             return new RunEnvironment(owner, workingDirectory);
 
         var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
-        var secret = await CreateOwnerAsync(owner, ct);
+        var (secret, madeSecret) = await CreateOwnerAsync(owner, ct);
         try
         {
+            // A pod that ended (evicted, its node shut down) is replaced from the manifest as it is now, on the claim it had.
+            await RemoveEndedRunPodAsync(KubernetesNames.ObjectName(owner), ct);
             var reference = KubernetesManifests.OwnerReference(secret);
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.Claim(owner, reference), _namespace, cancellationToken: ct));
             await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.Policy(owner, reference), _namespace, cancellationToken: ct));
@@ -88,7 +92,8 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         }
         catch
         {
-            await DeleteOwnerQuietlyAsync(owner);
+            // Only what this call made: a run that already had its objects keeps its volume through a failed retry.
+            if (madeSecret) await DeleteOwnerQuietlyAsync(owner);
             throw;
         }
 
@@ -117,15 +122,71 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         }
     }
 
-    private async Task<V1Secret> CreateOwnerAsync(Guid owner, CancellationToken ct)
+    private async Task<(V1Secret Secret, bool Made)> CreateOwnerAsync(Guid owner, CancellationToken ct)
     {
         try
         {
-            return await _client.CoreV1.CreateNamespacedSecretAsync(_manifests.Secret(owner), _namespace, cancellationToken: ct);
+            return (await _client.CoreV1.CreateNamespacedSecretAsync(_manifests.Secret(owner), _namespace, cancellationToken: ct), true);
         }
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
         {
-            return await _client.CoreV1.ReadNamespacedSecretAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct);
+            return (await _client.CoreV1.ReadNamespacedSecretAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct), false);
+        }
+    }
+
+    /// <summary>Deletes the pod when it has ended or is going away, and waits until it is gone, so a new one can take its name.</summary>
+    private async Task RemoveEndedRunPodAsync(string name, CancellationToken ct)
+    {
+        var pod = await ReadPodOrNullAsync(name, ct);
+        if (pod is null || pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return;
+        await DeletePodAndWaitAsync(name, ct);
+    }
+
+    private async Task DeletePodAndWaitAsync(string name, CancellationToken ct)
+    {
+        // Also when it is already terminating: on a lost node the kubelet never confirms the delete, and only a grace period of 0 removes the pod.
+        await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
+        await WaitPodGoneAsync(name, ct);
+    }
+
+    /// <summary>
+    /// Makes an ended run pod again from its own record (labels, owner and spec, so it keeps the claim and the tool
+    /// mounts it had), and waits until it is ready. False when the pod is not an ended one, which is not for this to mend.
+    /// </summary>
+    private async Task<bool> ReplaceEndedRunPodAsync(Guid owner, CancellationToken ct)
+    {
+        var name = KubernetesNames.ObjectName(owner);
+        await _runPodGate.WaitAsync(ct);
+        try
+        {
+            var pod = await ReadPodOrNullAsync(name, ct);
+            if (pod is null) return false;
+            if (IsReady(pod) && pod.Metadata.DeletionTimestamp is null) return true;
+            if (pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return false;
+
+            Logger?.LogInformation("The pod of run {Run} ended ({Why}); making it again on its volume", owner, WhyNotReady(pod));
+            await DeletePodAndWaitAsync(name, ct);
+            var fresh = new V1Pod
+            {
+                Metadata = new V1ObjectMeta
+                {
+                    Name = name,
+                    NamespaceProperty = _namespace,
+                    Labels = pod.Metadata.Labels,
+                    Annotations = pod.Metadata.Annotations,
+                    OwnerReferences = pod.Metadata.OwnerReferences,
+                },
+                Spec = pod.Spec,
+            };
+            fresh.Spec.NodeName = null;
+            await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(fresh, _namespace, cancellationToken: ct));
+            var ready = await WaitReadyAsync(name, $"run {owner:N}", ct);
+            _podAddresses[owner] = ready.Status.PodIP;
+            return true;
+        }
+        finally
+        {
+            _runPodGate.Release();
         }
     }
 
@@ -204,7 +265,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     protected override async Task<T> WithToolInstallerAsync<T>(ToolInstaller toolInstaller, Func<Guid, Task<T>> work, CancellationToken ct)
     {
         var installer = Guid.NewGuid();
-        var name = $"ild-tools-{installer:N}";
+        var name = KubernetesNames.ToolsName(installer);
         _execNames[installer] = name;
         try
         {
@@ -269,7 +330,9 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
 
         try
         {
-            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), null, ct);
+            // Only the agent being signed in, as the container host does; none when there is none to install.
+            var agents = agent is null ? (IReadOnlyList<RunAgent>)[] : Agents().Where(a => a.Agent.Key == agent.Key).ToList();
+            var tools = _options.UsesToolStore ? await ToolZonesAsync("The provider sign-in", new RunToolPlan([], []), agents, null, ct) : null;
             await _client.CoreV1.CreateNamespacedPodAsync(
                 _manifests.SignIn(name, SignInHome, tools?.For(SignInHome) ?? [], tools?.Zones ?? []), _namespace, cancellationToken: ct);
             await WaitReadyAsync(name, "the provider sign-in", ct);
@@ -317,8 +380,24 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     }
 
     protected override async Task<IExecStream> OpenExecStreamAsync(ExecOwner owner, IReadOnlyList<string> command, bool stdin, bool tty, CancellationToken ct)
-        => await PodExec.OpenAsync(
-            _client, _namespace, owner.Chat ? await EnsureChatPodAsync(ct) : _execNames.TryGetValue(owner.Id, out var other) ? other : KubernetesNames.ObjectName(owner.Id), command, stdin, tty, ct);
+    {
+        if (owner.Chat)
+            return await PodExec.OpenAsync(_client, _namespace, await EnsureChatPodAsync(ct), command, stdin, tty, ct);
+        if (_execNames.TryGetValue(owner.Id, out var other))
+            return await PodExec.OpenAsync(_client, _namespace, other, command, stdin, tty, ct);
+
+        var name = KubernetesNames.ObjectName(owner.Id);
+        try
+        {
+            return await PodExec.OpenAsync(_client, _namespace, name, command, stdin, tty, ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // A pod nothing restarts (RestartPolicy Never) that was evicted or lost its node: made again once, then the command retried.
+            if (!await ReplaceEndedRunPodAsync(owner.Id, ct)) throw;
+            return await PodExec.OpenAsync(_client, _namespace, name, command, stdin, tty, ct);
+        }
+    }
 
     // -- Chats -------------------------------------------------------------------
 
@@ -342,7 +421,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             {
                 if (existing.Metadata.DeletionTimestamp is null)
                     await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
-                await WaitChatPodGoneAsync(ct);
+                await WaitPodGoneAsync(ChatPodName, ct);
                 existing = null;
             }
 
@@ -379,14 +458,14 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     // -- Shutdown ----------------------------------------------------------------
 
     /// <summary>
-    /// What ILD puts away when it stops, after the drain. The chat pod and any sign-in pod are deleted: the chats' folders
+    /// What ILD puts away when it stops, after the drain. The chat pod and any sign-in or installer pod are deleted: the chats' folders
     /// are in their claim, and the next chat makes the pod from the runner image as it is then. A run's pod stays: a
     /// pod cannot be stopped, and it is what a parked run resumes in.
     /// </summary>
     public async Task ShutdownAsync(CancellationToken ct)
     {
         var options = new V1DeleteOptions { GracePeriodSeconds = 0 };
-        await Task.WhenAll(new[] { ChatPodName }.Concat(_signIns.Keys).Select(async name =>
+        await Task.WhenAll(new[] { ChatPodName }.Concat(_signIns.Keys).Concat(_execNames.Values.Where(n => n.StartsWith("ild-tools-", StringComparison.Ordinal))).Distinct().Select(async name =>
         {
             try
             {
@@ -399,11 +478,13 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         }));
     }
 
-    private async Task<V1Pod?> ChatPodStateAsync(CancellationToken ct)
+    private Task<V1Pod?> ChatPodStateAsync(CancellationToken ct) => ReadPodOrNullAsync(ChatPodName, ct);
+
+    private async Task<V1Pod?> ReadPodOrNullAsync(string name, CancellationToken ct)
     {
         try
         {
-            return await _client.CoreV1.ReadNamespacedPodAsync(ChatPodName, _namespace, cancellationToken: ct);
+            return await _client.CoreV1.ReadNamespacedPodAsync(name, _namespace, cancellationToken: ct);
         }
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -411,13 +492,13 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         }
     }
 
-    private async Task WaitChatPodGoneAsync(CancellationToken ct)
+    private async Task WaitPodGoneAsync(string name, CancellationToken ct)
     {
         var started = Stopwatch.StartNew();
-        while (await ChatPodStateAsync(ct) is not null)
+        while (await ReadPodOrNullAsync(name, ct) is not null)
         {
             if (started.Elapsed > _options.ReadyTimeout)
-                throw new InvalidOperationException($"the old pod of the chats was still there after {_options.ReadyTimeout.TotalSeconds:0} s");
+                throw new InvalidOperationException($"the old pod {name} was still there after {_options.ReadyTimeout.TotalSeconds:0} s");
             await Task.Delay(ReadyPollInterval, ct);
         }
     }
@@ -442,11 +523,14 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             Collect((await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
             Collect((await _client.CoreV1.ListNamespacedPersistentVolumeClaimAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
             Collect((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
-            var signIns = (await _client.CoreV1.ListNamespacedPodAsync(
-                    _namespace, labelSelector: $"{selector},{KubernetesNames.RoleLabel}={KubernetesNames.SignInRole}", cancellationToken: ct)).Items
-                .Select(p => p.Metadata.Name)
-                .Where(n => n is not null && !_signIns.ContainsKey(n))
-                .ToList();
+            // Sign-in and installer pods carry no run label; those ILD has not got open are left by a crash.
+            var open = _execNames.Values.ToHashSet(StringComparer.Ordinal);
+            var signIns = new List<string?>();
+            foreach (var role in new[] { KubernetesNames.SignInRole, KubernetesNames.ToolsRole })
+                signIns.AddRange((await _client.CoreV1.ListNamespacedPodAsync(
+                        _namespace, labelSelector: $"{selector},{KubernetesNames.RoleLabel}={role}", cancellationToken: ct)).Items
+                    .Select(p => p.Metadata.Name)
+                    .Where(n => n is not null && !_signIns.ContainsKey(n) && !open.Contains(n)));
 
             return runs
                 .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
@@ -465,7 +549,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     {
         if (leftover.Kind != RunLeftoverKind)
             throw new ArgumentException($"unknown leftover kind '{leftover.Kind}'", nameof(leftover));
-        if (leftover.Location.StartsWith("ild-signin-", StringComparison.Ordinal))
+        if (leftover.Location.StartsWith("ild-signin-", StringComparison.Ordinal) || leftover.Location.StartsWith("ild-tools-", StringComparison.Ordinal))
         {
             try
             {
@@ -475,7 +559,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             }
             catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
             {
-                Logger?.LogWarning(ex, "Could not delete the sign-in pod {Name}; the next sweep tries again", leftover.Location);
+                Logger?.LogWarning(ex, "Could not delete the sign-in or installer pod {Name}; the next sweep tries again", leftover.Location);
                 return false;
             }
         }

@@ -112,7 +112,7 @@ internal sealed class ExecRunProcess : IRunProcess
         {
             if (!disposing) return;
             try { exec.CloseStdinAsync().GetAwaiter().GetResult(); }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException) { }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException or InvalidOperationException) { }
             base.Dispose(disposing);
         }
 

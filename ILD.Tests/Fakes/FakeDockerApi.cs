@@ -136,13 +136,13 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     }
 
     /// <summary>Puts a sign-in container in the engine as if a run host had made it: no run label, the sign-in role.</summary>
-    public void SeedSignIn(string name, string instance)
+    public void SeedSignIn(string name, string instance, string role = "signin")
     {
         var labels = new Dictionary<string, string>
         {
             ["app.kubernetes.io/managed-by"] = "ild",
             ["ild/instance"] = instance,
-            ["ild/role"] = "signin",
+            ["ild/role"] = role,
         };
         lock (_gate) _containers[name] = new FakeContainer(name, new JsonObject(), labels) { Running = true };
     }

@@ -1434,6 +1434,58 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal("3Gi", shared.MemoryLimit);
     }
 
+    [Fact]
+    public async Task The_sweep_removes_installer_containers_a_killed_ild_left()
+    {
+        _api.SeedSignIn("ild-tools-left", Instance, role: "tools");
+        _api.SeedSignIn("ild-tools-other", "other", role: "tools");
+        using var host = NewHost(Options());
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+
+        await sweeper.SweepAsync(host, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("ild-tools-left", _api.Containers());
+        Assert.Contains("ild-tools-other", _api.Containers());
+    }
+
+    [Fact]
+    public async Task Shutdown_removes_the_installer_containers_that_are_open()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var ct = TestContext.Current.CancellationToken;
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                await host.ShutdownAsync(ct);
+                await e.WriteStdoutAsync(AgentNodeLine + "\n");
+            }
+            await e.ExitAsync(0);
+        };
+
+        await host.CreateAsync(new RunEnvironmentRequest(Guid.NewGuid(), MakeBaseRepository("shut", ("package.json", "{}")), "b", Repo), ct);
+
+        Assert.Contains(_api.Deleted, d => d.StartsWith("containers/ild-tools-", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("ILD_CONTAINER_INSTANCE")]
+    [InlineData("ILD_CONTAINER_TOOLS_VOLUME")]
+    public void A_name_the_engine_would_refuse_is_refused_when_the_settings_are_read(string setting)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => ContainerRunHostOptions.From(name => name switch
+        {
+            "ILD_CONTAINER_SOCKET" => "/var/run/docker.sock",
+            "ILD_CONTAINER_RUNNER_IMAGE" => "img",
+            "ILD_API_URL" => "http://ild:8080",
+            _ when name == setting => "bad name!",
+            _ => null,
+        }));
+
+        Assert.Contains(setting, ex.Message);
+    }
+
     // -- Shutdown ----------------------------------------------------------------
 
     [Fact]

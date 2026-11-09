@@ -68,7 +68,7 @@ Nothing in ILD is specific to a CNI or a storage backend. The cluster needs Kube
 | `ILD_K8S_STORAGE_CLASS` | StorageClass of a run's volume (`ReadWriteOnce`). Unset: the cluster's default class. At startup ILD warns if the class's `reclaimPolicy` is not `Delete`, because a kept volume outlives its run |
 | `ILD_K8S_STORAGE_SIZE` | Size of a run's volume (default `10Gi`). Chats share one volume of the same class and size |
 | `ILD_K8S_CPU_REQUEST` / `ILD_K8S_MEMORY_REQUEST` | What a pod asks the scheduler for (default `100m` / `256Mi`). Low on purpose, so runs that wait do not fill the scheduler's view of the cluster |
-| `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT` (older names `ILD_K8S_CPU_LIMIT` / `ILD_K8S_MEMORY_LIMIT`) | What a pod may use (default `4` / `8Gi`). Requests below limits make the pods Burstable. Run concurrency is the cap that protects the nodes from memory overload |
+| `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT` (older names `ILD_K8S_CPU_LIMIT` / `ILD_K8S_MEMORY_LIMIT`) | What a pod may use (default `4` / `8Gi`); `0` means no limit. Requests below limits make the pods Burstable. Run concurrency is the cap that protects the nodes from memory overload |
 | `ILD_K8S_ILD_POD_SELECTOR` | Comma-separated `key=value` labels of ILD's own pods (default `app.kubernetes.io/name=ild`). The run's network policy lets the pod reach only pods with these labels, and be reached only by them |
 | `ILD_NETWORK_PROXY_PORT` | As elsewhere. On Kubernetes the egress proxy listens on all interfaces, and the pod's network policy allows that port |
 | `ILD_K8S_SWEEP_INTERVAL_MINUTES` | How often the sweeper removes the objects of finished or missing runs (default `10`); it also runs once at startup |

@@ -64,7 +64,9 @@ internal sealed class PodExec : IExecStream
 
     public async Task CloseStdinAsync(CancellationToken ct = default)
     {
-        if (_stdin is null || !_demuxer.SupportsClose) return;
+        if (_stdin is null) return;
+        if (!_demuxer.SupportsClose)
+            throw new InvalidOperationException($"the cluster did not negotiate {Protocol}, so the command's stdin cannot be closed; Kubernetes 1.30 or newer is needed");
         await _demuxer.CloseChannel(ChannelIndex.StdIn, ct);
     }
 

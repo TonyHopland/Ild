@@ -221,7 +221,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         Resources = new V1ResourceRequirements
                         {
                             Requests = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(options.CpuRequest), ["memory"] = new(options.MemoryRequest) },
-                            Limits = limits ? new Dictionary<string, ResourceQuantity> { ["cpu"] = new(options.CpuLimit), ["memory"] = new(options.MemoryLimit) } : null,
+                            Limits = limits ? Limits() : null,
                         },
                         VolumeMounts =
                         [
@@ -240,6 +240,21 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
             },
         };
     }
+
+    // A limit that is 0 is left out: no limit.
+    private Dictionary<string, ResourceQuantity>? Limits()
+    {
+        var limits = new Dictionary<string, ResourceQuantity>();
+        if (options.CpuLimit is { } cpu) limits["cpu"] = new(cpu);
+        if (options.MemoryLimit is { } memory) limits["memory"] = new(memory);
+        return limits.Count == 0 ? null : limits;
+    }
+
+    // The installer and sign-in pods ask for what a run does, so a namespace that requires requests accepts them; no limits.
+    private V1ResourceRequirements Requests() => new()
+    {
+        Requests = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(options.CpuRequest), ["memory"] = new(options.MemoryRequest) },
+    };
 
     // Each zone of the store is a folder of its claim (a subPath), so a pod mounts only the zones it names and never the
     // claim's root, where every repository's folder is.
@@ -270,7 +285,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
             {
                 [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
                 [KubernetesNames.InstanceLabel] = options.Instance,
-                ["ild/role"] = "tools",
+                [KubernetesNames.RoleLabel] = KubernetesNames.ToolsRole,
             },
         },
         Spec = new V1PodSpec
@@ -315,6 +330,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         AllowPrivilegeEscalation = false,
                         Capabilities = new V1Capabilities { Drop = ["ALL"] },
                     },
+                    Resources = Requests(),
                     VolumeMounts =
                     [
                         .. ToolMounts([writable], readOnly: false),
@@ -371,6 +387,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         AllowPrivilegeEscalation = false,
                         Capabilities = new V1Capabilities { Drop = ["ALL"] },
                     },
+                    Resources = Requests(),
                     VolumeMounts = [.. ToolMounts(zones, readOnly: true)],
                 },
             ],

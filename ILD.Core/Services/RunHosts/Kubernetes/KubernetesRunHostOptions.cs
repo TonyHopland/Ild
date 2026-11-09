@@ -37,8 +37,10 @@ public sealed record KubernetesRunHostOptions
     public string StorageSize { get; init; } = "10Gi";
     public string CpuRequest { get; init; } = "100m";
     public string MemoryRequest { get; init; } = "256Mi";
-    public string CpuLimit { get; init; } = "4";
-    public string MemoryLimit { get; init; } = "8Gi";
+
+    /// <summary>The CPU and memory limits of a run's pod; null is no limit, which is what a setting of <c>0</c> means.</summary>
+    public string? CpuLimit { get; init; } = "4";
+    public string? MemoryLimit { get; init; } = "8Gi";
 
     /// <summary>The labels of ILD's own pods, which the run's network policy lets the run reach and be reached by.</summary>
     public IReadOnlyDictionary<string, string> IldPodSelector { get; init; }
@@ -90,14 +92,14 @@ public sealed record KubernetesRunHostOptions
         return defaults with
         {
             Namespace = Value(NamespaceSetting),
-            Instance = Value(InstanceSetting) ?? defaults.Instance,
+            Instance = CheckedInstance(Value(InstanceSetting)) ?? defaults.Instance,
             RunnerImage = image,
             StorageClass = Value(StorageClassSetting),
             StorageSize = Value(StorageSizeSetting) ?? defaults.StorageSize,
             CpuRequest = Value(CpuRequestSetting) ?? defaults.CpuRequest,
             MemoryRequest = Value(MemoryRequestSetting) ?? defaults.MemoryRequest,
-            CpuLimit = Value(RunHostOptions.CpuLimitSetting) ?? Value(CpuLimitSetting) ?? defaults.CpuLimit,
-            MemoryLimit = Value(RunHostOptions.MemoryLimitSetting) ?? Value(MemoryLimitSetting) ?? defaults.MemoryLimit,
+            CpuLimit = Limit(Value(RunHostOptions.CpuLimitSetting) ?? Value(CpuLimitSetting) ?? defaults.CpuLimit),
+            MemoryLimit = Limit(Value(RunHostOptions.MemoryLimitSetting) ?? Value(MemoryLimitSetting) ?? defaults.MemoryLimit),
             IldPodSelector = Value(IldPodSelectorSetting) is { } selector ? ParseSelector(selector) : defaults.IldPodSelector,
             IldPort = uri.Port,
             EgressProxyPort = int.TryParse(Value(EgressProxyPortSetting), out var proxyPort) ? proxyPort : 0,
@@ -109,6 +111,19 @@ public sealed record KubernetesRunHostOptions
             Toolchains = RunHostOptions.ToolchainsOn(Value(RunHostOptions.ToolchainsSetting)),
             ToolsClaim = Value(ToolsClaimSetting),
         };
+    }
+
+    // 0 means no limit, as it does for the container host; the API refuses a limit below the request.
+    private static string? Limit(string? quantity)
+        => quantity is not null && decimal.TryParse(quantity, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var n) && n == 0 ? null : quantity;
+
+    // The instance is in the name of the chat pod ("ild-chat-" + instance) and in a label value: a DNS-1123 label, short enough for both.
+    private static string? CheckedInstance(string? instance)
+    {
+        if (instance is null) return null;
+        if (instance.Length > 50 || !System.Text.RegularExpressions.Regex.IsMatch(instance, "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"))
+            throw new InvalidOperationException($"{InstanceSetting} is '{instance}'; it must be lowercase letters, digits and '-', starting and ending with a letter or digit, and at most 50 characters.");
+        return instance;
     }
 
     private static int? PositiveInt(string? value, string name)

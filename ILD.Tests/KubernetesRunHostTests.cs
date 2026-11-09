@@ -1145,7 +1145,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var goes = Task.Run(async () =>
         {
             await Task.Delay(100, TestContext.Current.CancellationToken);
-            await client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, FakeKubernetesApi.Namespace, cancellationToken: TestContext.Current.CancellationToken);
+            await client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, FakeKubernetesApi.Namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: TestContext.Current.CancellationToken);
         }, TestContext.Current.CancellationToken);
 
         await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
@@ -1303,5 +1303,258 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Null(KubernetesNames.OwnerOf("/ild-run/not-a-run/repo"));
         Assert.Null(KubernetesNames.OwnerOf("/worktrees/ild/repo"));
         Assert.Null(KubernetesNames.OwnerOf(null));
+    }
+
+    // -- A run pod that ended ------------------------------------------------------
+
+    private async Task<V1Pod> EndRunPodAsync(string phase)
+    {
+        await CreateRunAsync();
+        var pod = _api.Get<V1Pod>("pods", Name(_run))!;
+        pod.Status = new V1PodStatus { Phase = phase, Reason = "Evicted" };
+        return pod;
+    }
+
+    [Theory]
+    [InlineData("Failed")]
+    [InlineData("Succeeded")]
+    public async Task A_command_in_an_ended_run_pod_makes_the_pod_again_on_the_same_claim_and_keeps_the_secret_and_volume(string phase)
+    {
+        var ended = await EndRunPodAsync(phase);
+        var claimName = ended.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName;
+        var ct = TestContext.Current.CancellationToken;
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct);
+        await process.WaitForExitAsync(ct);
+
+        Assert.Contains($"pods/{Name(_run)}", _api.Deleted);
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
+        var fresh = _api.Get<V1Pod>("pods", Name(_run))!;
+        Assert.Equal(claimName, fresh.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName);
+        Assert.Equal(ended.Metadata.OwnerReferences.Single().Name, fresh.Metadata.OwnerReferences.Single().Name);
+        Assert.Equal("Running", fresh.Status?.Phase ?? "Running");
+        Assert.DoesNotContain($"secrets/{Name(_run)}", _api.Deleted);
+        Assert.DoesNotContain($"persistentvolumeclaims/{Name(_run)}", _api.Deleted);
+        Assert.Single(_api.Names("secrets"));
+        Assert.Single(_api.Names("persistentvolumeclaims"));
+    }
+
+    [Fact]
+    public async Task A_run_pod_stuck_terminating_on_a_lost_node_is_removed_with_a_grace_period_of_0_and_made_again()
+    {
+        var ended = await EndRunPodAsync("Failed");
+        ended.Metadata.DeletionTimestamp = DateTime.UtcNow;
+        var ct = TestContext.Current.CancellationToken;
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct);
+        await process.WaitForExitAsync(ct);
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepositoryIn("again"), "ild/wi-1-run", Repo), ct);
+
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
+        Assert.Null(_api.Get<V1Pod>("pods", Name(_run))!.Metadata.DeletionTimestamp);
+        Assert.Single(_api.Names("persistentvolumeclaims"));
+    }
+
+    [Fact]
+    public async Task A_start_retried_on_a_run_pod_stuck_terminating_removes_it_with_a_grace_period_of_0()
+    {
+        var ended = await EndRunPodAsync("Failed");
+        ended.Metadata.DeletionTimestamp = DateTime.UtcNow;
+
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepositoryIn("again"), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
+        Assert.Single(_api.Names("secrets"));
+    }
+
+    [Fact]
+    public async Task A_start_retried_on_an_ended_run_pod_replaces_the_pod_and_keeps_the_volume()
+    {
+        await EndRunPodAsync("Failed");
+
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepositoryIn("again"), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        Assert.Contains($"pods/{Name(_run)}", _api.Deleted);
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
+        Assert.DoesNotContain($"secrets/{Name(_run)}", _api.Deleted);
+        Assert.DoesNotContain($"persistentvolumeclaims/{Name(_run)}", _api.Deleted);
+        Assert.Single(_api.Names("persistentvolumeclaims"));
+    }
+
+    [Fact]
+    public async Task A_start_that_fails_on_objects_it_did_not_make_leaves_them_for_the_next_try()
+    {
+        await EndRunPodAsync("Failed");
+        _api.PodReadsBeforeReady = int.MaxValue;
+        var host = NewHost(Options() with { ReadyTimeout = TimeSpan.FromMilliseconds(200) });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepositoryIn("again"), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain($"secrets/{Name(_run)}", _api.Deleted);
+        Assert.Single(_api.Names("secrets"));
+        Assert.Single(_api.Names("persistentvolumeclaims"));
+    }
+
+    // -- Installers left by a crash ------------------------------------------------
+
+    [Fact]
+    public async Task Installer_pods_ILD_has_not_got_open_are_listed_as_leftovers_and_deleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        _api.SeedTools("ild-tools-" + Guid.NewGuid().ToString("N"), Instance);
+        _api.SeedTools("ild-tools-" + Guid.NewGuid().ToString("N"), "other");
+        var orphan = Assert.Single(_api.Names("pods"), n => n.StartsWith("ild-tools-", StringComparison.Ordinal) && _api.Get<V1Pod>("pods", n)!.Metadata.Labels["ild/instance"] == Instance);
+
+        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct));
+
+        Assert.Equal(orphan, leftover.Location);
+        Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
+        Assert.Contains($"pods/{orphan}", _api.Deleted);
+    }
+
+    [Fact]
+    public async Task An_installer_pod_that_is_open_is_not_swept_and_has_requests_and_no_limits()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"));
+        var ct = TestContext.Current.CancellationToken;
+        var seen = new List<string>();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Pod.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                _installerPods[e.Pod] = _api.Get<V1Pod>("pods", e.Pod)!;
+                seen.AddRange((await host.ListLeftoversAsync(new HashSet<Guid>(), ct)).Select(l => l.Location));
+                await e.WriteStdoutAsync(NodeLine + "\n");
+            }
+            await e.ExitAsync(0);
+        };
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "b", Repo), ct);
+
+        Assert.Empty(seen);
+        var resources = Installer(Assert.Single(_installerPods.Keys)).Spec.Containers.Single().Resources;
+        Assert.Equal("100m", resources.Requests["cpu"].ToString());
+        Assert.Equal("256Mi", resources.Requests["memory"].ToString());
+        Assert.Null(resources.Limits);
+    }
+
+    [Fact]
+    public async Task Shutdown_deletes_the_installer_pods_that_are_open()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"));
+        var ct = TestContext.Current.CancellationToken;
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Pod.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                await host.ShutdownAsync(ct);
+                await e.WriteStdoutAsync(NodeLine + "\n");
+            }
+            await e.ExitAsync(0);
+        };
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(("package.json", "{}")), "b", Repo), ct);
+
+        Assert.Contains(_api.Deleted, d => d.StartsWith("pods/ild-tools-", StringComparison.Ordinal));
+    }
+
+    // -- Limits and sign-in --------------------------------------------------------
+
+    [Fact]
+    public async Task A_limit_of_zero_means_no_limit_and_the_pod_has_no_limits_key()
+    {
+        var options = KubernetesRunHostOptions.From(name => name switch
+        {
+            "ILD_API_URL" => "http://ild.example:8080",
+            "ILD_K8S_RUNNER_IMAGE" => "img",
+            "ILD_RUN_CPU_LIMIT" => "0",
+            "ILD_RUN_MEMORY_LIMIT" => "0",
+            _ => null,
+        }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
+        var host = NewHost(options);
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b", Repo), TestContext.Current.CancellationToken);
+
+        var resources = _api.Get<V1Pod>("pods", Name(_run))!.Spec.Containers.Single().Resources;
+        Assert.Null(resources.Limits);
+        Assert.Equal("100m", resources.Requests["cpu"].ToString());
+        Assert.Null(options.CpuLimit);
+        Assert.Null(options.MemoryLimit);
+    }
+
+    [Fact]
+    public async Task One_limit_of_zero_leaves_out_only_that_limit()
+    {
+        var options = Options() with { CpuLimit = null };
+        await NewHost(options).CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "b", Repo), TestContext.Current.CancellationToken);
+
+        var limits = _api.Get<V1Pod>("pods", Name(_run))!.Spec.Containers.Single().Resources.Limits;
+        Assert.Equal(["memory"], limits.Keys);
+    }
+
+    [Fact]
+    public async Task A_sign_in_installs_only_the_agent_it_is_for_and_its_pod_has_requests_and_no_limits()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0"), new RunAgent(ManagedAgentCatalog.ClaudeCode, "2.0.0")]);
+        var installs = AnswerInstallers(AgentNodeLine, PiLine);
+        var ct = TestContext.Current.CancellationToken;
+
+        await using var signIn = await host.OpenSignInAsync(ManagedAgentCatalog.Pi, "pi", [], 80, 24, ct);
+
+        var install = Assert.Single(installs);
+        Assert.Contains(install.Command, c => c.StartsWith("agent=pi|", StringComparison.Ordinal));
+        Assert.DoesNotContain(install.Command, c => c.StartsWith("agent=claude", StringComparison.Ordinal));
+        var pod = _api.Get<V1Pod>("pods", SignInPod())!;
+        var resources = pod.Spec.Containers.Single().Resources;
+        Assert.Equal("100m", resources.Requests["cpu"].ToString());
+        Assert.Equal("256Mi", resources.Requests["memory"].ToString());
+        Assert.Null(resources.Limits);
+        Assert.Contains("/wrap", EnvOf(pod, "PATH"));
+    }
+
+    [Fact]
+    public async Task A_sign_in_for_no_managed_agent_installs_none()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
+        var installs = AnswerInstallers();
+
+        await using var signIn = await host.OpenSignInAsync(null, "foo", [], 80, 24, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(installs, i => i.Command.Any(c => c.StartsWith("agent=", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("Main_1")]
+    [InlineData("-main")]
+    [InlineData("main-")]
+    [InlineData("a b")]
+    public void An_instance_that_is_not_a_DNS_label_is_refused(string instance)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => Options(instance));
+
+        Assert.Contains("ILD_K8S_INSTANCE", ex.Message);
+    }
+
+    [Fact]
+    public void An_instance_too_long_for_the_names_derived_from_it_is_refused()
+        => Assert.Throws<InvalidOperationException>(() => Options(new string('a', 51)));
+
+    [Fact]
+    public async Task Closing_stdin_without_the_v5_protocol_is_an_error_and_not_a_silent_hang()
+    {
+        await _api.DisposeAsync();
+        _api = await FakeKubernetesApi.StartAsync(offerV5: false);
+        _host = NewHost(Options());
+        var run = Guid.NewGuid();
+        _api.Seed("pods", Name(run), Instance, run);
+        _api.OnExec = async e => { await e.ReadStdinToEndAsync(); await e.ExitAsync(0); };
+
+        using var exec = await PodExec.OpenAsync(_api.Client(), FakeKubernetesApi.Namespace, Name(run), ["cat"], stdin: true, tty: false, TestContext.Current.CancellationToken);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => exec.CloseStdinAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("v5.channel.k8s.io", ex.Message);
     }
 }
