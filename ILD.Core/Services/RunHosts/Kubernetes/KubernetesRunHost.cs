@@ -130,10 +130,13 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
 
     public override async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
     {
+        await SyncPreviewDataBackAsync(environment, ct);
         _podAddresses.TryRemove(environment.OwnerId, out _);
         await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedSecretAsync(
             KubernetesNames.ObjectName(environment.OwnerId), _namespace, new V1DeleteOptions { PropagationPolicy = "Background" }, cancellationToken: ct));
     }
+
+    protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => IsHealthyAsync(owner, ct);
 
     private async Task<bool> IsHealthyAsync(Guid owner, CancellationToken ct)
     {

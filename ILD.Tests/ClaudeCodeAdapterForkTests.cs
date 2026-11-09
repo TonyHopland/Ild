@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -156,6 +157,7 @@ public class ClaudeCodeAdapterForkTests
         await connection.OpenAsync();
 
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 

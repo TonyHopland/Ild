@@ -43,7 +43,7 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         _runners.Add(runner);
-        return new RepositoryManager(runner, null, _worktrees, _mirrors);
+        return new RepositoryManager(runner, new LocalRunHost(runner), null, _worktrees, _mirrors);
     }
 
     private async Task<(string Remote, string Base, GitAuthOptions Auth, string Worktree)> ClonedWithWorktreeAsync(RepositoryManager mgr, string branch)

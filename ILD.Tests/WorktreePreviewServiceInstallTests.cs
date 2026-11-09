@@ -38,10 +38,10 @@ public class WorktreePreviewServiceInstallTests : IDisposable
         var configuration = new ConfigurationBuilder().Build();
         return environment is null
             ? new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-                NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims())
+                NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared)
             : new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
                 NullLogger<WorktreePreviewService>.Instance,
-                environment: environment);
+                environment: environment, host: LocalRunHost.Shared);
     }
 
     private void WriteConfig(string installCommand)

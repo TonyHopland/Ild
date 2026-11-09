@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations.Adapters;
@@ -155,6 +156,7 @@ public sealed class PackageFeedAgentLaunchTests : IDisposable
             var connection = new SqliteConnection("Filename=:memory:");
             await connection.OpenAsync();
             var services = new ServiceCollection();
+            services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
             services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
             var provider = services.BuildServiceProvider();

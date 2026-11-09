@@ -61,11 +61,11 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         IRepositoryManager git,
         IConfiguration config,
         IShutdownState shutdown,
+        IRunHost host,
         ILogger<ChatRepositoryCloner>? log = null,
-        IRunHost? host = null,
         IProcessRunner? runner = null)
     {
-        _host = host ?? LocalRunHost.Shared;
+        _host = host;
         _runner = runner ?? new ProcessRunner();
         _db = db;
         _scopes = scopes;

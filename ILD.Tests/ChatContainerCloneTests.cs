@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -52,7 +53,7 @@ public sealed class ChatContainerCloneTests : IDisposable
 
     private ChatRepositoryCloner Cloner()
         => new(_db.Context, _services.GetRequiredService<IServiceScopeFactory>(), new ChatCloneCoordinator(), _db.Providers,
-            new RepositoryManager(worktreesRoot: Path.Combine(_dir, "worktrees")), Config, ShutdownState.NeverStopping, host: _host);
+            new RepositoryManager(new LocalRunHost(new ProcessRunner()), worktreesRoot: Path.Combine(_dir, "worktrees")), Config, ShutdownState.NeverStopping, host: _host);
 
     private static IReadOnlyList<string> GitArguments(RunCommand command)
     {

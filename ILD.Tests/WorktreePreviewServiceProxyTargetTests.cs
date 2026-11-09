@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using System.Net.Sockets;
 using ILD.Core.Services.Implementations;
@@ -43,7 +44,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
             factory.Object,
             new ConfigurationBuilder().Build(),
             PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
         return _service;
     }
 

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -60,7 +61,7 @@ public class WorkItemsControllerTransitionTests
             db.LoopRuns,
             db.ServerClient,
             db.ServerOptions, TestActors.Instance,
-            engine: new Mock<ILoopEngine>().Object);
+            engine: new Mock<ILoopEngine>().Object, runHost: LocalRunHost.Shared);
 
         var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,

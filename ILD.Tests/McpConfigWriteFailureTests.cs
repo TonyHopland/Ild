@@ -205,6 +205,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         StageUnwritableConfigDirectory();
         var provider = new RecordingLoggerProvider();
         IServiceCollection services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         services.AddLogging(logging => logging.AddProvider(provider));
         services.AddSingleton<IProcessEnvironment>(_environment);
         foreach (var descriptor in new ServiceCollection().AddIldServices().Where(d =>

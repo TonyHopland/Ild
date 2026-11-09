@@ -36,14 +36,30 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     // -- Commands ----------------------------------------------------------------
 
     // A command with no working directory goes where the run or chat it is for lives; without one it would start on this machine.
+    // One that must run in a run goes to that run or nowhere: never to this machine, whatever its directory says.
     public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
+        if (command.RunIn is { } runIn)
+            return await isolated.StartCommandAsync(await InRunAsync(command, runIn, ct), ct);
         var directory = command.Start.WorkingDirectory;
         var onIsolated = string.IsNullOrEmpty(directory) && command.OwnerId != Guid.Empty
             ? await isolated.HeldOwnerAsync(command.OwnerId, ct) is not null
             : OnIsolated(directory);
         return await (onIsolated ? isolated : local).StartCommandAsync(command, ct);
     }
+
+    private async Task<RunCommand> InRunAsync(RunCommand command, Guid runIn, CancellationToken ct)
+    {
+        var directory = command.Start.WorkingDirectory;
+        var owner = await isolated.HeldOwnerAsync(runIn, ct)
+            ?? throw new InvalidOperationException($"refusing to run {command.Start.FileName} in {directory}: the {isolated.Kind.ToString().ToLowerInvariant()} run host holds no run or chat {runIn:N}, and a command of a run never runs on ILD's own machine");
+        var root = owner.Chat ? RunPaths.ChatRoot(runIn) : RunPaths.RunRoot(runIn);
+        if (!string.IsNullOrEmpty(directory) && !Within(Path.GetFullPath(directory), root))
+            throw new InvalidOperationException($"refusing to run {command.Start.FileName} in {directory}, which is outside run {runIn:N}");
+        return command;
+    }
+
+    private static bool Within(string path, string root) => path == root || path.StartsWith(root + "/", StringComparison.Ordinal);
 
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
         => await local.KillAllAsync(ownerId, ct) + await isolated.KillAllAsync(ownerId, ct);
@@ -140,6 +156,11 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
         => For(workingDirectory).GatewayApiUrl(configuredApiUrl, workingDirectory);
 
     public string? RunHomeFor(string workingDirectory) => For(workingDirectory).RunHomeFor(workingDirectory);
+
+    public string PreviewStateDirectoryFor(string worktreePath) => For(worktreePath).PreviewStateDirectoryFor(worktreePath);
+
+    public Task<string?> PreviewDataFolderAsync(Guid repositoryId, string worktreePath, CancellationToken ct = default)
+        => For(worktreePath).PreviewDataFolderAsync(repositoryId, worktreePath, ct);
 
     // -- Sweep -------------------------------------------------------------------
 

@@ -26,7 +26,7 @@ public sealed class RepositoryManagerTests : IDisposable
         runner.Forbid(_repo);
         runner.Forbid(worktreesRoot);
         lock (_auditors) _auditors.Add(runner);
-        return new RepositoryManager(runner, logger, worktreesRoot, _mirrors);
+        return new RepositoryManager(runner, new LocalRunHost(runner), logger, worktreesRoot, _mirrors);
     }
 
     private void Forbid(string path)
@@ -1132,7 +1132,7 @@ public sealed class RepositoryManagerTests : IDisposable
         var runner = new CancellingRebaseRunner();
         // A directory with a .git directory is a clone of ours, which is all the manager checks before it runs git.
         Directory.CreateDirectory(Path.Combine(_repo, ".git"));
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), _mirrors);
+        var mgr = new RepositoryManager(runner, new LocalRunHost(runner), null, Path.Combine(_tmp, "wt"), _mirrors);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -1242,7 +1242,7 @@ public sealed class RepositoryManagerTests : IDisposable
         // `--exit-code` puts the answer in the exit code; corroborating it against
         // stdout only adds a way to mistake an existing branch for a free one, and
         // that is the direction the conflict check must never fail in.
-        var mgr = new RepositoryManager(new SilentSuccessRunner(), worktreesRoot: Path.Combine(_tmp, "wt"), mirrorsRoot: _mirrors);
+        var mgr = new RepositoryManager(new SilentSuccessRunner(), LocalRunHost.Shared, worktreesRoot: Path.Combine(_tmp, "wt"), mirrorsRoot: _mirrors);
 
         Assert.True(await mgr.RemoteHasBranchAsync("https://example.invalid/repo.git", "feature/foo", TestContext.Current.CancellationToken));
     }

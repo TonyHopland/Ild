@@ -44,7 +44,7 @@ public class RepositoryManagerMirrorTests : IDisposable
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         _runners.Add(runner);
-        return (new RepositoryManager(runner, null, _worktrees, _mirrors), runner);
+        return (new RepositoryManager(runner, new LocalRunHost(runner), null, _worktrees, _mirrors), runner);
     }
 
     private static GitAuthOptions Auth(string remote) => new(remote, "tok-" + Guid.NewGuid().ToString("N"), "Forgejo");

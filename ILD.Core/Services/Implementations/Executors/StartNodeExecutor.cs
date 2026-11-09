@@ -142,7 +142,7 @@ public sealed class StartNodeExecutor : INodeExecutor
                 ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
             if (!baseOk) return (false, null, null, baseError);
 
-            path = (await host.CreateAsync(new RunEnvironmentRequest(run.Id, basePath!, branch, repo.Id), ctx.CancellationToken)).WorkingDirectory;
+            path = (await host.CreateAsync(new RunEnvironmentRequest(run.Id, basePath!, branch, repo.Id, KeepPreviewData: repo.KeepPreviewData), ctx.CancellationToken)).WorkingDirectory;
             await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         }
         try

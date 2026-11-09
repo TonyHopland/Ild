@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using System.Net.Sockets;
 using ILD.Core.Services.Implementations;
@@ -45,7 +46,7 @@ public class WorktreePreviewServicePortAllocationTests : IDisposable
             new ConfigurationBuilder().Build(),
             PreviewProxyBase.Parse(null),
             NullLogger<WorktreePreviewService>.Instance,
-            isPortAvailable: isPortAvailable);
+            isPortAvailable: isPortAvailable, host: LocalRunHost.Shared);
         return _service;
     }
 

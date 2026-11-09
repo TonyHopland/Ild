@@ -92,10 +92,10 @@ public class ConnectionTesterTests : IDisposable
     ];
 
     private static ConnectionTester ProviderTester(HttpMessageHandler handler, ILogger<ConnectionTester>? logger = null)
-        => new(Adapters(), new RepositoryManager(ScriptedRunner.Exit(0)), new HttpClient(handler), logger);
+        => new(Adapters(), new RepositoryManager(ScriptedRunner.Exit(0), LocalRunHost.Shared), new HttpClient(handler), logger);
 
     private static ConnectionTester RepoTester(IProcessRunner runner, ILogger<ConnectionTester>? logger = null)
-        => new(Adapters(), new RepositoryManager(runner), new HttpClient(ScriptedHandler.Answer(HttpStatusCode.OK)), logger);
+        => new(Adapters(), new RepositoryManager(runner, new LocalRunHost(runner)), new HttpClient(ScriptedHandler.Answer(HttpStatusCode.OK)), logger);
 
     private static RemoteProvider Provider(string type, string url, string? apiKey) => new()
     {
@@ -297,7 +297,7 @@ public class ConnectionTesterTests : IDisposable
         using var bound = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         bound.Bind(new IPEndPoint(IPAddress.Loopback, 0));
         var port = ((IPEndPoint)bound.LocalEndPoint!).Port;
-        var tester = new ConnectionTester(Adapters(), new RepositoryManager(ScriptedRunner.Exit(0)), new HttpClient());
+        var tester = new ConnectionTester(Adapters(), new RepositoryManager(ScriptedRunner.Exit(0), LocalRunHost.Shared), new HttpClient());
 
         var result = await tester.TestRemoteProviderAsync(Provider("Forgejo", $"http://127.0.0.1:{port}", Key), CancellationToken.None);
 
@@ -512,7 +512,7 @@ public class ConnectionTesterTests : IDisposable
     }
 
     private static ConnectionTester RealGitTester()
-        => new(Adapters(), new RepositoryManager(), new HttpClient(ScriptedHandler.Answer(HttpStatusCode.OK)));
+        => new(Adapters(), new RepositoryManager(new LocalRunHost(new ProcessRunner())), new HttpClient(ScriptedHandler.Answer(HttpStatusCode.OK)));
 
     [Fact]
     public async Task Repository_whose_default_branch_exists_is_ok_and_names_it()
@@ -647,7 +647,7 @@ public class ConnectionTesterTests : IDisposable
         const string cloneUrl = "https://ci-bot@git.example.com/team/app.git";
         var provider = Provider("Forgejo", "https://git.example.com", Key);
         var runner = ScriptedRunner.Exit(0);
-        var mgr = new RepositoryManager(runner, mirrorsRoot: Path.Combine(_tmp, "mirrors"));
+        var mgr = new RepositoryManager(runner, new LocalRunHost(runner), mirrorsRoot: Path.Combine(_tmp, "mirrors"));
         var tester = new ConnectionTester(Adapters(), mgr, new HttpClient(ScriptedHandler.Answer(HttpStatusCode.OK)));
         var clone = Directory.CreateDirectory(Path.Combine(_tmp, "clone")).FullName;
         Directory.CreateDirectory(Path.Combine(clone, ".git"));

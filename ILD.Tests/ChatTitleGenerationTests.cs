@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Collections.Concurrent;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Network;
@@ -229,7 +230,7 @@ public sealed class ChatTitleGenerationTests : IDisposable
     private ChatService NewChatService(AppDbContext ctx)
         => new(ctx, new ProviderStore(ctx), new ScriptedRegistry(this), _notifier,
             new ChatOptions { ScratchRoot = _scratchRoot }, new LoopRunStore(ctx), new ChatLoopScratchpad(),
-            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 
     [Theory]
     [InlineData(NetworkMode.Off)]

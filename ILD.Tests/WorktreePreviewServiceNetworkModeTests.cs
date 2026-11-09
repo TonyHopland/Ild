@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
@@ -54,7 +55,7 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         _service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            egressProxy: Proxy, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: policy);
+            egressProxy: Proxy, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: policy, host: LocalRunHost.Shared);
         return _service;
     }
 

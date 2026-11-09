@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -124,7 +125,7 @@ public class LoopEngineStopRunTests
         // exists to catch never happens.
         var seedMgr = new WorkItemManager(
             new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object,
-            db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance);
+            db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, runHost: LocalRunHost.Shared);
         var workItemId = await seedMgr.CreateWorkItemAsync(TestActors.Human, "cancel me", "", null);
 
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
@@ -150,7 +151,7 @@ public class LoopEngineStopRunTests
         services.AddScoped<ILoopTemplateStore>(sp => new LoopTemplateStore(sp.GetRequiredService<AppDbContext>()));
         services.AddScoped<IWorkItemManager>(sp => new WorkItemManager(
             new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object,
-            sp.GetRequiredService<ILoopRunStore>(), db.ServerClient, db.ServerOptions, TestActors.Instance));
+            sp.GetRequiredService<ILoopRunStore>(), db.ServerClient, db.ServerOptions, TestActors.Instance, runHost: LocalRunHost.Shared));
         services.AddSingleton<IRunNotifier>(new NoopRunNotifier());
         services.AddSingleton<IWorkItemNotifier>(new Mock<IWorkItemNotifier>().Object);
         using var sp = services.BuildServiceProvider();

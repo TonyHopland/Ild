@@ -622,6 +622,8 @@ internal sealed class FakeDockerExec(string container, IReadOnlyList<string> com
 
     public Task WriteStdoutAsync(string text) => SendAsync(1, Encoding.UTF8.GetBytes(text));
 
+    public Task WriteStdoutAsync(byte[] bytes) => SendAsync(1, bytes);
+
     public Task WriteStderrAsync(string text) => SendAsync(2, Encoding.UTF8.GetBytes(text));
 
     /// <summary>Reports the exit code to the engine's state, then ends the stream, in the order the real engine does.</summary>

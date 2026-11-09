@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
@@ -40,7 +41,7 @@ public class AiTraversalCapAiNodeSeamTests
             services.AddSingleton(providerStore.Object);
             services.AddSingleton<IAgentAdapterRegistry>(new SingleAdapterRegistry(adapter));
             services.AddSingleton<IPromptRenderingService>(sp => new PromptRenderingService(
-                new PromptTemplateResolver(), sp.GetRequiredService<IEventLogStore>(),
+                new PromptTemplateResolver(host: LocalRunHost.Shared), sp.GetRequiredService<IEventLogStore>(),
                 new RunConversationService(sp.GetRequiredService<IEventLogStore>(), sp.GetRequiredService<ILoopRunStore>()),
                 sp.GetRequiredService<ILoopRunStore>(), sp.GetRequiredService<IGlobalVariableStore>()));
             if (concurrency is not null) services.AddSingleton(concurrency);

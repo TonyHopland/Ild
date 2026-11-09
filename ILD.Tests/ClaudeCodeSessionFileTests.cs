@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -42,6 +43,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         _connection = new SqliteConnection("Filename=:memory:");
         await _connection.OpenAsync();
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection).AddInterceptors(_sql));
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
         _services = services.BuildServiceProvider();
@@ -218,6 +220,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         // Another writer lands between this turn's metadata read and its append.
         var raced = 0;
         var racing = new ServiceCollection();
+        racing.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         racing.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection));
         racing.AddScoped<IAdapterSessionSnapshotStore>(sp => new RacingSnapshotStore(
             new AdapterSessionSnapshotStore(sp.GetRequiredService<AppDbContext>()), async () =>

@@ -160,7 +160,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         _runners.Add(runner);
         runner.Forbid(Path.Combine(_tmp, "base"));
         runner.Forbid(Path.Combine(_tmp, "wt"));
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), Path.Combine(_tmp, "mirrors"));
+        var mgr = new RepositoryManager(runner, new LocalRunHost(runner), null, Path.Combine(_tmp, "wt"), Path.Combine(_tmp, "mirrors"));
 
         await RunCycleAsync(mgr);
 

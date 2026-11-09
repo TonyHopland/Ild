@@ -155,6 +155,19 @@ public interface IRunHost
     /// <summary>The <c>HOME</c> the CLIs of the run that holds <paramref name="workingDirectory"/> run with, when it is not the agent home of this machine; null when it is.</summary>
     string? RunHomeFor(string workingDirectory);
 
+    /// <summary>
+    /// The <c>${STATE_DIR}</c> of a preview of the worktree at <paramref name="worktreePath"/>: a folder of the run that holds the
+    /// worktree, which the preview's steps can write and see where they run. Not created.
+    /// </summary>
+    string PreviewStateDirectoryFor(string worktreePath);
+
+    /// <summary>
+    /// The run's own copy of the preview data <paramref name="repositoryId"/> keeps between runs, a volume per subfolder, as the run that
+    /// holds <paramref name="worktreePath"/> sees it. Its host filled it when the run was made with <see cref="RunEnvironmentRequest.KeepPreviewData"/>
+    /// and puts it back when the run ends cleanly. Null when the run has none: a chat, or a run made without it.
+    /// </summary>
+    Task<string?> PreviewDataFolderAsync(Guid repositoryId, string worktreePath, CancellationToken ct = default);
+
     // -- Sweep -------------------------------------------------------------------
 
     /// <summary>What runs and chats that are finished, or no longer exist, left behind. Anything of <paramref name="liveIds"/> is kept.</summary>
@@ -172,11 +185,14 @@ public enum RunHostKind
     Kubernetes,
 }
 
-/// <summary>The handle of a run's environment: whose it is and its working directory, in the host's own paths.</summary>
-public sealed record RunEnvironment(Guid OwnerId, string WorkingDirectory);
+/// <summary>
+/// The handle of a run's environment: whose it is and its working directory, in the host's own paths. Deleting it with
+/// <see cref="KeptPreviewDataOf"/> puts the run's copy of the preview data back in that repository's store first, when the run is still running.
+/// </summary>
+public sealed record RunEnvironment(Guid OwnerId, string WorkingDirectory, Guid? KeptPreviewDataOf = null);
 
-/// <summary>What <see cref="IRunHost.CreateAsync"/> makes an environment from: the base checkout and the run's branch.</summary>
-public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string BranchName, Guid RepositoryId, bool Dns = false);
+/// <summary>What <see cref="IRunHost.CreateAsync"/> makes an environment from: the base checkout and the run's branch. <see cref="KeepPreviewData"/> gives the run a copy of the preview data its repository keeps between runs.</summary>
+public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string BranchName, Guid RepositoryId, bool Dns = false, bool KeepPreviewData = false);
 
 /// <summary>
 /// A command to start. <see cref="Start"/> carries the program, arguments, working directory,
@@ -204,6 +220,13 @@ public sealed record RunCommand
     public Guid? ProviderId { get; }
     public NetworkMode NetworkMode { get; }
     public IReadOnlyDictionary<string, string>? Environment { get; }
+
+    /// <summary>
+    /// The run or chat the command must run in, for a command the agent can shape (a Cmd node, a preview step). An isolated host refuses it
+    /// unless it holds that run and the working directory is in it; it is never started on ILD's own machine instead. Unlike
+    /// <see cref="OwnerId"/> it does not make <see cref="IRunHost.KillAllAsync"/> end the command, so a preview outlives a retry.
+    /// </summary>
+    public Guid? RunIn { get; init; }
 
     /// <summary>
     /// The files in the agent read root that the caller wrote for this command and its arguments or environment point at.

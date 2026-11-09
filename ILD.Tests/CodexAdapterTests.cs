@@ -790,6 +790,7 @@ public sealed class CodexAdapterTests : IDisposable
         if (store is null)
             return new CodexAdapter(_logger, _environment);
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         store.Register(services);
         var provider = services.BuildServiceProvider();
         return new CodexAdapter(provider.GetRequiredService<IServiceScopeFactory>(), _logger, _environment);

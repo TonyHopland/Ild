@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations.Files;
 using System.Net;
 using System.Net.Http.Headers;
@@ -46,12 +47,15 @@ public class PreviewDataApiTests(SharedApiFactory factory) : IClassFixture<Share
         var agent = AgentClient(ownHost);
         var repositoryId = await SeedRepositoryAsync(ownHost, "alpha");
         await SetKeepAsync(ownHost, repositoryId, keep: true);
-        var (a, aTitle, _) = await PreviewableWorkItemAsync(ownHost, user, repositoryId, "First item", "wt-a");
+        var (a, aTitle, aWorktree) = await PreviewableWorkItemAsync(ownHost, user, repositoryId, "First item", "wt-a");
         var (b, bTitle, bWorktree) = await PreviewableWorkItemAsync(ownHost, user, repositoryId, "Second item", "wt-b");
         var folder = PreviewDataFolder(ownHost, repositoryId);
+        // Each worktree is a run made with Keep preview data on, which has its own copy of the (empty) stored data.
+        var aCopy = Directory.CreateDirectory(LocalRunHost.PreviewDataCopyOf(aWorktree)).FullName;
+        Directory.CreateDirectory(LocalRunHost.PreviewDataCopyOf(bWorktree));
 
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsJsonAsync($"/api/v1/workitems/{a}/preview/start", new { }, Ct)).StatusCode);
-        Assert.True(File.Exists(Path.Combine(folder, "data", "file")));
+        Assert.True(File.Exists(Path.Combine(aCopy, "data", "file")));
 
         foreach (var (client, path) in new[]
         {
@@ -68,13 +72,13 @@ public class PreviewDataApiTests(SharedApiFactory factory) : IClassFixture<Share
         Assert.False(File.Exists(Path.Combine(bWorktree, "listing.txt")), "a refused start ran an install step");
 
         await AssertRemovalRefusedAsync(user, repositoryId, HolderSentence(a, aTitle));
-        Assert.True(File.Exists(Path.Combine(folder, "data", "file")));
+        Assert.True(File.Exists(Path.Combine(aCopy, "data", "file")));
 
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsync($"/api/v1/workitems/{a}/preview/stop", null, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await user.DeleteAsync($"/api/v1/storage/preview-data/{repositoryId}", Ct)).StatusCode);
         Assert.False(AgentWritableFiles.EntryExists(folder));
 
-        // The next preview starts on empty volumes.
+        // The next run's preview starts on empty volumes.
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsJsonAsync($"/api/v1/workitems/{b}/preview/start", new { }, Ct)).StatusCode);
         Assert.Equal("", File.ReadAllText(Path.Combine(bWorktree, "listing.txt")));
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsync($"/api/v1/workitems/{b}/preview/stop", null, Ct)).StatusCode);

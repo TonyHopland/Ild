@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Net;
 using System.Runtime.Versioning;
@@ -69,7 +70,7 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
         var environment = new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } }.WithRealPath();
         var service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            environment: environment, notifier: _notifier.Object);
+            environment: environment, notifier: _notifier.Object, host: LocalRunHost.Shared);
         _services.Add(service);
         return service;
     }

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
@@ -173,7 +174,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
         services.AddSingleton<IWorktreePreviewService>(new WorktreePreviewService(
             new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims()));
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared));
         services.AddSingleton(Resolver());
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", RepositoryId = repoId, WorktreePath = _worktree, BranchName = "b" };
         var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Start, Config = "{\"runInstall\":true}" };
@@ -283,7 +284,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
 
         var service = new WorktreePreviewService(
             new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
         var environment = new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = "/feeds/x.npmrc" };
         var command = service.PreparedCommand(new WorktreePreviewService.ResolvedStep(
             "npm start", _worktree, environment, NetworkMode.Off, ["/feeds/x.npmrc"]));

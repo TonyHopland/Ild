@@ -160,7 +160,7 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
         return new ChatService(
             _db.Context, _db.Providers, registry, Mock.Of<IChatNotifier>(),
             new ChatOptions { ScratchRoot = _scratchRoot }, _db.LoopRuns, new ChatLoopScratchpad(),
-            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
     }
 
     private async Task<Guid> StartChatAsync(ChatService svc)

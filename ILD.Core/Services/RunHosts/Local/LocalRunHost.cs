@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Porta.Pty;
@@ -24,14 +25,17 @@ public sealed class LocalRunHost : IRunHost
     private readonly IProcessRunner? _runner;
     private readonly IServiceProvider? _services;
     private readonly IRepositoryManager? _repositories;
+    private readonly IConfiguration? _configuration;
     private readonly ProcessRunOptions _agentOptions;
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<LocalRunProcess, byte>> _running = new();
 
     /// <param name="runner">What bundles are moved with; the git and shell scripts of a clone run through it.</param>
     /// <param name="services">Where <see cref="CreateAsync"/> and <see cref="DeleteAsync"/> find the repository manager, which uses this host.</param>
     /// <param name="repositories">The repository manager to make worktrees with, when it is not to be found through <paramref name="services"/>.</param>
-    public LocalRunHost(IProcessRunner? runner = null, IServiceProvider? services = null, IRepositoryManager? repositories = null)
+    /// <param name="configuration">Where the preview data repositories keep is found, when it is not to be found through <paramref name="services"/>.</param>
+    public LocalRunHost(IProcessRunner? runner = null, IServiceProvider? services = null, IRepositoryManager? repositories = null, IConfiguration? configuration = null)
     {
+        _configuration = configuration;
         _runner = runner;
         _services = services;
         _repositories = repositories;
@@ -45,12 +49,15 @@ public sealed class LocalRunHost : IRunHost
     public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
     {
         var path = await Repositories().CreateWorktreeAsync(request.BasePath, request.BranchName);
+        if (request.KeepPreviewData)
+            await FillPreviewDataAsync(path, request.RepositoryId, ct);
         return new RunEnvironment(request.OwnerId, path);
     }
 
     public async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
     {
         await KillAllAsync(environment.OwnerId, ct);
+        await SyncPreviewDataBackAsync(environment, ct);
         await Repositories().DestroyWorktreeAsync(environment.WorkingDirectory);
     }
 
@@ -317,6 +324,63 @@ public sealed class LocalRunHost : IRunHost
     public string? RunHomeFor(string workingDirectory) => null;
 
     public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => configuredApiUrl ?? "http://localhost:5000";
+
+    public string PreviewStateDirectoryFor(string worktreePath) => WorktreePreviewService.StateDirectoryOf(worktreePath);
+
+    public Task<string?> PreviewDataFolderAsync(Guid repositoryId, string worktreePath, CancellationToken ct = default)
+    {
+        var copy = PreviewDataCopyOf(worktreePath);
+        return Task.FromResult(Directory.Exists(copy) ? copy : null);
+    }
+
+    /// <summary>The run's own copy of the preview data its repository keeps, a folder in scratch named for its worktree.</summary>
+    internal static string PreviewDataCopyOf(string worktreePath)
+        => Path.Combine(AgentIsolation.ScratchRoot, "preview-data", WorktreePreviewService.WorktreeSlug(Path.GetFullPath(worktreePath)));
+
+    private PreviewDataStore Store()
+        => new(PreviewVolumes.Root(
+                _configuration
+                ?? _services?.GetService<IConfiguration>()
+                ?? throw new InvalidOperationException("this run host was built without configuration, so it does not know where preview data is kept")),
+            _services?.GetService<ILogger<PreviewDataStore>>());
+
+    private async Task FillPreviewDataAsync(string worktreePath, Guid repositoryId, CancellationToken ct)
+    {
+        var copy = PreviewDataCopyOf(worktreePath);
+        if (AgentWritableFiles.EntryExists(copy)) return;
+        using var file = PrivateTempFile.Create("ild-preview-data-");
+        await using (var sink = file.OpenWrite())
+            await Store().PackAsync(repositoryId, sink, ct);
+        await AgentWritableFiles.CreateDirectoryAsync(copy, ct);
+        await using var archive = file.OpenRead();
+        await PreviewDataStore.UnpackAsync(archive, copy, ct);
+    }
+
+    // The run's commands are ended first, so the copy is not changing while it is packed. Whatever happens, the copy goes.
+    private async Task SyncPreviewDataBackAsync(RunEnvironment environment, CancellationToken ct)
+    {
+        var copy = PreviewDataCopyOf(environment.WorkingDirectory);
+        if (!Directory.Exists(copy)) return;
+        try
+        {
+            if (environment.KeptPreviewDataOf is { } repositoryId)
+            {
+                using var file = PrivateTempFile.Create("ild-preview-data-");
+                await using (var sink = file.OpenWrite())
+                    await PreviewDataStore.PackFolderAsync(copy, sink, ct);
+                await using var archive = file.OpenRead();
+                await Store().ReplaceAsync(repositoryId, archive, ct);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _services?.GetService<ILogger<LocalRunHost>>()?.LogWarning(ex, "The preview data of the run in {Worktree} is not kept: it could not be put back", environment.WorkingDirectory);
+        }
+        finally
+        {
+            await AgentWritableFiles.DeleteAsync([copy], CancellationToken.None);
+        }
+    }
 
     // -- Sweep -------------------------------------------------------------------
 

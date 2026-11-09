@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -380,7 +381,7 @@ public class WorkItemsControllerDiffBaseTests
             db.LoopRuns,
             db.ServerClient,
             db.ServerOptions, TestActors.Instance,
-            engine: new Mock<ILoopEngine>().Object);
+            engine: new Mock<ILoopEngine>().Object, runHost: LocalRunHost.Shared);
 
         var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id);
         // Editing is only offered while the item waits on a human, so that is

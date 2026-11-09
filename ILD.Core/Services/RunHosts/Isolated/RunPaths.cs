@@ -36,6 +36,12 @@ public static class RunPaths
 
     public static string ChatHome(Guid chatId) => $"{ChatRoot(chatId)}/home";
 
+    /// <summary>The run's own copy of the preview data its repository keeps between runs, a volume per folder; it goes with the run.</summary>
+    public static string PreviewData(Guid ownerId) => $"{RunRoot(ownerId)}/preview-volumes";
+
+    /// <summary>The run or chat that holds <paramref name="path"/>, or null when it is in neither.</summary>
+    public static Guid? HolderOf(string? path) => OwnerOf(path) ?? ChatOf(path);
+
     /// <summary>The chat that holds <paramref name="path"/>, or null when it is not a path in the chat container.</summary>
     public static Guid? ChatOf(string? path) => OwnerIn(path, ChatsRoot);
 

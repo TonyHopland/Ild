@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 
@@ -40,7 +41,7 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
     }
 
     private RepositoryManager NewManager()
-        => new(_runner, null, Path.Combine(_tmp, "wt"), Path.Combine(_tmp, "mirrors"));
+        => new(_runner, new LocalRunHost(_runner), null, Path.Combine(_tmp, "wt"), Path.Combine(_tmp, "mirrors"));
 
     [Fact]
     public async Task Every_git_call_on_a_clone_or_worktree_is_agent_scoped()

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -543,7 +544,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,
             _loopScratchpad,
-            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 
     private sealed class NullChatNotifier : IChatNotifier
     {

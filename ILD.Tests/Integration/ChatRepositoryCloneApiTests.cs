@@ -554,7 +554,7 @@ public class ChatRepositoryCloneApiTests
         private Host()
         {
             Directory.CreateDirectory(_root);
-            Git = RecordingRepositoryManager.Around(new RepositoryManager(new ProcessRunner(), null, Path.Combine(_root, "worktrees"), Path.Combine(_root, "mirrors")));
+            Git = RecordingRepositoryManager.Around(new RepositoryManager(new ProcessRunner(), new LocalRunHost(new ProcessRunner()), null, Path.Combine(_root, "worktrees"), Path.Combine(_root, "mirrors")));
             var database = SqliteDatabaseFile.Create(Path.Combine(_root, "db"));
             Factory = new ApiFactory(configureServices: services =>
             {

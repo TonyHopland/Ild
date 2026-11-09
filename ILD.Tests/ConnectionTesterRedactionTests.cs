@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using System.Text;
 using ILD.Core.Services.Implementations;
@@ -56,7 +57,7 @@ public class ConnectionTesterRedactionTests
     public async Task A_key_echoed_across_the_detail_cap_is_masked_before_the_cut(int padding)
     {
         var handler = new EchoHandler(HttpStatusCode.Forbidden, _ => new string('x', padding) + Key + new string('y', 200));
-        var tester = new ConnectionTester(Adapters(), new RepositoryManager(), new HttpClient(handler));
+        var tester = new ConnectionTester(Adapters(), new RepositoryManager(new LocalRunHost(new ProcessRunner())), new HttpClient(handler));
 
         var result = await tester.TestRemoteProviderAsync(Provider("GitHub", "https://github.com"), CancellationToken.None);
 
@@ -70,7 +71,7 @@ public class ConnectionTesterRedactionTests
     {
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes($":{Key}"));
         var handler = new EchoHandler(HttpStatusCode.Unauthorized, request => $"{{\"message\":\"rejected {request.Headers.Authorization}\"}}");
-        var tester = new ConnectionTester(Adapters(), new RepositoryManager(), new HttpClient(handler));
+        var tester = new ConnectionTester(Adapters(), new RepositoryManager(new LocalRunHost(new ProcessRunner())), new HttpClient(handler));
 
         var result = await tester.TestRemoteProviderAsync(Provider("AzureDevOps", "https://dev.azure.com/org"), CancellationToken.None);
 
@@ -90,7 +91,7 @@ public class ConnectionTesterRedactionTests
             Assert.Equal(username, env["ILD_GIT_USERNAME"]);
             return $"remote: Authorization: Basic {encoded}\nfatal: Authentication failed for 'https://git.example.com/team/app.git/'";
         });
-        var tester = new ConnectionTester(Adapters(), new RepositoryManager(runner), new HttpClient());
+        var tester = new ConnectionTester(Adapters(), new RepositoryManager(runner, new LocalRunHost(runner)), new HttpClient());
         var provider = Provider(type, "https://git.example.com");
         var repo = new Repository
         {

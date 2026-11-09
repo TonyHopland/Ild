@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -45,7 +46,7 @@ public class AINodeExecutorSteeringTests
         // Production always has the rendering service in scope, so the steering
         // path must be exercised with it present.
         services.AddSingleton<IPromptRenderingService>(new ILD.Core.Services.Implementations.PromptRenderingService(
-            new ILD.Core.Services.Implementations.PromptTemplateResolver(), db.EventLogs,
+            new ILD.Core.Services.Implementations.PromptTemplateResolver(host: LocalRunHost.Shared), db.EventLogs,
             new ILD.Core.Services.Implementations.RunConversationService(db.EventLogs, db.LoopRuns), db.LoopRuns, db.GlobalVariables));
         return (services.BuildServiceProvider(), adapter);
     }

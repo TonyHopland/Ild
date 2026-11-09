@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -143,5 +144,5 @@ public sealed class ChatGlobalVariableProposalFeedbackTests : IDisposable
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,
             new ChatLoopScratchpad(),
-            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 }
