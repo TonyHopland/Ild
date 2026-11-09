@@ -66,8 +66,8 @@ try
             Path.Combine(dataPath, "gateway"),
             (name, bytes) =>
             {
-                var path = Path.Combine(ILD.Core.Services.RunHosts.Local.AgentIsolation.CreateAgentReadDirectory("gateway-ca"), name);
-                ILD.Core.Services.RunHosts.Local.AgentIsolation.WriteAgentReadableFile(path, bytes);
+                var path = Path.Combine(AgentIsolation.CreateAgentReadDirectory("gateway-ca"), name);
+                AgentIsolation.WriteAgentReadableFile(path, bytes);
                 return path;
             });
         Environment.SetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortVariable, gatewayTlsPort.ToString());

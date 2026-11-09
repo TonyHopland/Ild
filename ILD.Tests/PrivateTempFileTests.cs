@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations.Files;
 
 namespace ILD.Tests;
@@ -5,6 +6,7 @@ namespace ILD.Tests;
 public sealed class PrivateTempFileTests
 {
     [Fact]
+    [UnsupportedOSPlatform("windows")]
     public async Task The_file_is_owner_only_in_an_owner_only_directory_whatever_the_umask()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "file modes");

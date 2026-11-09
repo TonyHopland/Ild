@@ -344,8 +344,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // only what the bundle carries, and its origin is the remote.
     private async Task PopulateAsync(Guid owner, RunEnvironmentRequest request, string workingDirectory, CancellationToken ct)
     {
-        using var bundleFile = PrivateTempFile.Create("ild-run-");
-        // The bundle and its directory go when this block ends.
+        // The bundle and its directory are gone before the checkout runs.
+        using (var bundleFile = PrivateTempFile.Create("ild-run-"))
         {
             await using (var sink = bundleFile.OpenWrite())
             {
