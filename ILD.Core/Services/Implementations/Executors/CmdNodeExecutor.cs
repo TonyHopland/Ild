@@ -65,7 +65,8 @@ public sealed class CmdNodeExecutor : INodeExecutor
         IRunProcess p;
         try
         {
-            p = await host.StartCommandAsync(RunCommand.Prepared(psi, ctx.Run.Id), ctx.CancellationToken);
+            p = await host.StartCommandAsync(
+                RunCommand.Prepared(psi, ctx.Run.Id, feeds.Environment, feeds.FilePath is null ? null : [feeds.FilePath]), ctx.CancellationToken);
         }
         catch (Exception ex)
         {

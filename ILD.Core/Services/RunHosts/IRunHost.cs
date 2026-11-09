@@ -173,7 +173,7 @@ public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string
 /// </summary>
 public sealed record RunCommand
 {
-    private RunCommand(ProcessStartInfo start, Guid ownerId, bool asAgent, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment, IReadOnlyList<string>? agentFiles = null)
+    private RunCommand(ProcessStartInfo start, Guid ownerId, bool asAgent, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment, IReadOnlyList<string>? files = null)
     {
         Start = start;
         OwnerId = ownerId;
@@ -181,7 +181,7 @@ public sealed record RunCommand
         ProviderId = providerId;
         NetworkMode = networkMode;
         Environment = environment;
-        AgentFiles = agentFiles ?? [];
+        Files = files ?? [];
     }
 
     public ProcessStartInfo Start { get; }
@@ -192,22 +192,24 @@ public sealed record RunCommand
     public IReadOnlyDictionary<string, string>? Environment { get; }
 
     /// <summary>
-    /// The files in the agent read root that the adapter wrote for this launch and its arguments or environment point at.
-    /// A host that cannot share ILD's disk with the launch copies exactly these in; text is never searched for paths.
+    /// The files in the agent read root that the caller wrote for this command and its arguments or environment point at.
+    /// A host that cannot share ILD's disk with the command copies exactly these in; text is never searched for paths.
     /// </summary>
-    public IReadOnlyList<string> AgentFiles { get; }
+    public IReadOnlyList<string> Files { get; }
 
     /// <summary>An agent CLI launch: the host gives it the provider's egress rules and environment.</summary>
     public static RunCommand Agent(
-        ProcessStartInfo start, Guid ownerId, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment, IReadOnlyList<string>? agentFiles = null)
-        => new(start, ownerId, asAgent: true, providerId, networkMode, environment, agentFiles);
+        ProcessStartInfo start, Guid ownerId, Guid? providerId, NetworkMode networkMode, IReadOnlyDictionary<string, string>? environment, IReadOnlyList<string>? files = null)
+        => new(start, ownerId, asAgent: true, providerId, networkMode, environment, files);
 
     /// <summary>
     /// A command the caller has already given its environment and proxy (a Cmd node, a preview, a git command in a
-    /// chat clone), started as it is.
+    /// chat clone), started as it is. <paramref name="environment"/> is what the caller set on purpose, which a host that
+    /// starts the command in an environment of its own keeps even where it equals a value of the host's.
     /// </summary>
-    public static RunCommand Prepared(ProcessStartInfo prepared, Guid ownerId = default)
-        => new(prepared, ownerId, asAgent: false, providerId: null, NetworkMode.Off, environment: null);
+    public static RunCommand Prepared(
+        ProcessStartInfo prepared, Guid ownerId = default, IReadOnlyDictionary<string, string>? environment = null, IReadOnlyList<string>? files = null)
+        => new(prepared, ownerId, asAgent: false, providerId: null, NetworkMode.Off, environment, files);
 }
 
 /// <summary>The outcome of a command that moved code.</summary>

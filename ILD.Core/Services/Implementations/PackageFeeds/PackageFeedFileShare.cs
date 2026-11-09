@@ -32,7 +32,7 @@ public sealed class PackageFeedFileShare
         {
             _current ??= PackageFeedCredentialFiles.Materialize(_feeds, _prefix, _logger);
             _holders++;
-            return new Lease(this, _current.Environment);
+            return new Lease(this, _current.Environment, _current.FilePath);
         }
     }
 
@@ -52,11 +52,15 @@ public sealed class PackageFeedFileShare
         private readonly PackageFeedFileShare _share;
         private int _released;
 
-        internal Lease(PackageFeedFileShare share, IReadOnlyDictionary<string, string> environment)
+        internal Lease(PackageFeedFileShare share, IReadOnlyDictionary<string, string> environment, string? path)
         {
             _share = share;
             Environment = environment;
+            Path = path;
         }
+
+        /// <summary>The npm config file the lease holds, or null when no feed is selected.</summary>
+        public string? Path { get; }
 
         /// <summary>The feed variables for the process this lease is held for.</summary>
         public IReadOnlyDictionary<string, string> Environment { get; }

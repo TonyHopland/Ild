@@ -62,7 +62,7 @@ public sealed class LocalRunHost : IRunHost
 
     public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
-        var psi = command.AsAgent ? PrepareAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : command.Start;
+        var psi = command.AsAgent ? PrepareAgentLaunch(command.Start, command.ProviderId, command.NetworkMode, command.Environment) : WithEnvironment(command.Start, command.Environment);
         var process = await StartAsync(psi, ct);
         var tracked = new LocalRunProcess(process, Forget(command.OwnerId));
         if (command.OwnerId != Guid.Empty)
@@ -99,6 +99,13 @@ public sealed class LocalRunHost : IRunHost
         foreach (var (name, value) in environment ?? new Dictionary<string, string>())
             psi.Environment[name] = value;
         return AgentIsolation.ApplyLaunchEnvironment(psi, providerId, mode);
+    }
+
+    private static ProcessStartInfo WithEnvironment(ProcessStartInfo psi, IReadOnlyDictionary<string, string>? environment)
+    {
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+            psi.Environment[name] = value;
+        return psi;
     }
 
     private Action<LocalRunProcess> Forget(Guid ownerId) => process =>

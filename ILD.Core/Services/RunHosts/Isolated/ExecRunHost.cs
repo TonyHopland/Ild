@@ -350,11 +350,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         if (owner.Chat)
             foreach (var line in await ChatEnvironmentAsync(owner.Id, ct))
                 environment[line[..line.IndexOf('=')]] = line[(line.IndexOf('=') + 1)..];
-        if (command.AsAgent)
-        {
-            if (Path.IsPathRooted(fileName)) fileName = Path.GetFileName(fileName);
-            (arguments, environment) = await StageAgentFilesAsync(owner, command, arguments, environment, ct);
-        }
+        if (command.AsAgent && Path.IsPathRooted(fileName)) fileName = Path.GetFileName(fileName);
+        (arguments, environment) = await StageAgentFilesAsync(owner, command, arguments, environment, ct);
         foreach (var (name, value) in network) environment[name] = value;
 
         var directory = string.IsNullOrEmpty(psi.WorkingDirectory) ? RunPaths.WorkingDirectory(owner.Id) : psi.WorkingDirectory;
@@ -391,14 +388,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             environment[name] = value;
 
         network = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (command.AsAgent)
-        {
-            // The run's network reaches only ILD, so even a launch in network mode Off goes through the proxy,
-            // which lets every request of that mode through.
-            if (AgentIsolation.EgressProxyUrl(command.ProviderId) is { } proxy)
-                foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
-                    network[name] = value;
-        }
+        // The run's network reaches only ILD, so even a command in network mode Off goes through the proxy, which lets every
+        // request of that mode through; a Cmd node or a preview needs it as much as an agent does.
+        if (AgentIsolation.EgressProxyUrl(command.ProviderId) is { } proxy)
+            foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
+                network[name] = value;
 
         var ild = new Uri(IldUrl).Host;
         foreach (var bag in new[] { environment, network })
@@ -421,20 +415,20 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private async Task<(List<string> Arguments, Dictionary<string, string> Environment)> StageAgentFilesAsync(
         ExecOwner owner, RunCommand command, List<string> arguments, Dictionary<string, string> environment, CancellationToken ct)
     {
-        if (command.AgentFiles.Count == 0) return (arguments, environment);
+        if (command.Files.Count == 0) return (arguments, environment);
         string root;
         try { root = Path.GetFullPath(AgentReadRoot()); }
         catch (InvalidOperationException) { return (arguments, environment); }
 
-        var ownerSegment = command.OwnerId.ToString("N");
+        var ownerSegment = owner.Id.ToString("N");
         var staged = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var declared in command.AgentFiles)
+        foreach (var declared in command.Files)
         {
             var local = Path.GetFullPath(declared);
             var relative = Path.GetRelativePath(root, local);
             var inside = relative != "." && !Path.IsPathRooted(relative)
                 && !relative.Split(Path.DirectorySeparatorChar).Contains("..");
-            if (!inside || command.OwnerId == Guid.Empty
+            if (!inside
                 || !relative.Contains(ownerSegment, StringComparison.OrdinalIgnoreCase) || !File.Exists(local))
             {
                 Logger?.LogWarning("Not staging {Path} into the run: it is not a file this launch wrote in the agent read root", declared);
@@ -464,15 +458,19 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private async Task<bool> KillCommandAsync(ExecOwner owner, string commandId, CancellationToken ct)
         => (await RunScriptAsync(owner, KillCommandScript, [commandId], ct)).Success;
 
+    /// <summary>The run or chat this host holds under <paramref name="ownerId"/>, or null when it holds neither.</summary>
+    public async Task<ExecOwner?> HeldOwnerAsync(Guid ownerId, CancellationToken ct = default)
+    {
+        ExecOwner owner = ownerId;
+        if (await RunExistsAsync(owner, ct)) return owner;
+        owner = new ExecOwner(ownerId, Chat: true);
+        return HostsChats && await RunExistsAsync(owner, ct) ? owner : null;
+    }
+
     // The id is a run's or a chat's; a run has an environment of its own and a chat does not, so a run is the one with a pod or container.
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
     {
-        ExecOwner owner = ownerId;
-        if (!await RunExistsAsync(owner, ct))
-        {
-            owner = new ExecOwner(ownerId, Chat: true);
-            if (!HostsChats || !await RunExistsAsync(owner, ct)) return 0;
-        }
+        if (await HeldOwnerAsync(ownerId, ct) is not { } owner) return 0;
         var result = await RunScriptAsync(owner, KillAllScript, [ownerId.ToString("N")], ct);
         return result.Success && int.TryParse(result.StdOut.Trim(), out var killed) ? killed : 0;
     }

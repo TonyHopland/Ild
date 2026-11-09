@@ -522,6 +522,10 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     private async Task<bool> ShouldRetryWithoutWorkingDirectoryAsync(Exception ex, string worktreePath, CancellationToken ct)
     {
+        // Without a working directory a command starts on this machine, which on a container or Kubernetes host is not the run.
+        if (RunHost.Kind != RunHostKind.Local)
+            return false;
+
         if (!await RunHost.DirectoryExistsAsync(worktreePath, ct))
             return false;
 
