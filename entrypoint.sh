@@ -150,16 +150,14 @@ link_agent_config_files() {
 }
 
 # The credential store is the runtime user's alone: owned by it, 0700, and rid of
-# the group and ACL grants earlier versions gave their agent uid. The tripwire
+# the group and ACL grants earlier versions gave their agent uid. chmod g-rwxs,o-rwx strips them: on a
+# file with an ACL it sets the ACL mask, which cancels any named entries too (the image has no setfacl). The tripwire
 # keeps the common boot, where nothing drifted, from walking the whole store.
 ensure_credential_store() {
   path="$1"
   mkdir -p "$path"
 
   if find "$path" \( ! -user "$RUNTIME_USER" -o -perm /g+rwxs,o+rwx \) -print -quit 2>/dev/null | grep -q .; then
-    if command -v setfacl >/dev/null 2>&1; then
-      setfacl -R -b "$path" 2>/dev/null || true
-    fi
     chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$path"
     chmod -R g-rwxs,o-rwx "$path"
   fi
@@ -228,8 +226,11 @@ in_user_namespace() {
 #    still owns it, so nothing on the host loses access. A restart of the engine's socket makes a new one,
 #    which ILD cannot open until it restarts too; ILD says so in its log and on the settings page.
 #  - A socket of group root outside a user namespace is the host's root group (rootful Podman): left alone,
-#    and said why, unless the operator sets ILD_CONTAINER_SOCKET_GRANT=1. Then its group becomes
-#    RUNTIME_USER's own, on every start, so a socket the engine made anew after a restart is covered too.
+#    and said why, unless the operator sets ILD_CONTAINER_SOCKET_GRANT=1. Then its group becomes the
+#    gid ILD_CONTAINER_SOCKET_GID (default 10099, never ILD's own), on every start, so a socket the engine
+#    made anew after a restart is covered too. The host sees the socket under that gid.
+#  - A socket whose group is the overflow gid (user-namespace remap, no mapping for the host group): ILD
+#    cannot open it whatever it joins; said so, nothing changed.
 grant_engine_socket() {
   # Not ILD's image (the WorkItem Server shares this script), or pods instead of containers.
   [ "${ILD_IMAGE:-}" = 1 ] && [ -z "${KUBERNETES_SERVICE_HOST:-}" ] || return 0
@@ -241,7 +242,11 @@ grant_engine_socket() {
   fi
 
   gid="$(stat -c %g "$socket")"
-  if [ "$gid" != 0 ]; then
+  overflow="$(cat "${OVERFLOWGID_FILE:-/proc/sys/kernel/overflowgid}" 2>/dev/null || true)"
+  if [ "$gid" != 0 ] && [ -n "$overflow" ] && [ "$gid" = "$overflow" ]; then
+    echo "WARNING: the group of $socket is unmapped in this user namespace (gid $gid, userns-remap), so ILD cannot open it and no run can start. Run the container with --userns=host or use another socket." >&2
+    return 0
+  elif [ "$gid" != 0 ]; then
     group="$(getent group "$gid" | cut -d: -f1)"
     if [ -z "$group" ]; then
       group="ild-engine-$gid"
@@ -256,21 +261,29 @@ grant_engine_socket() {
     fi
     gid="$(getent group "$group" | cut -d: -f3)"
   elif [ "${ILD_CONTAINER_SOCKET_GRANT:-}" = 1 ]; then
-    # The operator chose it: the socket goes to RUNTIME_USER's own group, whose gid the image fixes (10001),
-    # since outside a user namespace the host sees the same number.
-    group="$(getent group "$RUNTIME_USER" | cut -d: -f1)"
-    gid="$(getent group "$RUNTIME_USER" | cut -d: -f3)"
-    if [ -z "$group" ]; then
-      echo "WARNING: ILD_CONTAINER_SOCKET_GRANT=1 but this image has no group $RUNTIME_USER; $socket is left alone and no run can start." >&2
+    # The operator chose it: the socket goes to a gid of their choosing, never ILD's own (10001) or root,
+    # since outside a user namespace the host sees the same number and anything holding it gets the engine.
+    gid="${ILD_CONTAINER_SOCKET_GID:-10099}"
+    own_gid="$(getent group "$RUNTIME_USER" | cut -d: -f3)"
+    case "$gid" in
+      ''|*[!0-9]*) gid=0 ;;
+    esac
+    if [ "$((10#$gid))" -eq 0 ] || [ "$gid" = "$own_gid" ]; then
+      echo "WARNING: ILD_CONTAINER_SOCKET_GID=${ILD_CONTAINER_SOCKET_GID:-} must be a whole number other than 0 and ILD's own gid (${own_gid:-unknown}); $socket is left alone and no run can start." >&2
       return 0
+    fi
+    group="$(getent group "$gid" | cut -d: -f1)"
+    if [ -z "$group" ]; then
+      group=ild-engine-host
+      groupadd --gid "$gid" "$group"
     fi
     if ! chgrp "$group" "$socket"; then
       echo "WARNING: could not give $socket to group $group; ILD cannot open it and no run can start." >&2
       return 0
     fi
-    echo "ILD_CONTAINER_SOCKET_GRANT=1: gave $socket, of the host's root engine, to group $group (gid $gid). ILD is root-equivalent on that host."
+    echo "ILD_CONTAINER_SOCKET_GRANT=1: gave $socket, of the host's root engine, to group $group (gid $gid); the host now sees the socket under gid $gid, so give that gid to nothing else. ILD is root-equivalent on that host."
   else
-    echo "WARNING: $socket belongs to the host's root group, which ILD does not join; no run can start. Set ILD_CONTAINER_SOCKET_GRANT=1 to give it ILD's own group on each start (ILD is then root-equivalent on that host), give it a group of its own (Docker's docker group), or use rootless Podman." >&2
+    echo "WARNING: $socket belongs to the host's root group, which ILD does not join; no run can start. Set ILD_CONTAINER_SOCKET_GRANT=1 to give it the group ILD_CONTAINER_SOCKET_GID on each start (ILD is then root-equivalent on that host), give it a group of its own (Docker's docker group), or use rootless Podman." >&2
     return 0
   fi
 

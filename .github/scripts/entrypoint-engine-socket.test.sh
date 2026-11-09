@@ -36,6 +36,8 @@ fi
 [ -S "$socket" ] || { echo "FAIL: could not make a socket"; exit 1; }
 printf '0 0 4294967295\n' > "$work/uid_map.host"
 printf '0 1000 1\n1 524288 65536\n' > "$work/uid_map.userns"
+printf "65534\n" > "$work/overflowgid"
+printf "4294967295\n" > "$work/overflowgid.other"
 
 # run <socket gid> <socket mode> <uid map> <group db> [ILD_IMAGE] [socket path] [KUBERNETES_SERVICE_HOST]
 run() {
@@ -54,6 +56,8 @@ run() {
     sock_gid="$1" sock_mode="$2"
     UID_MAP_FILE="$3" ILD_IMAGE="${5-1}" ILD_CONTAINER_SOCKET="${6-unix://$socket}" KUBERNETES_SERVICE_HOST="${7-}"
     RUNTIME_USER=ild ILD_CONTAINER_SOCKET_GRANT="${grant-}"
+    OVERFLOWGID_FILE="${overflow_file-$work/overflowgid}"
+    if [ -n "${sock_gid_setting+x}" ]; then ILD_CONTAINER_SOCKET_GID="$sock_gid_setting"; else unset ILD_CONTAINER_SOCKET_GID; fi
     # shellcheck disable=SC1090
     . "$funcs"
     grant_engine_socket
@@ -89,15 +93,35 @@ else fail "rootful root group: $(calls) / $(cat "$work/stderr")"; fi
 if grep -q "ILD_CONTAINER_SOCKET_GRANT=1" "$work/stderr"; then pass "the refusal names the opt-in"; else fail "refusal: $(cat "$work/stderr")"; fi
 
 grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups"
-if [ "$(calls)" = "chgrp ild;usermod -aG ild ild;" ] && grep -q "root-equivalent" "$work/stdout"; then
-  pass "rootful with ILD_CONTAINER_SOCKET_GRANT=1: the socket goes to ild's own group, and that is said"
+if [ "$(calls)" = "groupadd --gid 10099 ild-engine-host;chgrp ild-engine-host;usermod -aG ild-engine-host ild;" ] && grep -q "root-equivalent" "$work/stdout" && grep -q "gid 10099" "$work/stdout"; then
+  pass "rootful with ILD_CONTAINER_SOCKET_GRANT=1: the socket goes to a dedicated group of gid 10099, and that is said"
 else fail "rootful opt-in: $(calls) / $(cat "$work/stdout") / $(cat "$work/stderr")"; fi
 
-grant=1 run 0 srw-rw---- "$work/uid_map.host" 'other:x:10002:
-'
-if [ -z "$(calls)" ] && grep -q "has no group ild" "$work/stderr"; then
-  pass "rootful opt-in without ILD's group: left alone and said"
-else fail "rootful opt-in, no group: $(calls) / $(cat "$work/stderr")"; fi
+sock_gid_setting=4242 grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups"
+if [ "$(calls)" = "groupadd --gid 4242 ild-engine-host;chgrp ild-engine-host;usermod -aG ild-engine-host ild;" ]; then
+  pass "ILD_CONTAINER_SOCKET_GID chooses the gid the socket is given"
+else fail "chosen gid: $(calls)"; fi
+
+sock_gid_setting=4242 grant=1 run 0 srw-rw---- "$work/uid_map.host" "${groups}hostengine:x:4242:
+"
+if [ "$(calls)" = "chgrp hostengine;usermod -aG hostengine ild;" ]; then pass "a group that already has that gid is reused"; else fail "reuse: $(calls)"; fi
+
+for bad in 10001 0 abc 00; do
+  sock_gid_setting="$bad" grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups"
+  if [ -z "$(calls)" ] && grep -q "ILD_CONTAINER_SOCKET_GID" "$work/stderr"; then
+    pass "ILD_CONTAINER_SOCKET_GID='$bad' is refused and nothing is touched"
+  else fail "bad gid '$bad': $(calls) / $(cat "$work/stderr")"; fi
+done
+
+run 65534 srw-rw---- "$work/uid_map.userns" "$groups"
+if [ -z "$(calls)" ] && grep -q "userns-remap" "$work/stderr" && grep -q -- "--userns=host" "$work/stderr"; then
+  pass "a socket group equal to the overflow gid is said (--userns=host) and nothing is touched"
+else fail "overflow gid: $(calls) / $(cat "$work/stderr")"; fi
+
+overflow_file="$work/overflowgid.other" run 65534 srw-rw---- "$work/uid_map.host" "$groups"
+if [ "$(calls)" = "groupadd --gid 65534 ild-engine-65534;usermod -aG ild-engine-65534 ild;" ]; then
+  pass "gid 65534 that is not the overflow gid is joined as any other"
+else fail "65534 not overflow: $(calls)"; fi
 
 grant=1 run 0 srw-rw---- "$work/uid_map.userns" "$groups"
 if [ "$(calls)" = "groupadd ild-engine;chgrp ild-engine;usermod -aG ild-engine ild;" ]; then

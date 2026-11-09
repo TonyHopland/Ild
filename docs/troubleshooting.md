@@ -47,7 +47,7 @@ Adjust the directory names for your toolchain (`target`, `build`, `node_modules/
 
 **No run or chat can start: ILD cannot open the container engine's socket**
 
-ILD's log says why at startup, and **Settings > General** shows the reason. Check that `ILD_CONTAINER_SOCKET_HOST` in `.env` is the socket of the engine compose talks to ([Which socket](deployment.md#which-socket)). A socket of the host's `root` group (rootful Podman on Linux) needs `ILD_CONTAINER_SOCKET_GRANT=1`. On a rootless engine, restart ILD after restarting the engine's socket. See [The engine socket](deployment.md#the-engine-socket).
+ILD's log says why at startup, and **Settings > General** shows the reason. Check that `ILD_CONTAINER_SOCKET_HOST` in `.env` is the socket of the engine compose talks to ([Which socket](deployment.md#which-socket)). A socket of the host's `root` group (rootful Podman on Linux) needs `ILD_CONTAINER_SOCKET_GRANT=1`. A log warning that the socket's group is unmapped (`userns-remap`) means the container needs `--userns=host`, or another socket. On a rootless engine, restart ILD after restarting the engine's socket. See [The engine socket](deployment.md#the-engine-socket).
 
 **A run's container fails to start with `crun: open 'memory.max'`**
 

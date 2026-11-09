@@ -115,6 +115,20 @@ else
   fail "ILD_PREVIEW_PROXY_BASE's default does not name port $listen_port"
 fi
 
+# 6. A fresh copy of .env.example leaves the socket empty, so the guard above fires instead of mounting a default.
+if grep -q '^ILD_CONTAINER_SOCKET_HOST=$' "$repo_root/.env.example" && ! grep -q '^ILD_CONTAINER_SOCKET_HOST=.' "$repo_root/.env.example"; then
+  pass ".env.example leaves ILD_CONTAINER_SOCKET_HOST empty"
+else
+  fail ".env.example does not have an uncommented, empty ILD_CONTAINER_SOCKET_HOST="
+fi
+
+# 7. The dedicated gid reaches the container.
+if grep -q 'ILD_CONTAINER_SOCKET_GID=\${ILD_CONTAINER_SOCKET_GID:-10099}' "$compose"; then
+  pass "compose passes ILD_CONTAINER_SOCKET_GID (default 10099)"
+else
+  fail "compose does not pass ILD_CONTAINER_SOCKET_GID"
+fi
+
 echo
 if [ "$failures" -gt 0 ]; then echo "$failures failure(s)"; exit 1; fi
 echo "all passed"
