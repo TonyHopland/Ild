@@ -215,6 +215,12 @@ export default function Repositories() {
             <div className="repo-id">
               <span className="repo-name">{repo.name}</span>
               <span className="repo-url">{repo.cloneUrl}</span>
+              {repo.cloneUrlHasCredentials && (
+                <span className="repo-url-warning" role="alert">
+                  This clone URL contains a credential. Move it to the remote provider's API key and
+                  remove it from the URL.
+                </span>
+              )}
             </div>
             <span className={`repo-status-badge status-${repo.defaultIntakeStatus}`}>
               {repo.defaultIntakeStatus}
@@ -709,6 +715,11 @@ export default function Repositories() {
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+
+        .repo-url-warning {
+          font-size: 0.75rem;
+          color: #e0a84a;
         }
 
         .repo-actions {

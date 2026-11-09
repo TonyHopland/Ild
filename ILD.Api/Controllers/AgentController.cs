@@ -848,7 +848,8 @@ public class AgentController : ControllerBase
                 defaultIntakeStatus = r.DefaultIntakeStatus.ToString(),
             })
             .ToListAsync();
-        return Ok(repos);
+        // Stripped after the query: a clone URL may carry credentials an agent must not read.
+        return Ok(repos.Select(r => new { r.id, r.name, cloneUrl = RepositoryManager.WithoutUserInfo(r.cloneUrl), r.defaultBranch, r.defaultIntakeStatus }));
     }
 
     [HttpGet("loop-templates")]

@@ -946,6 +946,10 @@ Under `dotnet run` nothing keeps an agent behind the proxy: a client that ignore
 `HTTP(S)_PROXY` connects directly, and with `ILD_NETWORK_PROXY_PORT` unset there is
 no proxy and the lists are not applied at all.
 
+## Repository clone URLs
+
+A repository's clone URL must not contain credentials. Put the token in the remote provider's API key: ILD hands it to git itself and never to an agent. Creating a repository, or changing its clone URL, with a `user:token@` in the URL is refused. A URL saved with credentials before this rule keeps working, shows a warning on the Repositories page, and is never shown to an agent or returned by the API without them; remove the credential from the URL once the provider's key holds it.
+
 ## Package feeds
 
 Repositories that restore from a private Azure Artifacts feed (npm or NuGet)
