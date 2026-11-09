@@ -295,7 +295,7 @@ Whoever holds the socket controls every container on the host: it can start a pr
 - A named volume for its files, an `internal` network of its own, and a container from the runner image started with `sleep infinity` as uid 10001, all capabilities dropped, `no-new-privileges`, the engine's default seccomp profile, and the CPU and memory limits of `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT`. The three are made at Start and deleted at Cleanup; the container stays up while a Human node waits, so previews keep working.
 - The network is `internal`, so the container cannot reach the internet or the host's other networks. ILD connects its own container (`ILD_CONTAINER_ILD_CONTAINER`) to the network, so the run reaches ILD and nothing else: the model gateway, the MCP endpoint and the egress proxy. Anything else the agent connects to goes through the egress proxy and its [limits](configuration.md#agent-network-limits).
 - The container is given the host name in `ILD_API_URL` as ILD's address on its own network. The code goes in and out as bundles over exec, so the container never holds the git credential or the mirror.
-- The toolchains its repository needs and the agents ILD has installed, from the [toolchain store](configuration.md#run-toolchains): the `ild-tools` (agents), `ild-tools-toolchains` and, for a repository's own tools, `ild-tools-repo-<repository id>` volumes, mounted read-only. The first run that needs a version installs it, in a short-lived `ild-tools-…` container of the runner image on the engine's default network that mounts only the volume it writes; later runs reuse it. The first two are shared by every run, a repository's only by its own runs, and none is pruned.
+- The toolchains its repository needs and the agents ILD has installed, from the [toolchain store](configuration.md#run-toolchains): the `ild-tools-agents`, `ild-tools-toolchains` and, for a repository's own tools, `ild-tools-repo-<repository id>` volumes, mounted read-only. The first run that needs a version installs it, in a short-lived `ild-tools-…` container of the runner image on the engine's default network that mounts only the volume it writes; later runs reuse it. The first two are shared by every run, a repository's only by its own runs, and none is pruned.
 - When ILD stops, the container is stopped, and started again when the run next needs it ([What happens to the containers and pods ILD made](#what-happens-to-the-containers-and-pods-ild-made)).
 - Every object is labelled `app.kubernetes.io/managed-by=ild`, `ild/instance=<ILD_CONTAINER_INSTANCE>` and `ild/run=<run id>`. There are no owner references on a single host, so Cleanup deletes the container, the volume and the network explicitly, and the sweeper (once at startup, then every `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`) deletes the labelled objects of runs that are finished or gone. It only touches its own instance. An ILD that is killed mid-run leaves nothing behind after its next start.
 
@@ -315,7 +315,7 @@ Once ILD is up, its log says `Container engine socket /run/container.sock: ild c
 
 Keep ILD's port the same outside its container as inside (`8080:8080` and the default `ILD_PREVIEW_PROXY_BASE=http://ild.localhost:8080`). A preview URL is used by your browser outside the container and by a chat's browser inside it, where `*.localhost` is ILD's container itself; mapped to another port outside (`8090:8080`), one of the two cannot load it. To move ILD to another port, move it inside too: `ASPNETCORE_URLS=http://+:8090`, `ILD_API_URL=http://ild:8090`, `8090:8090` and the proxy base on `8090`.
 
-The first run of a repository installs its toolchains and ILD's agents into the `ild-tools` volume before it starts, which takes from seconds to a few minutes; later runs reuse them. With a local model (LM Studio, Ollama) behind the provider, the agent nodes take as long as the model does.
+The first run of a repository installs its toolchains and ILD's agents into the store's volumes before it starts, which takes from seconds to a few minutes; later runs reuse them. With a local model (LM Studio, Ollama) behind the provider, the agent nodes take as long as the model does.
 
 ### Which socket
 
@@ -462,7 +462,7 @@ starts again never sweeps it. Remove it by its label, on the engine ILD used:
 docker rm -f $(docker ps -aq --filter label=app.kubernetes.io/managed-by=ild)
 docker volume rm $(docker volume ls -q --filter label=app.kubernetes.io/managed-by=ild)
 docker network rm $(docker network ls -q --filter label=app.kubernetes.io/managed-by=ild)
-docker volume rm ild-tools ild-tools-toolchains   # the toolchain store (and each ild-tools-repo-<repository id>)
+docker volume rm ild-tools-agents ild-tools-toolchains ild-tools   # the toolchain store (and each ild-tools-repo-<repository id>)
 ```
 
 (`podman` takes the same commands.) On Kubernetes, run

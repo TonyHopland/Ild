@@ -89,10 +89,10 @@ public sealed record RunToolMount(RunToolZone Zone, Guid RepositoryId = default)
         _ => RunToolStore.RepositoryToolsRoot,
     };
 
-    /// <summary>The name of the volume holding the zone on a container engine, from the agents' volume's.</summary>
+    /// <summary>The name of the volume holding the zone on a container engine, from the store's base name. The agents' is never the base name itself: that volume held everything before the zones, and what a repository's install script could write there is not reused.</summary>
     public string VolumeName(string agentsVolume) => Zone switch
     {
-        RunToolZone.Agents => agentsVolume,
+        RunToolZone.Agents => $"{agentsVolume}-agents",
         RunToolZone.Toolchains => $"{agentsVolume}-toolchains",
         _ => $"{agentsVolume}-repo-{RepositoryId:N}",
     };

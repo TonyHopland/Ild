@@ -849,11 +849,11 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(["tool=node@20"], installs.Single(i => i.Contains("tool=node@20")).TakeLast(1));
         foreach (var installer in _api.Created.Where(c => c.StartsWith("containers/ild-tools-", StringComparison.Ordinal)))
             Assert.DoesNotContain(installer["containers/".Length..], _api.Containers());
-        Assert.Contains("volumes/ild-tools", _api.Created);
+        Assert.Contains("volumes/ild-tools-agents", _api.Created);
         Assert.Contains("volumes/ild-tools-toolchains", _api.Created);
 
         var container = _api.Container(Name(_run))!;
-        Assert.Equal(["ild-tools:/opt/ild-tools:ro", "ild-tools-toolchains:/opt/ild-toolchains:ro"], BindsOf(container).Skip(1).OrderByDescending(b => b, StringComparer.Ordinal));
+        Assert.Equal(["ild-tools-agents:/opt/ild-tools:ro", "ild-tools-toolchains:/opt/ild-toolchains:ro"], BindsOf(container).Skip(1).Order(StringComparer.Ordinal));
         var env = container["Env"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
         var home = RunPaths.HomeDirectory(_run);
         Assert.Contains($"PATH=/opt/ild-toolchains/mise/installs/node/20.19.1/bin:/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}", env);
@@ -873,7 +873,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
                 var config = _api.Container(e.Container)!;
                 seen = config.ToJsonString();
                 Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
-                Assert.Equal(["ild-tools:/opt/ild-tools:rw"], BindsOf(config));
+                Assert.Equal(["ild-tools-agents:/opt/ild-tools:rw"], BindsOf(config));
                 Assert.Equal(["ALL"], config["HostConfig"]!["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
                 Assert.Null(config["HostConfig"]!["NetworkMode"]);
                 Assert.Null(config["Labels"]![RunPaths.RunLabel]);
@@ -914,7 +914,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var volume = $"ild-tools-repo-{Repo:N}";
         Assert.Contains($"volumes/{volume}", _api.Created);
         var byZone = snapshots.Values.ToDictionary(c => EnvOf(c, "ILD_TOOLS_ROOT"));
-        Assert.Equal([$"ild-tools:/opt/ild-tools:rw"], BindsOf(byZone[RunToolStore.Root]));
+        Assert.Equal([$"ild-tools-agents:/opt/ild-tools:rw"], BindsOf(byZone[RunToolStore.Root]));
         Assert.Equal([$"ild-tools-toolchains:/opt/ild-toolchains:rw"], BindsOf(byZone[RunToolStore.ToolchainsRoot]));
         // The repository's installer reaches its own volume, and the shared toolchains it builds with read-only: never the agents'.
         Assert.Equal([$"{volume}:/opt/ild-repo-tools:rw", "ild-tools-toolchains:/opt/ild-toolchains:ro"], BindsOf(byZone[PrettierFolder]));
@@ -923,6 +923,28 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var run = _api.Container(Name(_run))!;
         Assert.Contains($"{volume}:/opt/ild-repo-tools:ro", BindsOf(run));
         Assert.All(BindsOf(run).Skip(1), b => Assert.EndsWith(":ro", b, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_agents_zone_is_never_the_volume_of_the_one_store_from_before_the_zones()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var snapshots = new List<System.Text.Json.Nodes.JsonObject>();
+        AnswerInstaller(AgentNodeLine, ClaudeLine, NodeLine);
+        var inner = _api.OnExec!;
+        _api.OnExec = e =>
+        {
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal)) lock (snapshots) snapshots.Add(_api.Container(e.Container)!);
+            return inner(e);
+        };
+
+        await CreateRunAsync(host, _run, MakeBaseRepository("base", ("package.json", "{}")));
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("ild-tools", _api.Volumes());
+        var binds = snapshots.Concat([_api.Container(Name(_run))!, _api.Container(ChatContainer)!]).SelectMany(c => BindsOf(c));
+        Assert.DoesNotContain(binds, b => b.StartsWith("ild-tools:", StringComparison.Ordinal));
+        Assert.Contains("ild-tools-agents:/opt/ild-tools:ro", BindsOf(_api.Container(Name(_run))!));
     }
 
     [Fact]
@@ -988,7 +1010,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await CreateRunAsync(host, other, repo);
 
         Assert.Equal(2, installs.Count);
-        Assert.Contains("ild-tools:/opt/ild-tools:ro", _api.Container(Name(other))!["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+        Assert.Contains("ild-tools-agents:/opt/ild-tools:ro", _api.Container(Name(other))!["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
     }
 
     [Fact]
@@ -1025,7 +1047,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await CreateRunAsync(host, _run, MakeBaseRepository("base", ("package.json", "{}")));
 
         Assert.Empty(installs);
-        Assert.DoesNotContain("ild-tools", _api.Volumes());
+        Assert.DoesNotContain("ild-tools-agents", _api.Volumes());
         var env = _api.Container(Name(_run))!["Env"]!.AsArray().Select(e => e!.GetValue<string>());
         Assert.DoesNotContain(env, e => e.StartsWith("PATH=", StringComparison.Ordinal));
     }
@@ -1038,7 +1060,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await CreateRunAsync(_host, _run, MakeBaseRepository());
 
         Assert.Empty(installs);
-        Assert.DoesNotContain("ild-tools", _api.Volumes());
+        Assert.DoesNotContain("ild-tools-agents", _api.Volumes());
         var env = _api.Container(Name(_run))!["Env"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
         Assert.Contains($"NPM_CONFIG_PREFIX={RunPaths.HomeDirectory(_run)}/.local", env);
         Assert.Contains($"PATH={RunPaths.HomeDirectory(_run)}/.local/bin:{RunToolEnvironment.ImagePath}", env);
@@ -1361,12 +1383,12 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(ChatFolder(first), firstPath);
         Assert.Equal(ChatFolder(second), secondPath);
         Assert.Equal(
-            [$"volumes/{ChatContainer}", "volumes/ild-tools", "volumes/ild-tools-toolchains", $"networks/{ChatContainer}", $"containers/{ChatContainer}"],
+            [$"volumes/{ChatContainer}", "volumes/ild-tools-agents", "volumes/ild-tools-toolchains", $"networks/{ChatContainer}", $"containers/{ChatContainer}"],
             _api.Created);
         var container = _api.Container(ChatContainer)!;
         Assert.Equal("registry.example/ild-runner:1", container["Image"]!.GetValue<string>());
         Assert.Equal("10001:10001", container["User"]!.GetValue<string>());
-        Assert.Equal([$"{ChatContainer}:/ild-chat:rw", "ild-tools:/opt/ild-tools:ro", "ild-tools-toolchains:/opt/ild-toolchains:ro"], BindsOf(container));
+        Assert.Equal([$"{ChatContainer}:/ild-chat:rw", "ild-tools-agents:/opt/ild-tools:ro", "ild-tools-toolchains:/opt/ild-toolchains:ro"], BindsOf(container));
         var host = container["HostConfig"]!;
         Assert.Equal(ChatContainer, host["NetworkMode"]!.GetValue<string>());
         Assert.Equal("ALL", host["CapDrop"]!.AsArray().Single()!.GetValue<string>());
@@ -1621,14 +1643,14 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var config = _api.Container(name)!;
         Assert.Null(config["HostConfig"]!["NetworkMode"]);
         Assert.Null(config["HostConfig"]!["ExtraHosts"]);
-        Assert.Equal(["ild-tools:/opt/ild-tools:ro"], config["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
+        Assert.Equal(["ild-tools-agents:/opt/ild-tools:ro"], config["HostConfig"]!["Binds"]!.AsArray().Select(b => b!.GetValue<string>()));
         Assert.Equal(["ALL"], config["HostConfig"]!["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Equal(["no-new-privileges"], config["HostConfig"]!["SecurityOpt"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
         Assert.Equal("signin", config["Labels"]!["ild/role"]!.GetValue<string>());
         Assert.Null(config["Labels"]![RunPaths.RunLabel]);
         Assert.Empty(_api.Networks());
-        Assert.DoesNotContain(_api.Volumes(), v => v != "ild-tools");
+        Assert.DoesNotContain(_api.Volumes(), v => v != "ild-tools-agents");
         Assert.Contains("PATH=/opt/ild-tools/agents/claude-code/2.1.0/wrap:/tmp/home/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:" + RunToolEnvironment.ImagePath,
             config["Env"]!.AsArray().Select(v => v!.GetValue<string>()));
         Assert.NotNull(seen);

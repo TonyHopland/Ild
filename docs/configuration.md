@@ -93,7 +93,7 @@ When ILD's image runs outside Kubernetes, each **loop run** gets a container, a 
 | `ILD_CONTAINER_SOCKET` | **Required.** The path of the engine's unix socket inside ILD's container (a `unix://` prefix is accepted); compose sets `/run/container.sock` and mounts `ILD_CONTAINER_SOCKET_HOST` there. Never detected: whoever holds the socket controls every container on the engine, so rootless Podman is the supported setup |
 | `ILD_CONTAINER_SOCKET_GRANT` | Read by ILD's container entrypoint. `1` gives a socket of the host's `root` group (rootful Podman on Linux) ILD's own group on each start, which makes ILD root-equivalent on that host. Unset, such a socket is left alone and ILD cannot open it. A Podman machine's rootful socket is `root:wheel` and needs nothing. See [Deployment](./deployment.md#the-engine-socket) |
 | `ILD_CONTAINER_RUNNER_IMAGE` | **Required.** The container image: compose builds the `runner` target of the Dockerfile as `localhost/ild-runner:latest` and uses it, or set the published `ild-runner` image. Runs get their toolchains and agents from the [toolchain store](#run-toolchains), which is filled with this image too. It must already be on the engine |
-| `ILD_CONTAINER_TOOLS_VOLUME` | The named volume that holds the [toolchain store](#run-toolchains), default `ild-tools`. ILD creates it; every run and every ILD on the engine shares it |
+| `ILD_CONTAINER_TOOLS_VOLUME` | The named volume that holds the [toolchain store](#run-toolchains), default `ild-tools`, the base name of the store's volumes (`ild-tools-agents`, `ild-tools-toolchains`, `ild-tools-repo-<repository id>`). ILD creates them; every run and every ILD on the engine shares it |
 | `ILD_RUN_TOOLCHAINS` | `on` (default): runs get toolchains and agents from the store. `off`: only what the runner image has, for a runner image of your own that carries them. The Kubernetes host reads it too |
 | `ILD_API_URL` | **Required.** ILD's address as the run's container reaches it; compose sets `http://ild:8080`. Its host must be a name (not `localhost`, not an IP address): each container is given that name for ILD's address on its network. The container reaches the model gateway and the MCP endpoint there |
 | `ILD_CONTAINER_ILD_CONTAINER` | The name of ILD's own container (compose: `ild`). ILD connects itself to each run's network and the run reaches it at its address there |
@@ -111,7 +111,7 @@ In a container or a pod, a run's image has no language toolchain and no coding a
 
 | Zone | Mounted at | Holds | Docker / Podman volume | Kubernetes `subPath` of the claim |
 | --- | --- | --- | --- | --- |
-| Agents | `/opt/ild-tools` | The agents' Node and the agent CLIs: ILD's own picks | `ild-tools` | `ild` |
+| Agents | `/opt/ild-tools` | The agents' Node and the agent CLIs: ILD's own picks | `ild-tools-agents` | `ild` |
 | Toolchains | `/opt/ild-toolchains` | The mise core tools (`node`, `python`, `dotnet`, `go`, `java`, `ruby`, `rust`, `bun`, `deno`, `elixir`, `erlang`, `swift`, `zig`), shared by every repository | `ild-tools-toolchains` | `toolchains` |
 | Repository tools | `/opt/ild-repo-tools` | Every other tool a repository names (`npm:prettier`, `cargo:…`, `pipx:…`, `aqua:…`, `prettier`), in a folder for its set of specs | `ild-tools-repo-<repository id>` | `repo-tools/<repository id>` |
 
@@ -136,9 +136,9 @@ In a container or a pod, a run's image has no language toolchain and no coding a
 - **Chrome** is in the runner image, at `/opt/google/chrome/chrome`, for the chrome-devtools MCP server.
 - **The first run that needs a version** installs it into the store, in a short-lived installer of the runner image that mounts only the zone it writes (and the toolchains read-only, for a repository's tools) and has the engine's default network (a pod with no NetworkPolicy on Kubernetes). It downloads from the toolchains' own sites, GitHub and the npm registry. Later runs that need the same start without it. If an install fails, the run fails with the installer's last lines.
 - **Install scripts** (npm's `postinstall`, cargo's `build.rs`) are off in the agents and toolchains zones. In a repository's own zone they run, since that zone is only ever mounted by that repository's runs; `"run": { "ignoreScripts": true }` in `ild.config.json` turns them off there too. A change to a repository's tool specs installs into a fresh folder, so what an earlier set installed is not what the new one runs.
-- **Upgrading** from a version with one store installs everything once more into the new zones; the old store contents are unused and can be removed.
+- **Upgrading** from a version with one store installs everything once more into the new zones; the old store contents (the `ild-tools` volume on an engine) are never mounted again and can be removed.
 - **`npm install -g`** and `cargo install` go into the run's home (`$HOME/.local`), which is on `PATH`. When the run's Node has corepack, `pnpm` and `yarn` are its shims, at the version the project's `packageManager` pins.
-- **The store is never pruned.** Remove the volumes (`docker volume rm ild-tools ild-tools-toolchains` and the `ild-tools-repo-…` ones) or empty the claim to start over.
+- **The store is never pruned.** Remove the volumes (`docker volume rm ild-tools-agents ild-tools-toolchains` and the `ild-tools-repo-…` ones) or empty the claim to start over.
 
 ## Agent telemetry
 
