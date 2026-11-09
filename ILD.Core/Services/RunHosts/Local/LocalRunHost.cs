@@ -316,7 +316,7 @@ public sealed class LocalRunHost : IRunHost
 
     public string? RunHomeFor(string workingDirectory) => null;
 
-    public string GatewayApiUrl(string? configuredApiUrl) => configuredApiUrl ?? "http://localhost:5000";
+    public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => configuredApiUrl ?? "http://localhost:5000";
 
     // -- Sweep -------------------------------------------------------------------
 

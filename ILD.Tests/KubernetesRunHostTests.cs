@@ -685,7 +685,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var launch = _api.Execs.Last().Command;
         foreach (var name in new[] { "NO_PROXY", "no_proxy" })
             Assert.Contains(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) && c.Split('=', 2)[1].Split(',').Contains("ild.example"));
-        Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1"));
+        Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1", RunPaths.WorkingDirectory(_run)));
     }
 
     [Fact]
@@ -717,8 +717,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var noProxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
         Assert.Contains("ild-api", noProxy);
         Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
-        Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null));
-        var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host));
+        Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
+        var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host, RunPaths.WorkingDirectory(_run)));
         Assert.Contains(new Uri((string)mcp["ILD_API_URL"]!).Host, noProxy);
         var names = Assert.Single(_api.Get<V1Pod>("pods", Name(_run))!.Spec.HostAliases).Hostnames;
         Assert.Contains("ild-api", names);
@@ -1120,7 +1120,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     [Fact]
     public void The_gateway_is_reached_at_ilds_service()
-        => Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl(null));
+        => Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
 
     [Fact]
     public async Task Files_are_read_and_written_by_commands_in_the_pod()

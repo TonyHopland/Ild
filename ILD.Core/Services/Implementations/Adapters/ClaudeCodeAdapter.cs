@@ -92,7 +92,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
             if (!ctx.NoTools)
-                mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, RunFacingEnvironment);
+                mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx));
 
             // Fork: seed a copy of the source session's transcript under the
             // destination id (leaving the source file untouched) so the restore

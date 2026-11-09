@@ -110,7 +110,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[copilot-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, RunFacingEnvironment);
+            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx));
 
             using var gateway = OpenGateway(ctx);
             IRunProcess? proc;

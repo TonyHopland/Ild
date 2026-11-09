@@ -287,7 +287,7 @@ internal sealed class FakeRunHost : IRunHost
     public Task<RunHostOutput> RunToolAsync(string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default)
         => throw new NotSupportedException("the fake host runs no tools");
 
-    public string GatewayApiUrl(string? configuredApiUrl) => configuredApiUrl ?? "http://fake-ild";
+    public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => configuredApiUrl ?? "http://fake-ild";
 
     public Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<RunLeftover>>([]);

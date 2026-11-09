@@ -135,8 +135,12 @@ public interface IRunHost
     /// <summary>Where the preview proxy forwards to reach a service listening on <paramref name="port"/> in the run whose working directory is <paramref name="workingDirectory"/>.</summary>
     Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default);
 
-    /// <summary>The base address of ILD that the run's CLI is given for the model gateway; <paramref name="configuredApiUrl"/> is the operator's setting, null when unset.</summary>
-    string GatewayApiUrl(string? configuredApiUrl);
+    /// <summary>
+    /// The base address of ILD that a CLI launched in <paramref name="workingDirectory"/> is given for the model gateway and its MCP
+    /// server: the name ILD has where that CLI runs, which is on its <c>NO_PROXY</c>. <paramref name="configuredApiUrl"/> is the
+    /// operator's setting, null when unset.
+    /// </summary>
+    string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory);
 
     /// <summary>The <c>HOME</c> the CLIs of the run that holds <paramref name="workingDirectory"/> run with, when it is not the agent home of this machine; null when it is.</summary>
     string? RunHomeFor(string workingDirectory);

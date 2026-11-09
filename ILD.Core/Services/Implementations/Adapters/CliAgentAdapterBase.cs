@@ -44,8 +44,9 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// </summary>
     protected IProcessEnvironment EnvironmentVariables { get; }
 
-    /// <summary>The environment as a run sees ILD: for the config files that point the agent's MCP server at ILD.</summary>
-    protected IProcessEnvironment RunFacingEnvironment => new RunFacingEnvironment(EnvironmentVariables, RunHost);
+    /// <summary>The environment as the launch of <paramref name="ctx"/> sees ILD: for the config files that point the agent's MCP server at ILD.</summary>
+    protected IProcessEnvironment RunFacingEnvironmentFor(AgentExecutionContext ctx)
+        => new RunFacingEnvironment(EnvironmentVariables, RunHost, ctx.RunContext.WorktreePath);
 
     protected CliAgentAdapterBase(IProcessEnvironment? environment = null)
     {
@@ -127,7 +128,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         if (ScopeFactory is null) return null;
         using var scope = ScopeFactory.CreateScope();
         var registry = scope.ServiceProvider.GetService<IModelGatewayRegistry>();
-        var apiUrl = RunHost.GatewayApiUrl(EnvironmentVariables.Get("ILD_API_URL"));
+        var apiUrl = RunHost.GatewayApiUrl(EnvironmentVariables.Get("ILD_API_URL"), ctx.RunContext.WorktreePath);
         // The agent reaches the gateway at ILD's own address, which no block may close.
         var ildHost = Uri.TryCreate(apiUrl, UriKind.Absolute, out var ild) ? ild.Host : null;
         return registry?.Open(

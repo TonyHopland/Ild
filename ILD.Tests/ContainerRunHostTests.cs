@@ -572,7 +572,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var launch = _api.Execs.Last().Command;
         foreach (var name in new[] { "NO_PROXY", "no_proxy" })
             Assert.Contains(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) && c.Split('=', 2)[1].Split(',').Contains("ild.example"));
-        Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1"));
+        Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1", RunPaths.WorkingDirectory(_run)));
     }
 
     [Fact]
@@ -588,11 +588,28 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var noProxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
         Assert.Contains("ild-api", noProxy);
         Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
-        Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null));
-        var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host));
+        Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
+        var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host, RunPaths.WorkingDirectory(_run)));
         Assert.Contains(new Uri((string)mcp["ILD_API_URL"]!).Host, noProxy);
         var hosts = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
         Assert.Contains(hosts, h => h.StartsWith("ild-api:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Through_the_routing_host_a_launch_in_a_run_is_given_ild_by_the_name_on_its_no_proxy()
+    {
+        // As ILD is wired: the routing host in front. The proxy refuses ILD's own name, so a launch in the run given
+        // compose's ild (the operator's setting) rather than ild-api has its model calls refused.
+        _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
+        await CreateRunAsync();
+        var routing = new RoutingRunHost(LocalRunHost.Shared, _host);
+        var run = RunPaths.WorkingDirectory(_run);
+
+        Assert.Equal("http://ild-api:8080", routing.GatewayApiUrl("http://ild:8080", run));
+        var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, routing, run));
+        Assert.Equal("ild-api", new Uri((string)mcp["ILD_API_URL"]!).Host);
+        // ild-api resolves only in runs; a launch on ILD's own machine keeps the setting.
+        Assert.Equal("http://ild:8080", routing.GatewayApiUrl("http://ild:8080", "/somewhere/on/ilds/disk"));
     }
 
     [Fact]
@@ -921,7 +938,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
     [Fact]
     public void The_gateway_is_reached_at_the_name_ild_is_known_by()
-        => Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl(null));
+        => Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
 
     // -- Delete and sweep --------------------------------------------------------
 

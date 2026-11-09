@@ -759,7 +759,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             : HostsChats && RunPaths.ChatOf(workingDirectory) is { } chat ? RunPaths.ChatHome(chat)
             : null;
 
-    public string GatewayApiUrl(string? configuredApiUrl) => IldUrl;
+    public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => IldUrl;
 
     /// <summary>Where the preview proxy forwards to reach a service listening on <paramref name="port"/> in the run.</summary>
     public abstract Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default);

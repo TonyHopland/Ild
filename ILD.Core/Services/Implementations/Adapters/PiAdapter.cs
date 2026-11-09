@@ -62,7 +62,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             using var gateway = OpenGateway(ctx);
             // A run in its own pod or container cannot see ILD's scratch directory: pi's files go to the run's home there.
             var runHome = string.IsNullOrWhiteSpace(ctx.RunContext.WorktreePath) ? null : RunHost.RunHomeFor(ctx.RunContext.WorktreePath);
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, RunFacingEnvironment, ctx.NoTools, gateway, runHome);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, RunFacingEnvironmentFor(ctx), ctx.NoTools, gateway, runHome);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");

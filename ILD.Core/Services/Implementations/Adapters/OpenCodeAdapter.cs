@@ -115,7 +115,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
 
             using var gateway = OpenGateway(ctx);
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, RunFacingEnvironment, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway);
             var extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, _logger);
 
             IRunProcess? proc = null;

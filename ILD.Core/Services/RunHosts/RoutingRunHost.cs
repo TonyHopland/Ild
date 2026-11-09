@@ -132,8 +132,10 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
         => For(workingDirectory).PreviewTargetAsync(workingDirectory, port, ct);
 
-    // The local host answers with the operator's setting, which for this backend is ILD's Service address too.
-    public string GatewayApiUrl(string? configuredApiUrl) => local.GatewayApiUrl(configuredApiUrl);
+    // The CLI's own host answers: a run or chat reaches ILD by the name on its NO_PROXY, which need not be the operator's
+    // setting (compose's ild is ild-api there) and does not resolve on this machine, where ILD is the setting.
+    public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory)
+        => For(workingDirectory).GatewayApiUrl(configuredApiUrl, workingDirectory);
 
     public string? RunHomeFor(string workingDirectory) => For(workingDirectory).RunHomeFor(workingDirectory);
 
