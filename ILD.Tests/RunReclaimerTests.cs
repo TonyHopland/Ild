@@ -300,9 +300,10 @@ public class RunReclaimerTests : IDisposable
             .Returns(Task.CompletedTask);
         var host = new LocalRunHost(repositories: repo.Object, configuration: configuration);
         var repositoryId = Guid.NewGuid();
-        await host.CreateAsync(new RunEnvironmentRequest(Guid.NewGuid(), stored, "ild/wi-a", repositoryId, KeepPreviewData: keepPreviewData),
+        var runId = Guid.NewGuid();
+        await host.CreateAsync(new RunEnvironmentRequest(runId, stored, "ild/wi-a", repositoryId, KeepPreviewData: keepPreviewData),
             TestContext.Current.CancellationToken);
-        _tempDirs.Add(LocalRunHost.PreviewDataCopyOf(stored));
+        _tempDirs.Add(LocalRunHost.PreviewDataCopyOf(runId, stored));
         using var preview = new WorktreePreviewService(new Mock<IHttpClientFactory>().Object, configuration,
             PreviewProxyBase.Disabled, NullLogger<WorktreePreviewService>.Instance, host,
             environment: new TestProcessEnvironment { { "HOME", Path.Combine(worktreesRoot, "home") } }.WithRealPath());
@@ -314,6 +315,7 @@ public class RunReclaimerTests : IDisposable
         Assert.True(File.Exists(Path.Combine(stateDirectory, "scratch")));
 
         var run = Run(stored, branch: null);
+        run.Id = runId;
         run.RepositoryId = repositoryId;
 
         Assert.True(await new RunReclaimer(repo.Object, new Mock<IProviderStore>().Object, host).ReclaimLocalStateAsync(run));

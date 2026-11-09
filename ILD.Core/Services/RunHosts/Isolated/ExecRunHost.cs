@@ -894,8 +894,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var all = true;
         foreach (var group in paths.GroupBy(OwnerFor))
         {
-            // A run whose pod or container is gone took its files with it; a chat's outlive its container.
-            if (!group.Key.Chat && !await RunExistsAsync(group.Key, ct)) continue;
+            // A run that is not running is not started again to delete files in it: they go with its pod or container, and
+            // what a crashed run left must not run again. A chat's files outlive its container.
+            if (!group.Key.Chat && !await IsRunningAsync(group.Key.Id, ct)) continue;
             var result = await RunScriptAsync(group.Key, "rm -rf -- \"$@\"", [.. group], ct);
             all &= result.Success;
             if (result.Success && HostsChats)
@@ -932,6 +933,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     /// <summary>Whether the run's pod or container is there and running, found without starting it.</summary>
     protected abstract Task<bool> IsRunningAsync(Guid owner, CancellationToken ct);
+
+    public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default) => IsRunningAsync(environment.OwnerId, ct);
 
     /// <summary>Where the preview data repositories keep between runs is stored, on ILD's own disk. A run made with <see cref="RunEnvironmentRequest.KeepPreviewData"/> needs it.</summary>
     public PreviewDataStore? PreviewData { get; set; }

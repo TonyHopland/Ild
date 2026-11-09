@@ -27,7 +27,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     private readonly Guid _repository = Guid.NewGuid();
     private readonly List<WorktreePreviewService> _services = [];
     private readonly List<string> _fifosToRelease = [];
-    private readonly List<string> _worktrees = [];
+    private readonly Dictionary<string, Guid> _runs = [];
     private LocalRunHost? _host;
 
     public WorktreePreviewServiceVolumeTests()
@@ -39,8 +39,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
 
     public void Dispose()
     {
-        foreach (var worktree in _worktrees)
-            try { Directory.Delete(LocalRunHost.PreviewDataCopyOf(worktree), recursive: true); } catch { /* best effort */ }
+        foreach (var (worktree, run) in _runs)
+            try { Directory.Delete(LocalRunHost.PreviewDataCopyOf(run, worktree), recursive: true); } catch { /* best effort */ }
         foreach (var fifo in _fifosToRelease)
             Unblock(fifo);
         foreach (var service in _services)
@@ -57,7 +57,9 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     private string RepositoryFolder => Path.Combine(Path.GetFullPath(_worktreesRoot), ".preview-volumes", _repository.ToString("D"));
 
     /// <summary>The folder of the "data" volume in the run of <paramref name="worktree"/>'s own copy of the kept preview data.</summary>
-    private static string KeptVolume(string worktree) => Path.Combine(LocalRunHost.PreviewDataCopyOf(worktree), "data");
+    private string KeptVolume(string worktree) => Path.Combine(Copy(worktree), "data");
+
+    private string Copy(string worktree) => LocalRunHost.PreviewDataCopyOf(_runs[worktree], worktree);
 
     private IConfiguration Configuration => new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WorktreesPath"] = _worktreesRoot })
@@ -74,7 +76,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     }
 
     /// <summary>Ends the run of <paramref name="worktree"/> cleanly, which puts its copy of the kept preview data back in the store.</summary>
-    private Task EndRunAsync(string worktree) => Host.DeleteAsync(new RunEnvironment(Guid.NewGuid(), worktree, _repository), Ct);
+    private Task EndRunAsync(string worktree) => Host.DeleteAsync(new RunEnvironment(_runs[worktree], worktree, _repository), Ct);
 
     private PreviewVolumeScope Scope(string workItemId, bool keep = true)
         => new(_repository, keep, workItemId, Title(workItemId));
@@ -165,8 +167,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         var worktree = Path.GetFullPath(Path.Combine(_worktreesRoot, name));
         Directory.CreateDirectory(worktree);
         WriteConfig(worktree, volumes ?? ["Data"], install ?? StandardInstall, services ?? [StandardWeb]);
-        _worktrees.Add(worktree);
-        await Host.CreateAsync(new RunEnvironmentRequest(Guid.NewGuid(), worktree, name, _repository, KeepPreviewData: true), Ct);
+        _runs[worktree] = Guid.NewGuid();
+        await Host.CreateAsync(new RunEnvironmentRequest(_runs[worktree], worktree, name, _repository, KeepPreviewData: true), Ct);
         return worktree;
     }
 
@@ -201,7 +203,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         Assert.False(Directory.Exists(RepositoryFolder));
 
         await EndRunAsync(a);
-        Assert.False(Directory.Exists(LocalRunHost.PreviewDataCopyOf(a)));
+        Assert.False(Directory.Exists(Copy(a)));
         Assert.Equal(a, File.ReadAllText(Path.Combine(RepositoryFolder, "data", "owner")));
 
         var b = await WorktreeAsync("wt-b");

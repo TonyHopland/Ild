@@ -295,6 +295,11 @@ internal sealed class FakeRunHost : IRunHost
 
     public string PreviewStateDirectoryFor(string worktreePath) => StateDirectoryFor(worktreePath);
 
+    /// <summary>What <c>IsRunningAsync</c> answers: whether a run is still running as it was made.</summary>
+    public bool Running { get; set; } = true;
+
+    public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default) => Task.FromResult(Running);
+
     /// <summary>Where <c>PreviewDataFolderAsync</c> says a repository keeps its preview data.</summary>
     public Func<Guid, string?> PreviewDataFolder { get; set; } = repository => $"/fake-preview-data/{repository:D}";
 

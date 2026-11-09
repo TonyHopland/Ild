@@ -33,6 +33,9 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
         => For(environment.WorkingDirectory).DeleteAsync(environment, ct);
 
+    public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default)
+        => For(environment.WorkingDirectory).IsRunningAsync(environment, ct);
+
     // -- Commands ----------------------------------------------------------------
 
     // A command with no working directory goes where the run or chat it is for lives; without one it would start on this machine.

@@ -51,8 +51,8 @@ public class PreviewDataApiTests(SharedApiFactory factory) : IClassFixture<Share
         var (b, bTitle, bWorktree) = await PreviewableWorkItemAsync(ownHost, user, repositoryId, "Second item", "wt-b");
         var folder = PreviewDataFolder(ownHost, repositoryId);
         // Each worktree is a run made with Keep preview data on, which has its own copy of the (empty) stored data.
-        var aCopy = Directory.CreateDirectory(LocalRunHost.PreviewDataCopyOf(aWorktree)).FullName;
-        Directory.CreateDirectory(LocalRunHost.PreviewDataCopyOf(bWorktree));
+        var aCopy = Directory.CreateDirectory(LocalRunHost.PreviewDataCopyOf(Guid.NewGuid(), aWorktree)).FullName;
+        Directory.CreateDirectory(LocalRunHost.PreviewDataCopyOf(Guid.NewGuid(), bWorktree));
 
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsJsonAsync($"/api/v1/workitems/{a}/preview/start", new { }, Ct)).StatusCode);
         Assert.True(File.Exists(Path.Combine(aCopy, "data", "file")));

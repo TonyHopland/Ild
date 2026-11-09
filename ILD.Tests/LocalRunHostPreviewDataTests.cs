@@ -1,3 +1,5 @@
+using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
@@ -15,7 +17,7 @@ public sealed class LocalRunHostPreviewDataTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("ild-local-preview-data-").FullName;
     private readonly Guid _repository = Guid.NewGuid();
-    private readonly List<string> _worktrees = [];
+    private readonly Dictionary<string, Guid> _runs = [];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -25,20 +27,36 @@ public sealed class LocalRunHostPreviewDataTests : IDisposable
 
     private string StoredFolder => PreviewVolumes.RepositoryFolder(Configuration, _repository);
 
-    private LocalRunHost Host()
+    private readonly Mock<IRepositoryManager> _worktrees = Worktrees();
+
+    private static Mock<IRepositoryManager> Worktrees()
     {
         var worktrees = new Mock<IRepositoryManager>();
         worktrees.Setup(r => r.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((string path, string _) => path);
-        return new LocalRunHost(repositories: worktrees.Object, configuration: Configuration);
+        worktrees.Setup(r => r.DestroyWorktreeAsync(It.IsAny<string>())).Returns((string path) =>
+        {
+            Directory.Delete(path, recursive: true);
+            return Task.CompletedTask;
+        });
+        return worktrees;
     }
+
+    /// <summary>A local host as one ILD process has it; another call is the host of ILD after a restart, which made none of the runs before.</summary>
+    private LocalRunHost Host() => new(repositories: _worktrees.Object, configuration: Configuration);
+
+    private LoopRun Run(string worktree) => new() { Id = _runs[worktree], WorkItemId = "wi-a", WorktreePath = worktree, RepositoryId = _repository };
+
+    private RunReclaimer Reclaimer(LocalRunHost host) => new(_worktrees.Object, new Mock<IProviderStore>().Object, host);
 
     private async Task<string> RunAsync(LocalRunHost host, string name, bool keep = true)
     {
         var worktree = Directory.CreateDirectory(Path.Combine(_root, "worktrees", name)).FullName;
-        _worktrees.Add(worktree);
-        await host.CreateAsync(new RunEnvironmentRequest(Guid.NewGuid(), worktree, name, _repository, KeepPreviewData: keep), Ct);
+        _runs[worktree] = Guid.NewGuid();
+        await host.CreateAsync(new RunEnvironmentRequest(_runs[worktree], worktree, name, _repository, KeepPreviewData: keep), Ct);
         return worktree;
     }
+
+    private string Copy(string worktree) => LocalRunHost.PreviewDataCopyOf(_runs[worktree], worktree);
 
     private void Store(string path, string content)
     {
@@ -55,12 +73,12 @@ public sealed class LocalRunHostPreviewDataTests : IDisposable
         var worktree = await RunAsync(host, "wt-a");
         var copy = await host.PreviewDataFolderAsync(_repository, worktree, Ct);
 
-        Assert.Equal(LocalRunHost.PreviewDataCopyOf(worktree), copy);
+        Assert.Equal(Copy(worktree), copy);
         Assert.Equal("old", File.ReadAllText(Path.Combine(copy!, "data", "seed")));
         File.WriteAllText(Path.Combine(copy!, "data", "seed"), "changed in the run");
         Assert.Equal("old", File.ReadAllText(Path.Combine(StoredFolder, "data", "seed")));
 
-        await host.DeleteAsync(new RunEnvironment(Guid.NewGuid(), worktree, _repository), Ct);
+        await host.DeleteAsync(new RunEnvironment(_runs[worktree], worktree, _repository), Ct);
 
         Assert.Equal("changed in the run", File.ReadAllText(Path.Combine(StoredFolder, "data", "seed")));
         Assert.False(Directory.Exists(copy));
@@ -75,7 +93,7 @@ public sealed class LocalRunHostPreviewDataTests : IDisposable
         var copy = (await host.PreviewDataFolderAsync(_repository, worktree, Ct))!;
         File.WriteAllText(Path.Combine(copy, "data", "seed"), "changed in the run");
 
-        await host.DeleteAsync(new RunEnvironment(Guid.NewGuid(), worktree), Ct);
+        await host.DeleteAsync(new RunEnvironment(_runs[worktree], worktree), Ct);
 
         Assert.Equal("old", File.ReadAllText(Path.Combine(StoredFolder, "data", "seed")));
         Assert.False(Directory.Exists(copy));
@@ -110,23 +128,82 @@ public sealed class LocalRunHostPreviewDataTests : IDisposable
         Store("data/seed", "old");
         var host = Host();
         var worktree = await RunAsync(host, "wt-a");
-        var copy = LocalRunHost.PreviewDataCopyOf(worktree);
+        var copy = Copy(worktree);
         var elsewhere = Directory.CreateDirectory(Path.Combine(_root, "only-ild-may-read")).FullName;
         File.WriteAllText(Path.Combine(elsewhere, "secret"), "s");
         Directory.Delete(copy, recursive: true);
         Directory.CreateSymbolicLink(copy, elsewhere);
 
-        await host.DeleteAsync(new RunEnvironment(Guid.NewGuid(), worktree, _repository), Ct);
+        await host.DeleteAsync(new RunEnvironment(_runs[worktree], worktree, _repository), Ct);
 
         Assert.Equal("old", File.ReadAllText(Path.Combine(StoredFolder, "data", "seed")));
         Assert.False(File.Exists(Path.Combine(StoredFolder, "secret")));
         Assert.True(File.Exists(Path.Combine(elsewhere, "secret")));
     }
 
+    [Fact]
+    public async Task Reclaiming_a_run_this_process_made_puts_its_copy_back()
+    {
+        Store("data/seed", "old");
+        var host = Host();
+        var worktree = await RunAsync(host, "wt-a");
+        File.WriteAllText(Path.Combine(Copy(worktree), "data", "seed"), "changed in the run");
+
+        Assert.True(await Reclaimer(host).ReclaimLocalStateAsync(Run(worktree)));
+
+        Assert.Equal("changed in the run", File.ReadAllText(Path.Combine(StoredFolder, "data", "seed")));
+        Assert.False(Directory.Exists(Copy(worktree)));
+    }
+
+    [Fact]
+    public async Task Reclaiming_a_run_after_ild_restarted_removes_its_copy_without_putting_it_back()
+    {
+        Store("data/seed", "old");
+        var worktree = await RunAsync(Host(), "wt-a");
+        File.WriteAllText(Path.Combine(Copy(worktree), "data", "seed"), "half-written when ILD stopped");
+
+        Assert.True(await Reclaimer(Host()).ReclaimLocalStateAsync(Run(worktree)));
+
+        Assert.Equal("old", File.ReadAllText(Path.Combine(StoredFolder, "data", "seed")));
+        Assert.False(Directory.Exists(Copy(worktree)));
+    }
+
+    [Fact]
+    public async Task The_startup_sweep_removes_the_copy_of_a_run_that_is_gone_without_putting_it_back()
+    {
+        Store("data/seed", "old");
+        var before = Host();
+        var gone = await RunAsync(before, "wt-gone");
+        var live = await RunAsync(before, "wt-live");
+        File.WriteAllText(Path.Combine(Copy(gone), "data", "seed"), "half-written");
+        var restarted = Host();
+
+        var leftovers = LocalRunHost.ListLeftovers(
+                new HashSet<Guid> { _runs[live] }, Path.Combine(_root, "agent-read"), AgentIsolation.ScratchRoot, DateTime.UtcNow.AddMinutes(1), null)
+            .Leftovers.Where(l => l.Kind == LocalRunHost.PreviewDataCopyKind).ToList();
+
+        Assert.DoesNotContain(leftovers, l => l.Location == Copy(live));
+        Assert.True(await restarted.DeleteLeftoverAsync(Assert.Single(leftovers, l => l.Location == Copy(gone)), Ct));
+        Assert.False(Directory.Exists(Copy(gone)));
+        Assert.True(Directory.Exists(Copy(live)));
+        Assert.Equal("old", File.ReadAllText(Path.Combine(StoredFolder, "data", "seed")));
+    }
+
+    [Fact]
+    public async Task The_startup_sweep_leaves_copies_made_since_it_started()
+    {
+        var worktree = await RunAsync(Host(), "wt-a");
+
+        var leftovers = LocalRunHost.ListLeftovers(
+            new HashSet<Guid>(), Path.Combine(_root, "agent-read"), AgentIsolation.ScratchRoot, DateTime.UtcNow.AddMinutes(-1), null).Leftovers;
+
+        Assert.DoesNotContain(leftovers, l => l.Location == Copy(worktree));
+    }
+
     public void Dispose()
     {
-        foreach (var worktree in _worktrees)
-            try { Directory.Delete(LocalRunHost.PreviewDataCopyOf(worktree), recursive: true); } catch { /* best effort */ }
+        foreach (var worktree in _runs.Keys)
+            try { Directory.Delete(Copy(worktree), recursive: true); } catch { /* best effort */ }
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 }

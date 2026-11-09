@@ -1,3 +1,6 @@
+using Moq;
+using ILD.Core.Services.Interfaces;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.Enums;
 using System.Diagnostics;
@@ -1439,6 +1442,50 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal("old", Stored(store, "data/seed"));
         Assert.DoesNotContain(Name(_run), _api.Containers());
         Assert.DoesNotContain(Name(_run), _api.Volumes());
+    }
+
+    [Fact]
+    public async Task Reclaiming_a_run_whose_container_stopped_neither_starts_it_again_nor_puts_its_copy_back()
+    {
+        var store = StoreWith(("data/seed", "old"));
+        _host.PreviewData = store;
+        await CreateRunAsync();
+        _api.Stop(Name(_run));
+        _api.Execs.Clear();
+        _api.OnExec = async e =>
+        {
+            if (IsPack(e)) await e.WriteStdoutAsync(TarOf(("data/seed", "from a crashed run")));
+            await e.ExitAsync(0);
+        };
+        var repositories = new Mock<IRepositoryManager>();
+        var reclaimer = new RunReclaimer(repositories.Object, new Mock<IProviderStore>().Object, new RoutingRunHost(new FakeRunHost(), _host));
+        var run = new ILD.Data.Entities.LoopRun { Id = _run, WorkItemId = "wi-1", WorktreePath = WorkingDirectory, RepositoryId = Repo };
+
+        Assert.True(await reclaimer.ReclaimLocalStateAsync(run));
+
+        Assert.Empty(_api.Execs);
+        Assert.Equal("old", Stored(store, "data/seed"));
+        Assert.DoesNotContain(Name(_run), _api.Containers());
+    }
+
+    [Fact]
+    public async Task Reclaiming_a_running_run_puts_its_copy_back()
+    {
+        var store = StoreWith(("data/seed", "old"));
+        _host.PreviewData = store;
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            if (IsPack(e)) await e.WriteStdoutAsync(TarOf(("data/seed", "changed in the run")));
+            await e.ExitAsync(0);
+        };
+        var reclaimer = new RunReclaimer(new Mock<IRepositoryManager>().Object, new Mock<IProviderStore>().Object, new RoutingRunHost(new FakeRunHost(), _host));
+        var run = new ILD.Data.Entities.LoopRun { Id = _run, WorkItemId = "wi-1", WorktreePath = WorkingDirectory, RepositoryId = Repo };
+
+        Assert.True(await reclaimer.ReclaimLocalStateAsync(run));
+
+        Assert.Equal("changed in the run", Stored(store, "data/seed"));
+        Assert.DoesNotContain(Name(_run), _api.Containers());
     }
 
     [Theory]

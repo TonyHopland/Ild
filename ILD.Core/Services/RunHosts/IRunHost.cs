@@ -32,6 +32,13 @@ public interface IRunHost
     /// <summary>Make the run's working directory from the base repository's checkout, or take it as it is when it is already healthy.</summary>
     Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default);
 
+    /// <summary>
+    /// Whether the run of <paramref name="environment"/> is still running as it was made, found without starting anything: its pod
+    /// or container running, or on this machine, a run this ILD process made. A run that crashed, or outlived a restart of ILD, is not;
+    /// what it kept between runs is never put back.
+    /// </summary>
+    Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default);
+
     /// <summary>Remove what <see cref="CreateAsync"/> made. Never throws for what it finds there; the exception is a host that cannot be reached.</summary>
     Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default);
 
@@ -122,7 +129,7 @@ public interface IRunHost
     /// <summary>Every regular file below <paramref name="directory"/> matching <paramref name="namePattern"/>, with its first line.</summary>
     Task<IReadOnlyList<(string Path, string FirstLine)>> ListFilesAsync(string directory, string namePattern, CancellationToken ct = default);
 
-    /// <summary>Delete each path, whatever it is. Returns whether every one is gone.</summary>
+    /// <summary>Delete each path, whatever it is. Returns whether every one is gone; one in a run that is not running counts as gone with that run, which is never started again for it.</summary>
     Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default);
 
     /// <summary>Make the folder a chat works in and return its path: below <paramref name="localRoot"/> on this machine, or a folder of its own in the chat container when the host keeps chats there. Fine when it is already there.</summary>
