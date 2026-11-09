@@ -2129,6 +2129,52 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         => api.Created.Single(c => c.StartsWith("containers/ild-signin-", StringComparison.Ordinal))["containers/".Length..];
 
     [Fact]
+    public async Task Every_kind_of_container_is_made_with_the_hardening_and_the_network_of_its_kind()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        AnswerInstaller(AgentNodeLine, ClaudeLine);
+        // An installer is gone once its work is done, so each container's request is kept the first time it is used.
+        var made = new Dictionary<string, string>(StringComparer.Ordinal);
+        var answer = _api.OnExec;
+        _api.OnExec = e =>
+        {
+            if (_api.Container(e.Container) is { } config) made.TryAdd(e.Container, config.ToJsonString());
+            return answer(e);
+        };
+
+        await CreateRunAsync(host, _run, MakeBaseRepository());
+        await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+        await using var signIn = await host.OpenSignInAsync(
+            ManagedAgentCatalog.ClaudeCode, "/data/agents/claude/bin/claude", ["setup-token"], 100, 30, TestContext.Current.CancellationToken);
+
+        var kinds = made.Keys.Select(name => name switch
+        {
+            _ when name == Name(_run) => "run",
+            ChatContainer => "chat",
+            _ when name.StartsWith("ild-tools-", StringComparison.Ordinal) => "installer",
+            _ when name.StartsWith("ild-signin-", StringComparison.Ordinal) => "sign-in",
+            _ => name,
+        }).Distinct().Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(["chat", "installer", "run", "sign-in"], kinds);
+
+        foreach (var (name, json) in made)
+        {
+            var config = JsonNode.Parse(json)!;
+            var hostConfig = config["HostConfig"]!;
+            Assert.Equal(["ALL"], hostConfig["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
+            Assert.Equal(["no-new-privileges"], hostConfig["SecurityOpt"]!.AsArray().Select(c => c!.GetValue<string>()));
+            Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
+            Assert.Equal("registry.example/ild-runner:1", config["Image"]!.GetValue<string>());
+
+            // A run and the chat container are on a network of their own that reaches only ILD; an installer and a
+            // sign-in are on the engine's default network, to download and to sign in.
+            var ownNetwork = name == Name(_run) || name == ChatContainer;
+            Assert.Equal(ownNetwork ? name : null, hostConfig["NetworkMode"]?.GetValue<string>());
+            Assert.Equal(ownNetwork, hostConfig["ExtraHosts"] is not null);
+        }
+    }
+
+    [Fact]
     public async Task The_sign_in_container_has_the_default_network_the_store_read_only_and_nothing_of_a_chat_or_run()
     {
         using var host = NewHost(Options(), [Claude]);

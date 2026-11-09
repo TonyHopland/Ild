@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Files;
 using ILD.Core.Services.RunHosts.Local;
 using System.Collections.Concurrent;
 using System.Collections;
@@ -343,10 +344,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // only what the bundle carries, and its origin is the remote.
     private async Task PopulateAsync(Guid owner, RunEnvironmentRequest request, string workingDirectory, CancellationToken ct)
     {
-        var bundlePath = Path.Combine(Path.GetTempPath(), $"ild-run-{Guid.NewGuid():N}.bundle");
-        try
+        using var bundleFile = PrivateTempFile.Create("ild-run-");
+        // The bundle and its directory go when this block ends.
         {
-            await using (var sink = new FileStream(bundlePath, FileMode.CreateNew, FileAccess.Write))
+            await using (var sink = bundleFile.OpenWrite())
             {
                 var created = await runner.RunAsync(
                     "git", ["-C", request.BasePath, "bundle", "create", "--quiet", "-", "--all"], "/", ct, null,
@@ -358,14 +359,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             var origin = await runner.RunAsync("git", ["-C", request.BasePath, "config", "--get", "remote.origin.url"], "/", ct);
             var originUrl = origin.Success ? RepositoryManager.WithoutUserInfo(origin.StdOut.Trim()) : request.BasePath;
 
-            await using var bundle = new FileStream(bundlePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous);
+            await using var bundle = bundleFile.OpenRead();
             var pushed = await PushBundleAsync(workingDirectory, originUrl, bundle, ct);
             if (!pushed.Success)
                 throw new InvalidOperationException($"could not put the code in the run's {Noun}: {pushed.StdErr.Trim()}");
-        }
-        finally
-        {
-            File.Delete(bundlePath);
         }
 
         var checkout = await RunScriptAsync(

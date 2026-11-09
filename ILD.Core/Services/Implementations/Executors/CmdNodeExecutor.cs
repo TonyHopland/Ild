@@ -61,7 +61,13 @@ public sealed class CmdNodeExecutor : INodeExecutor
         var psi = IsolateCommand(ShellStartInfo(command, workingDirectory), AgentIsolation.LaunchProxy(mode, aiProviderId: null));
         foreach (var (name, value) in feeds.Environment)
             psi.Environment[name] = value;
-        string Combined() => sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
+        // The pumps append to each buffer under its own lock, so a read takes both.
+        string Combined()
+        {
+            lock (sb)
+            lock (err)
+                return sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
+        }
 
         IRunProcess p;
         try
