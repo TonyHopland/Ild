@@ -255,7 +255,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(_run.ToString("N"), policy.PodSelector.MatchLabels["ild/run"]);
         var toIld = policy.Egress[0];
         Assert.Equal("ild", toIld.To.Single().PodSelector.MatchLabels["app.kubernetes.io/name"]);
-        Assert.Equal([8080, 3128], toIld.Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
+        Assert.Equal([8080, 3128, 8442], toIld.Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
         Assert.Single(policy.Egress);
         Assert.Equal("ild", policy.Ingress.Single().FromProperty.Single().PodSelector.MatchLabels["app.kubernetes.io/name"]);
     }
@@ -910,6 +910,35 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Contains(staged, launch);
         Assert.Contains("CFG=--c=" + staged, launch);
         Assert.DoesNotContain(launch, c => c.Contains(readRoot, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_policy_leaves_out_the_gateway_listener_port_when_it_is_switched_off()
+    {
+        _host = NewHost(Options() with { GatewayTlsPort = 0 });
+        await CreateRunAsync();
+
+        var toIld = _api.Get<V1NetworkPolicy>("networkpolicies", Name(_run))!.Spec.Egress[0];
+        Assert.Equal([8080, 3128], toIld.Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
+    }
+
+    [Fact]
+    public async Task A_copilot_launch_reaches_the_listener_where_the_pod_reaches_ild_and_trusts_the_staged_certificate()
+    {
+        await CreateRunAsync();
+        var readRoot = Path.Combine(_scratch, "agent-read");
+        var ca = Path.Combine(_scratch, "gateway-tls.pem");
+        File.WriteAllText(ca, "-----BEGIN CERTIFICATE-----");
+        var written = new Dictionary<string, string>();
+        var host = AgentReadHost(readRoot, written);
+
+        await CopilotLaunch.RunAsync(host, _run, WorkingDirectory, readRoot, ca, "http://ild.example:8080");
+
+        var launch = _api.Execs.Last().Command;
+        Assert.Contains("GH_HOST=ild.example:8442", launch);
+        var staged = Assert.Single(launch, c => c.StartsWith("NODE_EXTRA_CA_CERTS=", StringComparison.Ordinal))["NODE_EXTRA_CA_CERTS=".Length..];
+        Assert.StartsWith(RunPaths.AgentReadDirectory + "/", staged);
+        Assert.Equal("-----BEGIN CERTIFICATE-----", written[staged]);
     }
 
     [Fact]

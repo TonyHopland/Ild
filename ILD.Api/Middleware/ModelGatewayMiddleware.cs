@@ -97,7 +97,7 @@ public sealed partial class ModelGatewayMiddleware
         }
 
         var rewriteEndpointsTo = tls is not null && route == GatewayRoutes.GitHub && rest == CopilotUserPath
-            ? $"https://127.0.0.1:{tls.Port}/{CopilotEndpointPrefix}"
+            ? $"https://{context.Request.Host}/{CopilotEndpointPrefix}"
             : null;
         context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
         var error = await _forwarder.SendAsync(
@@ -166,7 +166,7 @@ public sealed partial class ModelGatewayMiddleware
     // What each agent CLI calls on its route. An entry ending in '/' is a prefix; any other is the exact path.
     private static readonly Dictionary<string, string[]> AllowedPaths = new()
     {
-        [GatewayRoutes.GitHub] = ["", "copilot_internal/", "mcp/"],
+        [GatewayRoutes.GitHub] = ["copilot_internal/"],
         [GatewayRoutes.ChatGpt] = ["codex/", "wham/"],
         [GatewayRoutes.Anthropic] = ["v1/messages", "v1/messages/count_tokens", "v1/models", "v1/models/"],
         [GatewayRoutes.Upstream] =

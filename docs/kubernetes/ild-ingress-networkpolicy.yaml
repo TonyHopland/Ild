@@ -1,8 +1,8 @@
 # Who may connect to ILD's pod. Without it nothing restricts ingress, and any pod in the cluster can use ILD's
 # egress proxy as a relay. Edit the namespaces, the ILD pod selector (ILD_K8S_ILD_POD_SELECTOR) and the ports
-# (the port of ILD_API_URL, and ILD_NETWORK_PROXY_PORT) to match your install.
+# (the port of ILD_API_URL, ILD_NETWORK_PROXY_PORT and ILD_GATEWAY_TLS_PORT) to match your install.
 #
-# The proxy port admits only the pods ILD makes (runs, the chat pod and the tools pods all carry
+# The proxy and Copilot listener ports admit only the pods ILD makes (runs, the chat pod and the tools pods all carry
 # app.kubernetes.io/managed-by=ild) in the run namespace. The web and gateway port admits any source, as it does without
 # a policy: browsers, your ingress controller and the run pods reach it there, so do not narrow it to run pods.
 apiVersion: networking.k8s.io/v1
@@ -26,6 +26,8 @@ spec:
       ports:
         - protocol: TCP
           port: 3128
+        - protocol: TCP
+          port: 8442
     - ports:
         - protocol: TCP
           port: 8080

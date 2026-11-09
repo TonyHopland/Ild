@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Copilot runs and chats in containers and pods can reach the model gateway and trust its certificate.**
 - **Network mode `off` gives runs a direct network route again** (any host, port and protocol, with no proxy variables), in containers and pods as ADR-0019 says; Settings → Network shows which runs have one.
 - **Containers and pods no longer hang on a malformed exit status, and a retried start keeps the run's checkout.**
 - **Cmd nodes and previews in containers can install packages again.**

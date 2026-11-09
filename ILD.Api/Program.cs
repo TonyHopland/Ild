@@ -61,6 +61,13 @@ try
             Environment.GetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortVariable)
             ?? builder.Configuration["Gateway:TlsPort"]) is { } gatewayTlsPort)
     {
+        // Runs reach ILD at the host of ILD_API_URL (as the run host spells it), so the listener is bound where runs
+        // reach ILD, as the egress proxy is, and its certificate names that host.
+        var gatewayHostNames = Uri.TryCreate(Environment.GetEnvironmentVariable("ILD_API_URL") ?? builder.Configuration["ILD_API_URL"], UriKind.Absolute, out var gatewayIldUrl)
+            ? new[] { gatewayIldUrl.Host, ILD.Core.Services.RunHosts.Isolated.ExecRunHost.RunFacingHost(gatewayIldUrl.Host) }
+            : Array.Empty<string>();
+        var gatewayBind = ILD.Core.Services.Implementations.Network.EgressProxyOptions.BindAddressFor(
+            ILD.Core.Services.RunHosts.RunHostOptions.Detect(name => builder.Configuration[name]));
         var gatewayTls = ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.Create(
             gatewayTlsPort,
             Path.Combine(dataPath, "gateway"),
@@ -69,13 +76,14 @@ try
                 var path = Path.Combine(AgentIsolation.CreateAgentReadDirectory("gateway-ca"), name);
                 AgentIsolation.WriteAgentReadableFile(path, bytes);
                 return path;
-            });
+            },
+            gatewayHostNames);
         Environment.SetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortVariable, gatewayTlsPort.ToString());
         Environment.SetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.CaFileVariable, gatewayTls.CaFile);
         builder.Services.AddSingleton(gatewayTls);
         builder.WebHost.ConfigureKestrel(kestrel => kestrel.ConfigureHttpsDefaults(https => https.ServerCertificate = gatewayTls.Certificate));
         builder.WebHost.UseUrls(string.Join(';',
-            builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey) is { Length: > 0 } urls ? urls : "http://localhost:5000", $"https://127.0.0.1:{gatewayTlsPort}"));
+            builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey) is { Length: > 0 } urls ? urls : "http://localhost:5000", $"https://{gatewayBind}:{gatewayTlsPort}"));
     }
 
     var connectionString = Environment.GetEnvironmentVariable("ILD_DB_CONNECTION_STRING")

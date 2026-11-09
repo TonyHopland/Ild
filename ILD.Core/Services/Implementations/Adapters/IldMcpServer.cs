@@ -32,6 +32,14 @@ public static class IldMcpServer
     /// <param name="environment">Where the agent read root is configured; the process environment by default.</param>
     public static string? TryWriteConfigFile(
         string namePrefix, Guid loopRunId, object config, ILogger logger, IProcessEnvironment? environment = null)
+        => TryWriteFile(namePrefix, loopRunId, JsonSerializer.SerializeToUtf8Bytes(config), ".json", logger, environment);
+
+    /// <summary>
+    /// Write any file an agent CLI reads (the certificate Copilot trusts) beside the MCP configs, under the same
+    /// naming, deletion and sweep rules as <see cref="TryWriteConfigFile"/>. Null when it cannot be written.
+    /// </summary>
+    public static string? TryWriteFile(
+        string namePrefix, Guid loopRunId, byte[] content, string extension, ILogger logger, IProcessEnvironment? environment = null)
     {
         environment ??= ProcessEnvironment.Current;
         var root = AgentReadRoot(environment);
@@ -40,8 +48,8 @@ public static class IldMcpServer
         {
             path = Path.Combine(
                 AgentIsolation.CreateAgentReadDirectoryUnder(root, ConfigDirectorySegment),
-                $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}.json");
-            AgentIsolation.WriteAgentReadableFile(path, JsonSerializer.SerializeToUtf8Bytes(config));
+                $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}{extension}");
+            AgentIsolation.WriteAgentReadableFile(path, content);
             return path;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -64,7 +72,7 @@ public static class IldMcpServer
         var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
         if (!Directory.Exists(directory))
             return;
-        foreach (var file in Directory.EnumerateFiles(directory, $"*-{loopRunId:N}-*.json"))
+        foreach (var file in Directory.EnumerateFiles(directory, $"*-{loopRunId:N}-*").Where(f => f.EndsWith(".json") || f.EndsWith(".pem")))
             File.Delete(file);
     }
 

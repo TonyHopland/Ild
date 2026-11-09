@@ -108,17 +108,13 @@ public class AdapterGatewayTests
     public void Copilot_gets_the_https_listener_a_github_shaped_placeholder_and_the_certificate_to_trust()
     {
         var psi = CopilotAdapter.BuildRunProcessStartInfo("copilot", Path.GetTempPath(), "hi");
-        var environment = new TestProcessEnvironment
-        {
-            { GatewayTlsEndpoint.PortVariable, "8442" },
-            { GatewayTlsEndpoint.CaFileVariable, "/read/gateway-tls.pem" },
-        };
+        var environment = new TestProcessEnvironment { { GatewayTlsEndpoint.PortVariable, "8442" } };
 
-        Assert.True(CopilotAdapter.TryApplyGateway(psi, _lease, environment));
+        Assert.True(CopilotAdapter.TryApplyGateway(psi, _lease, environment, "/read/ca-copy.pem"));
 
         Assert.Equal("127.0.0.1:8442", psi.Environment["GH_HOST"]);
         Assert.Equal("gho_" + _lease.Token, psi.Environment["COPILOT_GITHUB_TOKEN"]);
-        Assert.Equal("/read/gateway-tls.pem", psi.Environment["NODE_EXTRA_CA_CERTS"]);
+        Assert.Equal("/read/ca-copy.pem", psi.Environment["NODE_EXTRA_CA_CERTS"]);
         Assert.Equal("--no-auto-update", psi.ArgumentList[0]);
         AssertHoldsNoSecret(psi);
     }
@@ -128,7 +124,7 @@ public class AdapterGatewayTests
     {
         var psi = CopilotAdapter.BuildRunProcessStartInfo("copilot", Path.GetTempPath(), "hi");
 
-        Assert.False(CopilotAdapter.TryApplyGateway(psi, _lease, new TestProcessEnvironment()));
+        Assert.False(CopilotAdapter.TryApplyGateway(psi, _lease, new TestProcessEnvironment(), "/read/ca-copy.pem"));
         Assert.False(psi.Environment.ContainsKey("GH_HOST"));
     }
 

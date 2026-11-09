@@ -83,13 +83,14 @@ public class CopilotGatewayTests : IAsyncLifetime
     {
         using var lease = await OpenAsync();
 
-        using var response = await _factory.CreateClient()
-            .SendAsync(Request("/gateway/github/copilot_internal/user", lease.GitHubToken), TestContext.Current.CancellationToken);
+        var request = Request("/gateway/github/copilot_internal/user", lease.GitHubToken);
+        request.Headers.Host = "ild-api:8442";
+        using var response = await _factory.CreateClient().SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        Assert.Equal("https://127.0.0.1:8442/_ep/api.individual.githubcopilot.com", body.GetProperty("endpoints").GetProperty("api").GetString());
-        Assert.Equal("https://127.0.0.1:8442/_ep/telemetry.individual.githubcopilot.com", body.GetProperty("endpoints").GetProperty("telemetry").GetString());
+        Assert.Equal("https://ild-api:8442/_ep/api.individual.githubcopilot.com", body.GetProperty("endpoints").GetProperty("api").GetString());
+        Assert.Equal("https://ild-api:8442/_ep/telemetry.individual.githubcopilot.com", body.GetProperty("endpoints").GetProperty("telemetry").GetString());
         Assert.Equal("https://github.com/stays", body.GetProperty("note").GetString());
         Assert.Equal("Bearer gho_real", _seenAuthorization);
         Assert.Equal("", _seenAcceptEncoding);
@@ -108,6 +109,18 @@ public class CopilotGatewayTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, suffixTrick.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, otherGitHubApi.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/gateway/github/")]
+    [InlineData("/gateway/github/mcp/readonly")]
+    public async Task The_github_route_answers_only_copilot_internal_and_the_endpoint_prefix(string path)
+    {
+        using var lease = await OpenAsync();
+
+        using var response = await _factory.CreateClient().SendAsync(Request(path, lease.GitHubToken), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]

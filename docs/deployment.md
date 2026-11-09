@@ -249,7 +249,7 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
 
 - Kubernetes 1.30 or later, and a CNI that enforces NetworkPolicy. Without enforcement the pods start and work, but nothing keeps them off the rest of the cluster.
 - A StorageClass that can provision `ReadWriteOnce` volumes: the cluster's default class, or the one you name in `ILD_K8S_STORAGE_CLASS`. Prefer a class with `reclaimPolicy: Delete`; ILD warns at startup if it is not.
-- ILD's pods reachable from the run namespace at the Service in `ILD_API_URL`, on its HTTP port and on the egress proxy port (`ILD_NETWORK_PROXY_PORT`). If the namespace ILD runs in denies ingress by default, allow the run pods (label `app.kubernetes.io/managed-by=ild`, in the run namespace) to those two ports.
+- ILD's pods reachable from the run namespace at the Service in `ILD_API_URL`, on its HTTP port, on the egress proxy port (`ILD_NETWORK_PROXY_PORT`) and, for Copilot, on the gateway's HTTPS port (`ILD_GATEWAY_TLS_PORT`, default `8442`), so the Service must expose that port too. If the namespace ILD runs in denies ingress by default, allow the run pods (label `app.kubernetes.io/managed-by=ild`, in the run namespace) to those ports.
 
 ### Setup
 
