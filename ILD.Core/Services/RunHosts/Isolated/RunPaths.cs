@@ -20,6 +20,9 @@ public static class RunPaths
     public const string ChatRole = "chat";
     public const string RoleLabel = "ild/role";
 
+    /// <summary>The role of a toolchain installer's pod or container, which the sweep removes once ILD no longer has it open.</summary>
+    public const string ToolsRole = "tools";
+
     public static string RunRoot(Guid ownerId) => $"{RunsRoot}/{ownerId:N}";
 
     public static string WorkingDirectory(Guid ownerId) => $"{RunRoot(ownerId)}/repo";

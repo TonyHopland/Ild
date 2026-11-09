@@ -13,6 +13,10 @@ public static class KubernetesNames
     public const string StateDirectory = RunPaths.StateDirectory;
     public const string RoleLabel = RunPaths.RoleLabel;
     public const string ChatRole = RunPaths.ChatRole;
+    public const string ToolsRole = RunPaths.ToolsRole;
+
+    /// <summary>The name of a toolchain installer pod.</summary>
+    public static string ToolsName(Guid id) => $"ild-tools-{id:N}";
 
     /// <summary>The annotation that says which pod spec the chat pod was made from.</summary>
     public const string SpecAnnotation = "ild/spec";

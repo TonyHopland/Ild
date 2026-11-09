@@ -137,6 +137,14 @@ public sealed class InteractiveProviderSessionService
     private async Task RunInContainerAsync(
         WebSocket socket, AiProvider provider, string binaryPath, ISignInTerminalHost signIn, int initialCols, int initialRows, CancellationToken cancellationToken)
     {
+        // A path on ILD's machine is not one in the container or pod, which has the managed CLI from the store.
+        if (AiProviderConfig.Parse(provider.Config).BinaryPath is { Length: > 0 })
+        {
+            await PtyWebSocketBridge.SendErrorAndCloseAsync(
+                socket, $"{provider.Name} has a custom binary path, which does not exist in the sign-in container or pod; clear the binary path to sign in with the managed CLI.", cancellationToken);
+            return;
+        }
+
         var managed = ManagedAgentCatalog.Find(provider.Type);
         if (managed is not null
             && AiProviderConfig.Parse(provider.Config).BinaryPath is null

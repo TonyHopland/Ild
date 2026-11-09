@@ -26,10 +26,13 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     private readonly Dictionary<(string Kind, string Name), object> _objects = new();
     private int _podReadsBeforeReady;
 
-    private FakeKubernetesApi(WebApplication app)
+    private FakeKubernetesApi(WebApplication app, bool offerV5)
     {
         _app = app;
+        _offerV5 = offerV5;
     }
+
+    private readonly bool _offerV5;
 
     public string Address { get; private set; } = string.Empty;
 
@@ -53,13 +56,14 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
 
     public IKubernetes Client() => new k8s.Kubernetes(new KubernetesClientConfiguration { Host = Address });
 
-    public static async Task<FakeKubernetesApi> StartAsync()
+    /// <param name="offerV5">False for a cluster that does not speak the v5 channel protocol: the exec is accepted with none.</param>
+    public static async Task<FakeKubernetesApi> StartAsync(bool offerV5 = true)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Logging.ClearProviders();
         var app = builder.Build();
-        var api = new FakeKubernetesApi(app);
+        var api = new FakeKubernetesApi(app, offerV5);
         api.Map(app);
         await app.StartAsync();
         api.Address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
@@ -77,7 +81,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     }
 
     /// <summary>Puts an object of a run in the cluster as if a run host had made it.</summary>
-    public void Seed(string kind, string name, string instance, Guid run, string? managedBy = "ild")
+    public void Seed(string kind, string name, string instance, Guid run, string? managedBy = "ild", string? podPhase = null)
     {
         var meta = new V1ObjectMeta
         {
@@ -95,11 +99,31 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
             _objects[(kind, name)] = kind switch
             {
                 "secrets" => new V1Secret { Metadata = meta },
-                "pods" => new V1Pod { Metadata = meta },
+                "pods" => new V1Pod { Metadata = meta, Status = podPhase is null ? null : new V1PodStatus { Phase = podPhase } },
                 "persistentvolumeclaims" => new V1PersistentVolumeClaim { Metadata = meta },
                 _ => new V1NetworkPolicy { Metadata = meta },
             };
         }
+    }
+
+    /// <summary>Puts a toolchain installer pod of an instance in the cluster, as if a host had made it and then crashed.</summary>
+    public void SeedTools(string name, string instance)
+    {
+        lock (_gate)
+            _objects[("pods", name)] = new V1Pod
+            {
+                Metadata = new V1ObjectMeta
+                {
+                    Name = name,
+                    NamespaceProperty = Namespace,
+                    Labels = new Dictionary<string, string>
+                    {
+                        ["app.kubernetes.io/managed-by"] = "ild",
+                        ["ild/instance"] = instance,
+                        ["ild/role"] = "tools",
+                    },
+                },
+            };
     }
 
     private void Map(WebApplication app)
@@ -231,14 +255,22 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
             return;
         }
         lock (_gate)
-            if (!_objects.ContainsKey(("pods", pod)))
+        {
+            if (!_objects.TryGetValue(("pods", pod), out var found))
             {
                 http.Response.StatusCode = 404;
                 return;
             }
+            // The API refuses a command in a pod that has ended.
+            if (((V1Pod)found).Status?.Phase is "Failed" or "Succeeded")
+            {
+                http.Response.StatusCode = 409;
+                return;
+            }
+        }
 
         var offered = http.WebSockets.WebSocketRequestedProtocols;
-        var socket = await http.WebSockets.AcceptWebSocketAsync(offered.FirstOrDefault(p => p == "v5.channel.k8s.io") ?? offered.First());
+        var socket = await http.WebSockets.AcceptWebSocketAsync(_offerV5 ? offered.FirstOrDefault(p => p == "v5.channel.k8s.io") ?? offered.First() : null);
         var exec = new FakeExec(pod, http.Request.Query["command"].Select(c => c!).ToList(), Flag(http, "stdin"), Flag(http, "tty"), socket);
         exec.Protocol = socket.SubProtocol ?? string.Empty;
         lock (_gate) Execs.Add(exec);

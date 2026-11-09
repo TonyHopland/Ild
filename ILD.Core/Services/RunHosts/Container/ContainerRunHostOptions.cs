@@ -81,7 +81,7 @@ public sealed record ContainerRunHostOptions
         return defaults with
         {
             Socket = socket,
-            Instance = Value(InstanceSetting) ?? defaults.Instance,
+            Instance = DockerName(Value(InstanceSetting), InstanceSetting) ?? defaults.Instance,
             RunnerImage = image,
             IldContainer = Value(IldContainerSetting),
             NanoCpus = Value(RunHostOptions.CpuLimitSetting) is { } cpu ? NanoCpusOf(cpu) : defaults.NanoCpus,
@@ -92,7 +92,7 @@ public sealed record ContainerRunHostOptions
             GitIdentity = GitIdentitySettings.Select(name => (name, value: Value(name))).Where(e => e.value is not null).ToDictionary(e => e.name, e => e.value!),
             IldUrl = ildUrl,
             Toolchains = RunHostOptions.ToolchainsOn(Value(RunHostOptions.ToolchainsSetting)),
-            ToolsVolume = Value(ToolsVolumeSetting) ?? defaults.ToolsVolume,
+            ToolsVolume = DockerName(Value(ToolsVolumeSetting), ToolsVolumeSetting) ?? defaults.ToolsVolume,
         };
     }
 
@@ -122,6 +122,12 @@ public sealed record ContainerRunHostOptions
         var bytes = (long)(value * (suffix is null ? 1 : factor));
         return bytes == 0 ? null : bytes;
     }
+
+    // Both name engine objects and sit in label filters, so they must be a name the engine accepts.
+    private static string? DockerName(string? value, string setting)
+        => value is null || System.Text.RegularExpressions.Regex.IsMatch(value, "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,49}$")
+            ? value
+            : throw new InvalidOperationException($"{setting} is '{value}'; it must be letters, digits, '_', '.' and '-', starting with a letter or digit, and at most 50 characters.");
 
     private static int? PositiveInt(string? value, string name)
     {

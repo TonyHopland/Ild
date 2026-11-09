@@ -235,7 +235,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     private IDictionary<string, string> ToolsLabels() => new Dictionary<string, string>
     {
         [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
-        ["ild/role"] = "tools",
+        [RunPaths.RoleLabel] = RunPaths.ToolsRole,
     };
 
     /// <summary>
@@ -417,6 +417,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     {
         var work = new List<Task> { RemoveContainerAsync(ChatName, "the chat container", ct) };
         work.AddRange(_signIns.Keys.Select(name => RemoveContainerAsync(name, "a sign-in container", ct)));
+        work.AddRange(_execNames.Values.Where(name => name.StartsWith("ild-tools-", StringComparison.Ordinal)).Select(name => RemoveContainerAsync(name, "a toolchain installer", ct)));
         try
         {
             var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
@@ -699,11 +700,15 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             Collect((await _api.GetAsync($"/volumes?filters={filter}", ct))?["Volumes"], v => v["Labels"]);
             Collect(await _api.GetAsync($"/networks?filters={filter}", ct), n => n["Labels"]);
             var signIns = new List<string>();
+            var open = _execNames.Values.ToHashSet(StringComparer.Ordinal);
             foreach (var listed in (await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct))?.AsArray() ?? [])
-                if (listed?["Labels"]?[RunPaths.RoleLabel]?.GetValue<string>() == SignInRole
-                    && listed["Names"]?.AsArray().FirstOrDefault()?.GetValue<string>()?.TrimStart('/') is { } signIn
-                    && !_signIns.ContainsKey(signIn))
-                    signIns.Add(signIn);
+            {
+                var role = listed?["Labels"]?[RunPaths.RoleLabel]?.GetValue<string>();
+                if (role is SignInRole or RunPaths.ToolsRole
+                    && listed!["Names"]?.AsArray().FirstOrDefault()?.GetValue<string>()?.TrimStart('/') is { } name
+                    && !_signIns.ContainsKey(name) && !open.Contains(name))
+                    signIns.Add(name);
+            }
 
             return runs
                 .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
@@ -722,7 +727,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     {
         if (leftover.Kind != RunLeftoverKind)
             throw new ArgumentException($"unknown leftover kind '{leftover.Kind}'", nameof(leftover));
-        if (leftover.Location.StartsWith("ild-signin-", StringComparison.Ordinal))
+        if (leftover.Location.StartsWith("ild-signin-", StringComparison.Ordinal) || leftover.Location.StartsWith("ild-tools-", StringComparison.Ordinal))
         {
             try
             {
@@ -731,7 +736,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             }
             catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
             {
-                Logger?.LogWarning(ex, "Could not delete the sign-in container {Name}; the next sweep tries again", leftover.Location);
+                Logger?.LogWarning(ex, "Could not delete the sign-in or installer container {Name}; the next sweep tries again", leftover.Location);
                 return false;
             }
         }
