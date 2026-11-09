@@ -144,10 +144,11 @@ services:
       - ILD_CONTAINER_RUNNER_IMAGE=${ILD_CONTAINER_RUNNER_IMAGE:-localhost/ild-runner:latest}
       - ILD_CONTAINER_ILD_CONTAINER=ild
       # 1 when the socket belongs to the host's root group (rootful Podman on
-      # Linux): the entrypoint then gives it ILD's own group on each start, which
-      # makes ILD root-equivalent on that host. A Podman machine's socket is
-      # root:wheel and needs nothing.
+      # Linux): the entrypoint then gives it the group ILD_CONTAINER_SOCKET_GID on
+      # each start, which makes ILD root-equivalent on that host. A Podman
+      # machine's socket is root:wheel and needs nothing.
       - ILD_CONTAINER_SOCKET_GRANT=${ILD_CONTAINER_SOCKET_GRANT:-0}
+      - ILD_CONTAINER_SOCKET_GID=${ILD_CONTAINER_SOCKET_GID:-10099}
       # What a run's container may use. 0 for no limit, on a rootless engine
       # whose cgroup controllers are not delegated (a run then fails to start
       # with "crun: open 'memory.max'").

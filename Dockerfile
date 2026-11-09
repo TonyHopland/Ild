@@ -92,8 +92,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 # Create the runtime user up front. ILD runs as this non-root user (the
 # entrypoint drops to it via gosu) and owns /app, /data and /worktrees;
 # the managed coding-agent installs land under /data owned by ild. Reuses
-# any existing user/group at the configured UID/GID. Its group's gid is the one
-# the entrypoint gives a rootful engine's socket (ILD_CONTAINER_SOCKET_GRANT).
+# any existing user/group at the configured UID/GID. A rootful engine's socket
+# is not given this group but another gid (ILD_CONTAINER_SOCKET_GRANT, ILD_CONTAINER_SOCKET_GID).
 RUN existing_group="$(getent group "${ILD_GID}" | cut -d: -f1 || true)" && \
     if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
       groupmod -n ild "$existing_group"; \

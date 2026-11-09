@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets. Settings warns when the container socket is not rootless or cannot be reached.
-- **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart. A rootful Podman machine's socket works as it is.
+- **`ILD_CONTAINER_SOCKET_HOST` is empty in `.env.example`**, so a fresh copy makes compose ask for the socket instead of mounting `/run/podman/podman.sock`.
+- **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart. The socket goes to a dedicated gid, `ILD_CONTAINER_SOCKET_GID` (default 10099), not ILD's own 10001; the host sees the socket under it. ILD warns when a socket's group is unmapped by `userns-remap`. A rootful Podman machine's socket works as it is.
 - **A run in a container or pod gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows**; `run.tools` in `ild.config.json` names them when finding them is not enough.
 - **Network forwards work in run and chat containers and pods**: `127.0.0.1:<local port>` there reaches the forward's destination through the egress proxy.
 - **A run restores NuGet packages from a private Azure Artifacts feed**: the toolchain store installs the credential provider with each .NET SDK from 9.0.200 on.
