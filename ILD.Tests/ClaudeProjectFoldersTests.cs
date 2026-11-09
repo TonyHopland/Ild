@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text.Json;
 using ILD.Api.Controllers;
 using ILD.Api.Services;
@@ -135,7 +136,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
     private ChatService NewChatService(AppDbContext ctx)
         => new(ctx, new ProviderStore(ctx), Mock.Of<IAgentAdapterRegistry>(), Mock.Of<IChatNotifier>(),
             new ChatOptions { ScratchRoot = Path.Combine(_root, "chat-sessions") }, new LoopRunStore(ctx),
-            new ChatLoopScratchpad(), new ChatCloneCoordinator(), claudeProjects: _folders);
+            new ChatLoopScratchpad(), new ChatCloneCoordinator(), claudeProjects: _folders, runHost: LocalRunHost.Shared);
 
     private ClaudeProjectFolderSweeper NewSweeper()
     {
@@ -171,7 +172,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
         var reclaimer = new Mock<IRunReclaimer>();
         reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(true);
         var controller = new LoopRunsController(Mock.Of<ILoopEngine>(), Mock.Of<IEventLogService>(), _db.LoopRuns,
-            new AdapterSessionSnapshotStore(_db.Context), new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
+            new AdapterSessionSnapshotStore(_db.Context), new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance, host: LocalRunHost.Shared),
             reclaimer.Object, Mock.Of<IWorkItemManager>(), NoPackageFeeds.Resolver, Mock.Of<IRunConversationService>(),
             Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(), Mock.Of<ISchedulerSettingsService>(), _folders);
 

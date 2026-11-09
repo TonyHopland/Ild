@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -88,7 +89,7 @@ public sealed class ChatTitleRetryTests : IDisposable
     private ChatService NewChatService(IChatTitleScheduler titles)
         => new(_db.Context, _db.Providers, new Registry(this), Mock.Of<IChatNotifier>(),
             new ChatOptions { ScratchRoot = _scratchRoot }, _db.LoopRuns, new ChatLoopScratchpad(),
-            new ChatCloneCoordinator(), titles: titles, claudeProjects: TestClaudeProjectFolders.Instance);
+            new ChatCloneCoordinator(), titles: titles, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 
     private Task TurnAsync(ChatService chat, Guid id, string message)
         => chat.ExecuteTurnAsync(id, Guid.NewGuid(), message, CancellationToken.None);

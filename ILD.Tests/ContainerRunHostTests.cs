@@ -1,3 +1,6 @@
+using Moq;
+using ILD.Core.Services.Interfaces;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.Enums;
 using System.Diagnostics;
@@ -1279,6 +1282,231 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         using var elsewhere = await routing.StartCommandAsync(
             RunCommand.Prepared(Command("", "ls"), Guid.NewGuid()), TestContext.Current.CancellationToken);
         Assert.Single(local.Started);
+    }
+
+    // -- Commands that must run in a run, and where a preview's files are -------
+
+    [Fact]
+    public async Task A_preview_step_in_its_state_directory_runs_in_the_runs_container()
+    {
+        await CreateRunAsync();
+        var local = new FakeRunHost();
+        var routing = new RoutingRunHost(local, _host);
+        var state = routing.PreviewStateDirectoryFor(WorkingDirectory);
+
+        using var step = await routing.StartCommandAsync(
+            RunCommand.Prepared(Command(state + "/npm-cache", "npm", "ci")) with { RunIn = _run }, TestContext.Current.CancellationToken);
+        await step.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal($"{RunPaths.RunRoot(_run)}/preview-state", state);
+        Assert.Empty(local.Started);
+        Assert.Equal(Name(_run), _api.Execs.Last().Container);
+    }
+
+    [Theory]
+    [InlineData("/tmp/preview/0123abcd")]
+    [InlineData("/data/worktrees/.preview-volumes/11111111-1111-1111-1111-111111111111/data")]
+    [InlineData("/ild-run/22222222222222222222222222222222/repo")]
+    [InlineData("{run}/../22222222222222222222222222222222/repo")]
+    public async Task A_command_that_must_run_in_a_run_is_refused_outside_it_and_never_starts_on_ilds_machine(string directory)
+    {
+        await CreateRunAsync();
+        var local = new FakeRunHost();
+        var routing = new RoutingRunHost(local, _host);
+        var execs = _api.Execs.Count;
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => routing.StartCommandAsync(
+            RunCommand.Prepared(Command(directory.Replace("{run}", RunPaths.RunRoot(_run)), "sh")) with { RunIn = _run },
+            TestContext.Current.CancellationToken));
+
+        Assert.StartsWith("refusing to run sh", error.Message);
+        Assert.Empty(local.Started);
+        Assert.Equal(execs, _api.Execs.Count);
+    }
+
+    [Fact]
+    public async Task A_command_for_a_run_the_host_does_not_hold_is_refused_and_not_started_on_ilds_machine()
+    {
+        var local = new FakeRunHost();
+        var routing = new RoutingRunHost(local, _host);
+        var gone = Guid.NewGuid();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => routing.StartCommandAsync(
+            RunCommand.Prepared(Command(RunPaths.WorkingDirectory(gone), "sh")) with { RunIn = gone }, TestContext.Current.CancellationToken));
+
+        Assert.Contains("never runs on ILD's own machine", error.Message);
+        Assert.Empty(local.Started);
+    }
+
+    // -- Kept preview data: the run's own copy -----------------------------------
+
+    private PreviewDataStore StoreWith(params (string Path, string Content)[] files)
+    {
+        var store = new PreviewDataStore(Path.Combine(_scratch, "preview-data"));
+        foreach (var (path, content) in files)
+        {
+            var file = Path.Combine(store.FolderOf(Repo), path);
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, content);
+        }
+        return store;
+    }
+
+    private string Stored(PreviewDataStore store, string path) => File.ReadAllText(Path.Combine(store.FolderOf(Repo), path));
+
+    private static byte[] TarOf(params (string Path, string Content)[] files)
+    {
+        using var archive = new MemoryStream();
+        using (var writer = new System.Formats.Tar.TarWriter(archive, leaveOpen: true))
+            foreach (var (path, content) in files)
+                writer.WriteEntry(new System.Formats.Tar.PaxTarEntry(System.Formats.Tar.TarEntryType.RegularFile, path)
+                {
+                    DataStream = new MemoryStream(Encoding.UTF8.GetBytes(content)),
+                });
+        return archive.ToArray();
+    }
+
+    private string Unpacked(byte[] archive, string path)
+    {
+        var folder = Path.Combine(_scratch, $"unpacked-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        System.Formats.Tar.TarFile.ExtractToDirectory(new MemoryStream(archive), folder, overwriteFiles: false);
+        return File.ReadAllText(Path.Combine(folder, path));
+    }
+
+    private static bool IsFill(FakeDockerExec e) => e.Joined.Contains("tar -x");
+
+    private static bool IsPack(FakeDockerExec e) => e.Joined.Contains("tar -c");
+
+    [Fact]
+    public async Task A_run_made_with_kept_preview_data_gets_a_copy_of_the_stored_copy_in_its_own_folder()
+    {
+        _host.PreviewData = StoreWith(("data/seed", "kept"));
+        byte[]? filled = null;
+        _api.OnExec = async e =>
+        {
+            var stdin = e.WantsStdin ? await e.ReadStdinToEndAsync() : null;
+            if (IsFill(e)) filled = stdin;
+            // The run has no copy yet.
+            await e.ExitAsync(e.Joined.Contains("[ -e") && e.Command.Contains(RunPaths.PreviewData(_run)) ? 1 : 0);
+        };
+
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, KeepPreviewData: true), TestContext.Current.CancellationToken);
+
+        var fill = Assert.Single(_api.Execs, IsFill);
+        Assert.Equal(Name(_run), fill.Container);
+        Assert.Contains(RunPaths.PreviewData(_run), fill.Command);
+        Assert.Equal("kept", Unpacked(filled!, "data/seed"));
+        // Nothing of ILD's own disk is mounted into the run.
+        Assert.DoesNotContain(_api.Container(Name(_run))!["HostConfig"]!["Binds"]!.AsArray(), b => b!.GetValue<string>().Contains(_scratch));
+    }
+
+    [Fact]
+    public async Task Ending_a_run_cleanly_puts_its_copy_back_in_the_store_and_the_copy_goes_with_the_container()
+    {
+        var store = StoreWith(("data/seed", "old"));
+        _host.PreviewData = store;
+        await CreateRunAsync();
+        var archive = TarOf(("data/seed", "changed in the run"), ("data/added", "new"));
+        _api.OnExec = async e =>
+        {
+            if (IsPack(e)) await e.WriteStdoutAsync(archive);
+            await e.ExitAsync(0);
+        };
+
+        await _host.DeleteAsync(new RunEnvironment(_run, WorkingDirectory, Repo), TestContext.Current.CancellationToken);
+
+        Assert.Contains(RunPaths.PreviewData(_run), Assert.Single(_api.Execs, IsPack).Command);
+        Assert.Equal("changed in the run", Stored(store, "data/seed"));
+        Assert.Equal("new", Stored(store, "data/added"));
+        Assert.DoesNotContain(Name(_run), _api.Containers());
+        Assert.DoesNotContain(Name(_run), _api.Volumes());
+        Assert.Equal([Repo.ToString("D")], Directory.GetFileSystemEntries(Path.Combine(_scratch, "preview-data")).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public async Task A_run_whose_container_stopped_is_removed_without_putting_its_copy_back()
+    {
+        var store = StoreWith(("data/seed", "old"));
+        _host.PreviewData = store;
+        await CreateRunAsync();
+        _api.Stop(Name(_run));
+        _api.OnExec = async e =>
+        {
+            if (IsPack(e)) await e.WriteStdoutAsync(TarOf(("data/seed", "from a crashed run")));
+            await e.ExitAsync(0);
+        };
+
+        await _host.DeleteAsync(new RunEnvironment(_run, WorkingDirectory, Repo), TestContext.Current.CancellationToken);
+
+        Assert.Equal("old", Stored(store, "data/seed"));
+        Assert.DoesNotContain(Name(_run), _api.Containers());
+        Assert.DoesNotContain(Name(_run), _api.Volumes());
+    }
+
+    [Fact]
+    public async Task Reclaiming_a_run_whose_container_stopped_neither_starts_it_again_nor_puts_its_copy_back()
+    {
+        var store = StoreWith(("data/seed", "old"));
+        _host.PreviewData = store;
+        await CreateRunAsync();
+        _api.Stop(Name(_run));
+        _api.Execs.Clear();
+        _api.OnExec = async e =>
+        {
+            if (IsPack(e)) await e.WriteStdoutAsync(TarOf(("data/seed", "from a crashed run")));
+            await e.ExitAsync(0);
+        };
+        var repositories = new Mock<IRepositoryManager>();
+        var reclaimer = new RunReclaimer(repositories.Object, new Mock<IProviderStore>().Object, new RoutingRunHost(new FakeRunHost(), _host));
+        var run = new ILD.Data.Entities.LoopRun { Id = _run, WorkItemId = "wi-1", WorktreePath = WorkingDirectory, RepositoryId = Repo };
+
+        Assert.True(await reclaimer.ReclaimLocalStateAsync(run));
+
+        Assert.Empty(_api.Execs);
+        Assert.Equal("old", Stored(store, "data/seed"));
+        Assert.DoesNotContain(Name(_run), _api.Containers());
+    }
+
+    [Fact]
+    public async Task Reclaiming_a_running_run_puts_its_copy_back()
+    {
+        var store = StoreWith(("data/seed", "old"));
+        _host.PreviewData = store;
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            if (IsPack(e)) await e.WriteStdoutAsync(TarOf(("data/seed", "changed in the run")));
+            await e.ExitAsync(0);
+        };
+        var reclaimer = new RunReclaimer(new Mock<IRepositoryManager>().Object, new Mock<IProviderStore>().Object, new RoutingRunHost(new FakeRunHost(), _host));
+        var run = new ILD.Data.Entities.LoopRun { Id = _run, WorkItemId = "wi-1", WorktreePath = WorkingDirectory, RepositoryId = Repo };
+
+        Assert.True(await reclaimer.ReclaimLocalStateAsync(run));
+
+        Assert.Equal("changed in the run", Stored(store, "data/seed"));
+        Assert.DoesNotContain(Name(_run), _api.Containers());
+    }
+
+    [Theory]
+    [InlineData(0, "this is not a tar archive")]
+    [InlineData(1, "")]
+    public async Task A_copy_that_cannot_be_put_back_leaves_the_stored_copy_as_it_was(int exitCode, string output)
+    {
+        var store = StoreWith(("data/seed", "old"));
+        _host.PreviewData = store;
+        await CreateRunAsync();
+        _api.OnExec = async e =>
+        {
+            if (IsPack(e)) await e.WriteStdoutAsync(output);
+            await e.ExitAsync(IsPack(e) ? exitCode : 0);
+        };
+
+        await _host.DeleteAsync(new RunEnvironment(_run, WorkingDirectory, Repo), TestContext.Current.CancellationToken);
+
+        Assert.Equal("old", Stored(store, "data/seed"));
+        Assert.Equal([Repo.ToString("D")], Directory.GetFileSystemEntries(Path.Combine(_scratch, "preview-data")).Select(Path.GetFileName));
+        Assert.DoesNotContain(Name(_run), _api.Containers());
     }
 
     [Fact]

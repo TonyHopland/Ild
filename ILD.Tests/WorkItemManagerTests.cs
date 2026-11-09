@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Remote;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -78,7 +79,7 @@ public class WorkItemManagerTests
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
         engine = new Mock<ILoopEngine>();
-        return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance,
+        return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared,
             engine: engine.Object, remoteProvider: remoteProvider?.Object), db, repo.Id, repoMgr, eventLog);
     }
 
@@ -215,7 +216,7 @@ public class WorkItemManagerTests
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
 
         var id = await mgr.CreateWorkItemAsync(TestActors.Human, "orig", "origdesc", repo.Id);
         notifier.Invocations.Clear();
@@ -243,7 +244,7 @@ public class WorkItemManagerTests
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
 
         var ok = await mgr.UpdateAsync(TestActors.Human, Guid.NewGuid().ToString(), "t", "d");
         Assert.False(ok);
@@ -309,7 +310,7 @@ public class WorkItemManagerTests
         db.Context.Repositories.Add(repo);
         db.Context.SaveChanges();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
 
         var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repo.Id);
         var otherDep = await mgr.CreateWorkItemAsync(TestActors.Human, "other dep", "", repo.Id);
@@ -345,7 +346,7 @@ public class WorkItemManagerTests
         db.Context.SaveChanges();
         var notifier = new Mock<IWorkItemNotifier>();
         var scheduler = new Mock<IWorkItemScheduler>();
-        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object, scheduler: scheduler.Object);
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object, scheduler: scheduler.Object);
 
         var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repo.Id);
         var freed = await mgr.CreateWorkItemAsync(TestActors.Human, "freed", "", repo.Id);
@@ -835,7 +836,7 @@ public class WorkItemManagerTests
         services.AddRealFinishedRunCleaner();
         var cleaner = services.BuildServiceProvider().GetRequiredService<IFinishedRunCleaner>();
         var eventLog = new Mock<IEventLogService>();
-        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance,
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared,
             engine: engine.Object, runReclaimer: reclaimer.Object, finishedRunCleaner: cleaner);
         return (mgr, db, repo.Id, engine, owned, cleaner);
     }
@@ -1456,7 +1457,7 @@ public class WorkItemManagerTests
         db.Context.Repositories.Add(repo);
         db.Context.SaveChanges();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
 
         var dependency = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repo.Id);
         var middle = await mgr.CreateWorkItemAsync(TestActors.Human, "mid", "", repo.Id);
@@ -1489,9 +1490,9 @@ public class WorkItemManagerTests
             .Returns((WorkItemServerOptions o, string id, WorkItemActor a, CancellationToken ct) => db.ServerClient.DeleteAsync(o, id, a, ct));
         client.Setup(c => c.ListAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<RemoteWorkItemStatus?>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("boom"));
-        var creator = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var creator = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
         var id = await creator.CreateWorkItemAsync(TestActors.Human, "a", "", repo.Id);
-        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, client.Object, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, client.Object, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
         notifier.Invocations.Clear();
 
         Assert.True(await mgr.DeleteAsync(TestActors.Human, id));
@@ -1506,7 +1507,7 @@ public class WorkItemManagerTests
         var db = new TestDb();
         using var _ = db;
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
 
         Assert.False(await mgr.DeleteAsync(TestActors.Human, Guid.NewGuid().ToString()));
 
@@ -1989,7 +1990,7 @@ public class WorkItemManagerTests
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
 
         var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id);
         notifier.Invocations.Clear();
@@ -2024,7 +2025,7 @@ public class WorkItemManagerTests
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared, notifier.Object);
 
         var id = agentCreated
             ? await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id, Guid.NewGuid(), forceBacklog: true)
@@ -2048,7 +2049,7 @@ public class WorkItemManagerTests
         var notifier = new Mock<IWorkItemNotifier>();
         var preview = new Mock<IWorktreePreviewService>();
         var engine = new Mock<ILoopEngine>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance,
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared,
             notifier.Object, preview.Object, engine: engine.Object);
         return (mgr, db, repo.Id, preview, notifier, engine);
     }
@@ -2567,7 +2568,7 @@ public class WorkItemManagerTests
         using var restarted = new TestDb(server);
         var freshMgr = new WorkItemManager(
             new Mock<IRepositoryManager>().Object, restarted.Providers, new Mock<IEventLogService>().Object,
-            restarted.LoopRuns, restarted.ServerClient, restarted.ServerOptions, TestActors.Instance);
+            restarted.LoopRuns, restarted.ServerClient, restarted.ServerOptions, TestActors.Instance, runHost: LocalRunHost.Shared);
 
         Assert.Empty(restarted.Context.LoopRuns);
         var view = (await freshMgr.GetWorkItemAsync(id))!;
@@ -2816,7 +2817,7 @@ public class WorkItemManagerTests
         var resolver = new CountingOptionsResolver(db.ServerOptions);
         var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, eventLog.Object,
             new ILD.Data.Stores.LoopRunStore(runsContext), db.ServerClient, resolver, TestActors.Instance,
-            previewService: preview.Object);
+            previewService: preview.Object, runHost: LocalRunHost.Shared);
 
         var target = await mgr.CreateWorkItemAsync(TestActors.Human, "target", "", repo.Id);
         var a = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repo.Id);

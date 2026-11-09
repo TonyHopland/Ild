@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Porta.Pty;
@@ -24,14 +25,19 @@ public sealed class LocalRunHost : IRunHost
     private readonly IProcessRunner? _runner;
     private readonly IServiceProvider? _services;
     private readonly IRepositoryManager? _repositories;
+    private readonly IConfiguration? _configuration;
     private readonly ProcessRunOptions _agentOptions;
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<LocalRunProcess, byte>> _running = new();
+    // The runs this process made and has not deleted: after a crash or a restart of ILD a run is not among them.
+    private readonly ConcurrentDictionary<Guid, byte> _made = new();
 
     /// <param name="runner">What bundles are moved with; the git and shell scripts of a clone run through it.</param>
     /// <param name="services">Where <see cref="CreateAsync"/> and <see cref="DeleteAsync"/> find the repository manager, which uses this host.</param>
     /// <param name="repositories">The repository manager to make worktrees with, when it is not to be found through <paramref name="services"/>.</param>
-    public LocalRunHost(IProcessRunner? runner = null, IServiceProvider? services = null, IRepositoryManager? repositories = null)
+    /// <param name="configuration">Where the preview data repositories keep is found, when it is not to be found through <paramref name="services"/>.</param>
+    public LocalRunHost(IProcessRunner? runner = null, IServiceProvider? services = null, IRepositoryManager? repositories = null, IConfiguration? configuration = null)
     {
+        _configuration = configuration;
         _runner = runner;
         _services = services;
         _repositories = repositories;
@@ -45,12 +51,20 @@ public sealed class LocalRunHost : IRunHost
     public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
     {
         var path = await Repositories().CreateWorktreeAsync(request.BasePath, request.BranchName);
+        if (request.KeepPreviewData)
+            await FillPreviewDataAsync(request.OwnerId, path, request.RepositoryId, ct);
+        _made.TryAdd(request.OwnerId, 0);
         return new RunEnvironment(request.OwnerId, path);
     }
+
+    public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default)
+        => Task.FromResult(_made.ContainsKey(environment.OwnerId));
 
     public async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
     {
         await KillAllAsync(environment.OwnerId, ct);
+        await SyncPreviewDataBackAsync(environment, ct);
+        _made.TryRemove(environment.OwnerId, out _);
         await Repositories().DestroyWorktreeAsync(environment.WorkingDirectory);
     }
 
@@ -318,12 +332,102 @@ public sealed class LocalRunHost : IRunHost
 
     public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => configuredApiUrl ?? "http://localhost:5000";
 
+    public string PreviewStateDirectoryFor(string worktreePath) => WorktreePreviewService.StateDirectoryOf(worktreePath);
+
+    public Task<string?> PreviewDataFolderAsync(Guid repositoryId, string worktreePath, CancellationToken ct = default)
+        => Task.FromResult(FindPreviewDataCopy(worktreePath));
+
+    private static string PreviewDataCopiesRoot => Path.Combine(AgentIsolation.ScratchRoot, "preview-data");
+
+    /// <summary>
+    /// The run's own copy of the preview data its repository keeps: a folder in scratch named for the run, so the sweep can tell
+    /// whose it is, and for its worktree, so a preview, which knows only the worktree, finds it.
+    /// </summary>
+    internal static string PreviewDataCopyOf(Guid ownerId, string worktreePath)
+        => Path.Combine(PreviewDataCopiesRoot, $"{ownerId:N}-{WorktreePreviewService.WorktreeSlug(Path.GetFullPath(worktreePath))}");
+
+    /// <summary>The copy of the run that holds <paramref name="worktreePath"/>; null when it has none.</summary>
+    internal static string? FindPreviewDataCopy(string worktreePath)
+    {
+        var slug = WorktreePreviewService.WorktreeSlug(Path.GetFullPath(worktreePath));
+        try
+        {
+            return Directory.EnumerateDirectories(PreviewDataCopiesRoot, "*-" + slug)
+                .FirstOrDefault(folder => new DirectoryInfo(folder).LinkTarget is null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The copies of runs not in <paramref name="liveIds"/> made before <paramref name="startedUtc"/>: of a run whose row went without
+    /// being reclaimed, or that ILD did not end before it stopped. This process's own copies are never taken.
+    /// </summary>
+    internal static IEnumerable<string> OrphanedPreviewDataCopies(string scratchRoot, IReadOnlySet<Guid> liveIds, DateTime startedUtc)
+    {
+        var root = Path.Combine(scratchRoot, "preview-data");
+        if (!Directory.Exists(root)) return [];
+        return Directory.EnumerateFileSystemEntries(root)
+            .Where(entry => Path.GetFileName(entry) is { Length: > 32 } name && name[32] == '-'
+                && Guid.TryParseExact(name[..32], "N", out var owner) && !liveIds.Contains(owner)
+                && Directory.GetLastWriteTimeUtc(entry) < startedUtc);
+    }
+
+    private PreviewDataStore Store()
+        => new(PreviewVolumes.Root(
+                _configuration
+                ?? _services?.GetService<IConfiguration>()
+                ?? throw new InvalidOperationException("this run host was built without configuration, so it does not know where preview data is kept")),
+            _services?.GetService<ILogger<PreviewDataStore>>());
+
+    private async Task FillPreviewDataAsync(Guid ownerId, string worktreePath, Guid repositoryId, CancellationToken ct)
+    {
+        var copy = PreviewDataCopyOf(ownerId, worktreePath);
+        if (AgentWritableFiles.EntryExists(copy)) return;
+        using var file = PrivateTempFile.Create("ild-preview-data-");
+        await using (var sink = file.OpenWrite())
+            await Store().PackAsync(repositoryId, sink, ct);
+        await AgentWritableFiles.CreateDirectoryAsync(copy, ct);
+        await using var archive = file.OpenRead();
+        await PreviewDataStore.UnpackAsync(archive, copy, ct);
+    }
+
+    // The run's commands are ended first, so the copy is not changing while it is packed. Only the copy of a run this process made
+    // is put back: one that crashed or outlived a restart of ILD keeps nothing. Whatever happens, the copy goes.
+    private async Task SyncPreviewDataBackAsync(RunEnvironment environment, CancellationToken ct)
+    {
+        var copy = PreviewDataCopyOf(environment.OwnerId, environment.WorkingDirectory);
+        if (!AgentWritableFiles.EntryExists(copy)) return;
+        try
+        {
+            if (environment.KeptPreviewDataOf is { } repositoryId && _made.ContainsKey(environment.OwnerId))
+            {
+                using var file = PrivateTempFile.Create("ild-preview-data-");
+                await using (var sink = file.OpenWrite())
+                    await PreviewDataStore.PackFolderAsync(copy, sink, ct);
+                await using var archive = file.OpenRead();
+                await Store().ReplaceAsync(repositoryId, archive, ct);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _services?.GetService<ILogger<LocalRunHost>>()?.LogWarning(ex, "The preview data of the run in {Worktree} is not kept: it could not be put back", environment.WorkingDirectory);
+        }
+        finally
+        {
+            await AgentWritableFiles.DeleteAsync([copy], CancellationToken.None);
+        }
+    }
+
     // -- Sweep -------------------------------------------------------------------
 
     internal const string McpConfigKind = "mcp-config";
     internal const string PackageFeedConfigKind = "package-feed-config";
     internal const string PiExtensionKind = "pi-extension";
     internal const string LegacyPiExtensionsKind = "legacy-pi-extensions";
+    internal const string PreviewDataCopyKind = "preview-data-copy";
 
     public Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)
         => Task.FromResult(ListLeftovers(
@@ -332,7 +436,7 @@ public sealed class LocalRunHost : IRunHost
     /// <summary>
     /// The secret-bearing files a killed process left: MCP configs, package feed npm configs and pi
     /// extensions written before <paramref name="startedUtc"/> (the extensions only for runs and chats not in
-    /// <paramref name="liveIds"/>), and the scratch root's legacy extensions, as one leftover. A listing that
+    /// <paramref name="liveIds"/>), the copies of kept preview data of runs not in it made before then, and the scratch root's legacy extensions, as one leftover. A listing that
     /// fails is logged and the rest are listed; <c>ListedAll</c> is then false.
     /// </summary>
     internal static (IReadOnlyList<RunLeftover> Leftovers, bool ListedAll) ListLeftovers(
@@ -356,6 +460,7 @@ public sealed class LocalRunHost : IRunHost
         List(McpConfigKind, () => IldMcpServer.StaleConfigFiles(agentReadRoot, startedUtc));
         List(PackageFeedConfigKind, () => PackageFeedCredentialFiles.StaleFiles(agentReadRoot, startedUtc));
         List(PiExtensionKind, () => PiAdapter.StaleExtensions(agentReadRoot, liveIds, startedUtc));
+        List(PreviewDataCopyKind, () => OrphanedPreviewDataCopies(scratchRoot, liveIds, startedUtc));
         leftovers.Add(new RunLeftover(LegacyPiExtensionsKind, scratchRoot));
         return (leftovers, listedAll);
     }
@@ -371,6 +476,9 @@ public sealed class LocalRunHost : IRunHost
             case PiExtensionKind:
                 Directory.Delete(leftover.Location, recursive: true);
                 return true;
+            case PreviewDataCopyKind:
+                // Never put back: a run that was not ended by ILD may have left it half-written.
+                return await AgentWritableFiles.DeleteAsync([leftover.Location], ct);
             case LegacyPiExtensionsKind:
                 return await PiAdapter.SweepLegacyExtensionsAsync(leftover.Location, ct);
             default:

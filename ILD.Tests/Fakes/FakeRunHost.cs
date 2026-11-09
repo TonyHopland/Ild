@@ -54,7 +54,8 @@ internal sealed class FakeRunHost : IRunHost
         _seesDisk = true;
     }
 
-    public RunHostKind Kind => RunHostKind.Local;
+    /// <summary>Which host it stands in for: <c>Local</c> unless a test makes it an isolated one, whose runs live elsewhere.</summary>
+    public RunHostKind Kind { get; set; } = RunHostKind.Local;
 
     public FakeRunHost WithDirectory(string path)
     {
@@ -288,6 +289,22 @@ internal sealed class FakeRunHost : IRunHost
         => throw new NotSupportedException("the fake host runs no tools");
 
     public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => configuredApiUrl ?? "http://fake-ild";
+
+    /// <summary>Where <c>PreviewStateDirectoryFor</c> puts a preview's state directory: on this machine unless a test says otherwise.</summary>
+    public Func<string, string> StateDirectoryFor { get; set; } = WorktreePreviewService.StateDirectoryOf;
+
+    public string PreviewStateDirectoryFor(string worktreePath) => StateDirectoryFor(worktreePath);
+
+    /// <summary>What <c>IsRunningAsync</c> answers: whether a run is still running as it was made.</summary>
+    public bool Running { get; set; } = true;
+
+    public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default) => Task.FromResult(Running);
+
+    /// <summary>Where <c>PreviewDataFolderAsync</c> says a repository keeps its preview data.</summary>
+    public Func<Guid, string?> PreviewDataFolder { get; set; } = repository => $"/fake-preview-data/{repository:D}";
+
+    public Task<string?> PreviewDataFolderAsync(Guid repositoryId, string worktreePath, CancellationToken ct = default)
+        => Task.FromResult(PreviewDataFolder(repositoryId));
 
     public Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<RunLeftover>>([]);

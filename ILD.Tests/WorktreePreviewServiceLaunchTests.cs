@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Enums;
@@ -32,7 +33,7 @@ public class WorktreePreviewServiceLaunchTests : IDisposable
 
     private WorktreePreviewService BuildService(string? egressProxy = null)
         => new(new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, egressProxy, environment: _environment);
+            NullLogger<WorktreePreviewService>.Instance, LocalRunHost.Shared, egressProxy, environment: _environment);
 
     private WorktreePreviewService.ResolvedStep Step(NetworkMode mode = NetworkMode.Monitor) => new(
         "npm run dev",

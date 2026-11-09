@@ -410,6 +410,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var home = await RunScriptAsync(owner, HomeScript, [RunPaths.HomeDirectory(owner)], ct);
         if (!home.Success)
             throw new InvalidOperationException($"could not make the run's home in its {Noun}: {home.StdErr.Trim()}");
+        if (request.KeepPreviewData)
+            await FillPreviewDataAsync(owner, request.RepositoryId, ct);
         // A retry reaches an environment that already holds the run's checkout, with commits the bundle does not have:
         // cloning into it would fail and checking the branch out again would throw those commits away.
         var workingDirectory = RunPaths.WorkingDirectory(owner);
@@ -464,8 +466,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var psi = command.Start;
         // A command in a chat's folder is the chat's, whatever run or chat id its caller names to kill it by (a title is made under an id of its own).
         // With no directory the id alone says whose command it is, and it is a chat's as readily as a run's.
-        var held = string.IsNullOrEmpty(psi.WorkingDirectory) && command.OwnerId != Guid.Empty
-            ? await HeldOwnerAsync(command.OwnerId, ct)
+        var held = command.RunIn is { } runIn ? await HeldOwnerAsync(runIn, ct)
+            : string.IsNullOrEmpty(psi.WorkingDirectory) && command.OwnerId != Guid.Empty ? await HeldOwnerAsync(command.OwnerId, ct)
             : null;
         var owner = held ?? (RunPaths.ChatOf(psi.WorkingDirectory) is { } chat && HostsChats
             ? new ExecOwner(chat, Chat: true)
@@ -892,6 +894,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var all = true;
         foreach (var group in paths.GroupBy(OwnerFor))
         {
+            // A run that is not running is not started again to delete files in it: they go with its pod or container, and
+            // what a crashed run left must not run again. A chat's files outlive its container.
+            if (!group.Key.Chat && !await IsRunningAsync(group.Key.Id, ct)) continue;
             var result = await RunScriptAsync(group.Key, "rm -rf -- \"$@\"", [.. group], ct);
             all &= result.Success;
             if (result.Success && HostsChats)
@@ -910,6 +915,83 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             : null;
 
     public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => IldUrl;
+
+    public string PreviewStateDirectoryFor(string worktreePath)
+        => RunPaths.OwnerOf(worktreePath) is { } run ? $"{RunPaths.RunRoot(run)}/preview-state"
+            : HostsChats && RunPaths.ChatOf(worktreePath) is { } chat ? $"{RunPaths.ChatRoot(chat)}/preview-state/{WorktreePreviewService.WorktreeSlug(worktreePath)}"
+            : throw new InvalidOperationException($"{worktreePath} is not a worktree in a run's or chat's {Noun}");
+
+    public async Task<string?> PreviewDataFolderAsync(Guid repositoryId, string worktreePath, CancellationToken ct = default)
+    {
+        if (RunPaths.OwnerOf(worktreePath) is not { } run)
+            return HostsChats && RunPaths.ChatOf(worktreePath) is not null
+                ? null
+                : throw new InvalidOperationException($"{worktreePath} is not a worktree in a run's or chat's {Noun}");
+        var folder = RunPaths.PreviewData(run);
+        return (await RunScriptAsync(run, "[ -d \"$1\" ]", [folder], ct)).Success ? folder : null;
+    }
+
+    /// <summary>Whether the run's pod or container is there and running, found without starting it.</summary>
+    protected abstract Task<bool> IsRunningAsync(Guid owner, CancellationToken ct);
+
+    public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default) => IsRunningAsync(environment.OwnerId, ct);
+
+    /// <summary>Where the preview data repositories keep between runs is stored, on ILD's own disk. A run made with <see cref="RunEnvironmentRequest.KeepPreviewData"/> needs it.</summary>
+    public PreviewDataStore? PreviewData { get; set; }
+
+    // The exit status of the pack script when the run has no copy to put back.
+    private const int NoPreviewDataCopy = 3;
+
+    /// <summary>Fills the run's own copy from the store, unless it has one already (a retry of <see cref="CreateAsync"/>).</summary>
+    private async Task FillPreviewDataAsync(Guid owner, Guid repositoryId, CancellationToken ct)
+    {
+        var store = PreviewData ?? throw new InvalidOperationException($"this run host has no store of preview data to fill the run's {Noun} from");
+        var folder = RunPaths.PreviewData(owner);
+        if ((await RunScriptAsync(owner, "[ -e \"$1\" ] || [ -L \"$1\" ]", [folder], ct)).Success) return;
+        using var file = PrivateTempFile.Create("ild-preview-data-");
+        await using (var sink = file.OpenWrite())
+            await store.PackAsync(repositoryId, sink, ct);
+        await using var archive = file.OpenRead();
+        var filled = await ExecAsync(owner, ["/bin/bash", "-c", "mkdir -p -- \"$1\" && exec tar -x --no-same-owner -C \"$1\"", "bash", folder], archive, null, ct);
+        if (!filled.Success)
+            throw new InvalidOperationException($"could not fill the run's copy of its repository's preview data in its {Noun}: {filled.StdErr.Trim()}");
+    }
+
+    /// <summary>
+    /// Puts the run's copy of the preview data back in the store of <see cref="RunEnvironment.KeptPreviewDataOf"/>, before the
+    /// run's objects are deleted. Only from a run that is still running: one whose pod or container stopped or went away ended some other
+    /// way, and what it left is not kept. Never throws; the run is deleted whatever happened here.
+    /// </summary>
+    protected async Task SyncPreviewDataBackAsync(RunEnvironment environment, CancellationToken ct)
+    {
+        if (environment.KeptPreviewDataOf is not { } repositoryId || PreviewData is not { } store) return;
+        var owner = environment.OwnerId;
+        try
+        {
+            // Asked first: running a command in a stopped run would start it again.
+            if (!await IsRunningAsync(owner, ct))
+            {
+                Logger?.LogWarning("Run {Run} is not running, so its copy of the preview data is not kept", owner);
+                return;
+            }
+            using var file = PrivateTempFile.Create("ild-preview-data-");
+            RunHostOutput packed;
+            await using (var sink = file.OpenWrite())
+                packed = await ExecAsync(owner, ["/bin/bash", "-c", $"[ -d \"$1\" ] || exit {NoPreviewDataCopy}; exec tar -c -C \"$1\" .", "bash", RunPaths.PreviewData(owner)], null, sink, ct);
+            if (packed.ExitCode == NoPreviewDataCopy) return;
+            if (!packed.Success)
+            {
+                Logger?.LogWarning("Could not pack the preview data of run {Run}; the stored copy is unchanged: {Error}", owner, packed.StdErr.Trim());
+                return;
+            }
+            await using var archive = file.OpenRead();
+            await store.ReplaceAsync(repositoryId, archive, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger?.LogWarning(ex, "The preview data of run {Run} is not kept: it could not be put back from its {Noun}", owner, Noun);
+        }
+    }
 
     /// <summary>Where the preview proxy forwards to reach a service listening on <paramref name="port"/> in the run.</summary>
     public abstract Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default);

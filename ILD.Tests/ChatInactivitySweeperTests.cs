@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
@@ -116,7 +117,7 @@ public sealed class ChatInactivitySweeperTests : IDisposable
 
     private ChatService NewChatService(AppDbContext ctx)
         => new(ctx, new ProviderStore(ctx), Mock.Of<IAgentAdapterRegistry>(), _notifier.Object,
-            new ChatOptions { ScratchRoot = _scratchRoot }, new LoopRunStore(ctx), _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+            new ChatOptions { ScratchRoot = _scratchRoot }, new LoopRunStore(ctx), _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 
     private ChatInactivitySweeper BuildSweeper(IChatTurnRunner? runner = null)
     {

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Tests.Fakes;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -188,7 +189,7 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     private ChatService NewService(IAgentAdapter adapter, IEgressPolicy? egressPolicy = null)
-        => new(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, egressPolicy: egressPolicy);
+        => new(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, egressPolicy: egressPolicy, runHost: LocalRunHost.Shared);
 
     /// <summary>
     /// Seed an active (Running) run for <paramref name="workItemId"/> pointing at a
@@ -786,7 +787,7 @@ public sealed class ChatServiceTests : IDisposable
         var titles = NewTitleScheduler();
         var svc = new ChatService(_db.Context, _db.Providers,
             RegistryFor(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("reply")))),
-            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, titles: titles, claudeProjects: TestClaudeProjectFolders.Instance);
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, titles: titles, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
         var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         // The job handed off never finishes; the turn must end regardless.
@@ -813,7 +814,7 @@ public sealed class ChatServiceTests : IDisposable
                 if (interrupted) cts.Cancel();
                 return Task.FromResult(NodeExecutionResult.Fail(interrupted ? "interrupted" : "provider unavailable"));
             })),
-            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, titles: titles, claudeProjects: TestClaudeProjectFolders.Instance);
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, titles: titles, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
         var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "first", cts.Token);
@@ -867,7 +868,7 @@ public sealed class ChatServiceTests : IDisposable
         using var otherContext = _db.Fresh();
         var otherRequest = new ChatService(
             otherContext, _db.Providers, RegistryFor(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok()))),
-            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
         var svc = NewService(new FakeAdapter(async ctx =>
         {
             Assert.True(await otherRequest.RenameAsync("alice", ctx.ChatSessionId!.Value, "My own name", CancellationToken.None));
@@ -999,7 +1000,7 @@ public sealed class ChatServiceTests : IDisposable
         using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(starAfterInactiveRead).Options);
         var sweep = new ChatService(deleting, _db.Providers, Mock.Of<IAgentAdapterRegistry>(), _notifier, Options,
-            _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+            _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 
         Assert.False(await sweep.DeleteIfInactiveAsync(started.Id, DateTime.UtcNow.AddDays(1), TestContext.Current.CancellationToken));
 
@@ -1052,7 +1053,7 @@ public sealed class ChatServiceTests : IDisposable
         using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(clearBeforeSave).Options);
         var request = new ChatService(deleting, _db.Providers, Mock.Of<IAgentAdapterRegistry>(), _notifier, Options,
-            _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+            _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 
         Assert.True(await request.DeleteAsync("alice", started.Id, TestContext.Current.CancellationToken));
 
@@ -1221,7 +1222,7 @@ public sealed class ChatServiceTests : IDisposable
         using var otherContext = _db.Fresh();
         var otherRequest = new ChatService(
             otherContext, _db.Providers, RegistryFor(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok()))),
-            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
         var svc = NewService(new FakeAdapter(async ctx =>
         {
             // The reply will be sequence 1; this mark-read lands before it is stored.
@@ -1283,7 +1284,7 @@ public sealed class ChatServiceTests : IDisposable
         var schedules = new Mock<IChatScheduleNotifier>();
         var svc = new ChatService(_db.Context, _db.Providers,
             RegistryFor(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Fail("raw\0 terminal output")))),
-            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, schedules: schedules.Object, claudeProjects: TestClaudeProjectFolders.Instance);
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, schedules: schedules.Object, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
         var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         var turnId = Guid.NewGuid();
         var firingId = await SeedRunningFiringAsync(chat.Id, turnId);
@@ -1440,7 +1441,7 @@ public sealed class ChatServiceTests : IDisposable
         var registry = turn == NothingToRecord.NoAdapter
             ? Mock.Of<IAgentAdapterRegistry>(r => r.ResolveForProvider(It.IsAny<AiProvider>()) == noAdapter).WithDeclaredTraits()
             : RegistryFor(adapter);
-        var svc = new ChatService(_db.Context, _db.Providers, registry, _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+        var svc = new ChatService(_db.Context, _db.Providers, registry, _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
         var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         if (turn == NothingToRecord.ProviderGone)
         {
@@ -1583,7 +1584,7 @@ public sealed class ChatServiceTests : IDisposable
             .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(lateTitle).Options);
         var svc = new ChatService(deleting, _db.Providers, RegistryFor(new FakeAdapter(_ =>
             Task.FromResult(NodeExecutionResult.Ok("reply", usage: new TokenUsage(100, 10, 0.10m))))),
-            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
         var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hi", CancellationToken.None);
 

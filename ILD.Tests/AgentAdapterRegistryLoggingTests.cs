@@ -45,6 +45,7 @@ public sealed class AgentAdapterRegistryLoggingTests : IDisposable
 
         var warnings = new WarningCollector();
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         services.AddLogging(logging => logging.AddProvider(warnings));
         services.AddSingleton<IProcessEnvironment>(new TestProcessEnvironment { { AgentIsolation.AgentReadRootEnvVar, _root } });
         services.AddSingleton<IAgentAdapter, CopilotAdapter>();

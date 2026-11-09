@@ -113,6 +113,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     public override async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
     {
+        await SyncPreviewDataBackAsync(environment, ct);
         _addresses.TryRemove(environment.OwnerId, out _);
         await DeleteObjectsAsync(environment.OwnerId, ct);
     }
@@ -171,6 +172,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         try { await call(); }
         catch (DockerApiException ex) when (ex.Status == HttpStatusCode.NotFound) { }
     }
+
+    protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => IsHealthyAsync(owner, ct);
 
     private async Task<bool> IsHealthyAsync(Guid owner, CancellationToken ct)
     {

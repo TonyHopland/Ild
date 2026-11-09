@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -102,7 +103,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var unreachable = new WorkItemManager(
             Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns,
-            new WorkItemServerClient(new HttpClient(new ThrowingHandler())), _db.ServerOptions, TestActors.Instance);
+            new WorkItemServerClient(new HttpClient(new ThrowingHandler())), _db.ServerOptions, TestActors.Instance, runHost: LocalRunHost.Shared);
         var svc = NewService(adapter, unreachable);
         var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" }, TestContext.Current.CancellationToken)).Id;
 
@@ -142,7 +143,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
     }
 
     private WorkItemManager NewWorkItemManager(IWorkItemServerOptionsResolver options)
-        => new(Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, options, TestActors.Instance);
+        => new(Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, options, TestActors.Instance, runHost: LocalRunHost.Shared);
 
     private ChatService NewService(IAgentAdapter adapter, IWorkItemManager workItems)
         => new(
@@ -155,7 +156,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
             _db.LoopRuns,
             new ChatLoopScratchpad(),
             new ChatCloneCoordinator(),
-            workItems: workItems, claudeProjects: TestClaudeProjectFolders.Instance);
+            workItems: workItems, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 
     private async Task<AiProvider> SeedProviderAsync()
     {

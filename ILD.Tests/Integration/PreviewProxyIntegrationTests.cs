@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
@@ -64,7 +65,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         builder.Services.AddSingleton(PreviewProxyBase.Parse(proxyBase));
         builder.Services.AddSingleton<IWorktreePreviewService>(new StubPreviewService(label => _resolve(label)));
         builder.Services.AddScoped(_ => Mock.Of<IWorkItemManager>());
-        if (_runHost is not null) builder.Services.AddSingleton(_runHost);
+        builder.Services.AddSingleton(_runHost ?? LocalRunHost.Shared);
 
         _proxy = builder.Build();
         _proxy.UseWebSockets();

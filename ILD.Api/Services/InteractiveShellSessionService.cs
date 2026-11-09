@@ -21,10 +21,10 @@ public sealed class InteractiveShellSessionService
     private readonly ILogger<InteractiveShellSessionService> _logger;
     private readonly IRunHost _host;
 
-    public InteractiveShellSessionService(ILogger<InteractiveShellSessionService> logger, IRunHost? host = null)
+    public InteractiveShellSessionService(ILogger<InteractiveShellSessionService> logger, IRunHost host)
     {
         _logger = logger;
-        _host = host ?? LocalRunHost.Shared;
+        _host = host;
     }
 
     /// <param name="sessionLabel">

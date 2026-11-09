@@ -66,15 +66,15 @@ public sealed class ChatService : IChatService
         ILoopRunStore runs,
         IChatLoopScratchpad loopScratchpad,
         ChatCloneCoordinator chatClones,
+        IRunHost runHost,
         IWorkItemManager? workItems = null,
         ILogger<ChatService>? log = null,
         IChatTitleScheduler? titles = null,
         IChatScheduleNotifier? schedules = null,
         ClaudeProjectFolders? claudeProjects = null,
-        IEgressPolicy? egressPolicy = null,
-        IRunHost? runHost = null)
+        IEgressPolicy? egressPolicy = null)
     {
-        _runHost = runHost ?? LocalRunHost.Shared;
+        _runHost = runHost;
         _db = db;
         _providers = providers;
         _registry = registry;

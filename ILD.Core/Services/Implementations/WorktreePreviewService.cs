@@ -76,12 +76,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
         PreviewDataClaims claims,
+        IRunHost host,
         IEgressPolicy? egressPolicy = null,
-        IWorkItemNotifier? notifier = null,
-        IRunHost? host = null)
-        : this(httpClientFactory, configuration, proxyBase, logger,
+        IWorkItemNotifier? notifier = null)
+        : this(httpClientFactory, configuration, proxyBase, logger, host,
             AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims,
-            egressPolicy: egressPolicy, notifier: notifier, host: host)
+            egressPolicy: egressPolicy, notifier: notifier)
     {
     }
 
@@ -102,15 +102,15 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         IConfiguration configuration,
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
+        IRunHost host,
         string? egressProxy = null,
         IProcessEnvironment? environment = null,
         Func<int, bool>? isPortAvailable = null,
         PreviewDataClaims? claims = null,
         IEgressPolicy? egressPolicy = null,
-        IWorkItemNotifier? notifier = null,
-        IRunHost? host = null)
+        IWorkItemNotifier? notifier = null)
     {
-        _host = host ?? LocalRunHost.Shared;
+        _host = host;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _proxyBase = proxyBase;
@@ -746,7 +746,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // The install runs outside the gate, holding the preview data through its own lease.
         using (var lease = await ClaimPreviewDataAsync(volumes, normalized, holdsGate: false, cancellationToken))
         {
-            var stateDirectory = BuildStateDirectory(normalized);
+            var stateDirectory = await BuildStateDirectoryAsync(normalized, cancellationToken);
             var logDirectory = BuildLogDirectory(normalized);
 
             // Install needs no ports or running services — build a port-less runtime so
@@ -763,7 +763,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 new List<ManagedPreviewProcess>(),
                 DotEnvParser.Parse(customEnv),
                 new PackageFeedFileShare(packageFeeds ?? [], FeedFilePrefix(normalized, "install"), _logger),
-                await PreviewVolumes.CreateFoldersAsync(_configuration, profile.Volumes, volumes, stateDirectory, cancellationToken));
+                await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, volumes, stateDirectory, _logger, cancellationToken));
 
             await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken);
             return new WorktreeInstallResult(true);
@@ -1181,7 +1181,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         StartProgress? progress = null)
     {
         var publicHost = ResolvePublicHost(options.PublicHost);
-        var stateDirectory = BuildStateDirectory(normalized);
+        var stateDirectory = await BuildStateDirectoryAsync(normalized, cancellationToken);
         var logDirectory = BuildLogDirectory(normalized);
 
         var ports = AllocatePorts(profile, options.PortOverrides);
@@ -1196,7 +1196,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             new List<ManagedPreviewProcess>(),
             DotEnvParser.Parse(options.CustomEnv),
             new PackageFeedFileShare(options.PackageFeeds ?? [], FeedFilePrefix(normalized, "preview"), _logger),
-            await PreviewVolumes.CreateFoldersAsync(_configuration, profile.Volumes, options.Volumes, stateDirectory, cancellationToken),
+            await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, options.Volumes, stateDirectory, _logger, cancellationToken),
             lease,
             options.WorkItemId);
 
@@ -1916,15 +1916,20 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <summary>
     /// Per-worktree preview state the <em>preview itself</em> writes — the npm cache
     /// its install steps populate, and whatever a profile puts under
-    /// <c>${STATE_DIR}</c>. Rooted at the scratch root, since the preview's steps
-    /// must be able to write here.
+    /// <c>${STATE_DIR}</c>. Where the run host says, so the preview's steps can write
+    /// it and see it where they run.
     /// </summary>
-    private static string BuildStateDirectory(string worktreePath)
-        => AgentIsolation.CreateScratchDirectory(StateDirectorySegments(worktreePath));
+    private async Task<string> BuildStateDirectoryAsync(string worktreePath, CancellationToken cancellationToken)
+    {
+        RunInFor(worktreePath);
+        var stateDirectory = _host.PreviewStateDirectoryFor(worktreePath);
+        await _host.CreateDirectoryAsync(NpmCacheOf(stateDirectory), cancellationToken);
+        return stateDirectory;
+    }
 
     /// <summary>
-    /// The <c>${STATE_DIR}</c> a preview of <paramref name="worktreePath"/> uses, in
-    /// whatever form the path is given, without creating it: what run reclaim deletes.
+    /// The <c>${STATE_DIR}</c> a preview of <paramref name="worktreePath"/> uses on ILD's
+    /// own machine, in whatever form the path is given, without creating it.
     /// </summary>
     public static string StateDirectoryOf(string worktreePath)
         => Path.Combine([AgentIsolation.ScratchRoot, .. StateDirectorySegments(NormalizeWorktreePath(worktreePath))]);
@@ -1953,7 +1958,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private static string BuildLogDirectory(string worktreePath)
         => AgentIsolation.CreatePrivateDirectory("preview", WorktreeSlug(worktreePath));
 
-    private static string WorktreeSlug(string worktreePath)
+    internal static string WorktreeSlug(string worktreePath)
         => Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(worktreePath))).ToLowerInvariant();
 
@@ -1974,8 +1979,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             workingDirectory,
             environment,
             mode,
-            feeds.Path is null ? [] : [feeds.Path]);
+            feeds.Path is null ? [] : [feeds.Path],
+            RunInFor(runtime.WorktreePath));
     }
+
+    /// <summary>
+    /// The run or chat a preview of <paramref name="worktreePath"/> runs in. When runs are isolated a worktree
+    /// that is in neither (one left on ILD's own disk from before the host was switched) is refused: its steps
+    /// would otherwise start on ILD's own machine.
+    /// </summary>
+    private Guid? RunInFor(string worktreePath)
+        => RunPaths.HolderOf(worktreePath)
+            ?? (_host.Kind == RunHostKind.Local
+                ? null
+                : throw new InvalidOperationException(
+                    $"Refusing to preview {worktreePath}: runs are isolated and this worktree is not in a run, so its commands would run on ILD's own machine. Start a new run of the work item."));
 
     /// <summary>
     /// Layers a step's environment onto <paramref name="defaults"/>, which it returns.
@@ -2035,11 +2053,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// </para>
     /// </summary>
     internal static Dictionary<string, string> BuildDefaultEnvironment(string stateDirectory)
-    {
-        var npmCache = Path.Combine(stateDirectory, "npm-cache");
-        Directory.CreateDirectory(npmCache);
-        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["NPM_CONFIG_CACHE"] = npmCache };
-    }
+        => new(StringComparer.OrdinalIgnoreCase) { ["NPM_CONFIG_CACHE"] = NpmCacheOf(stateDirectory) };
+
+    private static string NpmCacheOf(string stateDirectory) => Path.Combine(stateDirectory, "npm-cache");
 
     /// <summary>
     /// ILD's own <c>HOME</c>, the root of the npm global bin added to ILD's own PATH.
@@ -2236,9 +2252,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     // What the caller sets on the process is passed on as such, and the credential file with it, so a host that starts the
-    // command in a run of its own keeps the variables and copies the file in.
+    // command in a run of its own keeps the variables and copies the file in. It runs in the worktree's run, or nowhere.
     internal RunCommand PreparedCommand(ResolvedStep resolved)
-        => RunCommand.Prepared(BuildPreviewProcess(resolved), environment: resolved.Environment, files: resolved.Files, networkMode: resolved.NetworkMode);
+        => RunCommand.Prepared(BuildPreviewProcess(resolved), environment: resolved.Environment, files: resolved.Files, networkMode: resolved.NetworkMode)
+            with { RunIn = resolved.RunIn };
 
     // The run id leads the name, which is how the run's files are found and what a host checks before it copies one in.
     internal static string FeedFilePrefix(string worktreePath, string kind)
@@ -2332,7 +2349,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     internal sealed record ResolvedStep(
         string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment,
-        NetworkMode NetworkMode = NetworkMode.Monitor, IReadOnlyList<string>? Files = null);
+        NetworkMode NetworkMode = NetworkMode.Monitor, IReadOnlyList<string>? Files = null, Guid? RunIn = null);
     private sealed record CommandResult(int ExitCode, string StdOut, string StdErr);
 
     private sealed class PreviewRuntime

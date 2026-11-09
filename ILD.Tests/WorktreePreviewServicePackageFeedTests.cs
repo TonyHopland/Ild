@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -43,7 +44,7 @@ public sealed class WorktreePreviewServicePackageFeedTests : IDisposable
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         _service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
         return _service;
     }
 

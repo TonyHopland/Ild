@@ -2,7 +2,6 @@ using ILD.Core.Services.Implementations.Files;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
-using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -24,14 +23,14 @@ public sealed class RunReclaimer : IRunReclaimer
     public RunReclaimer(
         IRepositoryManager repo,
         IProviderStore providers,
+        IRunHost host,
         IWorktreePreviewService? preview = null,
         IWorkItemNotifier? notifier = null,
         IConfiguration? config = null,
-        ILogger<RunReclaimer>? log = null,
-        IRunHost? host = null)
+        ILogger<RunReclaimer>? log = null)
     {
         _repo = repo;
-        _host = host ?? new LocalRunHost(repositories: repo);
+        _host = host;
         _providers = providers;
         _preview = preview ?? new NoopPreviewService();
         _notifier = notifier ?? new NoopWorkItemNotifier();
@@ -41,6 +40,8 @@ public sealed class RunReclaimer : IRunReclaimer
 
     public async Task<bool> ReclaimLocalStateAsync(LoopRun run)
     {
+        // Decided before anything reaches the run: stopping its preview could start a stopped container again.
+        var keptPreviewData = await KeptPreviewDataOfAsync(run);
         await StopPreviewIfRunningAsync(run);
 
         // The ILD extension holds the API token and nothing else can find it once
@@ -67,7 +68,13 @@ public sealed class RunReclaimer : IRunReclaimer
             try { baseRepoPath = await _repo.ResolveBaseRepoPathAsync(run.WorktreePath); }
             catch (Exception ex) { _log?.LogDebug(ex, "Could not resolve base repo for run {RunId}", run.Id); }
 
-            try { await _host.DeleteAsync(new RunEnvironment(run.Id, run.WorktreePath)); }
+            // The preview's ${STATE_DIR}, per-run volumes and npm cache included, belongs to the
+            // worktree and goes before it, while a run that is running can still be reached.
+            if (!await DeletePreviewStateAsync(run))
+                return false;
+
+            // The run's copy of its repository's kept preview data is put back in the store first, when the run ended cleanly.
+            try { await _host.DeleteAsync(new RunEnvironment(run.Id, run.WorktreePath, keptPreviewData)); }
             catch (Exception ex) { _log?.LogWarning(ex, "Failed to destroy worktree for run {RunId} at {Path}", run.Id, run.WorktreePath); }
 
             // Something survived the destroy attempt: report failure so the caller
@@ -75,15 +82,6 @@ public sealed class RunReclaimer : IRunReclaimer
             // row and stranding what is there as untracked disk.
             if (AgentWritableFiles.EntryExists(run.WorktreePath))
                 return false;
-        }
-
-        // The preview's ${STATE_DIR}, per-run volumes included, belongs to the worktree
-        // and goes with it. Kept preview data lives elsewhere and is never touched here.
-        if (!string.IsNullOrEmpty(run.WorktreePath)
-            && !await AgentWritableFiles.DeleteAsync([WorktreePreviewService.StateDirectoryOf(run.WorktreePath)]))
-        {
-            _log?.LogWarning("Could not remove the preview state directory of run {RunId}", run.Id);
-            return false;
         }
 
         if (string.IsNullOrEmpty(run.BranchName))
@@ -148,6 +146,41 @@ public sealed class RunReclaimer : IRunReclaimer
             _log?.LogWarning(ex, "Failed to stop the preview on {Path} before reclaiming run {RunId}",
                 run.WorktreePath, run.Id);
         }
+    }
+
+    /// <summary>
+    /// The repository whose store the run's copy of the kept preview data goes back to: only a run that is still running as it
+    /// was made. A run that crashed, or outlived a restart of ILD, may have left its copy half-written, and the stored copy stays.
+    /// </summary>
+    private async Task<Guid?> KeptPreviewDataOfAsync(LoopRun run)
+    {
+        if (string.IsNullOrEmpty(run.WorktreePath) || run.RepositoryId is not { } repositoryId) return null;
+        try
+        {
+            if (await _host.IsRunningAsync(new RunEnvironment(run.Id, run.WorktreePath)))
+                return repositoryId;
+            _log?.LogDebug("Run {RunId} is not running, so any preview data it kept is not stored", run.Id);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log?.LogWarning(ex, "Could not tell whether run {RunId} is running, so the preview data it kept is not stored", run.Id);
+        }
+        return null;
+    }
+
+    private async Task<bool> DeletePreviewStateAsync(LoopRun run)
+    {
+        try
+        {
+            if (await _host.DeleteAsync([_host.PreviewStateDirectoryFor(run.WorktreePath!)]))
+                return true;
+            _log?.LogWarning("Could not remove the preview state directory of run {RunId}", run.Id);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            _log?.LogWarning(ex, "Could not remove the preview state directory of run {RunId}", run.Id);
+        }
+        return false;
     }
 
     private async Task<string?> ResolveBaseRepoFromRepositoryAsync(Guid? repositoryId)

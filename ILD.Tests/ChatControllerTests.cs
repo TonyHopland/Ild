@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Security.Claims;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
@@ -350,7 +351,7 @@ public class ChatControllerTests
 
             var notifier = Mock.Of<IChatNotifier>();
             var chat = new ChatService(db.Context, new ProviderStore(db.Context), Mock.Of<IAgentAdapterRegistry>(), notifier,
-                new ChatOptions { ScratchRoot = scratchRoot }, new LoopRunStore(db.Context), new ChatLoopScratchpad(), new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
+                new ChatOptions { ScratchRoot = scratchRoot }, new LoopRunStore(db.Context), new ChatLoopScratchpad(), new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
             var runnerServices = new ServiceCollection().AddScoped<IChatService>(_ => chat).BuildServiceProvider();
             var runner = ActivatorUtilities.CreateInstance<ChatTurnRunner>(runnerServices, notifier, NullLogger<ChatTurnRunner>.Instance);
             var http = new DefaultHttpContext

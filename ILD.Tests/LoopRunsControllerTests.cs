@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Controllers;
 using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
@@ -190,7 +191,7 @@ public class LoopRunsControllerTests
         workItems.Setup(w => w.DeleteRunAsync(It.IsAny<Guid>())).Returns<Guid>(store.Object.DeleteAsync);
         return TestActors.SignedIn(new LoopRunsController(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
             snapshots ?? new Mock<IAdapterSessionSnapshotStore>().Object,
-            new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
+            new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance, host: LocalRunHost.Shared),
             reclaimer.Object, workItems.Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(),
             Mock.Of<ISchedulerSettingsService>(), claudeProjects: TestClaudeProjectFolders.Instance));
     }

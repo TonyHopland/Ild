@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -51,11 +52,11 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable, IClassFixt
         .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = Path.Combine(_dir, "data") })
         .Build();
 
-    private RepositoryManager RealGit => new(worktreesRoot: Path.Combine(_dir, "worktrees"));
+    private RepositoryManager RealGit => new(new LocalRunHost(new ProcessRunner()), worktreesRoot: Path.Combine(_dir, "worktrees"));
 
     private ChatRepositoryCloner Cloner(IRepositoryManager? git = null, IProviderStore? providers = null)
         => new(_db.Context, _services.GetRequiredService<IServiceScopeFactory>(), _chatClones, providers ?? _db.Providers,
-            git ?? RealGit, Config, ShutdownState.NeverStopping);
+            git ?? RealGit, Config, ShutdownState.NeverStopping, host: LocalRunHost.Shared);
 
     // -- Chat deletion and per-chat memory ------------------------------------------
 
@@ -380,7 +381,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable, IClassFixt
     {
         await using var db = _db.OnOwnConnection();
         var chats = new ChatService(db, new ProviderStore(db), Mock.Of<IAgentAdapterRegistry>(), Mock.Of<IChatNotifier>(),
-            new ChatOptions { ScratchRoot = _dir }, new LoopRunStore(db), new ChatLoopScratchpad(), _chatClones, claudeProjects: TestClaudeProjectFolders.Instance);
+            new ChatOptions { ScratchRoot = _dir }, new LoopRunStore(db), new ChatLoopScratchpad(), _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 
         Assert.True(await chats.DeleteAsync("scheduler", chatId, Ct).WaitAsync(Ct));
         Assert.False(Directory.Exists(scratch));

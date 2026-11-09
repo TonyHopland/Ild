@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Data.Common;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -48,7 +49,7 @@ internal static class RunTimeline
     /// </summary>
     public static WorkItemManager Manager(TestDb db, ILoopEngine? engine = null, IEventLogService? eventLog = null)
         => new(new Mock<IRepositoryManager>().Object, db.Providers, eventLog ?? EventLog(db), db.LoopRuns,
-            db.ServerClient, db.ServerOptions, TestActors.Instance, engine: engine);
+            db.ServerClient, db.ServerOptions, TestActors.Instance, engine: engine, runHost: LocalRunHost.Shared);
 
     /// <summary>Every event of the run, oldest first.</summary>
     public static IReadOnlyList<EventLog> Events(TestDb db, Guid runId)

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.RemoteProviders;
@@ -51,7 +52,7 @@ public class ConnectionTesterBranchMatchTests : IClassFixture<ConnectionTesterBr
     {
         var tester = new ConnectionTester(
             [new ForgejoRemoteGitProviderAdapter(), new GitHubRemoteGitProviderAdapter(), new AzureDevOpsRemoteGitProviderAdapter()],
-            new RepositoryManager(),
+            new RepositoryManager(new LocalRunHost(new ProcessRunner())),
             new HttpClient());
         var repo = new Repository
         {

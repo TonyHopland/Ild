@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using System.Net.Sockets;
 using ILD.Core.Services.Implementations;
@@ -84,7 +85,7 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         var configuration = new ConfigurationBuilder().Build();
         _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
         return _service;
     }
 

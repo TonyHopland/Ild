@@ -60,7 +60,7 @@ public class RepositoryManagerBundleFlowTests : IDisposable
         runner.Forbid(Path.Combine(_tmp, "base"));
         runner.ForbidAgentAccess(_mirrors);
         _runners.Add(runner);
-        return (new RepositoryManager(runner, null, _worktrees, _mirrors), bundles);
+        return (new RepositoryManager(runner, new LocalRunHost(runner), null, _worktrees, _mirrors), bundles);
     }
 
     private static void Upstream(string remote, string seed, string file)

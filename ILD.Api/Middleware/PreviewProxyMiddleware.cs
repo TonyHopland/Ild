@@ -112,7 +112,7 @@ public sealed class PreviewProxyMiddleware
         // responses. Buffering any of those turns a live page into a hang.
         context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
-        var host = context.RequestServices.GetService<IRunHost>() ?? LocalRunHost.Shared;
+        var host = context.RequestServices.GetRequiredService<IRunHost>();
         Uri previewTarget;
         try
         {

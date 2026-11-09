@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -16,7 +17,7 @@ public class ConnectionTesterMalformedInputTests
 {
     private static ConnectionTester Tester(HttpClient http) => new(
         [new ForgejoRemoteGitProviderAdapter(), new GitHubRemoteGitProviderAdapter(), new AzureDevOpsRemoteGitProviderAdapter()],
-        new RepositoryManager(),
+        new RepositoryManager(new LocalRunHost(new ProcessRunner())),
         http);
 
     private static RemoteProvider Provider(string type, string url, string apiKey) => new()

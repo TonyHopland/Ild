@@ -1,7 +1,8 @@
-using ILD.Core.Services.Implementations.Files;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -9,9 +10,9 @@ namespace ILD.Core.Services.Implementations;
 /// A preview profile's named volumes: which names it may declare, what
 /// <c>${VOLUME:name}</c> expands to, and where each volume's folder is. Repositories
 /// with Keep preview data between runs on keep theirs in one folder per repository
-/// under the worktrees root, a volume per subfolder; otherwise a volume lives under
-/// the worktree's state directory. Both are agent-writable, so ILD only creates and
-/// deletes there through <see cref="AgentWritableFiles"/>.
+/// where the run host keeps it (<see cref="IRunHost.PreviewDataFolderAsync"/>), a volume per
+/// subfolder; otherwise a volume lives under the worktree's state directory. Both are
+/// agent-writable, so ILD only creates and deletes there through the run host.
 /// </summary>
 public static class PreviewVolumes
 {
@@ -57,23 +58,30 @@ public static class PreviewVolumes
     /// <summary>
     /// The folder of each of <paramref name="declared"/>, by name in any case, created
     /// before anything runs: with Keep preview data on, the repository's folder that
-    /// every work item shares; otherwise, and without a repository, one under
-    /// <paramref name="stateDirectory"/>. Created without following links, since the preview's own
-    /// steps write there.
+    /// every work item shares; otherwise, without a repository, and for a chat in a host that keeps
+    /// it no preview data, one under <paramref name="stateDirectory"/>. Created through <paramref name="host"/>,
+    /// where the preview's steps run.
     /// </summary>
     public static async Task<IReadOnlyDictionary<string, string>> CreateFoldersAsync(
-        IConfiguration config, IReadOnlyList<string>? declared, PreviewVolumeScope? scope, string stateDirectory,
-        CancellationToken cancellationToken)
+        IRunHost host, string worktreePath, IReadOnlyList<string>? declared, PreviewVolumeScope? scope, string stateDirectory,
+        ILogger logger, CancellationToken cancellationToken)
     {
         var volumes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var name in declared ?? [])
+        if (declared is not { Count: > 0 })
+            return volumes;
+
+        var kept = scope is { KeepData: true } ? await host.PreviewDataFolderAsync(scope.RepositoryId, worktreePath, cancellationToken) : null;
+        if (scope is { KeepData: true } && kept is null)
+            logger.LogWarning("Preview data is kept between runs only for loop runs; the preview of {Worktree} gets volumes of its own", worktreePath);
+
+        foreach (var name in declared)
         {
-            var folder = scope is { KeepData: true }
-                ? Path.Combine(RepositoryFolder(config, scope.RepositoryId), name.ToLowerInvariant())
+            var folder = kept is not null
+                ? Path.Combine(kept, name.ToLowerInvariant())
                 : Path.Combine(stateDirectory, "volumes", name.ToLowerInvariant());
             try
             {
-                await AgentWritableFiles.CreateDirectoryAsync(folder, cancellationToken);
+                await host.CreateDirectoryAsync(folder, cancellationToken);
             }
             catch (IOException ex)
             {

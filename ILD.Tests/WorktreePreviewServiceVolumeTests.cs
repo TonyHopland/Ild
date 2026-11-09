@@ -1,3 +1,5 @@
+using ILD.Core.Services.RunHosts.Local;
+using ILD.Core.Services.RunHosts;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
@@ -13,8 +15,8 @@ namespace ILD.Tests;
 
 /// <summary>
 /// Named preview volumes (<c>${VOLUME:name}</c>) and the repository's Keep preview
-/// data between runs setting: where each volume's folder is, which previews share
-/// it, and the rule that only one work item of a keep-on repository holds its
+/// data between runs setting: where each volume's folder is, how a run's copy of the
+/// kept data reaches the next run, and the rule that only one work item of a keep-on repository holds its
 /// volumes at a time. Health probes are answered by a stub handler unless a test
 /// needs a service's own output, so services can be plain <c>sleep</c>s.
 /// </summary>
@@ -25,6 +27,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     private readonly Guid _repository = Guid.NewGuid();
     private readonly List<WorktreePreviewService> _services = [];
     private readonly List<string> _fifosToRelease = [];
+    private readonly Dictionary<string, Guid> _runs = [];
+    private LocalRunHost? _host;
 
     public WorktreePreviewServiceVolumeTests()
     {
@@ -35,6 +39,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var (worktree, run) in _runs)
+            try { Directory.Delete(LocalRunHost.PreviewDataCopyOf(run, worktree), recursive: true); } catch { /* best effort */ }
         foreach (var fifo in _fifosToRelease)
             Unblock(fifo);
         foreach (var service in _services)
@@ -47,7 +53,30 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    /// <summary>The stored copy of the repository's kept preview data, which only a run that ends puts anything in.</summary>
     private string RepositoryFolder => Path.Combine(Path.GetFullPath(_worktreesRoot), ".preview-volumes", _repository.ToString("D"));
+
+    /// <summary>The folder of the "data" volume in the run of <paramref name="worktree"/>'s own copy of the kept preview data.</summary>
+    private string KeptVolume(string worktree) => Path.Combine(Copy(worktree), "data");
+
+    private string Copy(string worktree) => LocalRunHost.PreviewDataCopyOf(_runs[worktree], worktree);
+
+    private IConfiguration Configuration => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WorktreesPath"] = _worktreesRoot })
+        .Build();
+
+    // Every worktree is a run made by the local host with Keep preview data on, so each has its own copy of the stored data.
+    private LocalRunHost Host => _host ??= new LocalRunHost(repositories: Worktrees().Object, configuration: Configuration);
+
+    private static Mock<IRepositoryManager> Worktrees()
+    {
+        var worktrees = new Mock<IRepositoryManager>();
+        worktrees.Setup(r => r.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync((string path, string _) => path);
+        return worktrees;
+    }
+
+    /// <summary>Ends the run of <paramref name="worktree"/> cleanly, which puts its copy of the kept preview data back in the store.</summary>
+    private Task EndRunAsync(string worktree) => Host.DeleteAsync(new RunEnvironment(_runs[worktree], worktree, _repository), Ct);
 
     private PreviewVolumeScope Scope(string workItemId, bool keep = true)
         => new(_repository, keep, workItemId, Title(workItemId));
@@ -63,13 +92,10 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         var handler = health ?? new HealthStub();
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient(handler, disposeHandler: false));
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WorktreesPath"] = _worktreesRoot })
-            .Build();
         var environment = new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } }.WithRealPath();
-        var service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
+        var service = new WorktreePreviewService(factory.Object, Configuration, PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            environment: environment, isPortAvailable: isPortAvailable, claims: claims);
+            environment: environment, isPortAvailable: isPortAvailable, claims: claims, host: Host);
         _services.Add(service);
         return service;
     }
@@ -136,12 +162,14 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     private static readonly Service StandardWeb = new("web", "printf up > \"${WORKTREE}/web.marker\"; exec sleep 60",
         Env: new() { ["DATA"] = "${VOLUME:DATA}" });
 
-    private string Worktree(string name, IReadOnlyList<string>? install = null, IReadOnlyList<Service>? services = null, IReadOnlyList<string>? volumes = null)
+    private async Task<string> WorktreeAsync(string name, IReadOnlyList<string>? install = null, IReadOnlyList<Service>? services = null, IReadOnlyList<string>? volumes = null)
     {
-        var worktree = Path.Combine(_worktreesRoot, name);
+        var worktree = Path.GetFullPath(Path.Combine(_worktreesRoot, name));
         Directory.CreateDirectory(worktree);
         WriteConfig(worktree, volumes ?? ["Data"], install ?? StandardInstall, services ?? [StandardWeb]);
-        return Path.GetFullPath(worktree);
+        _runs[worktree] = Guid.NewGuid();
+        await Host.CreateAsync(new RunEnvironmentRequest(_runs[worktree], worktree, name, _repository, KeepPreviewData: true), Ct);
+        return worktree;
     }
 
     private static string VolumeOf(string worktree) => File.ReadAllText(Path.Combine(worktree, "install.marker"));
@@ -163,32 +191,38 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     // --- where volumes live ---
 
     [Fact]
-    public async Task With_keep_on_every_work_item_of_the_repository_uses_one_folder_that_survives_stop_and_start()
+    public async Task With_keep_on_each_run_works_on_its_own_copy_and_what_a_run_left_reaches_the_next_once_it_ends()
     {
         var service = BuildService();
-        var a = Worktree("wt-a");
-        var b = Worktree("wt-b");
-        var expected = Path.Combine(RepositoryFolder, "data");
+        var a = await WorktreeAsync("wt-a");
 
         await service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301")), Ct);
-        Assert.Equal(expected, VolumeOf(a));
+        Assert.Equal(KeptVolume(a), VolumeOf(a));
         Assert.Equal("", Seen(a));
         await service.StopAsync(a, Ct);
+        Assert.False(Directory.Exists(RepositoryFolder));
 
+        await EndRunAsync(a);
+        Assert.False(Directory.Exists(Copy(a)));
+        Assert.Equal(a, File.ReadAllText(Path.Combine(RepositoryFolder, "data", "owner")));
+
+        var b = await WorktreeAsync("wt-b");
         await service.StartAsync(b, new WorktreePreviewStartOptions(Volumes: Scope("302")), Ct);
 
-        Assert.Equal(expected, VolumeOf(b));
-        // What work item 301's preview wrote is there for work item 302's.
+        Assert.Equal(KeptVolume(b), VolumeOf(b));
+        // What work item 301's run kept is there for work item 302's.
         Assert.Equal(a, Seen(b));
-        Assert.Equal(b, File.ReadAllText(Path.Combine(expected, "owner")));
+        Assert.Equal(b, File.ReadAllText(Path.Combine(KeptVolume(b), "owner")));
+        // The stored copy changes only when this run ends.
+        Assert.Equal(a, File.ReadAllText(Path.Combine(RepositoryFolder, "data", "owner")));
     }
 
     [Fact]
     public async Task With_keep_off_each_worktree_gets_its_own_folder_under_its_state_directory_which_a_restart_reuses()
     {
         var service = BuildService();
-        var a = Worktree("wt-a");
-        var b = Worktree("wt-b");
+        var a = await WorktreeAsync("wt-a");
+        var b = await WorktreeAsync("wt-b");
 
         var startedA = await service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301", keep: false)), Ct);
         // Previews of one keep-off repository run side by side.
@@ -214,9 +248,9 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     public async Task Switching_the_setting_moves_no_data_either_way()
     {
         var service = BuildService();
-        var a = Worktree("wt-a");
-        var b = Worktree("wt-b");
-        var c = Worktree("wt-c");
+        var a = await WorktreeAsync("wt-a");
+        var b = await WorktreeAsync("wt-b");
+        var c = await WorktreeAsync("wt-c");
 
         await service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301", keep: false)), Ct);
         await service.StopAsync(a, Ct);
@@ -226,6 +260,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         Assert.Equal("", Seen(b));
         Assert.Equal(a, File.ReadAllText(Path.Combine(VolumeOf(a), "owner")));
         await service.StopAsync(b, Ct);
+        await EndRunAsync(b);
 
         // On → off: the repository's folder is left exactly as it was.
         await service.StartAsync(c, new WorktreePreviewStartOptions(Volumes: Scope("303", keep: false)), Ct);
@@ -239,7 +274,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     {
         var health = new RecordingForwarder();
         var service = BuildService(health);
-        var a = Worktree("wt-a",
+        var a = await WorktreeAsync("wt-a",
             install: ["test -d \"${VOLUME:data}\" && printf ok > \"${WORKTREE}/existed\""],
             services:
             [
@@ -252,7 +287,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
                     Public: true,
                     PublicUrl: "https://web.example${VOLUME:data}"),
             ]);
-        var volume = Path.Combine(RepositoryFolder, "data");
+        var volume = KeptVolume(a);
 
         var started = await service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301")), Ct);
 
@@ -272,7 +307,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         string Server(string name) =>
             $"printf '%s' \"$DATA\" > \"${{WORKTREE}}/{name}.env\"; "
             + "exec node -e \"require('http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\"";
-        var a = Worktree("wt-a", install: [], services:
+        var a = await WorktreeAsync("wt-a", install: [], services:
         [
             new Service("web", Server("web"), Env: new() { ["PORT"] = "${PORT}", ["DATA"] = "${VOLUME:data}" }),
             new Service("api", Server("api"), Env: new() { ["PORT"] = "${PORT}", ["DATA"] = "${VOLUME:data}" }),
@@ -283,7 +318,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
 
         var web = File.ReadAllText(Path.Combine(a, "web.env"));
         Assert.Equal(web, File.ReadAllText(Path.Combine(a, "api.env")));
-        Assert.False(web.StartsWith(RepositoryFolder, StringComparison.Ordinal), web);
+        Assert.NotEqual(KeptVolume(a), web);
     }
 
     // --- config errors ---
@@ -312,7 +347,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     public async Task Volume_names_of_letters_digits_and_dashes_are_accepted()
     {
         var service = BuildService();
-        var worktree = Worktree("wt-a", install: [], services: [StandardWeb with { Env = new() { ["DATA"] = "${VOLUME:cache-2}" } }],
+        var worktree = await WorktreeAsync("wt-a", install: [], services: [StandardWeb with { Env = new() { ["DATA"] = "${VOLUME:cache-2}" } }],
             volumes: ["Data", "cache-2"]);
 
         var result = await service.ValidateConfigAsync(worktree, cancellationToken: Ct);
@@ -350,7 +385,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         string[] install = reference == Reference.InstallCommand
             ? [.. StandardInstall, $"printf '%s' \"{undeclared}\" > /dev/null"]
             : StandardInstall;
-        var worktree = Worktree("wt-a", install: install, services: [web]);
+        var worktree = await WorktreeAsync("wt-a", install: install, services: [web]);
 
         var error = op is { } operation
             ? await Assert.ThrowsAsync<InvalidOperationException>(() => Run(service, operation, worktree, Scope("301")))
@@ -372,8 +407,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     public async Task While_one_work_item_holds_a_keep_on_repository_another_starts_nothing_and_is_told_who_holds_it(Op op)
     {
         var service = BuildService();
-        var a = Worktree("wt-a");
-        var b = Worktree("wt-b");
+        var a = await WorktreeAsync("wt-a");
+        var b = await WorktreeAsync("wt-b");
         await service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("305")), Ct);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Run(service, op, b, Scope("306")));
@@ -383,7 +418,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         Assert.False(Launched(b), "a service was launched");
         Assert.False(File.Exists(Path.Combine(b, "seen.txt")), "an install step ran");
         Assert.False(service.IsPreviewRunning(b));
-        Assert.Equal(a, File.ReadAllText(Path.Combine(RepositoryFolder, "data", "owner")));
+        Assert.Equal(a, File.ReadAllText(Path.Combine(KeptVolume(a), "owner")));
         Assert.True(service.IsPreviewRunning(a));
     }
 
@@ -394,7 +429,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     public async Task The_work_item_that_holds_the_volumes_may_start_and_install_again(Op op)
     {
         var service = BuildService();
-        var a = Worktree("wt-a");
+        var a = await WorktreeAsync("wt-a");
         await service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("305")), Ct);
 
         await Run(service, op, a, Scope("305"));
@@ -409,9 +444,9 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     public async Task Starting_the_holding_work_item_on_a_new_worktree_stops_its_earlier_preview_first(Op op)
     {
         var service = BuildService();
-        var earlier = Worktree("wt-a-run1");
-        var current = Worktree("wt-a-run2");
-        var other = Worktree("wt-b");
+        var earlier = await WorktreeAsync("wt-a-run1");
+        var current = await WorktreeAsync("wt-a-run2");
+        var other = await WorktreeAsync("wt-b");
         await service.StartAsync(earlier, new WorktreePreviewStartOptions(Volumes: Scope("305")), Ct);
 
         await Run(service, op, current, Scope("305"));
@@ -434,8 +469,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     public async Task A_keep_off_preview_of_another_work_item_also_blocks_a_keep_on_start()
     {
         var service = BuildService();
-        var a = Worktree("wt-a");
-        var b = Worktree("wt-b");
+        var a = await WorktreeAsync("wt-a");
+        var b = await WorktreeAsync("wt-b");
         await service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("305", keep: false)), Ct);
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Run(service, Op.Start, b, Scope("306", keep: true)));
@@ -448,8 +483,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     public async Task A_keep_off_start_is_never_refused()
     {
         var service = BuildService();
-        var a = Worktree("wt-a");
-        var b = Worktree("wt-b");
+        var a = await WorktreeAsync("wt-a");
+        var b = await WorktreeAsync("wt-b");
         await service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("305", keep: true)), Ct);
 
         await service.StartAsync(b, new WorktreePreviewStartOptions(Volumes: Scope("306", keep: false)), Ct);
@@ -463,8 +498,8 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     {
         var service = BuildService();
         var (started, go) = (Fifo("started"), Fifo("go"));
-        var a = Worktree("wt-a", install: [$"printf x > '{started}'; cat '{go}' > /dev/null", .. StandardInstall]);
-        var b = Worktree("wt-b");
+        var a = await WorktreeAsync("wt-a", install: [$"printf x > '{started}'; cat '{go}' > /dev/null", .. StandardInstall]);
+        var b = await WorktreeAsync("wt-b");
 
         var installA = service.InstallAsync(a, volumes: Scope("305"), cancellationToken: Ct);
         await WaitUntilOpenedAsync(started);
@@ -479,7 +514,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
 
         await ReleaseAsync(go);
         await installA;
-        Assert.Equal(a, File.ReadAllText(Path.Combine(RepositoryFolder, "data", "owner")));
+        Assert.Equal(a, File.ReadAllText(Path.Combine(KeptVolume(a), "owner")));
 
         // Nothing is registered for the worktree, so the hold ended with the install.
         await service.InstallAsync(b, volumes: Scope("306"), cancellationToken: Ct);
@@ -507,12 +542,12 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         var service = BuildService(health, isPortAvailable: failure == StartFailure.PortInUse ? _ => false : null);
         var a = failure switch
         {
-            StartFailure.InstallStepFails => Worktree("wt-a", install: ["exit 3"]),
-            StartFailure.ConfigError => Worktree("wt-a", services: [StandardWeb with { Env = new() { ["DATA"] = "${VOLUME:missing}" } }]),
-            _ => Worktree("wt-a"),
+            StartFailure.InstallStepFails => await WorktreeAsync("wt-a", install: ["exit 3"]),
+            StartFailure.ConfigError => await WorktreeAsync("wt-a", services: [StandardWeb with { Env = new() { ["DATA"] = "${VOLUME:missing}" } }]),
+            _ => await WorktreeAsync("wt-a"),
         };
-        var b = Worktree("wt-b");
-        var c = Worktree("wt-c");
+        var b = await WorktreeAsync("wt-b");
+        var c = await WorktreeAsync("wt-c");
         var options = new WorktreePreviewStartOptions(
             Volumes: Scope("305"),
             PortOverrides: failure == StartFailure.PortInUse ? new Dictionary<string, int> { ["web"] = 4321 } : null);
@@ -539,9 +574,9 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     {
         var service = BuildService();
         var a = release == Release.ReplaceNotRunning
-            ? Worktree("wt-a", services: [StandardWeb with { Command = "exit 0" }])
-            : Worktree("wt-a");
-        var b = Worktree("wt-b");
+            ? await WorktreeAsync("wt-a", services: [StandardWeb with { Command = "exit 0" }])
+            : await WorktreeAsync("wt-a");
+        var b = await WorktreeAsync("wt-b");
 
         switch (release)
         {
@@ -578,13 +613,13 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     {
         var service = BuildService();
         var (started, go) = (Fifo("started"), Fifo("go"));
-        var a = Worktree("wt-a", install: end switch
+        var a = await WorktreeAsync("wt-a", install: end switch
         {
             InstallEnd.StepFails => ["exit 4"],
             InstallEnd.Cancelled => [$"printf x > '{started}'; cat '{go}' > /dev/null"],
             _ => StandardInstall,
         });
-        var b = Worktree("wt-b");
+        var b = await WorktreeAsync("wt-b");
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
 
         var install = service.InstallAsync(a, volumes: Scope("305"), cancellationToken: cancel.Token);
@@ -608,12 +643,12 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
         var claims = new PreviewDataClaims();
         var service = BuildService(claims: claims);
         var (started, go) = (Fifo("started"), Fifo("go"));
-        var blocker = Worktree("wt-c", install: [$"printf x > '{started}'; cat '{go}' > /dev/null"],
+        var blocker = await WorktreeAsync("wt-c", install: [$"printf x > '{started}'; cat '{go}' > /dev/null"],
             services: [new Service("web", "exec sleep 60")], volumes: []);
         var holding = service.StartAsync(blocker, new WorktreePreviewStartOptions(), Ct);
         await WaitUntilOpenedAsync(started);
-        var a = Worktree("wt-a");
-        var b = Worktree("wt-b");
+        var a = await WorktreeAsync("wt-a");
+        var b = await WorktreeAsync("wt-b");
         Assert.Equal("starting", (await service.BeginStartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301")), Ct)).State);
 
         Assert.True(claims.TryBeginReset(_repository, out _));
@@ -634,7 +669,7 @@ public class WorktreePreviewServiceVolumeTests : IDisposable
     {
         var claims = new PreviewDataClaims();
         var service = BuildService(claims: claims);
-        var a = Worktree("wt-a", install: ["exit 4"]);
+        var a = await WorktreeAsync("wt-a", install: ["exit 4"]);
         await Assert.ThrowsAnyAsync<Exception>(
             () => service.StartAsync(a, new WorktreePreviewStartOptions(Volumes: Scope("301")), Ct));
         Assert.Equal("failed", (await service.GetStatusAsync(a, Ct)).State);

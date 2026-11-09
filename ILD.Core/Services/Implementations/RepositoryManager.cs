@@ -41,17 +41,17 @@ public class RepositoryManager : IRepositoryManager
     /// <param name="mirrorsRoot">Where the per-remote mirrors live.</param>
     public RepositoryManager(
         IProcessRunner runner,
+        IRunHost host,
         ILogger<RepositoryManager>? logger = null,
         string? worktreesRoot = null,
         string? mirrorsRoot = null,
-        Func<string, string?>? readEnvironment = null,
-        IRunHost? host = null)
+        Func<string, string?>? readEnvironment = null)
     {
         _runner = runner;
         _readEnvironment = readEnvironment ?? Environment.GetEnvironmentVariable;
         _logger = logger;
         _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
-        _host = host ?? new LocalRunHost(runner);
+        _host = host;
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
@@ -59,8 +59,8 @@ public class RepositoryManager : IRepositoryManager
     }
 
     // Test/back-compat constructor: spins up a local ProcessRunner.
-    public RepositoryManager(ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
-        : this(new ProcessRunner(), logger, worktreesRoot)
+    public RepositoryManager(IRunHost host, ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
+        : this(new ProcessRunner(), host, logger, worktreesRoot)
     {
     }
 

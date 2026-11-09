@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Runtime.Versioning;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
@@ -57,7 +58,7 @@ public class PreviewStartWaitTests
         {
             using var service = new WorktreePreviewService(
                 new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-                NullLogger<WorktreePreviewService>.Instance);
+                NullLogger<WorktreePreviewService>.Instance, LocalRunHost.Shared);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.BeginStartAsync(root, null, TestContext.Current.CancellationToken));
 

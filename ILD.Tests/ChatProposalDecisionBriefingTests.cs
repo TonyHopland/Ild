@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -271,5 +272,5 @@ public sealed class ChatProposalDecisionBriefingTests : IDisposable
             new ChatLoopScratchpad(),
             new ChatCloneCoordinator(),
             workItems: new WorkItemManager(
-                Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, _db.ServerOptions, TestActors.Instance), claudeProjects: TestClaudeProjectFolders.Instance);
+                Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, _db.ServerOptions, TestActors.Instance, runHost: LocalRunHost.Shared), claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 }

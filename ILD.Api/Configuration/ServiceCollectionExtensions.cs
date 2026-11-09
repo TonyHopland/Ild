@@ -54,10 +54,10 @@ public static class ServiceCollectionExtensions
 
             return new RepositoryManager(
                 runner,
+                sp.GetRequiredService<IRunHost>(),
                 logger,
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot,
-                mirrorsRoot: RepositoryManager.MirrorRoot(config),
-                host: sp.GetRequiredService<IRunHost>());
+                mirrorsRoot: RepositoryManager.MirrorRoot(config));
         });
         services.AddSingleton<IRemoteRetryDelay, RemoteRetryDelay>();
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
@@ -78,6 +78,8 @@ public static class ServiceCollectionExtensions
                 : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp));
             host.Isolated.Probe = sp.GetRequiredService<NetworkEnforcementProbe>();
             host.Isolated.Refusals = sp.GetRequiredService<InstallerRefusals>();
+            // The lasting copy of the preview data repositories keep; each run works on a copy of its own.
+            host.Isolated.PreviewData = new PreviewDataStore(PreviewVolumes.Root(config), sp.GetRequiredService<ILogger<PreviewDataStore>>());
             // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
             host.Isolated.Forwards = async ct =>
             {

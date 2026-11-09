@@ -49,6 +49,7 @@ public class WorkItemManager : IWorkItemManager
         IWorkItemServerClient server,
         IWorkItemServerOptionsResolver options,
         BootstrapCredentials instance,
+        IRunHost runHost,
         IWorkItemNotifier? notifier = null,
         IWorktreePreviewService? previewService = null,
         IWorkItemScheduler? scheduler = null,
@@ -58,10 +59,9 @@ public class WorkItemManager : IWorkItemManager
         ILogger<WorkItemManager>? logger = null,
         RepositoryParallelismHolds? repositoryHolds = null,
         IFinishedRunCleaner? finishedRunCleaner = null,
-        IHumanInputProposalStore? humanInputProposals = null,
-        IRunHost? runHost = null)
+        IHumanInputProposalStore? humanInputProposals = null)
     {
-        _runHost = runHost ?? LocalRunHost.Shared;
+        _runHost = runHost;
         _humanInputProposals = humanInputProposals;
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -74,7 +74,7 @@ public class WorkItemManager : IWorkItemManager
         _previewService = previewService ?? new NoopPreviewService();
         _scheduler = scheduler;
         _engine = engine;
-        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _previewService, _notifier, host: _runHost);
+        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _runHost, _previewService, _notifier);
         _remoteProvider = remoteProvider;
         _logger = logger ?? NullLogger<WorkItemManager>.Instance;
         _repositoryHolds = repositoryHolds ?? new RepositoryParallelismHolds();

@@ -447,15 +447,20 @@ first install step, and a `cwd` inside one is allowed.
 
 Where the folder is depends on the repository's **Keep preview data between
 runs** setting (Repositories page, next to the custom `.env`; off by default). It
-is read when a preview, or a Start node's install, begins; changing it does not
-affect a preview that is already running.
+is read when a run starts, and when a preview or a Start node's install begins;
+changing it does not affect a run or preview that is already running.
 
 - **Off:** each volume is a fresh folder under the run's `${STATE_DIR}`. It
   survives restarts of that preview and is deleted with the run's worktree.
-- **On:** each volume is one folder for the whole repository, under
-  `.preview-volumes/<repository id>/<name>` in the worktrees directory. Every work
-  item and every run of the repository uses the same folder, so whatever one
-  preview wrote is there for the next, including on a new work item.
+- **On:** the repository keeps its volumes under
+  `.preview-volumes/<repository id>/<name>` in the worktrees directory, which no
+  run ever sees. Each run works on its own copy, made from that folder when the
+  run starts and put back when the run ends, so whatever one run's preview wrote
+  is there for the next run, including on a new work item. A run that ends any
+  other way (its container or pod stopped or gone) leaves the stored copy as it
+  was, and so does a copy that cannot be put back. When runs overlap, the last to
+  end wins. A run that started before the setting was turned on, and a chat, get
+  fresh volumes of their own instead.
 
 Switching the setting moves no data: turning it on starts from an empty
 repository folder, and turning it off leaves that folder where it is.

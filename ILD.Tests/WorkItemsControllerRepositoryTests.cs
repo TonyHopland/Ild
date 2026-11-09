@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -225,7 +226,7 @@ public class WorkItemsControllerRepositoryTests
             db.LoopRuns,
             db.ServerClient,
             db.ServerOptions, TestActors.Instance,
-            engine: new Mock<ILoopEngine>().Object);
+            engine: new Mock<ILoopEngine>().Object, runHost: LocalRunHost.Shared);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
         branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
