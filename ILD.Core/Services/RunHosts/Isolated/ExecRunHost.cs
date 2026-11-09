@@ -33,15 +33,15 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 {
     // Each command is a process group of its own, recorded under a name, so it can be killed as a group
     // without a connection to the command: the runtime does not reliably kill what an exec ran when its stream closes.
-    private const string CommandWrapper = """
+    private const string CommandWrapper = $$"""
         dir=$1; id=$2; shift 2
         cd -- "$dir" || exit 126
-        mkdir -p -- "/run/ild/procs/${id%/*}"
-        exec setsid -w sh -c 'f=/run/ild/procs/$1; shift; echo $$ > "$f"; "$@"; rc=$?; rm -f -- "$f"; exit $rc' sh "$id" "$@"
+        mkdir -p -- "{{RunPaths.ProcessDirectory}}/${id%/*}"
+        exec setsid -w sh -c 'f={{RunPaths.ProcessDirectory}}/$1; shift; echo $$ > "$f"; "$@"; rc=$?; rm -f -- "$f"; exit $rc' sh "$id" "$@"
         """;
 
-    private const string KillCommandScript = """
-        f=/run/ild/procs/$1
+    private const string KillCommandScript = $$"""
+        f={{RunPaths.ProcessDirectory}}/$1
         [ -f "$f" ] || exit 0
         pid=$(cat -- "$f"); rm -f -- "$f"
         case "$pid" in ''|*[!0-9]*) exit 0 ;; esac
@@ -52,9 +52,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         exit 0
         """;
 
-    internal const string KillAllScript = """
+    internal const string KillAllScript = $$"""
         n=0; pids=
-        for f in "/run/ild/procs/$1"/*; do
+        for f in "{{RunPaths.ProcessDirectory}}/$1"/*; do
             [ -f "$f" ] || continue
             pid=$(cat -- "$f" 2>/dev/null); rm -f -- "$f"
             case "$pid" in ''|*[!0-9]*) continue ;; esac

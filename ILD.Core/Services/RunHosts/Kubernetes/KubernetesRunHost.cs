@@ -74,7 +74,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     public override async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
     {
         var owner = request.OwnerId;
-        var workingDirectory = KubernetesNames.WorkingDirectory(owner);
+        var workingDirectory = RunPaths.WorkingDirectory(owner);
         if (await IsHealthyAsync(owner, ct))
             return new RunEnvironment(owner, workingDirectory);
 
@@ -208,7 +208,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
 
     private async Task DeleteOwnerQuietlyAsync(Guid owner)
     {
-        try { await DeleteAsync(new RunEnvironment(owner, KubernetesNames.WorkingDirectory(owner)), CancellationToken.None); }
+        try { await DeleteAsync(new RunEnvironment(owner, RunPaths.WorkingDirectory(owner)), CancellationToken.None); }
         catch (Exception ex) { Logger?.LogWarning(ex, "Could not remove the objects of run {Run} after its pod failed to start; the next sweep removes them", owner); }
     }
 
@@ -549,7 +549,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             void Collect(IEnumerable<IMetadata<V1ObjectMeta>> items)
             {
                 foreach (var item in items)
-                    if (item.Metadata.Labels is { } labels && labels.TryGetValue(KubernetesNames.RunLabel, out var run))
+                    if (item.Metadata.Labels is { } labels && labels.TryGetValue(RunPaths.RunLabel, out var run))
                         runs.Add(run);
             }
 
@@ -560,9 +560,9 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             // Sign-in and installer pods carry no run label; those ILD has not got open are left by a crash.
             var open = _execNames.Values.ToHashSet(StringComparer.Ordinal);
             var signIns = new List<string?>();
-            foreach (var role in new[] { KubernetesNames.SignInRole, KubernetesNames.ToolsRole })
+            foreach (var role in new[] { KubernetesNames.SignInRole, RunPaths.ToolsRole })
                 signIns.AddRange((await _client.CoreV1.ListNamespacedPodAsync(
-                        _namespace, labelSelector: $"{selector},{KubernetesNames.RoleLabel}={role}", cancellationToken: ct)).Items
+                        _namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={role}", cancellationToken: ct)).Items
                     .Select(p => p.Metadata.Name)
                     .Where(n => n is not null && !_signIns.ContainsKey(n) && !open.Contains(n)));
 
