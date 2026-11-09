@@ -1542,7 +1542,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         try
         {
-            await Task.WhenAll(process.StdOutPump, process.StdErrPump);
+            // The pumps end when the output pipes close. A process that survived the
+            // kill keeps them open, so this wait carries the same bound.
+            await Task.WhenAll(process.StdOutPump, process.StdErrPump).WaitAsync(KillGrace);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Preview service {Service} output was still open {Seconds:0.###}s after the stop; not waiting for it", process.Service.Name, KillGrace.TotalSeconds);
         }
         catch
         {

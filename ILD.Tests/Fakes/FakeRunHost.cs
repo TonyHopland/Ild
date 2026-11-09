@@ -325,14 +325,21 @@ internal sealed class FakeRunProcess : IRunProcess
         Command = command;
         _kill = script.Kill;
         Id = Interlocked.Increment(ref _nextId);
-        StandardOutput = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(script.Stdout)));
-        StandardError = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(script.Stderr)));
+        StandardOutput = new StreamReader(Output(script.Stdout, script));
+        StandardError = new StreamReader(Output(script.Stderr, script));
         StandardInput = new StreamWriter(new MemoryStream());
         if (script.ExitCode is { } code)
         {
             _exitCode = code;
             _exited.TrySetResult();
         }
+    }
+
+    /// <summary>A command that has not ended keeps its output open, as a real pipe does, until it exits.</summary>
+    private Stream Output(string text, FakeCommandScript script)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        return script.ExitCode is null ? new OpenUntilExitStream(bytes, _exited.Task) : new MemoryStream(bytes);
     }
 
     public RunCommand Command { get; }
@@ -388,4 +395,38 @@ internal sealed class WriteBackStream : MemoryStream
         if (disposing) _store(ToArray());
         base.Dispose(disposing);
     }
+}
+
+/// <summary>Yields its bytes, then blocks instead of reporting the end until <c>exited</c> completes.</summary>
+internal sealed class OpenUntilExitStream(byte[] data, Task exited) : Stream
+{
+    private int _position;
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+    public override int Read(byte[] buffer, int offset, int count)
+        => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        if (_position >= data.Length)
+        {
+            await exited.WaitAsync(cancellationToken);
+            return 0;
+        }
+
+        var n = Math.Min(buffer.Length, data.Length - _position);
+        data.AsMemory(_position, n).CopyTo(buffer);
+        _position += n;
+        return n;
+    }
+
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

@@ -68,10 +68,13 @@ public sealed class WorktreePreviewServiceRunHostTests
 
         await service.StartAsync(Worktree, cancellationToken: ct);
 
-        var stop = service.StopServiceAsync(Worktree, "web", ct);
+        var stop = service.StopAsync(Worktree, ct);
         var finished = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(10), ct));
         Assert.Same(stop, finished);
-        await stop;
+        var stopped = await stop;
+
+        Assert.False(service.IsPreviewRunning(Worktree));
+        Assert.All(stopped.Services, s => Assert.Equal("stopped", s.Status));
     }
 
     /// <summary>The service inside the fake run answers every health probe.</summary>

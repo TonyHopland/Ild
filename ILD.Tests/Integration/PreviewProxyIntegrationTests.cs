@@ -267,6 +267,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         Assert.Equal("hello preview", Encoding.UTF8.GetString(buffer, 0, received.Count));
         await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None);
     }
+
     [Fact]
     public async Task A_run_host_with_no_address_yet_is_the_same_404_not_a_500()
     {
@@ -283,7 +284,6 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
         Assert.DoesNotContain("no address yet", body);
     }
-
 
     [Theory]
     [InlineData(PreviewTargetOutcome.NotAPreviewHost)]
