@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Runs can no longer reach ILD's database, the WorkItem Server or the Kubernetes API**, unless you switch that protection off in Settings → Network or declare a forward to it.
-- **A repository can no longer plant code that every other run executes through the shared toolchain store.** A tool that is not a mise core tool installs into a folder only that repository's runs mount, and install scripts are off in the shared parts. The first run after upgrading installs its toolchains again.
+- **A repository can no longer plant code that every other run executes through the shared toolchain store.**
 
 ### Added
 
@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **On Kubernetes, ILD runs every loop run and chat in a pod.** Set up the RBAC and the shared tools claim from the deployment guide before you upgrade.
 - **The ILD image is smaller.**
 - **ILD and the WorkItem Server run as uid 10001, as documented.** They had silently run as 1654; the first start after the upgrade gives their volumes to the new uid.
-- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials.**
+- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials.** Open each Claude subscription provider's terminal once after upgrading.
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
 
 ### Fixed

@@ -61,8 +61,9 @@ is expected and costs a re-login.
 
 A stack from before agents always ran in containers needs `ILD_CONTAINER_SOCKET_HOST`
 in `.env` (and `ILD_CONTAINER_SOCKET_GRANT=1` for a socket of the host's `root` group),
-and is started with `docker-compose.yml`. On its first start ILD's entrypoint gives ILD back the files the old agent user
-left in `/data` and `/worktrees`, which can take a while on a large volume.
+and is started with `docker-compose.yml`. On its first start ILD's entrypoint gives ILD
+back the files the old agent user left in `/data` and `/worktrees`, which can take a
+while on a large volume.
 
 The release that stores saved AI sessions in compressed chunks converts the existing
 ones in the background after startup, one at a time; the app is usable meanwhile, and a
