@@ -657,11 +657,16 @@ postgres   postgres:5432        →  127.0.0.1:15432
 redis      cache.internal:6379  →  127.0.0.1:16379
 ```
 
-Then point the preview's `.env` at the loopback side:
+Then point the preview's `.env` at the destination's own name and port, which the
+run's container answers:
 
 ```
-ILD_DB_CONNECTION_STRING=Host=127.0.0.1;Port=15432;Database=ild_preview;Username=ild;Password=…
+ILD_DB_CONNECTION_STRING=Host=postgres;Port=5432;SSL Mode=Verify-Full;Database=ild_preview;Username=ild;Password=…
 ```
+
+The loopback form, `Host=127.0.0.1;Port=15432`, keeps working. Use it where the real
+name is not answered: for a destination that is an IP address, in a Kubernetes pod
+(its hosts file cannot be written by the run's user), and under `dotnet run`.
 
 ILD accepts the connection, judges `postgres` against the same whitelist and
 blacklist that govern the agent, records it in the Network log under that
@@ -676,9 +681,9 @@ Three things to know:
   `postgres` unlisted, the connection is refused immediately (rather than hanging)
   and logged as blocked; the row's **Allow** button adds the whitelist entry, and
   the next attempt succeeds with no restart.
-- **`SSL Mode=Verify-Full` will not work.** Your client now addresses the server
-  as `127.0.0.1`, so hostname verification fails. Use a weaker SSL mode for the
-  forwarded connection.
+- **`SSL Mode=Verify-Full` works on the real-name form**, since the client connects to
+  `postgres` and checks the certificate for that name. On the loopback form
+  (`127.0.0.1`) it fails, so use the real name wherever it is answered.
 - **A forward is instance-wide**: any agent process that can reach it can use it,
   not only the preview you declared it for. Scope the credential accordingly.
 - **A forward to ILD's own database server exposes that server to every agent.**

@@ -446,7 +446,13 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var sync = _api.Execs.Single(e => e.Command.Contains(ExecRunHost.ForwardsScript));
         Assert.Equal(Name(_run), sync.Container);
-        Assert.Equal(["15432", "postgres", "5432"], sync.Command.TakeLast(3));
+        var address = ForwardAddresses.Allocate(["postgres"])["postgres"];
+        Assert.Equal(["15432", "postgres", "5432", address], sync.Command.TakeLast(4));
+        // The name is mapped to that address first, by root, which owns the hosts file.
+        var hosts = _api.Execs.Single(e => e.Command.Contains(ExecRunHost.HostsScript));
+        Assert.Equal("0", hosts.User);
+        Assert.Equal([address, "postgres"], hosts.Command.TakeLast(2));
+        Assert.True(_api.Execs.IndexOf(hosts) < _api.Execs.IndexOf(sync));
         // A host that could carry a socat option is not given a relay.
         Assert.DoesNotContain("bad,host", sync.Command);
         Assert.True(_api.Execs.IndexOf(sync) < _api.Execs.FindIndex(e => e.Command.Contains("make-it")));
@@ -470,7 +476,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var syncs = _api.Execs.Where(e => e.Command.Contains(ExecRunHost.ForwardsScript)).ToList();
         Assert.Equal(2, syncs.Count);
-        Assert.Equal("5432", syncs[0].Command[^1]);
+        Assert.Equal("5432", syncs[0].Command[^2]);
         // Only the proxy's host and port: every relay is stopped.
         Assert.Equal(["/bin/bash", "-c", ExecRunHost.ForwardsScript, "bash"], syncs[1].Command.Take(4));
         Assert.Equal(6, syncs[1].Command.Count);

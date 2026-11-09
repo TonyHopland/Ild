@@ -480,10 +480,21 @@ describe("Network settings", () => {
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const row = await forwardRow("postgres");
-    expect(row.getByText(":5432")).toBeTruthy();
+    // The destination column and the preferred real-name form both show host:port.
+    expect(row.getAllByText(":5432")).toHaveLength(2);
     expect(row.getByText("127.0.0.1")).toBeTruthy();
     expect(row.getByText(":15432")).toBeTruthy();
+    expect(row.getByText(/Preferred: a TLS client/)).toBeTruthy();
     expect(row.getByText("Listening")).toBeTruthy();
+  });
+
+  test("a forward to an IP address says it has the loopback form only", async () => {
+    mockServices(enforced, "monitor", [{ ...postgres, host: "10.0.0.5" }]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = await forwardRow("postgres");
+    expect(row.getByText(/loopback only/)).toBeTruthy();
+    expect(row.queryByText(/Preferred:/)).toBeNull();
   });
 
   test("a forward whose local port will not bind says so on its own row", async () => {
@@ -1159,7 +1170,7 @@ describe("Editing a network forward", () => {
     );
     const table = await forwardTable();
     expect(await table.findByText("primary")).toBeTruthy();
-    expect(table.getByText("db.example")).toBeTruthy();
+    expect(table.getAllByText("db.example")[0]).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull();
     expect(screen.getByRole("button", { name: "Edit the primary forward" })).toBeTruthy();
     // The other row is untouched.

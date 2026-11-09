@@ -95,33 +95,72 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// Makes the run's or chat's environment answer the declared forwards (docs/adr/0020) on its own loopback, as ILD
     /// does under <c>dotnet run</c>: one socat per forward listens on <c>127.0.0.1:&lt;local port&gt;</c> and tunnels each
     /// connection to the destination through ILD's egress proxy with <c>CONNECT</c>, so the proxy judges and logs it
-    /// as it does every other. Idempotent: a relay that is running for the same destination is left alone, one for a
-    /// changed or deleted forward is stopped. Arguments: the proxy's host and port, then local port, host and port
-    /// per forward.
+    /// as it does every other. A forward with an address (see <see cref="HostsScript"/>) also gets a relay on
+    /// <c>&lt;address&gt;:&lt;destination port&gt;</c>, so a client that connects to the forward's real name and port reaches it
+    /// and a TLS client checks the certificate against that name. Idempotent: a relay that is running for the same
+    /// destination is left alone, one for a changed or deleted forward is stopped. Arguments: the proxy's host and
+    /// port, then local port, host, port and address (<c>-</c> for none) per forward.
     /// </summary>
     internal const string ForwardsScript = """
         dir="${ILD_FORWARDS_DIR:-/tmp/ild-forwards}"; mkdir -p "$dir"
         proxy_host=$1; proxy_port=$2; shift 2
         want=" "
-        while [ "$#" -ge 3 ]; do
-            local_port=$1; spec="$2:$3"; shift 3
-            want="$want$local_port "
-            if [ -f "$dir/$local_port.pid" ] && kill -0 "$(cat "$dir/$local_port.pid")" 2>/dev/null \
-                && [ "$(cat "$dir/$local_port.spec" 2>/dev/null)" = "$spec" ]; then
-                continue
+        relay() {
+            key=$1; bind=$2; listen=$3; spec=$4
+            want="$want$key "
+            if [ -f "$dir/$key.pid" ] && kill -0 "$(cat "$dir/$key.pid")" 2>/dev/null \
+                && [ "$(cat "$dir/$key.spec" 2>/dev/null)" = "$spec" ]; then
+                return
             fi
-            [ -f "$dir/$local_port.pid" ] && kill "$(cat "$dir/$local_port.pid")" 2>/dev/null
-            setsid socat "TCP-LISTEN:$local_port,bind=127.0.0.1,reuseaddr,fork" \
+            [ -f "$dir/$key.pid" ] && kill "$(cat "$dir/$key.pid")" 2>/dev/null
+            setsid socat "TCP-LISTEN:$listen,bind=$bind,reuseaddr,fork" \
                 "PROXY:$proxy_host:$spec,proxyport=$proxy_port" </dev/null >/dev/null 2>&1 &
-            echo "$!" > "$dir/$local_port.pid"; echo "$spec" > "$dir/$local_port.spec"
+            echo "$!" > "$dir/$key.pid"; echo "$spec" > "$dir/$key.spec"
+        }
+        while [ "$#" -ge 4 ]; do
+            local_port=$1; host=$2; port=$3; addr=$4; shift 4
+            relay "$local_port" 127.0.0.1 "$local_port" "$host:$port"
+            [ "$addr" = "-" ] || relay "${addr}_$port" "$addr" "$port" "$host:$port"
         done
         for f in "$dir"/*.pid; do
             [ -e "$f" ] || continue
-            local_port=$(basename "$f" .pid)
-            case "$want" in *" $local_port "*) ;; *) kill "$(cat "$f")" 2>/dev/null; rm -f "$f" "$dir/$local_port.spec" ;; esac
+            key=$(basename "$f" .pid)
+            case "$want" in *" $key "*) ;; *) kill "$(cat "$f")" 2>/dev/null; rm -f "$f" "$dir/$key.spec" ;; esac
         done
         exit 0
         """;
+
+    /// <summary>
+    /// Maps each forward's host name to its own loopback address in the environment's hosts file, in a block between
+    /// the marker lines that it replaces and removes when no forward is left; every other line stays. The file is
+    /// written in place, since the engines bind-mount it and it cannot be renamed over. Arguments: address and host
+    /// per forward. Exits 3, changing nothing, when the file cannot be written (kubelet's is root's in a pod whose
+    /// commands do not run as root); the caller then keeps the loopback form only.
+    /// </summary>
+    internal const string HostsScript = """
+        f="${ILD_HOSTS_FILE:-/etc/hosts}"
+        [ -w "$f" ] || exit 3
+        tmp=$(mktemp) || exit 1
+        trap 'rm -f "$tmp"' EXIT
+        awk '/^# ild-forwards begin$/ { skip = 1; next } /^# ild-forwards end$/ { skip = 0; next } !skip' "$f" > "$tmp" || exit 1
+        if [ "$#" -ge 2 ]; then
+            echo "# ild-forwards begin" >> "$tmp"
+            while [ "$#" -ge 2 ]; do printf '%s %s\n' "$1" "$2" >> "$tmp"; shift 2; done
+            echo "# ild-forwards end" >> "$tmp"
+        fi
+        cmp -s "$tmp" "$f" && exit 0
+        cat "$tmp" > "$f" || exit 3
+        """;
+
+    /// <summary>
+    /// Runs <see cref="HostsScript"/>. By default as the user commands run as; a host whose engine makes the hosts file
+    /// root's but lets root write it without a capability runs it as root.
+    /// </summary>
+    protected virtual Task<RunHostOutput> RunHostsScriptAsync(ExecOwner owner, IReadOnlyList<string> arguments, CancellationToken ct)
+        => RunScriptAsync(owner, HostsScript, arguments, ct);
+
+    // The owners whose hosts file could not be written, so that is logged once and not on every command.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ExecOwner, bool> _hostsUnwritable = new();
 
     // A forward's host goes into a socat address, where a comma or a colon would be read as an option or a field.
     private static readonly Regex ForwardHost = new(@"^[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?$", RegexOptions.Compiled);
@@ -148,8 +187,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             var forwards = (await Forwards(ct)).Where(f => ForwardHost.IsMatch(f.Host) && f.LocalPort is > 0 and <= 65535 && f.Port is > 0 and <= 65535).ToList();
             if (forwards.Count == 0 && !_forwarded.ContainsKey(owner)) return;
             var arguments = new List<string> { new Uri(IldUrl).Host, EgressProxyPort.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            var addresses = await MapForwardHostsAsync(owner, forwards, ct);
             foreach (var f in forwards)
-                arguments.AddRange([f.LocalPort.ToString(System.Globalization.CultureInfo.InvariantCulture), f.Host, f.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
+                arguments.AddRange([f.LocalPort.ToString(System.Globalization.CultureInfo.InvariantCulture), f.Host, f.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), addresses.GetValueOrDefault(f.Host, "-")]);
             var result = await RunScriptAsync(owner, ForwardsScript, arguments, ct);
             if (result.ExitCode != 0)
                 Logger?.LogWarning("Could not start the forwards in the {Noun} of {Owner}: {Error}", Noun, owner.Id, result.StdErr.Trim());
@@ -159,6 +199,25 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         {
             Logger?.LogWarning(ex, "Could not start the forwards in the {Noun} of {Owner}", Noun, owner.Id);
         }
+    }
+
+    /// <summary>
+    /// Writes the forward hosts' addresses into the environment's hosts file, and returns the address of each host that
+    /// has one: none when the file cannot be written, which is logged once per environment. Docker rewrites the file
+    /// when a container joins or leaves a network (opening or closing the direct route), so the block is written
+    /// again by the next sync, which runs before every command.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>> MapForwardHostsAsync(ExecOwner owner, IReadOnlyList<RunForward> forwards, CancellationToken ct)
+    {
+        var addresses = ForwardAddresses.Allocate(forwards.Select(f => f.Host));
+        var arguments = addresses.SelectMany(a => new[] { a.Value, a.Key }).ToList();
+        if (arguments.Count == 0 && !_forwarded.ContainsKey(owner)) return addresses;
+        var result = await RunHostsScriptAsync(owner, arguments, ct);
+        if (result.ExitCode == 0) { _hostsUnwritable.TryRemove(owner, out _); return addresses; }
+        if (_hostsUnwritable.TryAdd(owner, true))
+            Logger?.LogWarning("The hosts file of the {Noun} of {Owner} cannot be written, so its forwards answer on 127.0.0.1 and their local port only{Error}",
+                Noun, owner.Id, result.ExitCode == 3 ? "" : ": " + result.StdErr.Trim());
+        return new Dictionary<string, string>();
     }
 
     private protected readonly ILogger? Logger = logger;

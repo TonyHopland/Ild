@@ -570,6 +570,27 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Contains(_log.Warnings, w => w.Contains("ILD_K8S_TOOLS_CLAIM"));
     }
 
+    // -- Forwards ----------------------------------------------------------------
+
+    [Fact]
+    public async Task A_pod_whose_hosts_file_cannot_be_written_keeps_the_loopback_form_and_says_so_once()
+    {
+        await CreateRunAsync();
+        _api.OnExec = e => e.ExitAsync(e.Command.Contains(ExecRunHost.HostsScript) ? 3 : 0);
+        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
+        var ct = TestContext.Current.CancellationToken;
+
+        for (var i = 0; i < 2; i++)
+            using (var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), ct))
+                await process.WaitForExitAsync(ct);
+
+        // The hosts script runs as the pod's own user (the exec has no other), and the relay gets no address.
+        var syncs = _api.Execs.Where(e => e.Command.Contains(ExecRunHost.ForwardsScript)).ToList();
+        Assert.Equal(2, syncs.Count);
+        Assert.All(syncs, sync => Assert.Equal(["15432", "postgres", "5432", "-"], sync.Command.TakeLast(4)));
+        Assert.Single(_log.Warnings, w => w.Contains("hosts file"));
+    }
+
     // -- Exec --------------------------------------------------------------------
 
     [Fact]

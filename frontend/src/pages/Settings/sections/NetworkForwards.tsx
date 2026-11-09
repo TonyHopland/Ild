@@ -24,8 +24,15 @@ function forwardState(forward: NetworkForward): {
   return {
     tone: "ok",
     label: "Listening",
-    detail: `Point a client at 127.0.0.1:${forward.localPort}.`,
+    detail: isIpAddress(forward.host)
+      ? `Point a client at 127.0.0.1:${forward.localPort}.`
+      : `Point a client at ${forward.host}:${forward.port}, or at 127.0.0.1:${forward.localPort}.`,
   };
+}
+
+/** Whether a destination is an IP address: there is no name for an environment to answer on, so only the loopback form exists. */
+function isIpAddress(host: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":");
 }
 
 /**
@@ -200,9 +207,29 @@ function ForwardRow({ forward, onUpdate, onRemove, onWhitelist }: ForwardRowProp
             />
           </div>
         ) : (
-          <span className="net-host">
-            127.0.0.1<span className="net-port">:{forward.localPort}</span>
-          </span>
+          <>
+            {!isIpAddress(forward.host) && (
+              <div>
+                <span className="net-host">
+                  {forward.host}
+                  <span className="net-port">:{forward.port}</span>
+                </span>
+                <span className="net-sub">
+                  Preferred: a TLS client can check the certificate against the host name.
+                </span>
+              </div>
+            )}
+            <div>
+              <span className="net-host">
+                127.0.0.1<span className="net-port">:{forward.localPort}</span>
+              </span>
+            </div>
+            {isIpAddress(forward.host) && (
+              <span className="net-sub">
+                An IP address has no name to answer on: loopback only.
+              </span>
+            )}
+          </>
         )}
       </td>
       <td>
