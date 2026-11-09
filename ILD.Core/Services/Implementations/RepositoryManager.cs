@@ -1,7 +1,6 @@
-using System.Runtime.InteropServices;
+using ILD.Core.Services.Implementations.Files;
 using System.Text;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Win32.SafeHandles;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
@@ -37,7 +36,6 @@ public class RepositoryManager : IRepositoryManager
     private readonly IRunHost _host;
     private readonly string _worktreesRoot;
     private readonly GitMirror _mirrors;
-    private readonly ProcessRunOptions _agentOptions;
     private readonly Func<string, string?> _readEnvironment;
 
     /// <param name="mirrorsRoot">Where the per-remote mirrors live.</param>
@@ -53,7 +51,6 @@ public class RepositoryManager : IRepositoryManager
         _readEnvironment = readEnvironment ?? Environment.GetEnvironmentVariable;
         _logger = logger;
         _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
-        _agentOptions = new ProcessRunOptions(AgentScoped: true);
         _host = host ?? new LocalRunHost(runner);
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
@@ -142,13 +139,13 @@ public class RepositoryManager : IRepositoryManager
         if (!AgentWritableFiles.EntryExists(worktreePath)) return;
 
         string? repoPath = null;
-        if (await _host.DirectoryExistsAsync(worktreePath) && LinkTargetOf(worktreePath) is null)
+        if (await _host.DirectoryExistsAsync(worktreePath) && LocalWorktrees.LinkTargetOf(worktreePath) is null)
         {
             // Only a real directory can be a worktree; anything else here just goes.
             // Only a worktree whose pointer is ours is handed to git; anything else is
             // cleared like a stray directory, and its registration, if it has one,
             // is left for the next prune.
-            repoPath = TrustedRepositoryRoot(worktreePath);
+            repoPath = LocalWorktrees.TrustedRepositoryRoot(worktreePath);
             if (repoPath is not null)
                 await RunAsync(repoPath, "worktree", "remove", "--force", worktreePath);
         }
@@ -943,9 +940,9 @@ public class RepositoryManager : IRepositoryManager
     /// </summary>
     private static string? ResolveSafePath(string worktreePath, string relativePath)
     {
-        var root = ResolveLinks(Path.GetFullPath(worktreePath));
+        var root = LocalWorktrees.ResolveLinks(Path.GetFullPath(worktreePath));
         if (root == null) return null;
-        var full = ResolveLinks(Path.GetFullPath(Path.Combine(root, relativePath)));
+        var full = LocalWorktrees.ResolveLinks(Path.GetFullPath(Path.Combine(root, relativePath)));
         if (full == null) return null;
         var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
         return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? full : null;
@@ -1035,14 +1032,8 @@ public class RepositoryManager : IRepositoryManager
         await RunAsync(repoPath, "worktree", "prune");
     }
 
-    internal static string? TrustedRepositoryRoot(string path) => LocalWorktrees.TrustedRepositoryRoot(path);
-
-    private static string? ResolveLinks(string path) => LocalWorktrees.ResolveLinks(path);
-
-    private static string? LinkTargetOf(string path) => LocalWorktrees.LinkTargetOf(path);
-
     public Task<string?> ResolveBaseRepoPathAsync(string worktreePath)
-        => Task.FromResult(TrustedRepositoryRoot(worktreePath));
+        => Task.FromResult(LocalWorktrees.TrustedRepositoryRoot(worktreePath));
 
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
         => RunAsync(cwd, args, CancellationToken.None);
@@ -1063,7 +1054,7 @@ public class RepositoryManager : IRepositoryManager
 
     /// <summary>
     /// <c>git -C <paramref name="cwd"/></c>, agent-scoped. Refused, without starting git, for a directory
-    /// whose <c>.git</c> pointer is not one <see cref="TrustedRepositoryRoot"/> accepts.
+    /// whose <c>.git</c> pointer is not one <see cref="LocalWorktrees.TrustedRepositoryRoot"/> accepts.
     /// </summary>
     private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(
         string cwd, IReadOnlyList<string> args, CancellationToken ct, Stream? stdoutTo = null, Stream? stdinFrom = null)

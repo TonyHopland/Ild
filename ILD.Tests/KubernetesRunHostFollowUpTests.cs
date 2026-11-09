@@ -68,7 +68,7 @@ public sealed class KubernetesRunHostFollowUpTests
         api.Seed("pods", KubernetesNames.ObjectName(run), "main", run);
         var options = KubernetesRunHostOptions.From(n => n switch { "ILD_API_URL" => "http://ild:8080", "ILD_K8S_RUNNER_IMAGE" => "i", _ => null });
         var host = new KubernetesRunHost(api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner());
-        var wd = KubernetesNames.WorkingDirectory(run);
+        var wd = RunPaths.WorkingDirectory(run);
         api.OnExec = e => e.ExitAsync(0);
 
         using var owned = await host.StartCommandAsync(RunCommand.Prepared(new System.Diagnostics.ProcessStartInfo("agent") { WorkingDirectory = wd }, run), TestContext.Current.CancellationToken);
@@ -90,14 +90,14 @@ public sealed class KubernetesRunHostFollowUpTests
     {
         var run = Guid.NewGuid();
         var pod = new Mock<IRunHost>();
-        pod.Setup(h => h.RunHomeFor(It.IsAny<string>())).Returns(KubernetesNames.HomeDirectory(run));
-        var worktree = KubernetesNames.WorkingDirectory(run);
+        pod.Setup(h => h.RunHomeFor(It.IsAny<string>())).Returns(RunPaths.HomeDirectory(run));
+        var worktree = RunPaths.WorkingDirectory(run);
         var local = new Mock<IRunHost>();
 
         var inPod = ClaudeCodeAdapter.SessionFilePath(pod.Object, worktree, "s1", ProcessEnvironment.Current);
         var onDisk = ClaudeCodeAdapter.SessionFilePath(local.Object, "/worktrees/a", "s1", ProcessEnvironment.Current);
 
-        Assert.Equal($"{KubernetesNames.HomeDirectory(run)}/.claude/projects/{ClaudeCodeAdapter.EncodeWorktreePath(worktree)}/s1.jsonl", inPod);
+        Assert.Equal($"{RunPaths.HomeDirectory(run)}/.claude/projects/{ClaudeCodeAdapter.EncodeWorktreePath(worktree)}/s1.jsonl", inPod);
         Assert.Equal(ClaudeCodeAdapter.GetSessionFilePath("/worktrees/a", "s1", ProcessEnvironment.Current), onDisk);
     }
 
@@ -108,7 +108,7 @@ public sealed class KubernetesRunHostFollowUpTests
         var options = KubernetesRunHostOptions.From(n => n switch { "ILD_API_URL" => "http://ild:8080", "ILD_K8S_RUNNER_IMAGE" => "i", _ => null });
         var host = new KubernetesRunHost(new k8s.Kubernetes(new k8s.KubernetesClientConfiguration { Host = "http://127.0.0.1:1" }), options, "ns", new ProcessRunner());
 
-        Assert.Equal(KubernetesNames.HomeDirectory(run), host.RunHomeFor(KubernetesNames.WorkingDirectory(run)));
+        Assert.Equal(RunPaths.HomeDirectory(run), host.RunHomeFor(RunPaths.WorkingDirectory(run)));
         Assert.Null(host.RunHomeFor("/worktrees/a"));
         Assert.Null(new LocalRunHost().RunHomeFor("/worktrees/a"));
     }

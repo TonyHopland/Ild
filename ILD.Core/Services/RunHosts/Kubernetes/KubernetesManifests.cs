@@ -18,9 +18,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
 
     private IDictionary<string, string> Labels(Guid ownerId) => new Dictionary<string, string>
     {
-        [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
-        [KubernetesNames.InstanceLabel] = options.Instance,
-        [KubernetesNames.RunLabel] = ownerId.ToString("N"),
+        [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+        [RunPaths.InstanceLabel] = options.Instance,
+        [RunPaths.RunLabel] = ownerId.ToString("N"),
     };
 
     private V1ObjectMeta Meta(Guid ownerId, V1OwnerReference? owner = null) => new()
@@ -39,9 +39,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         NamespaceProperty = namespaceName,
         Labels = new Dictionary<string, string>
         {
-            [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
-            [KubernetesNames.InstanceLabel] = options.Instance,
-            [KubernetesNames.RoleLabel] = KubernetesNames.ChatRole,
+            [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+            [RunPaths.InstanceLabel] = options.Instance,
+            [RunPaths.RoleLabel] = RunPaths.ChatRole,
         },
     };
 
@@ -84,11 +84,11 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// What a run's pod can reach beyond that is reached through ILD's egress proxy, which alone resolves names.
     /// </summary>
     public V1NetworkPolicy Policy(Guid ownerId, V1OwnerReference owner, bool dns = false)
-        => Policy(Meta(ownerId, owner), new Dictionary<string, string> { [KubernetesNames.RunLabel] = ownerId.ToString("N"), [KubernetesNames.InstanceLabel] = options.Instance }, dns);
+        => Policy(Meta(ownerId, owner), new Dictionary<string, string> { [RunPaths.RunLabel] = ownerId.ToString("N"), [RunPaths.InstanceLabel] = options.Instance }, dns);
 
     /// <summary>The same rules for the chat pod, which no run's policy selects.</summary>
     public V1NetworkPolicy ChatPolicy()
-        => Policy(ChatMeta(), new Dictionary<string, string> { [KubernetesNames.RoleLabel] = KubernetesNames.ChatRole, [KubernetesNames.InstanceLabel] = options.Instance }, dns: false);
+        => Policy(ChatMeta(), new Dictionary<string, string> { [RunPaths.RoleLabel] = RunPaths.ChatRole, [RunPaths.InstanceLabel] = options.Instance }, dns: false);
 
     private V1NetworkPolicy Policy(V1ObjectMeta metadata, IDictionary<string, string> podLabels, bool dns)
     {
@@ -146,7 +146,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     }
 
     public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false)
-        => BuildPod(Meta(ownerId, owner), KubernetesNames.RunRoot(ownerId), KubernetesNames.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(KubernetesNames.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns);
+        => BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns);
 
     // The zones every chat mounts: the agents' and the shared toolchains, never a repository's own tools.
     private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];
@@ -199,8 +199,8 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         {
                             MatchLabels = new Dictionary<string, string>
                             {
-                                [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
-                                [KubernetesNames.InstanceLabel] = options.Instance,
+                                [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+                                [RunPaths.InstanceLabel] = options.Instance,
                             },
                         },
                     },
@@ -240,7 +240,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         VolumeMounts =
                         [
                             new V1VolumeMount { Name = WorkVolume, MountPath = root },
-                            new V1VolumeMount { Name = StateVolume, MountPath = KubernetesNames.StateDirectory },
+                            new V1VolumeMount { Name = StateVolume, MountPath = RunPaths.StateDirectory },
                             .. ToolMounts(zones, readOnly: true),
                         ],
                     },
@@ -297,9 +297,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
             NamespaceProperty = namespaceName,
             Labels = new Dictionary<string, string>
             {
-                [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
-                [KubernetesNames.InstanceLabel] = options.Instance,
-                [KubernetesNames.RoleLabel] = KubernetesNames.ToolsRole,
+                [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+                [RunPaths.InstanceLabel] = options.Instance,
+                [RunPaths.RoleLabel] = RunPaths.ToolsRole,
             },
         },
         Spec = new V1PodSpec
@@ -369,9 +369,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
             NamespaceProperty = namespaceName,
             Labels = new Dictionary<string, string>
             {
-                [KubernetesNames.ManagedByLabel] = KubernetesNames.ManagedByValue,
-                [KubernetesNames.InstanceLabel] = options.Instance,
-                [KubernetesNames.RoleLabel] = KubernetesNames.SignInRole,
+                [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+                [RunPaths.InstanceLabel] = options.Instance,
+                [RunPaths.RoleLabel] = KubernetesNames.SignInRole,
             },
         },
         Spec = new V1PodSpec

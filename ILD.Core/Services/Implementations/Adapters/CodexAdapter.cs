@@ -1,3 +1,5 @@
+using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Globalization;
@@ -94,7 +96,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     /// <summary>The directory removed with the run: codex's home for a gateway run.</summary>
     public static Task<bool> DeleteRunFilesAsync(Guid runOrChatId, CancellationToken ct = default)
-        => AgentWritableFiles.DeleteAsync([Path.Combine(AgentIsolation.ScratchRoot, HomeDirSegment, runOrChatId.ToString("N"))], ct);
+        => AgentWritableFiles.DeleteAsync([RunCodexHome(runOrChatId)], ct);
 
     private const string HomeDirSegment = "ild-codex-home";
 
@@ -159,7 +161,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             using var gateway = OpenGateway(ctx);
             var codexHome = RunHost.RunHomeFor(worktreePath) is { } runHome
                 ? Path.Combine(runHome, ".codex")
-                : gateway is null ? UserCodexHome() : RunCodexHome(ctx.ChatSessionId ?? ctx.RunContext.LoopRunId);
+                : gateway is null ? UserCodexHome() : RunCodexHome(OwnerOf(ctx));
             var sessionsDirectory = codexHome is null ? null : Path.Combine(codexHome, "sessions");
             if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId))
             {

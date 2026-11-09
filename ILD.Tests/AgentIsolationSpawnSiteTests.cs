@@ -12,8 +12,8 @@ namespace ILD.Tests;
 ///
 /// <para>
 /// It has no allowlist beyond that folder: a new spawn site is a violation until it goes through
-/// <c>IRunHost</c>. <c>new ProcessStartInfo</c> is not one — it only describes a launch, and the host
-/// is what starts it.
+/// <c>IRunHost</c>; the file helpers in <c>Implementations/Files</c> start theirs through <c>RunHosts/Local/LocalShell</c>.
+/// <c>new ProcessStartInfo</c> is not a spawn site — it only describes a launch, and the host is what starts it.
 /// </para>
 ///
 /// <para>

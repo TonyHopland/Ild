@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Files;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Local;
@@ -192,13 +193,13 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)
     {
         var reposDir = Path.Combine(job.ScratchPath, ReposFolder);
-        var (folderName, exists) = await FindFolderAsync(reposDir, job.Repo.Id, Clean(job.Repo.Name), job.ChatSessionId, RunPaths.ChatOf(job.ScratchPath) is not null, ct);
+        var inChatContainer = RunPaths.ChatOf(job.ScratchPath) is not null;
+        var (folderName, exists) = await FindFolderAsync(reposDir, job.Repo.Id, Clean(job.Repo.Name), job.ChatSessionId, inChatContainer, ct);
         var folder = Path.Combine(reposDir, folderName);
         var relativePath = $"{ReposFolder}/{folderName}";
         var branch = job.Branch;
         var remoteRef = $"refs/remotes/origin/{branch}";
 
-        var inChatContainer = RunPaths.ChatOf(job.ScratchPath) is not null;
         Task<AgentProcessResult> Git(params string[] args) => RunGitAsync(folder, reposDir, args, job.ChatSessionId, inChatContainer, ct);
 
         if (!exists)
@@ -266,11 +267,11 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private async Task<AgentProcessResult> FetchIntoChatContainerAsync(
         string basePath, string scratchPath, string remoteRef, Func<string[], Task<AgentProcessResult>> git, CancellationToken ct)
     {
-        var bundlePath = Path.Combine(Path.GetTempPath(), $"ild-chat-{Guid.NewGuid():N}.bundle");
+        using var bundleFile = PrivateTempFile.Create("ild-chat-");
         var inChat = $"{scratchPath}/.ild/sync-{Guid.NewGuid():N}.bundle";
         try
         {
-            await using (var sink = new FileStream(bundlePath, FileMode.CreateNew, FileAccess.Write))
+            await using (var sink = bundleFile.OpenWrite())
             {
                 var created = await _runner.RunAsync(
                     "git", ["-C", basePath, "bundle", "create", "--quiet", "-", remoteRef], "/", ct, null, new ProcessRunOptions(StandardOutputTo: sink));
@@ -278,13 +279,12 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
                     return new AgentProcessResult(created.ExitCode, created.StdOut, created.StdErr);
             }
 
-            await using (var bundle = new FileStream(bundlePath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous))
+            await using (var bundle = bundleFile.OpenRead())
                 await _host.WriteFileAsync(inChat, bundle, ct);
             return await git(["fetch", "-q", "--no-tags", inChat, $"+{remoteRef}:{remoteRef}"]);
         }
         finally
         {
-            File.Delete(bundlePath);
             await _host.DeleteAsync([inChat], CancellationToken.None);
         }
     }

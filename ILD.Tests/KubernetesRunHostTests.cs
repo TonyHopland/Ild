@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Implementations;
@@ -60,7 +61,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null)
         => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }) };
 
-    private string WorkingDirectory => KubernetesNames.WorkingDirectory(_run);
+    private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
 
     private static string Name(Guid run) => KubernetesNames.ObjectName(run);
 
@@ -357,9 +358,9 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var terminal = await _host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "/usr/local/bin/claude", ["setup-token"], 100, 30, ct);
         var name = SignInPod();
         var pod = _api.Get<V1Pod>("pods", name)!;
-        Assert.Equal(KubernetesNames.SignInRole, pod.Metadata.Labels[KubernetesNames.RoleLabel]);
+        Assert.Equal(KubernetesNames.SignInRole, pod.Metadata.Labels[RunPaths.RoleLabel]);
         // No run label: no run's NetworkPolicy selects it, so the OAuth flow can reach the provider.
-        Assert.False(pod.Metadata.Labels.ContainsKey(KubernetesNames.RunLabel));
+        Assert.False(pod.Metadata.Labels.ContainsKey(RunPaths.RunLabel));
         Assert.False(pod.Spec.AutomountServiceAccountToken);
         Assert.Equal("/tmp/home", pod.Spec.Containers.Single().Env.Single(e => e.Name == "HOME").Value);
         Assert.Empty(pod.Spec.Volumes ?? []);
@@ -447,7 +448,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var agentInstaller = Installer(agents.Pod);
         Assert.Equal("ild-tools", agentInstaller.Spec.Volumes.Single().PersistentVolumeClaim.ClaimName);
         Assert.Null(agentInstaller.Spec.Volumes.Single().PersistentVolumeClaim.ReadOnlyProperty);
-        Assert.False(agentInstaller.Metadata.Labels.ContainsKey(KubernetesNames.RunLabel));
+        Assert.False(agentInstaller.Metadata.Labels.ContainsKey(RunPaths.RunLabel));
         var agentMount = agentInstaller.Spec.Containers.Single().VolumeMounts.Single();
         Assert.Equal((RunToolStore.Root, "ild", false), (agentMount.MountPath, agentMount.SubPath, agentMount.ReadOnlyProperty));
         var toolchainMount = Installer(toolchains.Pod).Spec.Containers.Single().VolumeMounts.Single();
@@ -556,7 +557,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var exec = _api.Execs.Last();
         Assert.Equal(Name(_run), exec.Pod);
         Assert.Contains("ILD_TEST_ONLY=yes", exec.Command);
-        Assert.Equal($"HOME={KubernetesNames.HomeDirectory(_run)}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
+        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", exec.Command.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
         Assert.DoesNotContain(exec.Command, c => c.StartsWith("PATH=", StringComparison.Ordinal));
         Assert.Equal(["make-it", "a b"], exec.Command.TakeLast(2));
         Assert.Contains(WorkingDirectory, exec.Command);
@@ -1178,13 +1179,13 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var policy = _api.Get<V1NetworkPolicy>("networkpolicies", ChatPodName)!;
         foreach (var labels in new[] { pod.Metadata.Labels, claim.Metadata.Labels, policy.Metadata.Labels })
         {
-            Assert.Equal("chat", labels[KubernetesNames.RoleLabel]);
-            Assert.Equal(Instance, labels[KubernetesNames.InstanceLabel]);
-            Assert.False(labels.ContainsKey(KubernetesNames.RunLabel));
+            Assert.Equal("chat", labels[RunPaths.RoleLabel]);
+            Assert.Equal(Instance, labels[RunPaths.InstanceLabel]);
+            Assert.False(labels.ContainsKey(RunPaths.RunLabel));
         }
         Assert.Null(claim.Metadata.OwnerReferences);
         Assert.Equal("run-scratch", claim.Spec.StorageClassName);
-        Assert.Equal(policy.Spec.PodSelector.MatchLabels, new Dictionary<string, string> { [KubernetesNames.RoleLabel] = "chat", [KubernetesNames.InstanceLabel] = Instance });
+        Assert.Equal(policy.Spec.PodSelector.MatchLabels, new Dictionary<string, string> { [RunPaths.RoleLabel] = "chat", [RunPaths.InstanceLabel] = Instance });
         Assert.Equal(["Ingress", "Egress"], policy.Spec.PolicyTypes);
 
         var container = pod.Spec.Containers.Single();
@@ -1434,11 +1435,11 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     [Fact]
     public void A_path_belongs_to_the_run_whose_directory_it_is_below()
     {
-        Assert.Equal(_run, KubernetesNames.OwnerOf($"/ild-run/{_run:N}/repo/src/a.cs"));
-        Assert.Equal(_run, KubernetesNames.OwnerOf($"/ild-run/{_run:N}"));
-        Assert.Null(KubernetesNames.OwnerOf("/ild-run/not-a-run/repo"));
-        Assert.Null(KubernetesNames.OwnerOf("/worktrees/ild/repo"));
-        Assert.Null(KubernetesNames.OwnerOf(null));
+        Assert.Equal(_run, RunPaths.OwnerOf($"/ild-run/{_run:N}/repo/src/a.cs"));
+        Assert.Equal(_run, RunPaths.OwnerOf($"/ild-run/{_run:N}"));
+        Assert.Null(RunPaths.OwnerOf("/ild-run/not-a-run/repo"));
+        Assert.Null(RunPaths.OwnerOf("/worktrees/ild/repo"));
+        Assert.Null(RunPaths.OwnerOf(null));
     }
 
     // -- A run pod that ended ------------------------------------------------------

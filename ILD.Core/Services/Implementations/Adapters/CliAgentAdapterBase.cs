@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Files;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -131,7 +132,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         var ildHost = Uri.TryCreate(apiUrl, UriKind.Absolute, out var ild) ? ild.Host : null;
         return registry?.Open(
             ctx.Provider.Id,
-            ctx.ChatSessionId ?? ctx.RunContext.LoopRunId,
+            OwnerOf(ctx),
             apiUrl,
             GatewayRoutes.ModelHosts(ctx.Provider).Where(host => !string.Equals(host, ildHost, StringComparison.OrdinalIgnoreCase)).ToList());
     }
@@ -176,9 +177,6 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         return scope.ServiceProvider.GetService<IRunHost>() ?? LocalRunHost.Shared;
     }
 
-    /// <summary>The launch <see cref="StartAgentProcess"/> starts: <paramref name="psi"/> with the execution's environment and its network mode's proxy.</summary>
-    internal static ProcessStartInfo PrepareForExecution(ProcessStartInfo psi, AgentExecutionContext ctx)
-        => LocalRunHost.PrepareAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment);
 
     /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind

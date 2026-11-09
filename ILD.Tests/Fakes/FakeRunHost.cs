@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.RunHosts;
@@ -281,7 +282,7 @@ internal sealed class FakeRunHost : IRunHost
     public string? RunHomeFor(string workingDirectory) => null;
 
     public Task<bool> IsRunCloneAsync(string path, CancellationToken ct = default)
-        => Task.FromResult(ILD.Core.Services.Implementations.LocalWorktrees.TrustedRepositoryRoot(path) is not null);
+        => Task.FromResult(ILD.Core.Services.RunHosts.Local.LocalWorktrees.TrustedRepositoryRoot(path) is not null);
 
     public Task<RunHostOutput> RunToolAsync(string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default)
         => throw new NotSupportedException("the fake host runs no tools");

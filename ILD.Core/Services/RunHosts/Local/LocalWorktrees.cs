@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
-namespace ILD.Core.Services.Implementations;
+namespace ILD.Core.Services.RunHosts.Local;
 
 /// <summary>
 /// Reading a local worktree's <c>.git</c> pointers and links with the orchestrator's own filesystem
@@ -105,8 +105,8 @@ internal static class LocalWorktrees
     {
         try
         {
-            if (Storage.FileStatus.IsSupported
-                && (Storage.FileStatus.TryGet(file, out var status) != 0 || status.Kind != Storage.FileKind.File))
+            if (ILD.Core.Services.Implementations.Storage.FileStatus.IsSupported
+                && (ILD.Core.Services.Implementations.Storage.FileStatus.TryGet(file, out var status) != 0 || status.Kind != ILD.Core.Services.Implementations.Storage.FileKind.File))
                 return null;
 
             var descriptor = OpenFile(file, OpenNonBlocking);

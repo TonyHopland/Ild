@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text;
@@ -58,13 +59,16 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         Cancel: CancellationToken.None,
         NetworkMode: mode);
 
+    private static ProcessStartInfo Prepare(ProcessStartInfo psi, AgentExecutionContext ctx)
+        => LocalRunHost.PrepareAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment);
+
     [Theory]
     [InlineData(NetworkMode.Monitor)]
     [InlineData(NetworkMode.Whitelist)]
     [InlineData(NetworkMode.Blacklist)]
     public void An_adapter_launch_in_a_proxied_mode_gets_the_provider_scoped_proxy(NetworkMode mode)
     {
-        var psi = CliAgentAdapterBase.PrepareForExecution(new ProcessStartInfo("claude"), Execution(mode));
+        var psi = Prepare(new ProcessStartInfo("claude"), Execution(mode));
 
         Assert.StartsWith("http://provider:", psi.Environment["HTTPS_PROXY"]);
         Assert.EndsWith("@127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
@@ -74,7 +78,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     [Fact]
     public void An_adapter_launch_in_Off_has_no_proxy_variable()
     {
-        var psi = CliAgentAdapterBase.PrepareForExecution(new ProcessStartInfo("claude"), Execution(NetworkMode.Off));
+        var psi = Prepare(new ProcessStartInfo("claude"), Execution(NetworkMode.Off));
 
         foreach (var key in ProxyKeys)
             Assert.False(psi.Environment.ContainsKey(key), $"{key} set for an Off launch");
@@ -85,7 +89,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     {
         var ctx = Execution(NetworkMode.Off) with { Environment = new Dictionary<string, string> { ["FEED_TOKEN"] = "t" } };
 
-        var psi = CliAgentAdapterBase.PrepareForExecution(new ProcessStartInfo("claude"), ctx);
+        var psi = Prepare(new ProcessStartInfo("claude"), ctx);
 
         Assert.Equal("t", psi.Environment["FEED_TOKEN"]);
     }
