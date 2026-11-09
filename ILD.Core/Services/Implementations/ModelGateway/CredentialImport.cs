@@ -87,7 +87,7 @@ public static class CredentialImport
             if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             using (var stream = new FileStream(temp, options))
                 stream.Write(System.Text.Encoding.UTF8.GetBytes(text));
-            File.Move(temp, path, overwrite: true);
+            lock (CodexAuthFileLock.Gate) File.Move(temp, path, overwrite: true);
         }
         finally
         {

@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cmd nodes and previews in containers can install packages again: they get the egress proxy in network mode Off and their private npm feed file.
 - **The model gateway only forwards the model API calls each agent needs**, and a double-encoded `..` in the path can no longer reach other endpoints with the real credential.
 - **ILD no longer leaves its containers running while it is down.** On shutdown it stops each run's container, which it starts again when the run next needs it, and removes the chat and sign-in containers. The chat container or pod is also replaced when the runner image or ILD's settings changed, so chats no longer keep an old image.
+- **A Codex login no longer dies when its refreshed token cannot be saved, a request disconnects mid-refresh, or you sign in again during one**, and a failing refresh backs off instead of retrying on every request.
 
 ### Removed
 
