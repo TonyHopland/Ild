@@ -23,7 +23,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
 
     private readonly object _gate = new();
     private readonly WebApplication _app;
-    private readonly Dictionary<(string Kind, string Name), object> _objects = new();
+    private readonly Dictionary<(string Ns, string Kind, string Name), object> _objects = new();
     private int _podReadsBeforeReady;
 
     private FakeKubernetesApi(WebApplication app, bool offerV5)
@@ -72,23 +72,23 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         return api;
     }
 
-    public T? Get<T>(string kind, string name) where T : class
+    public T? Get<T>(string kind, string name, string ns = Namespace) where T : class
     {
-        lock (_gate) return _objects.TryGetValue((kind, name), out var o) ? o as T : null;
+        lock (_gate) return _objects.TryGetValue((ns, kind, name), out var o) ? o as T : null;
     }
 
-    public IReadOnlyList<string> Names(string kind)
+    public IReadOnlyList<string> Names(string kind, string ns = Namespace)
     {
-        lock (_gate) return _objects.Keys.Where(k => k.Kind == kind).Select(k => k.Name).OrderBy(n => n).ToList();
+        lock (_gate) return _objects.Keys.Where(k => k.Kind == kind && k.Ns == ns).Select(k => k.Name).OrderBy(n => n).ToList();
     }
 
     /// <summary>Puts an object of a run in the cluster as if a run host had made it.</summary>
-    public void Seed(string kind, string name, string instance, Guid run, string? managedBy = "ild", string? podPhase = null)
+    public void Seed(string kind, string name, string instance, Guid run, string? managedBy = "ild", string? podPhase = null, string ns = Namespace)
     {
         var meta = new V1ObjectMeta
         {
             Name = name,
-            NamespaceProperty = Namespace,
+            NamespaceProperty = ns,
             Labels = new Dictionary<string, string>
             {
                 ["app.kubernetes.io/managed-by"] = managedBy ?? "other",
@@ -98,7 +98,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         };
         lock (_gate)
         {
-            _objects[(kind, name)] = kind switch
+            _objects[(ns, kind, name)] = kind switch
             {
                 "secrets" => new V1Secret { Metadata = meta },
                 "pods" => new V1Pod { Metadata = meta, Status = podPhase is null ? null : new V1PodStatus { Phase = podPhase } },
@@ -112,7 +112,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     public void SeedTools(string name, string instance)
     {
         lock (_gate)
-            _objects[("pods", name)] = new V1Pod
+            _objects[(Namespace, "pods", name)] = new V1Pod
             {
                 Metadata = new V1ObjectMeta
                 {
@@ -147,13 +147,13 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         })
         {
             var root = $"{prefix}/namespaces/{{ns}}/{kind}";
-            app.MapPost(root, (Func<HttpContext, Task<IResult>>)(http => Create(http, kind)));
-            app.MapGet(root, (HttpContext http) => List(http, kind));
-            app.MapGet(root + "/{name}", (string name) => Read(kind, name));
-            app.MapDelete(root + "/{name}", async (HttpContext http, string name) => await Delete(http, kind, name));
+            app.MapPost(root, (Func<HttpContext, Task<IResult>>)(http => Create(http, (string)http.Request.RouteValues["ns"]!, kind)));
+            app.MapGet(root, (HttpContext http, string ns) => List(http, ns, kind));
+            app.MapGet(root + "/{name}", (string ns, string name) => Read(ns, kind, name));
+            app.MapDelete(root + "/{name}", async (HttpContext http, string ns, string name) => await Delete(http, ns, kind, name));
         }
         app.MapGet("/apis/storage.k8s.io/v1/storageclasses", () => Json(new V1StorageClassList { Items = StorageClasses }));
-        app.MapGet("/api/v1/namespaces/{ns}/pods/{name}/exec", async (HttpContext http, string name) => await Exec(http, name));
+        app.MapGet("/api/v1/namespaces/{ns}/pods/{name}/exec", async (HttpContext http, string ns, string name) => await Exec(http, ns, name));
     }
 
     private static bool Flag(HttpContext http, string name) => http.Request.Query[name].ToString() is "1" or "true";
@@ -164,7 +164,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     private static IResult Failure(int code, string reason, string message)
         => Results.Text(JsonSerializer.Serialize(new { kind = "Status", apiVersion = "v1", status = "Failure", code, reason, message }), "application/json", Encoding.UTF8, code);
 
-    private async Task<IResult> Create(HttpContext http, string kind)
+    private async Task<IResult> Create(HttpContext http, string ns, string kind)
     {
         using var reader = new StreamReader(http.Request.Body);
         var body = await reader.ReadToEndAsync();
@@ -176,22 +176,26 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
             _ => KubernetesJson.Deserialize<V1NetworkPolicy>(body),
         };
         var meta = ((IMetadata<V1ObjectMeta>)created).Metadata;
+        // As the API: the namespace in the body, when there is one, is the one in the path.
+        if (meta.NamespaceProperty is { Length: > 0 } given && given != ns)
+            return Failure(400, "BadRequest", $"the namespace of the provided object does not match the namespace sent on the request ({given} != {ns})");
+        meta.NamespaceProperty = ns;
         lock (_gate)
         {
-            if (_objects.ContainsKey((kind, meta.Name)))
+            if (_objects.ContainsKey((ns, kind, meta.Name)))
                 return Failure(409, "AlreadyExists", $"{kind} \"{meta.Name}\" already exists");
             meta.Uid = Guid.NewGuid().ToString();
-            _objects[(kind, meta.Name)] = created;
+            _objects[(ns, kind, meta.Name)] = created;
             Created.Add($"{kind}/{meta.Name}");
         }
         return Json(created, 201);
     }
 
-    private IResult Read(string kind, string name)
+    private IResult Read(string ns, string kind, string name)
     {
         lock (_gate)
         {
-            if (!_objects.TryGetValue((kind, name), out var found))
+            if (!_objects.TryGetValue((ns, kind, name), out var found))
                 return Failure(404, "NotFound", $"{kind} \"{name}\" not found");
             if (found is V1Pod pod && pod.Status is null)
             {
@@ -207,7 +211,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         }
     }
 
-    private IResult List(HttpContext http, string kind)
+    private IResult List(HttpContext http, string ns, string kind)
     {
         var selector = http.Request.Query["labelSelector"].ToString()
             .Split(',', StringSplitOptions.RemoveEmptyEntries)
@@ -216,7 +220,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         lock (_gate)
         {
             var matching = _objects
-                .Where(o => o.Key.Kind == kind)
+                .Where(o => o.Key.Kind == kind && o.Key.Ns == ns)
                 .Select(o => o.Value)
                 .Where(o => selector.All(s => ((IMetadata<V1ObjectMeta>)o).Metadata.Labels is { } l && l.TryGetValue(s[0], out var v) && v == s[1]))
                 .ToList();
@@ -230,7 +234,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         }
     }
 
-    private async Task<IResult> Delete(HttpContext http, string kind, string name)
+    private async Task<IResult> Delete(HttpContext http, string ns, string kind, string name)
     {
         using var reader = new StreamReader(http.Request.Body);
         var graceless = (await reader.ReadToEndAsync()).Replace(" ", "").Contains("\"gracePeriodSeconds\":0", StringComparison.Ordinal);
@@ -238,16 +242,16 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         lock (_gate)
         {
             // A pod that is terminating on a node that never confirms goes only when it is deleted with a grace period of 0.
-            if (_objects.TryGetValue((kind, name), out var terminating) && terminating is V1Pod { Metadata.DeletionTimestamp: not null } && !graceless)
+            if (_objects.TryGetValue((ns, kind, name), out var terminating) && terminating is V1Pod { Metadata.DeletionTimestamp: not null } && !graceless)
             {
                 Deleted.Add($"{kind}/{name}");
                 return Json(terminating);
             }
-            if (!_objects.Remove((kind, name), out removed!))
+            if (!_objects.Remove((ns, kind, name), out removed!))
                 return Failure(404, "NotFound", $"{kind} \"{name}\" not found");
             Deleted.Add($"{kind}/{name}");
             // Garbage collection: whatever names the deleted object as its owner goes with it.
-            foreach (var key in _objects.Keys.ToList())
+            foreach (var key in _objects.Keys.Where(k => k.Ns == ns).ToList())
                 if (((IMetadata<V1ObjectMeta>)_objects[key]).Metadata.OwnerReferences?.Any(r => r.Name == name && r.Kind.ToLowerInvariant() + "s" == kind) == true)
                     _objects.Remove(key);
         }
@@ -257,7 +261,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
             : Results.Text("{\"kind\":\"Status\",\"apiVersion\":\"v1\",\"status\":\"Success\"}", "application/json");
     }
 
-    private async Task Exec(HttpContext http, string pod)
+    private async Task Exec(HttpContext http, string ns, string pod)
     {
         if (!http.WebSockets.IsWebSocketRequest)
         {
@@ -266,7 +270,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         }
         lock (_gate)
         {
-            if (!_objects.TryGetValue(("pods", pod), out var found))
+            if (!_objects.TryGetValue((ns, "pods", pod), out var found))
             {
                 http.Response.StatusCode = 404;
                 return;

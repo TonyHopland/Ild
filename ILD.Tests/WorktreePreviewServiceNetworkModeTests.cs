@@ -12,21 +12,36 @@ namespace ILD.Tests;
 /// A Worktree Preview follows the network mode (ADR-0019): its install steps and
 /// services launch without the proxy in Off and proxied otherwise, with the mode
 /// read when the start, single-service start or install is called. Observed on real
-/// children (each writes the proxy variable it was given to a file).
+/// children (each writes the proxy variable it was given to a file). Runs alone because it
+/// clears the runner's proxy variables in the real process environment.
 /// </summary>
-[Collection(PreviewPortsCollection.Name)]
+[Collection(ProcessGlobalStateCollection.Name)]
 public class WorktreePreviewServiceNetworkModeTests : IDisposable
 {
     private const string Proxy = "http://127.0.0.1:3128";
     private const string Record = "printf %s \\\"$HTTPS_PROXY\\\" > ";
 
     private readonly string _worktree = Path.Combine(Path.GetTempPath(), "ild-preview-mode-" + Guid.NewGuid().ToString("N"));
+    private static readonly string[] ProxyKeys =
+        { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY" };
+
+    private readonly Dictionary<string, string?> _previous = new(StringComparer.Ordinal);
     private WorktreePreviewService? _service;
 
-    public WorktreePreviewServiceNetworkModeTests() => Directory.CreateDirectory(_worktree);
+    // The children inherit the runner's own proxy variables, so an Off case would see them; clear them for the test.
+    public WorktreePreviewServiceNetworkModeTests()
+    {
+        Directory.CreateDirectory(_worktree);
+        foreach (var key in ProxyKeys)
+        {
+            _previous[key] = Environment.GetEnvironmentVariable(key);
+            Environment.SetEnvironmentVariable(key, null);
+        }
+    }
 
     public void Dispose()
     {
+        foreach (var (name, value) in _previous) Environment.SetEnvironmentVariable(name, value);
         try { _service?.StopAsync(_worktree).GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { _service?.Dispose(); } catch { /* best effort */ }
         try { Directory.Delete(_worktree, recursive: true); } catch { /* best effort */ }

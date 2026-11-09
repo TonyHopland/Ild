@@ -22,6 +22,9 @@ internal sealed class FakeRunHost : IRunHost
 
     public List<RunCommand> Started { get; } = [];
     public List<FakeRunProcess> Killed { get; } = [];
+
+    /// <summary>Every process started, in order, whether or not it was ended through <c>KillAllAsync</c>.</summary>
+    public IReadOnlyList<FakeRunProcess> Processes { get { lock (_gate) return _running.ToList(); } }
     public List<Guid> KillAllCalls { get; } = [];
 
     /// <summary>Runs as <c>KillAllAsync</c> is entered, for a test that checks what had happened by then.</summary>
