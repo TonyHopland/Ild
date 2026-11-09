@@ -154,7 +154,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[codex-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, EnvironmentVariables);
+            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, RunFacingEnvironment);
 
             using var gateway = OpenGateway(ctx);
             var codexHome = RunHost.RunHomeFor(worktreePath) is { } runHome

@@ -47,6 +47,9 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     /// <summary>How often a starting pod is looked at.</summary>
     internal TimeSpan ReadyPollInterval { get; init; } = TimeSpan.FromSeconds(1);
 
+    /// <summary>How ILD's name in <c>ILD_API_URL</c> is resolved for a pod that has no DNS of its own.</summary>
+    internal Func<string, CancellationToken, Task<System.Net.IPAddress[]>> ResolveIld { get; init; } = (host, ct) => System.Net.Dns.GetHostAddressesAsync(host, ct);
+
     /// <summary>The agent CLIs a run gets: those ILD has installed, at their versions. Replaced in tests.</summary>
     internal Func<IReadOnlyList<RunAgent>> Agents { get; init; } = () => RunAgent.Installed(ManagedAgentInstall.ResolveDataRoot());
 
@@ -62,7 +65,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
 
     protected override bool ChatToolchains => _options.UsesToolStore;
 
-    protected override string IldUrl => _options.IldUrl;
+    protected override string IldUrl => RunFacingUrl(_options.IldUrl);
 
     protected override int EgressProxyPort => _options.EgressProxyPort;
 
@@ -83,8 +86,9 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             await RemoveEndedRunPodAsync(KubernetesNames.ObjectName(owner), ct);
             var reference = KubernetesManifests.OwnerReference(secret);
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.Claim(owner, reference), _namespace, cancellationToken: ct));
-            await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.Policy(owner, reference), _namespace, cancellationToken: ct));
-            await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.Pod(owner, reference, tools), _namespace, cancellationToken: ct));
+            await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.Policy(owner, reference, request.Dns), _namespace, cancellationToken: ct));
+            var ildAddress = request.Dns && RunFacingHost(new Uri(_options.IldUrl).Host) == new Uri(_options.IldUrl).Host ? null : await IldAddressAsync(ct);
+            await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.Pod(owner, reference, tools, ildAddress, request.Dns), _namespace, cancellationToken: ct));
             var pod = await WaitReadyAsync(KubernetesNames.ObjectName(owner), $"run {owner:N}", ct);
             _podAddresses[owner] = pod.Status.PodIP;
 
@@ -409,6 +413,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     /// </summary>
     private async Task<string> EnsureChatPodAsync(CancellationToken ct)
     {
+        await ChatIldAddressAsync(ct);
         if (await ChatPodStateAsync(ct) is { } pod && IsReady(pod) && pod.Metadata.DeletionTimestamp is null && IsCurrent(pod)) return ChatPodName;
 
         await _chatGate.WaitAsync(ct);
@@ -429,7 +434,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             {
                 await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.ChatClaim(), _namespace, cancellationToken: ct));
                 await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.ChatPolicy(), _namespace, cancellationToken: ct));
-                await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.ChatPod(), _namespace, cancellationToken: ct));
+                await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.ChatPod(_chatIldAddress), _namespace, cancellationToken: ct));
             }
             await WaitReadyAsync(ChatPodName, "the chats", ct);
             return ChatPodName;
@@ -441,15 +446,44 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     }
 
     private string? _chatSpec;
+    private string? _chatIldAddress;
+    private bool _chatIldAddressKnown;
+
+    private async Task ChatIldAddressAsync(CancellationToken ct)
+    {
+        if (_chatIldAddressKnown) return;
+        _chatIldAddress = await IldAddressAsync(ct);
+        _chatIldAddressKnown = true;
+    }
+
+    /// <summary>
+    /// ILD's Service address, which a pod without DNS is given for ILD's name; null when ILD is named by address. A Service that
+    /// is recreated gets a new address, so a pod made before that must be replaced.
+    /// </summary>
+    private async Task<string?> IldAddressAsync(CancellationToken ct)
+    {
+        var host = new Uri(_options.IldUrl).Host;
+        if (System.Net.IPAddress.TryParse(host.Trim('[', ']'), out _)) return null;
+        try
+        {
+            var addresses = await ResolveIld(host, ct);
+            return (addresses.FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork) ?? addresses.First()).ToString();
+        }
+        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or InvalidOperationException)
+        {
+            throw new InvalidOperationException($"ILD_API_URL names {host}, which ILD cannot resolve, so a pod without DNS cannot be given its address ({ex.Message})", ex);
+        }
+    }
 
     // Whether the chat pod was made from the spec ILD would make it from now.
     private bool IsCurrent(V1Pod pod)
         => pod.Metadata.Annotations?.TryGetValue(KubernetesNames.SpecAnnotation, out var spec) == true
-            && spec == (_chatSpec ??= KubernetesManifests.SpecOf(_manifests.ChatPod()));
+            && spec == (_chatSpec ??= KubernetesManifests.SpecOf(_manifests.ChatPod(_chatIldAddress)));
 
     /// <summary>Deletes a chat pod made from another runner image or other settings, so it is not left running until the next chat.</summary>
     internal async Task RetireStaleChatPodAsync(CancellationToken ct)
     {
+        await ChatIldAddressAsync(ct);
         if (await ChatPodStateAsync(ct) is not { } pod || pod.Metadata.DeletionTimestamp is not null || IsCurrent(pod)) return;
         Logger?.LogInformation("Replacing the chat pod: the runner image or ILD's settings changed since it was made");
         await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));

@@ -72,12 +72,11 @@ public static class ServiceCollectionExtensions
             var local = new LocalRunHost(runner, sp);
             if (kind == RunHostKind.Local) return local;
 
-            // A run's pod or container reaches the egress proxy over the network, not on ILD's loopback.
-            EgressProxyOptions.BindAddress = System.Net.IPAddress.Any;
             var loggers = sp.GetRequiredService<ILoggerFactory>();
             var host = kind == RunHostKind.Kubernetes
                 ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp))
                 : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp));
+            host.Isolated.Probe = sp.GetRequiredService<NetworkEnforcementProbe>();
             // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
             host.Isolated.Forwards = async ct =>
             {
@@ -199,8 +198,19 @@ public static class ServiceCollectionExtensions
         // at, the cached policy it consults, the recorder that persists what it
         // saw, and the enforcement status the entrypoint reported. All keyed off
         // ILD_NETWORK_PROXY_PORT; unset, nothing listens and launches are untouched.
-        services.AddSingleton(_ => EgressProxyOptions.FromEnvironment());
-        services.AddSingleton(sp => NetworkEnforcementStatus.FromEnvironment(sp.GetRequiredService<EgressProxyOptions>()));
+        // A run's pod or container reaches the egress proxy over the network, not on ILD's loopback.
+        services.AddSingleton(sp => EgressProxyOptions.FromEnvironment() with
+        {
+            BindAddress = EgressProxyOptions.BindAddressFor(RunHostOptions.Detect(name => sp.GetRequiredService<IConfiguration>()[name])),
+        });
+        services.AddSingleton(sp => new NetworkEnforcementProbe(name => Environment.GetEnvironmentVariable(name) ?? sp.GetRequiredService<IConfiguration>()[name]));
+        services.AddSingleton(sp => NetworkEnforcementStatus.FromEnvironment(sp.GetRequiredService<EgressProxyOptions>()) with { Probe = sp.GetRequiredService<NetworkEnforcementProbe>() });
+        services.AddSingleton<IProtectedDestinationSource>(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            string? Read(string name) => Environment.GetEnvironmentVariable(name) ?? config[name];
+            return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>());
+        });
         services.AddSingleton<IEgressPolicy, EgressPolicy>();
         services.AddSingleton<INetworkNotifier, SignalRNetworkNotifier>();
         services.AddSingleton<NetworkLogRecorder>();

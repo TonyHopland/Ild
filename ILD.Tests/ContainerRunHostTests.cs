@@ -287,6 +287,46 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Create_gives_the_container_no_working_nameserver_unless_the_run_asks_for_dns()
+    {
+        await CreateRunAsync();
+
+        Assert.Equal(["127.0.0.1"], _api.Container(Name(_run))!["HostConfig"]!["Dns"]!.AsArray().Select(c => c!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_run_that_asks_for_dns_gets_the_engines_resolver()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
+
+        Assert.Empty(_api.Container(Name(_run))!["HostConfig"]!["Dns"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task A_new_environment_probes_for_a_direct_way_out_and_a_refused_connect_makes_the_rules_enforced()
+    {
+        var probe = new ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe(_ => null, ildReaches: (_, _, _) => Task.FromResult(true));
+        _host.Probe = probe;
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Command.Any(c => c.Contains("/dev/tcp/", StringComparison.Ordinal))) await e.WriteStdoutAsync("1\n");
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (probe.EscapeObserved is null && DateTime.UtcNow < deadline) await Task.Delay(20, TestContext.Current.CancellationToken);
+
+        Assert.False(probe.EscapeObserved);
+    }
+
+    [Fact]
     public async Task Create_names_ild_by_the_network_gateway_when_ild_runs_on_the_host()
     {
         await CreateRunAsync();
@@ -516,6 +556,41 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var proxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
         Assert.Contains("ild.example:3128", proxy);
         Assert.DoesNotContain("127.0.0.1", proxy);
+    }
+
+    [Fact]
+    public async Task A_launch_reaches_ild_directly_so_its_host_is_in_NO_PROXY_and_the_gateway_url_uses_it()
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "curl");
+        
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var launch = _api.Execs.Last().Command;
+        foreach (var name in new[] { "NO_PROXY", "no_proxy" })
+            Assert.Contains(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) && c.Split('=', 2)[1].Split(',').Contains("ild.example"));
+        Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1"));
+    }
+
+    [Fact]
+    public async Task A_host_that_is_a_suffix_of_the_preview_domain_is_not_put_on_NO_PROXY_and_ild_is_reached_by_another_name()
+    {
+        _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "curl");
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var noProxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
+        Assert.Contains("ild-api", noProxy);
+        Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
+        Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null));
+        var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host));
+        Assert.Contains(new Uri((string)mcp["ILD_API_URL"]!).Host, noProxy);
+        var hosts = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
+        Assert.Contains(hosts, h => h.StartsWith("ild-api:", StringComparison.Ordinal));
     }
 
     [Fact]

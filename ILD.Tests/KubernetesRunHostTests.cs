@@ -57,7 +57,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
     private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null)
-        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools") };
+        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }) };
 
     private string WorkingDirectory => KubernetesNames.WorkingDirectory(_run);
 
@@ -214,7 +214,37 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Create_lets_the_pod_reach_only_ild_and_dns_and_be_reached_only_by_ild()
+    public async Task Create_gives_the_pod_no_nameserver_and_ilds_service_address_for_ilds_name()
+    {
+        await CreateRunAsync();
+
+        var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
+        Assert.Equal("None", spec.DnsPolicy);
+        Assert.Equal(["127.0.0.1"], spec.DnsConfig.Nameservers);
+        var alias = Assert.Single(spec.HostAliases);
+        Assert.Equal("10.96.0.20", alias.Ip);
+        Assert.Equal(["ild.example"], alias.Hostnames);
+    }
+
+    [Fact]
+    public async Task A_run_that_asks_for_dns_keeps_the_clusters_resolver_and_may_reach_it()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
+
+        var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
+        Assert.Null(spec.DnsPolicy);
+        Assert.Null(spec.HostAliases);
+        var policy = _api.Get<V1NetworkPolicy>("networkpolicies", Name(_run))!.Spec;
+        Assert.Equal([53, 53], policy.Egress[1].Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
+    }
+
+    [Fact]
+    public async Task Create_lets_the_pod_reach_only_ild_and_be_reached_only_by_ild()
     {
         await CreateRunAsync();
 
@@ -224,8 +254,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var toIld = policy.Egress[0];
         Assert.Equal("ild", toIld.To.Single().PodSelector.MatchLabels["app.kubernetes.io/name"]);
         Assert.Equal([8080, 3128], toIld.Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
-        Assert.Equal([53, 53], policy.Egress[1].Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
-        Assert.Equal(2, policy.Egress.Count);
+        Assert.Single(policy.Egress);
         Assert.Equal("ild", policy.Ingress.Single().FromProperty.Single().PodSelector.MatchLabels["app.kubernetes.io/name"]);
     }
 
@@ -603,6 +632,57 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var proxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
         Assert.Contains("ild.example:3128", proxy);
         Assert.DoesNotContain("127.0.0.1", proxy);
+    }
+
+    [Fact]
+    public async Task A_launch_reaches_ild_directly_so_its_host_is_in_NO_PROXY_and_the_gateway_url_uses_it()
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "curl");
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var launch = _api.Execs.Last().Command;
+        foreach (var name in new[] { "NO_PROXY", "no_proxy" })
+            Assert.Contains(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) && c.Split('=', 2)[1].Split(',').Contains("ild.example"));
+        Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1"));
+    }
+
+    [Fact]
+    public async Task A_run_that_asks_for_dns_still_gets_the_alias_cluster_dns_cannot_resolve()
+    {
+        _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
+
+        var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
+        Assert.Null(spec.DnsPolicy);
+        Assert.Contains("ild-api", Assert.Single(spec.HostAliases).Hostnames);
+    }
+
+    [Fact]
+    public async Task A_host_that_is_a_suffix_of_the_preview_domain_is_not_put_on_NO_PROXY_and_ild_is_reached_by_another_name()
+    {
+        _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "curl");
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var noProxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
+        Assert.Contains("ild-api", noProxy);
+        Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
+        Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null));
+        var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host));
+        Assert.Contains(new Uri((string)mcp["ILD_API_URL"]!).Host, noProxy);
+        var names = Assert.Single(_api.Get<V1Pod>("pods", Name(_run))!.Spec.HostAliases).Hostnames;
+        Assert.Contains("ild-api", names);
     }
 
     private KubernetesRunHost AgentReadHost(string readRoot, Dictionary<string, string> written)

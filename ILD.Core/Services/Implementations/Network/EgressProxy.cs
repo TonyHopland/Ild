@@ -49,12 +49,14 @@ public sealed class EgressProxy : BackgroundService
     private readonly ILogger<EgressProxy> _logger;
     private readonly EgressRelay _relay;
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
+    private readonly Func<IPAddress[], int, CancellationToken, Task<TcpClient>> _dial;
     private readonly TaskCompletionSource<int> _bound = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public EgressProxy(EgressProxyOptions options, IEgressPolicy policy, INetworkLogRecorder log, ILogger<EgressProxy> logger,
-        Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null)
+        Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<IPAddress[], int, CancellationToken, Task<TcpClient>>? dial = null)
     {
-        _resolve = resolve ?? ResolveAsync;
+        _resolve = resolve ?? EgressDestinationGuard.ResolveAsync;
+        _dial = dial ?? EgressDestinationGuard.ConnectAsync;
         _options = options;
         _policy = policy;
         _log = log;
@@ -75,7 +77,7 @@ public sealed class EgressProxy : BackgroundService
             return;
         }
 
-        var listener = new TcpListener(EgressProxyOptions.BindAddress, _options.Port);
+        var listener = new TcpListener(_options.BindAddress, _options.Port);
         try
         {
             listener.Start();
@@ -83,14 +85,14 @@ public sealed class EgressProxy : BackgroundService
         catch (SocketException ex)
         {
             _logger.LogError(ex, "Egress proxy could not listen on {Address}:{Port}; agent launches will point at a port nothing answers",
-                EgressProxyOptions.BindAddress, _options.Port);
+                _options.BindAddress, _options.Port);
             _bound.TrySetException(ex);
             return;
         }
 
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         _bound.TrySetResult(port);
-        _logger.LogInformation("Egress proxy listening on {Address}:{Port}", EgressProxyOptions.BindAddress, port);
+        _logger.LogInformation("Egress proxy listening on {Address}:{Port}", _options.BindAddress, port);
 
         _policy.Changed += OnPolicyChanged;
         try
@@ -119,13 +121,6 @@ public sealed class EgressProxy : BackgroundService
 
     private void OnPolicyChanged() => _ = _relay.ResetNewlyBlockedAsync();
 
-    /// <summary>
-    /// <see cref="Dns.GetHostAddressesAsync(string, CancellationToken)"/> refuses the
-    /// unspecified addresses as input, so an IP literal is taken as it stands.
-    /// </summary>
-    private static Task<IPAddress[]> ResolveAsync(string host, CancellationToken ct)
-        => IPAddress.TryParse(host, out var literal) ? Task.FromResult(new[] { literal }) : Dns.GetHostAddressesAsync(host, ct);
-
     private async Task HandleConnectionAsync(TcpClient client, CancellationToken stoppingToken)
     {
         using (client)
@@ -145,7 +140,7 @@ public sealed class EgressProxy : BackgroundService
                 }
 
                 // An agents' preview hostname is ILD's own preview proxy, not a host on the network: handed to ILD's
-                // web port on loopback, with its Host header, under no network policy, since it leaves ILD for nowhere.
+                // web port on loopback under no network policy, with the preview host as its Host so it reaches nothing else of ILD's.
                 if (Interfaces.PreviewProxyBase.IsAgentHost(request.Host))
                 {
                     if (request.Kind != RequestKind.Http || _options.WebPort is not int webPort)
@@ -157,7 +152,8 @@ public sealed class EgressProxy : BackgroundService
                             stoppingToken).ConfigureAwait(false);
                         return;
                     }
-                    await RelayAsync(stream, request with { Port = webPort }, [IPAddress.Loopback], head.Value, stoppingToken).ConfigureAwait(false);
+                    var handOff = ParseRequest(head.Value, request.Host)! with { Port = webPort };
+                    await RelayAsync(stream, handOff, [IPAddress.Loopback], head.Value, stoppingToken).ConfigureAwait(false);
                     return;
                 }
 
@@ -171,7 +167,7 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
 
-                // Resolved once, here: the addresses dialled are the addresses resolved.
+                // Resolved once, here: the addresses judged and dialled are the addresses resolved.
                 IPAddress[] addresses;
                 try
                 {
@@ -181,6 +177,14 @@ public sealed class EgressProxy : BackgroundService
                 {
                     _log.Record(request.Host, request.Port, decision, request.AiProviderId);
                     await WriteUnreachableAsync(stream, request, (ex as SocketException)?.SocketErrorCode.ToString() ?? "invalid host name", stoppingToken).ConfigureAwait(false);
+                    return;
+                }
+
+                var isForward = request.Kind == RequestKind.Connect && snapshot.IsForward(request.Host, request.Port);
+                if (snapshot.CheckAddresses(addresses, isForward) is { } refusal)
+                {
+                    _log.Record(request.Host, request.Port, NetworkDecision.Blocked, request.AiProviderId, refusal.Reason);
+                    await RefuseAsync(stream, request, "ILD refuses " + request.Host + " (" + refusal.Reason + ").", stoppingToken).ConfigureAwait(false);
                     return;
                 }
 
@@ -199,10 +203,10 @@ public sealed class EgressProxy : BackgroundService
 
     private async Task RelayAsync(NetworkStream client, ProxyRequest request, IPAddress[] addresses, ArraySegment<byte> head, CancellationToken stoppingToken)
     {
-        using var upstream = new TcpClient { NoDelay = true };
+        TcpClient upstream;
         try
         {
-            await upstream.ConnectAsync(addresses, request.Port, stoppingToken).ConfigureAwait(false);
+            upstream = await _dial(addresses, request.Port, stoppingToken).ConfigureAwait(false);
         }
         catch (SocketException ex)
         {
@@ -222,6 +226,7 @@ public sealed class EgressProxy : BackgroundService
         finally
         {
             upstream.Close();
+            upstream.Dispose();
         }
     }
 
@@ -303,7 +308,7 @@ public sealed class EgressProxy : BackgroundService
         return null;
     }
 
-    internal static ProxyRequest? ParseRequest(ArraySegment<byte> head)
+    internal static ProxyRequest? ParseRequest(ArraySegment<byte> head, string? hostOverride = null)
     {
         var span = head.AsSpan();
         if (TlsClientHello.StartsHandshake(span))
@@ -347,6 +352,7 @@ public sealed class EgressProxy : BackgroundService
             {
                 hostHeader = value;
                 sawHostHeader = true;
+                if (hostOverride is not null) continue;
             }
             else if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
                 transferEncodings.Add(value);
@@ -389,7 +395,7 @@ public sealed class EgressProxy : BackgroundService
         // the target); the origin-form request the upstream gets may not.
         var headText = new StringBuilder()
             .Append(method).Append(' ').Append(originTarget).Append(' ').Append(version).Append("\r\n")
-            .Append(sawHostHeader ? string.Empty : "Host: " + hostHeader + "\r\n")
+            .Append(sawHostHeader && hostOverride is null ? string.Empty : "Host: " + (hostOverride ?? hostHeader) + "\r\n")
             .Append(forwarded)
             .Append("Connection: close\r\n\r\n")
             .ToString();

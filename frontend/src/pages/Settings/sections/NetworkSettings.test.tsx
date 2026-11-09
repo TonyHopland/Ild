@@ -7,6 +7,7 @@ import type {
   NetworkForward,
   NetworkLogEntry,
   NetworkPolicyEntry,
+  NetworkProtectedDestination,
   NetworkStatus,
 } from "../../../types";
 import { WorkItemHubProvider } from "../../../hooks/useWorkItemHub";
@@ -53,6 +54,14 @@ const npmLine: NetworkLogEntry = {
   aiProviderId: "p1",
 };
 
+const database: NetworkProtectedDestination = {
+  id: "database",
+  name: "ILD database",
+  hosts: ["db.example"],
+  addresses: ["10.0.0.7"],
+  enabled: true,
+};
+
 const postgres: NetworkForward = {
   id: "f1",
   name: "postgres",
@@ -73,6 +82,7 @@ function mockServices(
   vi.spyOn(services.networkService, "getStatus").mockResolvedValue(status);
   vi.spyOn(services.networkService, "getEntries").mockResolvedValue([github, evil]);
   vi.spyOn(services.networkService, "getForwards").mockResolvedValue(forwards);
+  vi.spyOn(services.networkService, "getProtected").mockResolvedValue([database]);
   vi.spyOn(services.networkService, "getLog").mockResolvedValue([npmLine]);
   vi.spyOn(services.settingsService, "get").mockImplementation(async (key: string) => ({
     key,
@@ -135,6 +145,46 @@ describe("Network settings", () => {
     const banner = await screen.findByRole("status");
     expect(banner.textContent).toMatch(/advisory mode/i);
     expect(banner.textContent).toContain("NET_ADMIN is not granted");
+  });
+
+  test("says the limits are unverified rather than enforced before a probe has run", async () => {
+    mockServices({ ...enforced, enforcement: "unverified", reason: "No run has checked yet." });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const banner = await screen.findByRole("status");
+    expect(banner.textContent).toMatch(/not verified/i);
+  });
+
+  test("lists the protected destinations and switches one off only after a confirmation", async () => {
+    mockServices();
+    const setProtected = vi
+      .spyOn(services.networkService, "setProtected")
+      .mockResolvedValue({ ...database, enabled: false });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = (await screen.findByText("ILD database")).closest("tr")!;
+    expect(within(row).getByText("10.0.0.7")).toBeTruthy();
+
+    fireEvent.click(within(row).getByLabelText("Protect ILD database"));
+    expect(setProtected).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Switch off" }));
+
+    await waitFor(() => expect(setProtected).toHaveBeenCalledWith("database", false));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/ILD.s database/);
+  });
+
+  test("a protected refusal in the log links to the protections instead of offering a rule", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([
+      { ...npmLine, host: "db.example", port: 5432, reason: "protected: ILD database" },
+    ]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const log = within(await screen.findByLabelText("Traffic log"));
+    const row = (await log.findByText("db.example")).closest("tr")!;
+    expect(within(row).getByText("protected: ILD database")).toBeTruthy();
+    expect(within(row).getByRole("link", { name: "Protected destinations" })).toBeTruthy();
+    expect(within(row).queryByText("Allow")).toBeNull();
   });
 
   test("saves the mode and reverts when the save fails", async () => {

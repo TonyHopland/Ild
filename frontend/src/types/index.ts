@@ -1587,6 +1587,8 @@ export interface NetworkLogEntry {
   timestamp: string;
   decision: NetworkDecision;
   aiProviderId: string | null;
+  /** Why ILD refused it when the lists were not the reason: `loopback` or `protected: <name>`. */
+  reason?: string | null;
 }
 
 /**
@@ -1606,9 +1608,18 @@ export interface NetworkForward {
   listenError: string | null;
 }
 
-/** Whether runs and chats can reach the network only through the proxy (they run in containers or pods), and why. */
+/** One piece of ILD's own infrastructure the proxy keeps agents away from, with the operator's switch. */
+export interface NetworkProtectedDestination {
+  id: string;
+  name: string;
+  hosts: string[];
+  addresses: string[];
+  enabled: boolean;
+}
+
+/** Whether runs and chats can reach the network only through the proxy, and why: `unverified` until a probe in a run has tried to get out, `advisory` when one did. */
 export interface NetworkStatus {
-  enforcement: "enforced" | "advisory";
+  enforcement: "enforced" | "advisory" | "unverified";
   reason: string;
   proxyEnabled: boolean;
   proxyPort: number | null;

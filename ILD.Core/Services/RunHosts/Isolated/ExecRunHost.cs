@@ -124,6 +124,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>The declared forwards, read when a command or terminal starts in a run or chat; null runs with none.</summary>
     public Func<CancellationToken, Task<IReadOnlyList<RunForward>>>? Forwards { get; set; }
 
+    /// <summary>Checks, from the first environment made, that the network leaves no way out but the proxy; null runs no probe.</summary>
+    public ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe? Probe { get; set; }
+
     // The environments that were given relays, so one whose forwards all went is cleaned up, and one that never had
     // any costs no extra exec per command.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ExecOwner, bool> _forwarded = new();
@@ -170,6 +173,23 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     /// <summary>ILD's address as the run reaches it: where the model gateway and the MCP endpoint are.</summary>
     protected abstract string IldUrl { get; }
+
+    /// <summary>
+    /// ILD's URL as a run is given it. A run's <c>NO_PROXY</c> names ILD's host and most clients match it as a suffix, so a host that
+    /// is a suffix of <c>preview.ild</c> (compose's <c>ild</c>) would send every agent preview around the proxy: runs reach ILD
+    /// as <c>&lt;host&gt;-api</c> then, which the environment maps to the same address.
+    /// </summary>
+    internal static string RunFacingUrl(string ildUrl)
+    {
+        var uri = new Uri(ildUrl);
+        return RunFacingHost(uri.Host) == uri.Host ? ildUrl : new UriBuilder(uri) { Host = RunFacingHost(uri.Host) }.Uri.ToString().TrimEnd('/');
+    }
+
+    internal static string RunFacingHost(string host)
+        => ILD.Core.Services.Interfaces.PreviewProxyBase.AgentHost.Equals(host, StringComparison.OrdinalIgnoreCase)
+            || ILD.Core.Services.Interfaces.PreviewProxyBase.AgentHost.EndsWith("." + host, StringComparison.OrdinalIgnoreCase)
+            ? host + "-api"
+            : host;
 
     /// <summary>The port of ILD's egress proxy; 0 when there is none.</summary>
     protected abstract int EgressProxyPort { get; }
@@ -295,9 +315,19 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return RunToolStore.Parse(result.StdOut, root);
     }
 
+    /// <summary>Tries, from inside the environment and without the proxy, to connect out; true when it connected.</summary>
+    private async Task<bool?> ConnectDirectlyAsync(Guid owner, string host, int port, CancellationToken ct)
+    {
+        var result = await RunScriptAsync(owner, "timeout 3 bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' probe \"$1\" \"$2\" 2>/dev/null; echo $?",
+            [host, port.ToString(System.Globalization.CultureInfo.InvariantCulture)], ct);
+        if (!result.Success) return null;
+        return result.StdOut.Trim() switch { "0" => true, "1" or "124" => false, _ => null };
+    }
+
     /// <summary>Make the environment ready to work in: the run's home and the code the base repository has.</summary>
     protected async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
     {
+        if (Probe is { } probe) _ = probe.ProbeAsync((host, port, token) => ConnectDirectlyAsync(owner, host, port, token));
         var home = await RunScriptAsync(owner, HomeScript, [RunPaths.HomeDirectory(owner)], ct);
         if (!home.Success)
             throw new InvalidOperationException($"could not make the run's home in its {Noun}: {home.StdErr.Trim()}");
@@ -421,6 +451,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         foreach (var bag in new[] { environment, network })
             foreach (var (name, value) in bag.ToList())
                 bag[name] = ThroughIldHost(value, ild);
+        // ILD is on the run's own network: the gateway and the MCP endpoint go direct, not through the proxy.
+        foreach (var name in new[] { "NO_PROXY", "no_proxy" })
+            if (network.TryGetValue(name, out var noProxy))
+                network[name] = $"{noProxy},{ild}";
 
         environment["HOME"] = owner.Home;
         return environment;

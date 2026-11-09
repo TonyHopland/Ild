@@ -161,7 +161,7 @@ public enum RunHostKind
 public sealed record RunEnvironment(Guid OwnerId, string WorkingDirectory);
 
 /// <summary>What <see cref="IRunHost.CreateAsync"/> makes an environment from: the base checkout and the run's branch.</summary>
-public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string BranchName, Guid RepositoryId);
+public sealed record RunEnvironmentRequest(Guid OwnerId, string BasePath, string BranchName, Guid RepositoryId, bool Dns = false);
 
 /// <summary>
 /// A command to start. <see cref="Start"/> carries the program, arguments, working directory,

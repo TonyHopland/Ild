@@ -65,6 +65,7 @@ import {
   RunAnalyticsOverview,
   AnalyticsFilters,
   NetworkForward,
+  NetworkProtectedDestination,
   NetworkListKind,
   NetworkLogEntry,
   NetworkPolicyEntry,
@@ -1273,6 +1274,12 @@ export const networkService = {
   },
   deleteForward: async (id: string): Promise<void> => {
     return api.delete<void>(`/network/forwards/${id}`);
+  },
+  getProtected: async (): Promise<NetworkProtectedDestination[]> => {
+    return api.get<NetworkProtectedDestination[]>("/network/protected");
+  },
+  setProtected: async (id: string, enabled: boolean): Promise<NetworkProtectedDestination> => {
+    return api.put<NetworkProtectedDestination>(`/network/protected/${id}`, { enabled });
   },
   getLog: async (take = 200): Promise<NetworkLogEntry[]> => {
     return api.get<NetworkLogEntry[]>(`/network/log?take=${take}`);

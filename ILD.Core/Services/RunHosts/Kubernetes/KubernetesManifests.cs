@@ -80,17 +80,17 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     };
 
     /// <summary>
-    /// Egress only to ILD (the gateway, the MCP endpoint and the egress proxy) and to DNS; ingress only from ILD.
-    /// What a run's pod can reach beyond that is reached through ILD's egress proxy.
+    /// Egress only to ILD (the gateway, the MCP endpoint and the egress proxy), and to DNS when <paramref name="dns"/>; ingress only from ILD.
+    /// What a run's pod can reach beyond that is reached through ILD's egress proxy, which alone resolves names.
     /// </summary>
-    public V1NetworkPolicy Policy(Guid ownerId, V1OwnerReference owner)
-        => Policy(Meta(ownerId, owner), new Dictionary<string, string> { [KubernetesNames.RunLabel] = ownerId.ToString("N"), [KubernetesNames.InstanceLabel] = options.Instance });
+    public V1NetworkPolicy Policy(Guid ownerId, V1OwnerReference owner, bool dns = false)
+        => Policy(Meta(ownerId, owner), new Dictionary<string, string> { [KubernetesNames.RunLabel] = ownerId.ToString("N"), [KubernetesNames.InstanceLabel] = options.Instance }, dns);
 
     /// <summary>The same rules for the chat pod, which no run's policy selects.</summary>
     public V1NetworkPolicy ChatPolicy()
-        => Policy(ChatMeta(), new Dictionary<string, string> { [KubernetesNames.RoleLabel] = KubernetesNames.ChatRole, [KubernetesNames.InstanceLabel] = options.Instance });
+        => Policy(ChatMeta(), new Dictionary<string, string> { [KubernetesNames.RoleLabel] = KubernetesNames.ChatRole, [KubernetesNames.InstanceLabel] = options.Instance }, dns: false);
 
-    private V1NetworkPolicy Policy(V1ObjectMeta metadata, IDictionary<string, string> podLabels)
+    private V1NetworkPolicy Policy(V1ObjectMeta metadata, IDictionary<string, string> podLabels, bool dns)
     {
         var ild = new V1LabelSelector { MatchLabels = new Dictionary<string, string>(options.IldPodSelector) };
         var ports = new List<V1NetworkPolicyPort> { new() { Protocol = "TCP", Port = options.IldPort } };
@@ -111,18 +111,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         To = [new V1NetworkPolicyPeer { PodSelector = ild, NamespaceSelector = new V1LabelSelector() }],
                         Ports = ports,
                     },
-                    new V1NetworkPolicyEgressRule
-                    {
-                        To =
-                        [
-                            new V1NetworkPolicyPeer
-                            {
-                                PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["k8s-app"] = "kube-dns" } },
-                                NamespaceSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = "kube-system" } },
-                            },
-                        ],
-                        Ports = [new V1NetworkPolicyPort { Protocol = "UDP", Port = 53 }, new V1NetworkPolicyPort { Protocol = "TCP", Port = 53 }],
-                    },
+                    .. dns ? new[] { DnsEgress() } : [],
                 ],
                 Ingress =
                 [
@@ -135,8 +124,29 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         };
     }
 
-    public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null)
-        => BuildPod(Meta(ownerId, owner), KubernetesNames.RunRoot(ownerId), KubernetesNames.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(KubernetesNames.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true);
+    private static V1NetworkPolicyEgressRule DnsEgress()
+        => new()
+        {
+            To =
+            [
+                new V1NetworkPolicyPeer
+                {
+                    PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["k8s-app"] = "kube-dns" } },
+                    NamespaceSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = "kube-system" } },
+                },
+            ],
+            Ports = [new V1NetworkPolicyPort { Protocol = "UDP", Port = 53 }, new V1NetworkPolicyPort { Protocol = "TCP", Port = 53 }],
+        };
+
+    private List<string> IldNames()
+    {
+        var host = new Uri(options.IldUrl).Host;
+        var facing = ExecRunHost.RunFacingHost(host);
+        return facing == host ? [host] : [host, facing];
+    }
+
+    public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false)
+        => BuildPod(Meta(ownerId, owner), KubernetesNames.RunRoot(ownerId), KubernetesNames.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(KubernetesNames.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns);
 
     // The zones every chat mounts: the agents' and the shared toolchains, never a repository's own tools.
     private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];
@@ -146,9 +156,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// zones of the store's claim read-only whenever there is a store, since a pod's volumes are fixed when it is made and
     /// a chat may need toolchains later. No CPU or memory limit, as chats had in ILD's own container.
     /// </summary>
-    public V1Pod ChatPod()
+    public V1Pod ChatPod(string? ildAddress = null)
     {
-        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore ? ChatToolZones : [], limits: false);
+        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore ? ChatToolZones : [], limits: false, ildAddress, dns: false);
         pod.Metadata.Annotations = new Dictionary<string, string> { [KubernetesNames.SpecAnnotation] = SpecOf(pod) };
         return pod;
     }
@@ -163,7 +173,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
     }
 
-    private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, IReadOnlyList<RunToolMount> zones, bool limits)
+    private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, IReadOnlyList<RunToolMount> zones, bool limits, string? ildAddress, bool dns)
     {
         return new V1Pod
         {
@@ -171,6 +181,10 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
             Spec = new V1PodSpec
             {
                 AutomountServiceAccountToken = false,
+                // Names are resolved only by ILD's egress proxy: ILD's own name is pinned in the pod, and the nameserver is nothing.
+                DnsPolicy = dns ? null : "None",
+                DnsConfig = dns ? null : new V1PodDNSConfig { Nameservers = ["127.0.0.1"] },
+                HostAliases = ildAddress is null ? null : [new V1HostAlias { Ip = ildAddress, Hostnames = IldNames() }],
                 EnableServiceLinks = false,
                 RestartPolicy = "Never",
                 TerminationGracePeriodSeconds = 5,

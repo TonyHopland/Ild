@@ -33,6 +33,7 @@ public class NetworkController : ControllerBase
     private readonly NetworkEnforcementStatus _enforcement;
     private readonly IEgressForwarderState _forwarder;
     private readonly IRunHost _runHost;
+    private readonly IAppSettingStore _settings;
 
     public NetworkController(
         INetworkPolicyStore store,
@@ -42,8 +43,10 @@ public class NetworkController : ControllerBase
         INetworkNotifier notifier,
         NetworkEnforcementStatus enforcement,
         IEgressForwarderState forwarder,
-        IRunHost runHost)
+        IRunHost runHost,
+        IAppSettingStore settings)
     {
+        _settings = settings;
         _runHost = runHost;
         _store = store;
         _forwards = forwards;
@@ -89,12 +92,31 @@ public class NetworkController : ControllerBase
     public IActionResult GetStatus()
         => Ok(new
         {
-            enforcement = NetworkEnforcementStatus.EnforcementFor(_runHost.Kind),
+            enforcement = _enforcement.EnforcementFor(_runHost.Kind),
             reason = _enforcement.ReasonFor(_runHost.Kind),
             proxyEnabled = _enforcement.ProxyEnabled,
             proxyPort = _enforcement.ProxyPort,
             offAvailable = true,
         });
+
+    public sealed class SetProtectedRequest
+    {
+        public bool Enabled { get; set; }
+    }
+
+    [HttpGet("protected")]
+    public async Task<IActionResult> GetProtected(CancellationToken ct)
+        => Ok((await _policy.GetAsync(ct)).Protected.Select(View));
+
+    [HttpPut("protected/{id}")]
+    public async Task<IActionResult> SetProtected(string id, [FromBody] SetProtectedRequest request, CancellationToken ct)
+    {
+        var current = (await _policy.GetAsync(ct)).Protected.FirstOrDefault(p => p.Id == id);
+        if (current is null) return NotFound();
+        await _settings.UpsertAsync(ProtectedDestination.SettingKey(id), request.Enabled ? "true" : "false", ct);
+        await PolicyChangedAsync();
+        return Ok(View(current with { Enabled = request.Enabled }));
+    }
 
     [HttpGet("entries")]
     public async Task<IActionResult> GetEntries(CancellationToken ct)
@@ -349,6 +371,9 @@ public class NetworkController : ControllerBase
             listenError = _forwarder.ListenErrorFor(f.Id),
         };
 
+    private static object View(ProtectedDestination p)
+        => new { id = p.Id, name = p.Name, hosts = p.Hosts, addresses = p.Addresses.Select(a => a.ToString()), enabled = p.Enabled };
+
     private static object View(NetworkLogEntry l)
-        => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId };
+        => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId, reason = l.Reason };
 }

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Sockets;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -52,6 +53,8 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
     private readonly INetworkNotifier _notifier;
     private readonly ILogger<EgressForwarder> _logger;
     private readonly EgressRelay _relay;
+    private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
+    private readonly Func<IPAddress[], int, CancellationToken, Task<TcpClient>> _dial;
 
     private readonly SemaphoreSlim _reconciling = new(1, 1);
     private readonly SemaphoreSlim _wake = new(0, 1);
@@ -64,8 +67,12 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
         IEgressPolicy policy,
         INetworkLogRecorder log,
         INetworkNotifier notifier,
-        ILogger<EgressForwarder> logger)
+        ILogger<EgressForwarder> logger,
+        Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null,
+        Func<IPAddress[], int, CancellationToken, Task<TcpClient>>? dial = null)
     {
+        _resolve = resolve ?? EgressDestinationGuard.ResolveAsync;
+        _dial = dial ?? EgressDestinationGuard.ConnectAsync;
         _scopes = scopes;
         _policy = policy;
         _log = log;
@@ -329,13 +336,35 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
 
                 var snapshot = await _policy.GetAsync(ct).ConfigureAwait(false);
                 var decision = snapshot.Decide(forward.Host, aiProviderId: null);
-                _log.Record(forward.Host, forward.Port, decision, aiProviderId: null);
-                if (decision == NetworkDecision.Blocked) return;
+                if (decision == NetworkDecision.Blocked)
+                {
+                    _log.Record(forward.Host, forward.Port, decision, aiProviderId: null);
+                    return;
+                }
 
-                using var upstream = new TcpClient { NoDelay = true };
+                IPAddress[] addresses;
                 try
                 {
-                    await upstream.ConnectAsync(forward.Host, forward.Port, ct).ConfigureAwait(false);
+                    addresses = await _resolve(forward.Host, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is SocketException or ArgumentException)
+                {
+                    _log.Record(forward.Host, forward.Port, decision, aiProviderId: null);
+                    _logger.LogDebug(ex, "Forward {Name} could not resolve {Host}", forward.Name, forward.Host);
+                    return;
+                }
+
+                if (EgressDestinationGuard.Check(addresses, [], exemptFromProtections: true) is { } refusal)
+                {
+                    _log.Record(forward.Host, forward.Port, NetworkDecision.Blocked, aiProviderId: null, refusal.Reason);
+                    return;
+                }
+                _log.Record(forward.Host, forward.Port, decision, aiProviderId: null);
+
+                TcpClient upstream;
+                try
+                {
+                    upstream = await _dial(addresses, forward.Port, ct).ConfigureAwait(false);
                 }
                 catch (SocketException ex)
                 {
@@ -352,6 +381,7 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
                 finally
                 {
                     upstream.Close();
+                    upstream.Dispose();
                 }
             }
             catch (OperationCanceledException) { }
