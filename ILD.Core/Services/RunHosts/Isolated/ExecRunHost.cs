@@ -174,6 +174,23 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>ILD's address as the run reaches it: where the model gateway and the MCP endpoint are.</summary>
     protected abstract string IldUrl { get; }
 
+    /// <summary>
+    /// ILD's URL as a run is given it. A run's <c>NO_PROXY</c> names ILD's host and most clients match it as a suffix, so a host that
+    /// is a suffix of <c>preview.ild</c> (compose's <c>ild</c>) would send every agent preview around the proxy: runs reach ILD
+    /// as <c>&lt;host&gt;-api</c> then, which the environment maps to the same address.
+    /// </summary>
+    internal static string RunFacingUrl(string ildUrl)
+    {
+        var uri = new Uri(ildUrl);
+        return RunFacingHost(uri.Host) == uri.Host ? ildUrl : new UriBuilder(uri) { Host = RunFacingHost(uri.Host) }.Uri.ToString().TrimEnd('/');
+    }
+
+    internal static string RunFacingHost(string host)
+        => ILD.Core.Services.Interfaces.PreviewProxyBase.AgentHost.Equals(host, StringComparison.OrdinalIgnoreCase)
+            || ILD.Core.Services.Interfaces.PreviewProxyBase.AgentHost.EndsWith("." + host, StringComparison.OrdinalIgnoreCase)
+            ? host + "-api"
+            : host;
+
     /// <summary>The port of ILD's egress proxy; 0 when there is none.</summary>
     protected abstract int EgressProxyPort { get; }
 

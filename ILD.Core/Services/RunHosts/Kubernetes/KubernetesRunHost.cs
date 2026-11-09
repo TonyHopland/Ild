@@ -65,7 +65,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
 
     protected override bool ChatToolchains => _options.UsesToolStore;
 
-    protected override string IldUrl => _options.IldUrl;
+    protected override string IldUrl => RunFacingUrl(_options.IldUrl);
 
     protected override int EgressProxyPort => _options.EgressProxyPort;
 

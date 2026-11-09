@@ -138,6 +138,13 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
             Ports = [new V1NetworkPolicyPort { Protocol = "UDP", Port = 53 }, new V1NetworkPolicyPort { Protocol = "TCP", Port = 53 }],
         };
 
+    private List<string> IldNames()
+    {
+        var host = new Uri(options.IldUrl).Host;
+        var facing = ExecRunHost.RunFacingHost(host);
+        return facing == host ? [host] : [host, facing];
+    }
+
     public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false)
         => BuildPod(Meta(ownerId, owner), KubernetesNames.RunRoot(ownerId), KubernetesNames.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(KubernetesNames.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns);
 
@@ -177,7 +184,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 // Names are resolved only by ILD's egress proxy: ILD's own name is pinned in the pod, and the nameserver is nothing.
                 DnsPolicy = dns ? null : "None",
                 DnsConfig = dns ? null : new V1PodDNSConfig { Nameservers = ["127.0.0.1"] },
-                HostAliases = dns || ildAddress is null ? null : [new V1HostAlias { Ip = ildAddress, Hostnames = [new Uri(options.IldUrl).Host] }],
+                HostAliases = dns || ildAddress is null ? null : [new V1HostAlias { Ip = ildAddress, Hostnames = IldNames() }],
                 EnableServiceLinks = false,
                 RestartPolicy = "Never",
                 TerminationGracePeriodSeconds = 5,

@@ -62,7 +62,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     protected override string Noun => "container";
 
-    protected override string IldUrl => _options.IldUrl;
+    protected override string IldUrl => RunFacingUrl(_options.IldUrl);
 
     protected override int EgressProxyPort => _options.EgressProxyPort;
 
@@ -229,7 +229,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                 CapDrop = new[] { "ALL" },
                 SecurityOpt = new[] { "no-new-privileges" },
                 NetworkMode = name,
-                ExtraHosts = new[] { $"{_options.IldHost}:{ildAddress}" },
+                ExtraHosts = IldHosts(ildAddress),
                 Dns = NameServers(dns),
                 RestartPolicy = new { Name = "no" },
                 Memory = memory,
@@ -590,6 +590,11 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         await RemoveContainerAsync(ChatName, "the chat container", ct);
     }
 
+    private string[] IldHosts(string ildAddress)
+        => RunFacingHost(_options.IldHost) == _options.IldHost
+            ? [$"{_options.IldHost}:{ildAddress}"]
+            : [$"{_options.IldHost}:{ildAddress}", $"{RunFacingHost(_options.IldHost)}:{ildAddress}"];
+
     // Names are resolved only by ILD's egress proxy: ILD's own name comes from ExtraHosts, and the nameserver is nothing, so an
     // engine that forwards DNS out of an internal network has nowhere to forward to.
     private static string[] NameServers(bool dns) => dns ? [] : ["127.0.0.1"];
@@ -614,7 +619,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                 CapDrop = new[] { "ALL" },
                 SecurityOpt = new[] { "no-new-privileges" },
                 NetworkMode = ChatName,
-                ExtraHosts = new[] { $"{_options.IldHost}:{ildAddress}" },
+                ExtraHosts = IldHosts(ildAddress),
                 Dns = NameServers(dns: false),
                 RestartPolicy = new { Name = "no" },
             },

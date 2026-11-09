@@ -574,6 +574,24 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_host_that_is_a_suffix_of_the_preview_domain_is_not_put_on_NO_PROXY_and_ild_is_reached_by_another_name()
+    {
+        _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "curl");
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var noProxy = Assert.Single(_api.Execs.Last().Command, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
+        Assert.Contains("ild-api", noProxy);
+        Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
+        Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null));
+        var hosts = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Select(c => c!.GetValue<string>()).ToList();
+        Assert.Contains(hosts, h => h.StartsWith("ild-api:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_command_for_a_container_that_is_gone_says_so_instead_of_hanging()
     {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
