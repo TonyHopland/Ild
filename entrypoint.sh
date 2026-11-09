@@ -268,7 +268,9 @@ grant_engine_socket() {
     case "$gid" in
       ''|*[!0-9]*) gid=0 ;;
     esac
-    if [ "$((10#$gid))" -eq 0 ] || [ "$gid" = "$own_gid" ]; then
+    # Leading zeros off, so 010001 is 10001 and 00 is 0 (empty).
+    gid="${gid#"${gid%%[!0]*}"}"
+    if [ -z "$gid" ] || [ "$gid" = "$own_gid" ]; then
       echo "WARNING: ILD_CONTAINER_SOCKET_GID=${ILD_CONTAINER_SOCKET_GID:-} must be a whole number other than 0 and ILD's own gid (${own_gid:-unknown}); $socket is left alone and no run can start." >&2
       return 0
     fi

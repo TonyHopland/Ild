@@ -39,29 +39,31 @@ printf '0 1000 1\n1 524288 65536\n' > "$work/uid_map.userns"
 printf "65534\n" > "$work/overflowgid"
 printf "4294967295\n" > "$work/overflowgid.other"
 
+# The functions run under sh with set -eu, as entrypoint.sh does (dash in the image), not under bash.
+cat > "$work/harness.sh" <<'H'
+set -eu
+stat() { case "$2" in %g) echo "$sock_gid" ;; %A) echo "$sock_mode" ;; esac; }
+# Like getent: exit 2 when nothing matches.
+getent() { awk -F: -v k="$2" '$1==k || $3==k {print; found=1} END {exit found ? 0 : 2}' "$work/group"; }
+groupadd() {
+  echo "groupadd $*" >> "$work/calls"
+  if [ "$1" = "--gid" ]; then echo "$3:x:$2:" >> "$work/group"; else echo "$1:x:5555:" >> "$work/group"; fi
+}
+usermod() { echo "usermod $*" >> "$work/calls"; }
+chgrp() { echo "chgrp $1" >> "$work/calls"; }
+. "$funcs"
+grant_engine_socket
+H
+
 # run <socket gid> <socket mode> <uid map> <group db> [ILD_IMAGE] [socket path] [KUBERNETES_SERVICE_HOST]
 run() {
   : > "$work/calls"
   printf '%s' "$4" > "$work/group"
-  (
-    stat() { case "$2" in %g) echo "$sock_gid" ;; %A) echo "$sock_mode" ;; esac; }
-    # Like getent: exit 2 when nothing matches.
-    getent() { awk -F: -v k="$2" '$1==k || $3==k {print; found=1} END {exit found ? 0 : 2}' "$work/group"; }
-    groupadd() {
-      echo "groupadd $*" >> "$work/calls"
-      if [ "$1" = "--gid" ]; then echo "$3:x:$2:" >> "$work/group"; else echo "$1:x:5555:" >> "$work/group"; fi
-    }
-    usermod() { echo "usermod $*" >> "$work/calls"; }
-    chgrp() { echo "chgrp $1" >> "$work/calls"; }
-    sock_gid="$1" sock_mode="$2"
-    UID_MAP_FILE="$3" ILD_IMAGE="${5-1}" ILD_CONTAINER_SOCKET="${6-unix://$socket}" KUBERNETES_SERVICE_HOST="${7-}"
-    RUNTIME_USER=ild ILD_CONTAINER_SOCKET_GRANT="${grant-}"
-    OVERFLOWGID_FILE="${overflow_file-$work/overflowgid}"
-    if [ -n "${sock_gid_setting+x}" ]; then ILD_CONTAINER_SOCKET_GID="$sock_gid_setting"; else unset ILD_CONTAINER_SOCKET_GID; fi
-    # shellcheck disable=SC1090
-    . "$funcs"
-    grant_engine_socket
-  ) > "$work/stdout" 2> "$work/stderr"
+  if [ -n "${sock_gid_setting+x}" ]; then export ILD_CONTAINER_SOCKET_GID="$sock_gid_setting"; else unset ILD_CONTAINER_SOCKET_GID; fi
+  work="$work" funcs="$funcs" sock_gid="$1" sock_mode="$2" \
+    UID_MAP_FILE="$3" ILD_IMAGE="${5-1}" ILD_CONTAINER_SOCKET="${6-unix://$socket}" KUBERNETES_SERVICE_HOST="${7-}" \
+    RUNTIME_USER=ild ILD_CONTAINER_SOCKET_GRANT="${grant-}" OVERFLOWGID_FILE="${overflow_file-$work/overflowgid}" \
+    sh "$work/harness.sh" > "$work/stdout" 2> "$work/stderr"
 }
 
 calls() { tr '\n' ';' < "$work/calls"; }
@@ -106,7 +108,7 @@ sock_gid_setting=4242 grant=1 run 0 srw-rw---- "$work/uid_map.host" "${groups}ho
 "
 if [ "$(calls)" = "chgrp hostengine;usermod -aG hostengine ild;" ]; then pass "a group that already has that gid is reused"; else fail "reuse: $(calls)"; fi
 
-for bad in 10001 0 abc 00; do
+for bad in 10001 0 abc 00 010001; do
   sock_gid_setting="$bad" grant=1 run 0 srw-rw---- "$work/uid_map.host" "$groups"
   if [ -z "$(calls)" ] && grep -q "ILD_CONTAINER_SOCKET_GID" "$work/stderr"; then
     pass "ILD_CONTAINER_SOCKET_GID='$bad' is refused and nothing is touched"
