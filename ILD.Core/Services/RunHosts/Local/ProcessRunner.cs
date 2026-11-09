@@ -2,7 +2,7 @@ using System.Diagnostics;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
-namespace ILD.Core.Services.Implementations;
+namespace ILD.Core.Services.RunHosts.Local;
 
 /// <summary>
 /// Runs subprocesses for the orchestrator. A child never inherits the secrets

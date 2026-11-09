@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using ILD.Data.Enums;
 
-namespace ILD.Core.Services.Implementations;
+namespace ILD.Core.Services.RunHosts.Local;
 
 /// <summary>
 /// What a process ILD starts for an agent is given and kept from: the egress proxy for its network mode
@@ -197,7 +197,7 @@ public static class AgentIsolation
     /// <param name="configuredPort">The configured port, or null/blank for no proxy. Explicit form for tests.</param>
     /// <param name="aiProviderId">The provider the launch is made for, if any.</param>
     public static string? ResolveEgressProxyUrl(string? configuredPort, Guid? aiProviderId)
-        => Network.EgressProxyOptions.Parse(configuredPort).ClientUrl(aiProviderId);
+        => ILD.Core.Services.Implementations.Network.EgressProxyOptions.Parse(configuredPort).ClientUrl(aiProviderId);
 
     /// <summary>
     /// The variables that funnel a child's HTTP(S) traffic through

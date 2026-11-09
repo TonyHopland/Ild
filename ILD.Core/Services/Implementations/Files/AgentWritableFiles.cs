@@ -1,10 +1,8 @@
-using System.Diagnostics;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
 using System.Globalization;
-using System.Text;
 
-namespace ILD.Core.Services.Implementations;
+namespace ILD.Core.Services.Implementations.Files;
 
 /// <summary>
 /// File operations on paths the agent can write, such as pi's agent and session
@@ -58,7 +56,7 @@ public static class AgentWritableFiles
         => RunCheckedAsync($"""p="$1"; {Remove} && set -C && cat > "$p" """, [path], content, ct);
 
     /// <summary>
-    /// <see cref="WriteFileAsync(string, string, CancellationToken)"/> for a file only its owner, the agent,
+    /// <see cref="WriteFileAsync(string, string, CancellationToken)"/> for a file only its owner
     /// can read, and nobody can change: the run's copy of a credential (ADR-0031).
     /// </summary>
     public static Task WriteReadOnlyFileAsync(string path, string content, CancellationToken ct = default)
@@ -75,9 +73,7 @@ public static class AgentWritableFiles
         var temporary = $"{path}.ild-restore-{Guid.NewGuid():N}";
         try
         {
-            using (var process = Process.Start(BuildStartInfo(
-                       """set -C && exec cat > "$1" """, [temporary]))
-                   ?? throw new IOException("could not start /bin/sh"))
+            using (var process = LocalShell.Start("""set -C && exec cat > "$1" """, [temporary]))
             {
                 var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
                 try
@@ -128,10 +124,9 @@ public static class AgentWritableFiles
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfNegative(count);
-        using var process = Process.Start(BuildStartInfo(
-                """[ -f "$1" ] && [ ! -L "$1" ] || exit 3; tail -c "+$2" -- "$1" | head -c "$3" """,
-                [path, (offset + 1).ToString(CultureInfo.InvariantCulture), count.ToString(CultureInfo.InvariantCulture)]))
-            ?? throw new IOException("could not start /bin/sh");
+        using var process = LocalShell.Start(
+            """[ -f "$1" ] && [ ! -L "$1" ] || exit 3; tail -c "+$2" -- "$1" | head -c "$3" """,
+            [path, (offset + 1).ToString(CultureInfo.InvariantCulture), count.ToString(CultureInfo.InvariantCulture)]);
         process.StandardInput.Close();
         var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
         var range = new ExactLengthStream(process.StandardOutput.BaseStream, count, path);
@@ -306,32 +301,11 @@ public static class AgentWritableFiles
             throw new IOException($"'{arguments[0]}': {result.Stderr.Trim()} (exit {result.ExitCode})");
     }
 
-    private static ProcessStartInfo BuildStartInfo(string script, IReadOnlyList<string> arguments)
-    {
-        var psi = new ProcessStartInfo("/bin/sh")
-        {
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            UseShellExecute = false,
-            WorkingDirectory = "/",
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(script);
-        psi.ArgumentList.Add("ild-agent-files");
-        foreach (var argument in arguments)
-            psi.ArgumentList.Add(argument);
-
-        return psi;
-    }
-
     private static async Task<AgentProcessResult> RunAsync(
         string script, IReadOnlyList<string> arguments, string? stdin, CancellationToken ct)
     {
         using var process = new LocalRunProcess(
-            Process.Start(BuildStartInfo(script, arguments))
-                ?? throw new IOException("could not start /bin/sh"),
+            LocalShell.Start(script, arguments),
             static _ => { });
         return await AgentProcess.RunAsync(process, stdin, ct);
     }

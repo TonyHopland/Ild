@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
@@ -52,7 +53,7 @@ public sealed class SettingsControllerTests : IDisposable
                 "ILD_CONTAINER_RUNNER_IMAGE" => "img",
                 _ => null,
             }),
-            new ILD.Core.Services.Implementations.ProcessRunner());
+            new ILD.Core.Services.RunHosts.Local.ProcessRunner());
         _runHost = new RoutingRunHost(new FakeRunHost(), container);
 
         var json = System.Text.Json.Nodes.JsonNode.Parse(RunHostJson(await Build().GetRunHost(TestContext.Current.CancellationToken)))!;

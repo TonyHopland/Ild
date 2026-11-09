@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Files;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Extensions.Configuration;

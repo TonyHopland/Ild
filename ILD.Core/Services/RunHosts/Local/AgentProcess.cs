@@ -1,6 +1,6 @@
 using ILD.Core.Services.RunHosts;
 
-namespace ILD.Core.Services.Implementations;
+namespace ILD.Core.Services.RunHosts.Local;
 
 /// <summary>What a process run through <see cref="AgentProcess.RunAsync"/> ended with.</summary>
 internal sealed record AgentProcessResult(int ExitCode, string Stdout, string Stderr);

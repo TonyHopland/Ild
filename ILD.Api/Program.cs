@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Api.Authentication;
@@ -65,8 +66,8 @@ try
             Path.Combine(dataPath, "gateway"),
             (name, bytes) =>
             {
-                var path = Path.Combine(ILD.Core.Services.Implementations.AgentIsolation.CreateAgentReadDirectory("gateway-ca"), name);
-                ILD.Core.Services.Implementations.AgentIsolation.WriteAgentReadableFile(path, bytes);
+                var path = Path.Combine(ILD.Core.Services.RunHosts.Local.AgentIsolation.CreateAgentReadDirectory("gateway-ca"), name);
+                ILD.Core.Services.RunHosts.Local.AgentIsolation.WriteAgentReadableFile(path, bytes);
                 return path;
             });
         Environment.SetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortVariable, gatewayTlsPort.ToString());
