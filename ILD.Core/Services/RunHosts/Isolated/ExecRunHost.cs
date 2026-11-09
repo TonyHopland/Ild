@@ -421,6 +421,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         foreach (var bag in new[] { environment, network })
             foreach (var (name, value) in bag.ToList())
                 bag[name] = ThroughIldHost(value, ild);
+        // ILD is on the run's own network: the gateway and the MCP endpoint go direct, not through the proxy.
+        foreach (var name in new[] { "NO_PROXY", "no_proxy" })
+            if (network.TryGetValue(name, out var noProxy))
+                network[name] = $"{noProxy},{ild}";
 
         environment["HOME"] = owner.Home;
         return environment;

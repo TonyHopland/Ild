@@ -605,6 +605,21 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.DoesNotContain("127.0.0.1", proxy);
     }
 
+    [Fact]
+    public async Task A_launch_reaches_ild_directly_so_its_host_is_in_NO_PROXY_and_the_gateway_url_uses_it()
+    {
+        await CreateRunAsync();
+        var psi = Command(WorkingDirectory, "curl");
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        var launch = _api.Execs.Last().Command;
+        foreach (var name in new[] { "NO_PROXY", "no_proxy" })
+            Assert.Contains(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) && c.Split('=', 2)[1].Split(',').Contains("ild.example"));
+        Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1"));
+    }
+
     private KubernetesRunHost AgentReadHost(string readRoot, Dictionary<string, string> written)
     {
         var host = new KubernetesRunHost(_api.Client(), Options(), FakeKubernetesApi.Namespace, new ProcessRunner(), _log)

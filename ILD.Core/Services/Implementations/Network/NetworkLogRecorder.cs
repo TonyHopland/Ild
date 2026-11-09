@@ -17,7 +17,7 @@ namespace ILD.Core.Services.Implementations.Network;
 /// </summary>
 public interface INetworkLogRecorder
 {
-    void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId);
+    void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null);
 }
 
 public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
@@ -41,7 +41,7 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
         _log = log;
     }
 
-    public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId)
+    public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null)
         => _queue.Writer.TryWrite(new NetworkLogEntry
         {
             Id = Guid.NewGuid(),
@@ -50,6 +50,7 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
             Timestamp = DateTime.UtcNow,
             Decision = decision,
             AiProviderId = aiProviderId,
+            Reason = reason,
         });
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

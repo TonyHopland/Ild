@@ -24,4 +24,8 @@ public class NetworkLogEntry
     public NetworkDecision Decision { get; set; }
 
     public Guid? AiProviderId { get; set; }
+
+    /// <summary>Why a refusal was not the lists' doing (<c>loopback</c>, <c>protected: ILD database</c>); null otherwise.</summary>
+    [MaxLength(128)]
+    public string? Reason { get; set; }
 }

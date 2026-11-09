@@ -30,7 +30,7 @@ public sealed class NetworkControllerTests : IDisposable
     private static IRunHost Host(RunHostKind kind) => Mock.Of<IRunHost>(h => h.Kind == kind);
 
     private NetworkController Build(RunHostKind kind = RunHostKind.Container)
-        => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object, Proxied, _forwarder, Host(kind));
+        => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object, Proxied, _forwarder, Host(kind), _db.Settings);
 
     private sealed class StubForwarderState : IEgressForwarderState
     {
@@ -67,6 +67,29 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(".github.com", Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken)).Host);
         _policy.Verify(p => p.Invalidate(), Times.Once);
         _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
+    }
+
+    private sealed record ProtectedView(string Id, string Name, string[] Hosts, string[] Addresses, bool Enabled);
+
+    [Fact]
+    public async Task The_protected_destinations_are_listed_and_a_toggle_is_stored_and_takes_effect_on_the_next_connection()
+    {
+        _snapshot = EgressPolicySnapshot.Monitor with
+        {
+            Protected = [new ProtectedDestination(ProtectedDestination.Database, "ILD database", ["db.example"], [System.Net.IPAddress.Parse("10.0.0.7")])],
+        };
+        var controller = Build();
+
+        var listed = Body<ProtectedView[]>(await controller.GetProtected(TestContext.Current.CancellationToken));
+        var set = Body<ProtectedView>(await controller.SetProtected(ProtectedDestination.Database, new NetworkController.SetProtectedRequest { Enabled = false }, TestContext.Current.CancellationToken));
+
+        var view = Assert.Single(listed);
+        Assert.Equal(("database", "ILD database", true), (view.Id, view.Name, view.Enabled));
+        Assert.Equal(["10.0.0.7"], view.Addresses);
+        Assert.False(set.Enabled);
+        Assert.Equal("false", (await _db.Settings.GetByKeyAsync("network.protect.database", TestContext.Current.CancellationToken))!.Value);
+        _policy.Verify(p => p.Invalidate(), Times.Once);
+        Assert.IsType<NotFoundResult>(await controller.SetProtected("nope", new NetworkController.SetProtectedRequest(), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -594,7 +617,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateException("unique"));
         var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            Proxied, _forwarder, Host(RunHostKind.Container));
+            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
 
         var result = await controller.UpdateEntry(Guid.NewGuid(), Rule("api.example.com"), TestContext.Current.CancellationToken);
 
@@ -612,7 +635,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
         var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            Proxied, _forwarder, Host(RunHostKind.Container));
+            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
 
         var result = await controller.UpdateEntry(Guid.NewGuid(), Rule(), TestContext.Current.CancellationToken);
 
@@ -627,7 +650,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateException("unique"));
         var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
-            Proxied, _forwarder, Host(RunHostKind.Container));
+            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
 
         var result = await controller.UpdateForward(Guid.NewGuid(), Forward(localPort: 15432), TestContext.Current.CancellationToken);
 
@@ -643,7 +666,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
         var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
-            Proxied, _forwarder, Host(RunHostKind.Container));
+            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
 
         var result = await controller.UpdateForward(Guid.NewGuid(), Forward(), TestContext.Current.CancellationToken);
 

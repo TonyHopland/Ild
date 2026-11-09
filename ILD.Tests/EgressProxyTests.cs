@@ -53,9 +53,22 @@ public sealed class EgressProxyTests : IAsyncLifetime
         _upstreamPort = ((IPEndPoint)_upstream.LocalEndpoint).Port;
         _ = ServeUpstreamAsync(_upstream);
 
-        _proxy = new EgressProxy(new EgressProxyOptions(true, 0), _policy, _log, NullLogger<EgressProxy>.Instance);
+        _proxy = new EgressProxy(new EgressProxyOptions(true, 0), _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
         await _proxy.StartAsync(CancellationToken.None);
         _proxyPort = await _proxy.BoundPort.WaitAsync(Timeout);
+    }
+
+    private static readonly IPAddress TestNet = IPAddress.Parse("203.0.113.9");
+
+    /// <summary>An IP literal stands for itself, any name resolves to a public address: the listeners of these tests sit on loopback, which the proxy refuses, so the dial seam reaches them.</summary>
+    private static Task<IPAddress[]> PublicResolve(string host, CancellationToken ct)
+        => Task.FromResult(IPAddress.TryParse(host.Trim('[', ']'), out var literal) ? new[] { literal } : new[] { TestNet });
+
+    private static async Task<TcpClient> DialUpstream(IPAddress[] addresses, int port, CancellationToken ct)
+    {
+        var client = new TcpClient { NoDelay = true };
+        await client.ConnectAsync(IPAddress.Loopback, port, ct);
+        return client;
     }
 
     public async ValueTask DisposeAsync()
@@ -803,7 +816,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     /// <summary>A proxy whose web port, ILD's own, is the test's upstream.</summary>
     private async Task<int> StartProxyWithWebPortAsync()
     {
-        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { WebPort = _upstreamPort }, _policy, _log, NullLogger<EgressProxy>.Instance);
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { WebPort = _upstreamPort }, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
         _extraProxies.Add(proxy);
         await proxy.StartAsync(CancellationToken.None);
         return await proxy.BoundPort.WaitAsync(Timeout);
@@ -983,7 +996,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     private async Task<int> StartProxyAsync(CountingResolver? resolver, EgressProxyOptions? options = null)
     {
         var proxy = new EgressProxy(options ?? new EgressProxyOptions(true, 0), _policy, _log, NullLogger<EgressProxy>.Instance,
-            resolver is null ? null : resolver.ResolveAsync);
+            resolver is null ? PublicResolve : resolver.ResolveAsync, DialUpstream);
         await proxy.StartAsync(CancellationToken.None);
         _extraProxies.Add(proxy);
         return await proxy.BoundPort.WaitAsync(Timeout);
@@ -1012,7 +1025,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     {
         await SetModeAsync(mode);
         if (listed) await ListAsync("status.lan.example", whitelist ? NetworkListKind.Whitelist : NetworkListKind.Blacklist);
-        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
+        var resolver = new CountingResolver(_ => Private10);
         var port = await StartProxyAsync(resolver);
 
         var (client, status) = await ConnectViaAsync(port, "status.lan.example", _upstreamPort);
@@ -1050,8 +1063,10 @@ public sealed class EgressProxyTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("127.0.0.1")]
-    [InlineData("[::1]")]
+    [InlineData("10.1.2.3")]
+    [InlineData("192.168.1.5")]
+    [InlineData("169.254.169.254")]
+    [InlineData("[fd00::1]")]
     public async Task A_private_address_literal_is_judged_only_by_the_mode(string literal)
     {
         var port = await StartProxyAsync(null);
@@ -1069,7 +1084,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     [Fact]
     public async Task A_name_is_resolved_once_and_the_resolved_address_is_dialled()
     {
-        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
+        var resolver = new CountingResolver(_ => Private10);
         var port = await StartProxyAsync(resolver);
 
         var (client, status) = await ConnectViaAsync(port, "no-such-host.invalid", _upstreamPort);
@@ -1098,15 +1113,25 @@ public sealed class EgressProxyTests : IAsyncLifetime
     private sealed class RecordingLog : INetworkLogRecorder
     {
         private readonly List<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> _entries = new();
+        private readonly List<string?> _reasons = new();
 
         public IReadOnlyList<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> Entries
         {
             get { lock (_entries) return _entries.ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId)
+        public IReadOnlyList<string?> Reasons
         {
-            lock (_entries) _entries.Add((host, port, decision, aiProviderId));
+            get { lock (_entries) return _reasons.ToList(); }
+        }
+
+        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null)
+        {
+            lock (_entries)
+            {
+                _entries.Add((host, port, decision, aiProviderId));
+                _reasons.Add(reason);
+            }
         }
     }
 

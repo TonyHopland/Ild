@@ -92,7 +92,7 @@ public record NetworkPolicyChangedPayload();
 /// enum: the hub serialises enums as numbers where the REST API sends names, and
 /// the Settings page reads one shape from both.
 /// </summary>
-public record NetworkLogAppendedPayload(Guid Id, string Host, int Port, DateTime Timestamp, string Decision, Guid? AiProviderId);
+public record NetworkLogAppendedPayload(Guid Id, string Host, int Port, DateTime Timestamp, string Decision, Guid? AiProviderId, string? Reason = null);
 
 public record NetworkLogClearedPayload();
 

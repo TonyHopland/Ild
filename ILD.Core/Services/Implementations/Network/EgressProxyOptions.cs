@@ -1,4 +1,5 @@
 using System.Net;
+using ILD.Core.Services.RunHosts;
 
 namespace ILD.Core.Services.Implementations.Network;
 
@@ -14,8 +15,10 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
 {
     public static readonly IPAddress ListenAddress = IPAddress.Loopback;
 
-    /// <summary>What the proxy binds. Loopback, except where the agent runs in a pod and reaches the proxy at ILD's address.</summary>
-    public static IPAddress BindAddress { get; set; } = IPAddress.Loopback;
+    /// <summary>What the proxy binds. Loopback, except where the agent runs in a container or pod and reaches the proxy at ILD's address.</summary>
+    public IPAddress BindAddress { get; init; } = IPAddress.Loopback;
+
+    public static IPAddress BindAddressFor(RunHostKind kind) => kind == RunHostKind.Local ? IPAddress.Loopback : IPAddress.Any;
 
     public static readonly EgressProxyOptions Disabled = new(false, 0);
 

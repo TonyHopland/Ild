@@ -1587,6 +1587,8 @@ export interface NetworkLogEntry {
   timestamp: string;
   decision: NetworkDecision;
   aiProviderId: string | null;
+  /** Why ILD refused it when the lists were not the reason: `loopback` or `protected: <name>`. */
+  reason?: string | null;
 }
 
 /**
