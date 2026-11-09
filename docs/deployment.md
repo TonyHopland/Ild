@@ -274,6 +274,10 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
 
 `ILD_K8S_STORAGE_CLASS` and `ILD_K8S_STORAGE_SIZE` decide the volume of each run; unset, the cluster's default class is used. For run scratch, a class that keeps one copy next to the pod is enough, since a run's code is also on the remote. On Longhorn, [`storageclass-longhorn-example.yaml`](kubernetes/storageclass-longhorn-example.yaml) is such a class (`numberOfReplicas: 1`, `dataLocality: best-effort`). It is an operator's choice; ILD has no Longhorn-specific behaviour.
 
+### Who may reach ILD's proxy
+
+Nothing restricts ingress to ILD's pod by default, so any pod in the cluster could use its egress proxy as a relay. [`ild-ingress-networkpolicy.yaml`](kubernetes/ild-ingress-networkpolicy.yaml) admits only the pods ILD makes (runs, chats, tools) on the proxy port and leaves the web and gateway port open to its usual callers; adjust its namespaces and ports first.
+
 ### Cleanup
 
 Deleting a run's Secret deletes its pod, volume claim and network policy through their owner references. A sweeper runs at startup and every `ILD_K8S_SWEEP_INTERVAL_MINUTES`, and deletes the labelled objects of runs that are finished or no longer exist; it only touches objects whose `ild/instance` is its own. An ILD that is killed mid-run therefore leaves nothing behind after its next start.

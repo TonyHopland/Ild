@@ -14,12 +14,14 @@ import type {
   NetworkLogEntry,
   NetworkMode,
   NetworkPolicyEntry,
+  NetworkProtectedDestination,
   NetworkStatus,
 } from "../../../types";
 import ConfirmModal from "../../../components/ConfirmModal";
 import { NumericSettingField, Segmented, SettingRow, Switch } from "../controls";
 import { AddForwardRow, ForwardTable } from "./NetworkForwards";
 import { AddRuleRow, RuleTable } from "./NetworkRules";
+import { PROTECTED_ANCHOR, ProtectedDestinations } from "./NetworkProtected";
 import { describeError } from "./networkShared";
 
 const MODES: { value: NetworkMode; label: string; help: string }[] = [
@@ -91,7 +93,7 @@ interface LogGroup {
 export function groupConsecutive(entries: NetworkLogEntry[]): LogGroup[] {
   const groups: LogGroup[] = [];
   for (const entry of entries) {
-    const signature = `${entry.host}:${entry.port}:${entry.decision}:${entry.aiProviderId ?? ""}`;
+    const signature = `${entry.host}:${entry.port}:${entry.decision}:${entry.aiProviderId ?? ""}:${entry.reason ?? ""}`;
     const last = groups[groups.length - 1];
     if (last && last.key === signature) {
       last.count += 1;
@@ -170,6 +172,10 @@ export default function NetworkSettings() {
   const [modeError, setModeError] = useState<string | null>(null);
   const [entries, setEntries] = useState<NetworkPolicyEntry[]>([]);
   const [forwards, setForwards] = useState<NetworkForward[]>([]);
+  const [protectedDestinations, setProtectedDestinations] = useState<NetworkProtectedDestination[]>(
+    [],
+  );
+  const [protectedError, setProtectedError] = useState<string | null>(null);
   const [log, setLog] = useState<NetworkLogEntry[]>([]);
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [listError, setListError] = useState<string | null>(null);
@@ -198,6 +204,28 @@ export default function NetworkSettings() {
     setForwards,
     setForwardError,
     "Failed to load the forwards.",
+  );
+  const refreshProtected = useCallback(async () => {
+    try {
+      setProtectedDestinations(await networkService.getProtected());
+      setProtectedError(null);
+    } catch (err) {
+      setProtectedError(describeError(err, "Failed to load the protected destinations."));
+    }
+  }, []);
+
+  const toggleProtected = useCallback(
+    async (id: string, enabled: boolean) => {
+      try {
+        const updated = await networkService.setProtected(id, enabled);
+        setProtectedDestinations((prev) => prev.map((d) => (d.id === id ? updated : d)));
+        setProtectedError(null);
+      } catch (err) {
+        setProtectedError(describeError(err, "Failed to change the protection."));
+        await refreshProtected();
+      }
+    },
+    [refreshProtected],
   );
   const refreshEntries = entryList.refresh;
   const refreshForwards = forwardList.refresh;
@@ -229,8 +257,9 @@ export default function NetworkSettings() {
       .catch(() => {});
     void refreshEntries();
     void refreshForwards();
+    void refreshProtected();
     void refreshLog();
-  }, [refreshEntries, refreshForwards, refreshLog]);
+  }, [refreshEntries, refreshForwards, refreshProtected, refreshLog]);
 
   useEffect(() => {
     // The forwards ride on the same event: their listener set and the verdict on
@@ -238,6 +267,7 @@ export default function NetworkSettings() {
     const onPolicyChanged = () => {
       void refreshEntries();
       void refreshForwards();
+      void refreshProtected();
       void settingsService
         .get(NetworkSettingKeys.Mode)
         .then((s) => {
@@ -262,7 +292,12 @@ export default function NetworkSettings() {
       off("NetworkLogAppended", onLogAppended);
       off("NetworkLogCleared", onLogCleared);
     };
-  }, [on, off, refreshEntries, refreshForwards, refreshLog]);
+  }, [on, off, refreshEntries, refreshForwards, refreshProtected, refreshLog]);
+
+  const showProtected = (event: React.MouseEvent) => {
+    event.preventDefault();
+    document.getElementById(PROTECTED_ANCHOR)?.scrollIntoView?.({ behavior: "smooth" });
+  };
 
   const changeMode = async (next: NetworkMode) => {
     const previous = mode;
@@ -421,7 +456,12 @@ export default function NetworkSettings() {
 
       {status && status.enforcement !== "enforced" && (
         <div className="net-banner" role="status">
-          <strong>Advisory mode — agent network limits are not enforced.</strong> {status.reason}
+          <strong>
+            {status.enforcement === "unverified"
+              ? "Agent network limits are not verified."
+              : "Advisory mode — agent network limits are not enforced."}
+          </strong>{" "}
+          {status.reason}
         </div>
       )}
       {mode === "off" && (
@@ -485,6 +525,12 @@ export default function NetworkSettings() {
           setConfirmingOff(false);
           void changeMode("off");
         }}
+      />
+
+      <ProtectedDestinations
+        destinations={protectedDestinations}
+        onToggle={toggleProtected}
+        error={protectedError}
       />
 
       <section className="settings-card">
@@ -632,6 +678,7 @@ export default function NetworkSettings() {
                       >
                         {group.entry.decision}
                       </span>
+                      {group.entry.reason && <span className="net-sub"> {group.entry.reason}</span>}
                     </td>
                     <td className="net-sub">
                       {group.entry.aiProviderId
@@ -639,7 +686,13 @@ export default function NetworkSettings() {
                         : "—"}
                     </td>
                     <td className="net-actions">
-                      {rule ? (
+                      {group.entry.reason ? (
+                        group.entry.reason.startsWith("protected") ? (
+                          <a href={`#${PROTECTED_ANCHOR}`} onClick={showProtected}>
+                            Protected destinations
+                          </a>
+                        ) : null
+                      ) : rule ? (
                         <span className="net-sub">
                           covered by <span className="net-host">{rule.host}</span>
                         </span>

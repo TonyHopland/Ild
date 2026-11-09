@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Runs can no longer reach ILD's database, the WorkItem Server or the Kubernetes API**, unless you switch that protection off in Settings → Network or declare a forward to it.
 - **A repository can no longer plant code that every other run executes through the shared toolchain store.** A tool that is not a mise core tool installs into a folder only that repository's runs mount, and install scripts are off in the shared parts. The first run after upgrading installs its toolchains again.
 
 ### Added

@@ -79,7 +79,7 @@ What a run's pod gets:
 
 - **Objects.** A Secret (the owner), a PersistentVolumeClaim, a NetworkPolicy and the Pod, all labelled `app.kubernetes.io/managed-by=ild`, `ild/instance` and `ild/run`. The claim, policy and pod carry an `ownerReference` to the Secret, so deleting the Secret deletes them all.
 - **Hardening.** No service account token, all capabilities dropped, non-root, `RuntimeDefault` seccomp, no privilege escalation. Pods are spread across nodes with a topology spread constraint.
-- **Network.** Egress only to ILD's pods (the gateway and the MCP endpoint on the port of `ILD_API_URL`, the egress proxy) and to cluster DNS; ingress only from ILD's pods. A pod cannot reach another run, Postgres, the WorkItem Server or the Kubernetes API. Everything else an agent connects to goes through the egress proxy and its [network limits](#agent-network-limits), network mode `off` included.
+- **Network.** Egress only to ILD's pods (the gateway and the MCP endpoint on the port of `ILD_API_URL`, the egress proxy); no DNS, so ILD's Service address is pinned in the pod (`hostAliases`) and every other name is resolved by the egress proxy; ingress only from ILD's pods. A pod cannot reach another run directly. It cannot reach Postgres, the WorkItem Server or the Kubernetes API through the egress proxy either while their [protection](#agent-network-limits) is on, which it is unless you switch it off. Everything else an agent connects to goes through the egress proxy and its [network limits](#agent-network-limits), network mode `off` included. ILD's Service address is looked up when the pod is made: a Service that is deleted and recreated gets a new address, and a pod made before that must be replaced (ILD replaces the chat pod when it restarts).
 - **Git.** Code goes in and out as bundles over exec. The pod never holds the git credential or the mirror. It has no `.gitconfig`: set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` on ILD and they are set on every pod, so commits have an author.
 - **Models.** The agent CLIs reach the model through ILD's gateway with a placeholder credential. A provider that needs a read-only copy of its credential is not supported in a pod yet.
 - **Agent CLIs** are run by name from the pod image's `PATH`, not from the ILD data volume.
@@ -678,6 +678,12 @@ Three things to know:
   forwarded connection.
 - **A forward is instance-wide**: any agent process that can reach it can use it,
   not only the preview you declared it for. Scope the credential accordingly.
+- **A forward to ILD's own database server exposes that server to every agent.**
+  The example above is exactly that. A forward is exempt from the protected
+  destinations (see [Agent network limits](#agent-network-limits)) because you
+  declared it, and an agent can ask the egress proxy for the forwarded host and
+  port itself, so scope the credential and the database the forward lets in.
+  Loopback is never allowed as a forward's destination.
 
 A preview in one ILD instance reaches a preview in another the same way: a forward
 to that instance's preview-proxy port. A client in a run reaches another work
@@ -842,7 +848,7 @@ has no route at all.
 **`off` is not a filter.** In a container or pod, agents launched in `off` still
 go through the proxy, which then lets everything through, like `monitor`, to any
 host and any port the proxy can carry; it still cannot give them a direct route.
-With no list and no DNS block, an `off` agent can reach your LAN and cloud
+With no list, an `off` agent can reach your LAN and cloud
 metadata. Settings asks you to confirm it and shows a warning while it is active.
 `off` is always available. Under `dotnet run`, `off` means no proxy at all: agents
 connect directly, and only what they send through a forward is logged.
@@ -859,6 +865,41 @@ connect directly, and only what they send through a forward is logged.
   and the provider terminal follow the mode when they start; git run for the
   agent, chat repository clones and writes to agent-visible files never use the
   proxy.
+
+**Always refused.** The proxy checks the addresses it resolved, not the name asked
+for, so `localhost`, a name that resolves to `127.0.0.1`, `::1`, an IPv4-mapped
+loopback, `0.0.0.0` and `::` are refused in every mode, whatever the lists say and
+for a forward too: ILD's own loopback holds its forward listeners, its preview
+listeners and the gateway's HTTPS listener.
+
+**Protected destinations.** Settings → Network lists ILD's own infrastructure,
+each switched on by default: ILD's own addresses, ILD's database (the host of its
+connection string), the WorkItem Server (the host of its URL) and, on Kubernetes,
+the Kubernetes API. While one is on, the proxy refuses a connection whose resolved
+addresses match it in every proxied mode, and a whitelist entry does not override
+it; the Network Log records it as `protected: <name>` with a link to the switch.
+Switching one off asks for confirmation, warns while it is off, and applies to the
+next connection. A declared forward is exempt (not from the loopback rule), since
+declaring it is your decision, and is judged by the mode and lists. A private or
+link-local range is not blocked as such: see below.
+
+**Names.** Run and chat environments have no working DNS: ILD's own name comes from
+the container's hosts file (or the pod's `hostAliases`), and every other name is
+resolved by the proxy. ILD reaches its own gateway and MCP endpoint directly, over
+the run's network, so ILD's host is on `NO_PROXY`, and a `whitelist` needs no entry
+for it.
+
+**Is it enforced?** After the first environment of a run host is made, ILD tries a
+direct connection to a public address it can itself reach (`1.1.1.1:443`, or
+`ILD_NETWORK_PROBE_TARGET` as `host:port`) from inside it and repeats that every ten
+minutes. Settings says `enforced` only once that has failed, `advisory` when it got
+out (a CNI that ignores NetworkPolicy, an engine that does not isolate internal
+networks), and `unverified` until a probe has run, which is also the answer when ILD
+reaches nothing outside.
+
+On Kubernetes, nothing restricts who may connect to ILD's proxy port, so any pod in
+the cluster could use ILD as a relay. [`docs/kubernetes/ild-ingress-networkpolicy.yaml`](./kubernetes/ild-ingress-networkpolicy.yaml)
+admits only run, chat and tools pods on that port and leaves the web port as it is.
 
 LAN and private hosts (self-hosted git, a local model server, cloud metadata at
 `169.254.169.254`) go through the proxy like any other host: the mode and lists

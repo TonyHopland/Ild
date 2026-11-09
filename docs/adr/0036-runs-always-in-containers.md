@@ -22,3 +22,18 @@
 - A run is isolated from ILD, its database and its secrets by a container boundary rather than by a uid, and the egress limits are enforced by the run's network, which reaches only ILD.
 - ADR-0014, ADR-0016 and the firewall of ADR-0019 describe the earlier design. The egress proxy, its lists and its log remain.
 - Developing ILD with `dotnet run` runs agents unconfined, as before when `AGENT_USER` was empty.
+
+## The egress proxy's destination rules
+
+The proxy is the only way out of a run's network, and it listens where the run can reach it, so it must not become a way into ILD. Four rules follow, decided by the **addresses the proxy resolved** (it resolves a name once and dials what it resolved), never by the name asked for:
+
+- **Loopback is always refused**, for an agent's connection and for a forward alike, in every mode and whatever the lists say: `127.0.0.0/8`, `::1`, IPv4-mapped loopback, `0.0.0.0` and `::`. ILD's loopback holds its forward listeners, its preview listeners and the gateway's HTTPS listener. The `*.preview.ild` hand-off is the one thing that reaches ILD's web port, and it sends the preview host as `Host` so it reaches no other route.
+- **Protected destinations are on by default and the operator can switch each off** (`network.protect.<id>`, app state like the mode and lists, applied on the next connection): ILD's own addresses, ILD's database, the WorkItem Server and, on Kubernetes, the Kubernetes API. While one is on, a connection whose resolved addresses match it is refused in every proxied mode and a whitelist entry does not override it. The log records the refusal with its reason, not as a list decision.
+- **A declared forward ([ADR-0020](./0020-raw-tcp-egress-through-declared-forwards.md)) is exempt from the protected destinations**, not from the loopback rule: declaring it is an operator decision, and it is still judged by the mode and lists. A forward to ILD's own database server exposes that server to every agent, so the credential and the database it lets in are the operator's to scope.
+- **No private or link-local block.** [ADR-0019](./0019-agent-egress-through-in-container-proxy.md) rejected it on purpose; `whitelist` is what keeps agents off the LAN and cloud metadata. Changing that is a separate decision that amends ADR-0019.
+
+ILD itself is not reached through the proxy: ILD's host is on `NO_PROXY` in a run's environment, so the gateway and the MCP endpoint go direct over the run's network, which allows exactly that.
+
+The removed uid firewall also dropped DNS. Run and chat environments now have no working DNS (an engine's `Dns` is `127.0.0.1`; a pod has `dnsPolicy: None` and no DNS egress rule), ILD's name comes from the container's hosts file or the pod's `hostAliases`, and the proxy alone resolves names. It is a per-run setting, so a run launched in network mode `off` may have DNS back.
+
+**Enforced is observed, not asserted.** A probe tries a direct connection out of an environment to an address ILD itself reaches; the status is `enforced` only once that failed, `advisory` when it connected and `unverified` before any probe has run.
