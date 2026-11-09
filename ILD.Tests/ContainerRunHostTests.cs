@@ -839,6 +839,40 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_run_with_its_own_dns_gets_its_nameserver_back_when_the_route_closes()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
+        using (await StartAsync(NetworkMode.Off)) { }
+        var open = _api.Execs.Single(e => e.Joined.Contains("resolv.conf.orig", StringComparison.Ordinal));
+        Assert.Contains("cp /etc/resolv.conf", open.Joined);
+
+        using var process = await StartAsync(NetworkMode.Monitor);
+
+        var close = _api.Execs.Last(e => e.Joined.Contains("resolv.conf.orig", StringComparison.Ordinal));
+        Assert.NotSame(open, close);
+        Assert.Contains("cat /run/ild/resolv.conf.orig > /etc/resolv.conf", close.Joined);
+        Assert.DoesNotContain("printf", close.Joined);
+    }
+
+    [Fact]
+    public async Task Two_launches_in_off_at_once_both_start_and_the_container_is_connected_once()
+    {
+        await CreateRunAsync();
+        var ct = TestContext.Current.CancellationToken;
+
+        var both = await Task.WhenAll(StartAsync(NetworkMode.Off), StartAsync(NetworkMode.Off));
+
+        Assert.Equal(2, both.Length);
+        Assert.Single(_api.Connects, c => c["Container"]!.GetValue<string>() == Name(_run));
+        foreach (var p in both) p.Dispose();
+    }
+
+    [Fact]
     public async Task Returning_to_a_proxied_mode_with_an_off_process_still_running_keeps_the_route()
     {
         await CreateRunAsync();

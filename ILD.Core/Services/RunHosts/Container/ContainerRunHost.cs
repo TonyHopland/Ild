@@ -496,22 +496,33 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     private async Task<bool> OnOpenNetworkAsync(string container, CancellationToken ct)
         => (await _api.GetAsync($"/containers/{Escaped(container)}/json", ct, HttpStatusCode.NotFound))?["NetworkSettings"]?["Networks"]?[OpenNetworkName] is not null;
 
+    // A run made with DNS on has the engine's own nameserver, which is not ours to replace for good: it is put aside when the route opens and back when it closes.
+    private async Task<bool> HasOwnDnsAsync(string container, CancellationToken ct)
+        => (await _api.GetAsync($"/containers/{Escaped(container)}/json", ct))?["HostConfig"]?["Dns"] is not JsonArray { Count: > 0 };
+
     protected override async Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct)
     {
         if (owner.Chat) await EnsureChatContainerAsync(ct);
         var container = ContainerOf(owner);
         await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = OpenNetworkName, Internal = false, CheckDuplicate = true, Labels = OpenLabels() }, ct));
         if (!await OnOpenNetworkAsync(container, ct))
-            await _api.PostAsync($"/networks/{Escaped(OpenNetworkName)}/connect", new { Container = container }, ct);
+        {
+            try { await _api.PostAsync($"/networks/{Escaped(OpenNetworkName)}/connect", new { Container = container }, ct); }
+            // Another launch, or an earlier attempt, connected it first.
+            catch (DockerApiException)
+            {
+                if (!await OnOpenNetworkAsync(container, ct)) throw;
+            }
+        }
         // The container was made with no nameserver, which HostConfig fixes; root, who owns the file, writes one for as long as it has the route.
-        await SetNameServerAsync(container, await OpenNameServerAsync(ct), ct);
+        await SetNameServerAsync(container, await OpenNameServerAsync(ct), keepOriginal: await HasOwnDnsAsync(container, ct), restore: false, ct);
     }
 
     protected override async Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct)
     {
         var container = ContainerOf(owner);
         if (!await OnOpenNetworkAsync(container, ct)) return;
-        await SetNameServerAsync(container, NameServers(dns: false)[0], ct);
+        await SetNameServerAsync(container, NameServers(dns: false)[0], keepOriginal: await HasOwnDnsAsync(container, ct), restore: true, ct);
         await _api.PostAsync($"/networks/{Escaped(OpenNetworkName)}/disconnect", new { Container = container }, ct);
     }
 
@@ -543,10 +554,19 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             ?? throw new InvalidOperationException($"the network {OpenNetworkName} has no gateway address, which is where names are resolved on it");
     }
 
-    private async Task SetNameServerAsync(string container, string nameServer, CancellationToken ct)
+    private const string SavedResolvConf = RunPaths.StateDirectory + "/resolv.conf.orig";
+
+    // keepOriginal: the container has the engine's own nameserver, so opening saves the file and closing puts it back; otherwise it is ours to write.
+    private async Task SetNameServerAsync(string container, string nameServer, bool keepOriginal, bool restore, CancellationToken ct)
     {
+        var script = (keepOriginal, restore) switch
+        {
+            (true, true) => $"[ -f {SavedResolvConf} ] && cat {SavedResolvConf} > /etc/resolv.conf && rm -f {SavedResolvConf}; true",
+            (true, false) => $"[ -f {SavedResolvConf} ] || cp /etc/resolv.conf {SavedResolvConf}; printf 'nameserver %s\\n' \"$1\" > /etc/resolv.conf",
+            _ => "printf 'nameserver %s\\n' \"$1\" > /etc/resolv.conf",
+        };
         using var exec = await DockerExec.OpenAsync(
-            _api, container, ["/bin/sh", "-c", "printf 'nameserver %s\\n' \"$1\" > /etc/resolv.conf", "sh", nameServer], stdin: false, tty: false, ExitStatusTimeout, ct, user: "0");
+            _api, container, ["/bin/sh", "-c", script, "sh", nameServer], stdin: false, tty: false, ExitStatusTimeout, ct, user: "0");
         var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);
         var error = new StreamReader(exec.Stderr!).ReadToEndAsync(ct);
         var status = await exec.Status;

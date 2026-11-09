@@ -416,9 +416,30 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         // The direct route first, so the launch never runs a moment without it; a proxied launch is where a route that no process
         // of mode Off needs any more is taken away.
         var direct = command.NetworkMode == ILD.Data.Enums.NetworkMode.Off;
-        if (direct) await OpenDirectRouteAsync(owner, ct);
-        else await CloseDirectRouteIfUnusedAsync(owner, ct);
+        if (!direct)
+        {
+            await CloseDirectRouteIfUnusedAsync(owner, ct);
+            return await StartRoutedAsync(command, owner, direct: false, ct);
+        }
 
+        // Counted before the route is opened, so a proxied launch checking at the same moment sees it; the process owns the count once it runs.
+        _liveOff.AddOrUpdate(owner, 1, (_, n) => n + 1);
+        try
+        {
+            using (await RouteGateAsync(owner, ct))
+                await OpenDirectRouteAsync(owner, ct);
+            return await StartRoutedAsync(command, owner, direct: true, ct);
+        }
+        catch
+        {
+            EndOff(owner);
+            throw;
+        }
+    }
+
+    private async Task<IRunProcess> StartRoutedAsync(RunCommand command, ExecOwner owner, bool direct, CancellationToken ct)
+    {
+        var psi = command.Start;
         await SyncForwardsAsync(owner, ct);
         var (fileName, arguments) = (psi.FileName, psi.ArgumentList.ToList());
         var environment = EnvironmentFor(command, psi, owner, out var network);
@@ -438,17 +459,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         wrapped.Add(fileName);
         wrapped.AddRange(arguments);
 
-        if (direct) _liveOff.AddOrUpdate(owner, 1, (_, n) => n + 1);
-        IExecStream exec;
-        try
-        {
-            exec = await OpenExecAsync(owner, wrapped, stdin: psi.RedirectStandardInput, tty: false, ct);
-        }
-        catch
-        {
-            if (direct) EndOff(owner);
-            throw;
-        }
+        var exec = await OpenExecAsync(owner, wrapped, stdin: psi.RedirectStandardInput, tty: false, ct);
         return new ExecRunProcess(exec, Noun, id, psi.RedirectStandardInput, (commandId, token) => KillCommandAsync(owner, commandId, token),
             direct ? () => EndOff(owner) : null);
     }
@@ -472,6 +483,21 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // Off processes this ILD has started and not seen end: they cover the moment between the launch and its pid file.
     private readonly ConcurrentDictionary<ExecOwner, int> _liveOff = new();
 
+    // Opening and closing a route are one at a time for a container or pod; every chat shares one.
+    private readonly ConcurrentDictionary<ExecOwner, SemaphoreSlim> _routeGates = new();
+
+    private async Task<IDisposable> RouteGateAsync(ExecOwner owner, CancellationToken ct)
+    {
+        var gate = _routeGates.GetOrAdd(owner.Chat ? new ExecOwner(Guid.Empty, true) : owner, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        return new Release(gate);
+    }
+
+    private sealed class Release(SemaphoreSlim gate) : IDisposable
+    {
+        public void Dispose() => gate.Release();
+    }
+
     private void EndOff(ExecOwner owner) => _liveOff.AddOrUpdate(owner, 0, (_, n) => Math.Max(0, n - 1));
 
     /// <summary>Give the run's pod or container a route to the network that does not go through ILD. Idempotent. The route is the pod's or container's, not a process's.</summary>
@@ -488,6 +514,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     private async Task CloseDirectRouteIfUnusedAsync(ExecOwner owner, CancellationToken ct)
     {
+        using var gate = await RouteGateAsync(owner, ct);
         if (!await HasDirectRouteAsync(owner, ct)) return;
         // A chat container is every chat's, so one chat's Off process keeps it for all.
         if (_liveOff.Any(e => e.Value > 0 && (owner.Chat ? e.Key.Chat : e.Key == owner))) return;

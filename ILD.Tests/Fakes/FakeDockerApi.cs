@@ -401,6 +401,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         var container = JsonNode.Parse(request.Body)!["Container"]!.GetValue<string>();
         if (!_networks.ContainsKey(network)) return Failure(404, $"network {network} not found");
         if (!_containers.TryGetValue(container, out var found)) return Failure(404, $"no such container: {container}");
+        if (connect && found.Networks.Contains(network)) return Failure(403, $"endpoint with name {container} already exists in network {network}");
         if (connect) { found.Networks.Add(network); Connects.Add(JsonNode.Parse(request.Body)!); }
         else found.Networks.Remove(network);
         // Podman answers both with a plain-text "OK", not an empty body.
