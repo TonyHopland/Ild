@@ -1,7 +1,6 @@
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
-using ILD.Core.Services.RunHosts.Local;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
@@ -14,9 +13,9 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
 
     private readonly ILogger<PromptTemplateResolver>? _logger;
 
-    public PromptTemplateResolver(IRunHost? host = null, ILogger<PromptTemplateResolver>? logger = null)
+    public PromptTemplateResolver(IRunHost host, ILogger<PromptTemplateResolver>? logger = null)
     {
-        _host = host ?? LocalRunHost.Shared;
+        _host = host;
         _logger = logger;
     }
 
@@ -30,11 +29,16 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
             if (!key.StartsWith(PromptPlaceholderRegistry.WorkTreeFilePrefix, StringComparison.OrdinalIgnoreCase)) continue;
             var rel = key.Substring(PromptPlaceholderRegistry.WorkTreeFilePrefix.Length);
             if (files.ContainsKey(rel)) continue;
+            if (InWorktree(worktreePath, rel) is not { } path)
+            {
+                _logger?.LogWarning("{{WorkTree.File:{Path}}} names a file outside the worktree; it renders empty", rel);
+                continue;
+            }
             try
             {
                 using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 limit.CancelAfter(FileReadLimit);
-                var text = await _host.ReadTextFileAsync(Path.Combine(worktreePath, rel), limit.Token);
+                var text = await _host.ReadTextFileAsync(path, limit.Token);
                 if (text is not null) files[rel] = text;
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
@@ -43,6 +47,17 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
             }
         }
         return files;
+    }
+
+    /// <summary>The full path of <paramref name="relative"/> in the worktree; null when it is rooted, has a <c>..</c> segment, or resolves outside.</summary>
+    private static string? InWorktree(string worktreePath, string relative)
+    {
+        if (relative.Length == 0 || Path.IsPathRooted(relative) || relative[0] is '/' or '\\'
+            || relative.Split('/', '\\').Contains(".."))
+            return null;
+        var root = Path.GetFullPath(worktreePath).TrimEnd(Path.DirectorySeparatorChar);
+        var full = Path.GetFullPath(Path.Combine(root, relative));
+        return full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) ? full : null;
     }
 
     public string Render(string template, PromptContext context)
