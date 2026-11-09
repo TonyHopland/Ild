@@ -19,9 +19,9 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
     public Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default)
         => _db.NetworkPolicyEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Id == id, ct);
 
-    public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default)
+    public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default, bool installers = false)
         => _db.NetworkPolicyEntries.AsNoTracking()
-            .FirstOrDefaultAsync(e => e.ListKind == kind && e.Host == host && e.AiProviderId == aiProviderId, ct);
+            .FirstOrDefaultAsync(e => e.ListKind == kind && e.Host == host && e.AiProviderId == aiProviderId && e.Installers == installers, ct);
 
     public async Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default)
     {
@@ -31,13 +31,14 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
         await _db.SaveChangesAsync(ct);
     }
 
-    public async Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default)
+    public async Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default, bool installers = false)
     {
         var entry = await _db.NetworkPolicyEntries.FirstOrDefaultAsync(e => e.Id == id, ct);
         if (entry is null) return null;
         entry.Host = host;
         entry.ListKind = kind;
         entry.AiProviderId = aiProviderId;
+        entry.Installers = installers;
         await _db.SaveChangesAsync(ct);
         return entry;
     }

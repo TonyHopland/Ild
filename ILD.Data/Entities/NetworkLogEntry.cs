@@ -25,6 +25,10 @@ public class NetworkLogEntry
 
     public Guid? AiProviderId { get; set; }
 
+    /// <summary>The toolchain zone whose installer made the connection (<c>agents</c>, <c>toolchains</c>, <c>repo-&lt;id&gt;</c>); null for any other.</summary>
+    [MaxLength(64)]
+    public string? Installer { get; set; }
+
     /// <summary>Why a refusal was not the lists' doing (<c>loopback</c>, <c>protected: ILD database</c>); null otherwise.</summary>
     [MaxLength(128)]
     public string? Reason { get; set; }

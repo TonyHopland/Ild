@@ -77,6 +77,7 @@ public static class ServiceCollectionExtensions
                 ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp))
                 : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp));
             host.Isolated.Probe = sp.GetRequiredService<NetworkEnforcementProbe>();
+            host.Isolated.Refusals = sp.GetRequiredService<InstallerRefusals>();
             // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
             host.Isolated.Forwards = async ct =>
             {
@@ -213,6 +214,7 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<IEgressPolicy, EgressPolicy>();
         services.AddSingleton<INetworkNotifier, SignalRNetworkNotifier>();
+        services.AddSingleton<InstallerRefusals>();
         services.AddSingleton<NetworkLogRecorder>();
         services.AddSingleton<INetworkLogRecorder>(sp => sp.GetRequiredService<NetworkLogRecorder>());
         services.AddHostedService(sp => sp.GetRequiredService<NetworkLogRecorder>());

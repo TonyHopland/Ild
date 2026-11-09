@@ -388,7 +388,7 @@ public class AppDbContext : DbContext
             // One row per pattern, list and scope, enforced where the race is: two
             // concurrent "Add to whitelist" clicks must not both insert. Nulls are
             // NOT distinct here, or every global entry could be duplicated freely.
-            e.HasIndex(p => new { p.ListKind, p.Host, p.AiProviderId })
+            e.HasIndex(p => new { p.ListKind, p.Host, p.AiProviderId, p.Installers })
                 .IsUnique()
                 .AreNullsDistinct(false);
         });

@@ -1183,6 +1183,20 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_installers_network_left_without_its_container_is_a_leftover_and_deleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var name = "ild-tools-" + Guid.NewGuid().ToString("N");
+        _api.SeedToolsNetwork(name, Instance);
+
+        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct));
+
+        Assert.Equal(name, leftover.Location);
+        Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
+        Assert.Empty(_api.Networks());
+    }
+
+    [Fact]
     public async Task The_installer_mounts_only_its_zone_writable_as_the_runner_with_no_privileges_and_no_run_label()
     {
         using var host = NewHost(Options(), [Claude]);
@@ -1197,7 +1211,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
                 Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
                 Assert.Equal(["ild-tools-agents:/opt/ild-tools:rw"], BindsOf(config));
                 Assert.Equal(["ALL"], config["HostConfig"]!["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
-                Assert.Null(config["HostConfig"]!["NetworkMode"]);
+                Assert.Equal(e.Container, config["HostConfig"]!["NetworkMode"]!.GetValue<string>());
                 Assert.Null(config["Labels"]![RunPaths.RunLabel]);
                 Assert.Contains("MISE_DATA_DIR=/opt/ild-tools/mise", config["Env"]!.AsArray().Select(v => v!.GetValue<string>()));
                 await e.WriteStdoutAsync(ClaudeLine + "\n");
@@ -1215,6 +1229,51 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
     private static bool IgnoresScripts(System.Text.Json.Nodes.JsonObject container)
         => container["Env"]!.AsArray().Select(v => v!.GetValue<string>()).Contains("npm_config_ignore_scripts=true");
+
+    [Fact]
+    public async Task The_installer_is_on_an_internal_network_of_its_own_that_ild_joins_and_goes_through_the_proxy_under_its_zone()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var host = NewHost(Options(ildContainer: "ild-main"), [Claude]);
+        string? network = null;
+        System.Text.Json.Nodes.JsonObject? config = null;
+        string[] ildOnIt = [];
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                network = e.Container;
+                config = _api.Container(e.Container);
+                ildOnIt = [.. _api.NetworksOf("ild-main")];
+                Assert.True(_api.Network(e.Container)!["Internal"]!.GetValue<bool>());
+                await e.WriteStdoutAsync(ClaudeLine + "\n");
+            }
+            await e.ExitAsync(0);
+        };
+
+        await CreateRunAsync(host, _run, MakeBaseRepository());
+
+        Assert.NotNull(config);
+        Assert.Contains(network!, ildOnIt);
+        var hostConfig = config["HostConfig"]!;
+        Assert.Equal(network, hostConfig["NetworkMode"]!.GetValue<string>());
+        Assert.Contains(hostConfig["ExtraHosts"]!.AsArray(), h => h!.GetValue<string>().StartsWith("ild.example:10.89.", StringComparison.Ordinal));
+        Assert.Equal(["127.0.0.1"], hostConfig["Dns"]!.AsArray().Select(d => d!.GetValue<string>()));
+        Assert.Null(hostConfig["Tmpfs"]);
+
+        var proxy = "http://installer:agents@ild.example:3128";
+        foreach (var name in new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" })
+            Assert.Equal(proxy, EnvOf(config, name));
+        Assert.Equal("1", EnvOf(config, "NODE_USE_ENV_PROXY"));
+        Assert.Equal(AgentIsolation.EgressNoProxy, EnvOf(config, "NO_PROXY"));
+        Assert.Equal(AgentIsolation.EgressNoProxy, EnvOf(config, "no_proxy"));
+
+        // Gone with its installer, and ILD is off it.
+        Assert.Contains($"networks/{network}", _api.Deleted);
+        Assert.DoesNotContain(network!, _api.Networks());
+        Assert.DoesNotContain(network!, _api.NetworksOf("ild-main"));
+    }
 
     [Fact]
     public async Task A_repositorys_own_tools_go_in_a_volume_of_its_own_that_only_its_installer_and_its_runs_mount()
@@ -2153,7 +2212,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         using var host = NewHost(Options(), [Claude]);
         AnswerInstaller(AgentNodeLine, ClaudeLine);
         // An installer is gone once its work is done, so each container's request is kept the first time it is used.
-        var made = new Dictionary<string, string>(StringComparer.Ordinal);
+        var made = new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var answer = _api.OnExec;
         _api.OnExec = e =>
         {
@@ -2185,9 +2244,9 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             Assert.Equal("10001:10001", config["User"]!.GetValue<string>());
             Assert.Equal("registry.example/ild-runner:1", config["Image"]!.GetValue<string>());
 
-            // A run and the chat container are on a network of their own that reaches only ILD; an installer and a
-            // sign-in are on the engine's default network, to download and to sign in.
-            var ownNetwork = name == Name(_run) || name == ChatContainer;
+            // A run, the chat container and an installer are on a network of their own that reaches only ILD; a sign-in
+            // is on the engine's default network, to sign in.
+            var ownNetwork = !name.StartsWith("ild-signin-", StringComparison.Ordinal);
             Assert.Equal(ownNetwork ? name : null, hostConfig["NetworkMode"]?.GetValue<string>());
             Assert.Equal(ownNetwork, hostConfig["ExtraHosts"] is not null);
         }

@@ -1243,12 +1243,18 @@ export const networkService = {
     host: string;
     listKind: NetworkListKind;
     aiProviderId?: string | null;
+    installers?: boolean;
   }): Promise<NetworkPolicyEntry> => {
     return api.post<NetworkPolicyEntry>("/network/entries", data);
   },
   updateEntry: async (
     id: string,
-    data: { host: string; listKind: NetworkListKind; aiProviderId?: string | null },
+    data: {
+      host: string;
+      listKind: NetworkListKind;
+      aiProviderId?: string | null;
+      installers?: boolean;
+    },
   ): Promise<NetworkPolicyEntry> => {
     return api.put<NetworkPolicyEntry>(`/network/entries/${id}`, data);
   },
@@ -1287,14 +1293,21 @@ export const networkService = {
   clearLog: async (): Promise<{ removed: number }> => {
     return api.delete<{ removed: number }>("/network/log");
   },
-  /** Promote a log line to a list; `scopeToProvider` limits the new entry to the line's provider. */
+  /**
+   * Promote a log line to a list; `scopeToProvider` limits the new entry to the line's provider and
+   * `scopeToInstallers` to the installers' scope.
+   */
   addLogEntryToList: async (
     id: string,
     listKind: NetworkListKind,
     scopeToProvider = false,
+    scopeToInstallers = false,
   ): Promise<NetworkPolicyEntry> => {
     const target = listKind === "Whitelist" ? "whitelist" : "blacklist";
-    return api.post<NetworkPolicyEntry>(`/network/log/${id}/${target}`, { scopeToProvider });
+    return api.post<NetworkPolicyEntry>(`/network/log/${id}/${target}`, {
+      scopeToProvider,
+      scopeToInstallers,
+    });
   },
 };
 

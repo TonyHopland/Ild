@@ -15,7 +15,9 @@ namespace ILD.Core.Services.Implementations.Network;
 /// every host beneath it. <c>*.example.com</c> is accepted as the same suffix.
 /// Comparison is case-insensitive and ignores a trailing dot. An entry with an
 /// <see cref="NetworkPolicyEntry.AiProviderId"/> applies only to connections the
-/// agent made on behalf of that provider; one without applies to all.
+/// agent made on behalf of that provider; one without applies to all. An entry
+/// with <see cref="NetworkPolicyEntry.Installers"/> applies only to the connections of toolchain installers, which the
+/// global entries cover as well.
 /// </para>
 /// </summary>
 public static class EgressRules
@@ -195,7 +197,8 @@ public static class EgressRules
         NetworkMode mode,
         IEnumerable<NetworkPolicyEntry> entries,
         string host,
-        Guid? aiProviderId)
+        Guid? aiProviderId,
+        string? installer = null)
     {
         // Off is only ever seen by connections that were proxied before the switch to it;
         // they are judged as Monitor.
@@ -206,7 +209,9 @@ public static class EgressRules
         var wanted = mode == NetworkMode.Whitelist ? NetworkListKind.Whitelist : NetworkListKind.Blacklist;
         var listed = entries.Any(e =>
             e.ListKind == wanted
-            && (e.AiProviderId is null || e.AiProviderId == aiProviderId)
+            && (installer is null
+                ? !e.Installers && (e.AiProviderId is null || e.AiProviderId == aiProviderId)
+                : e.AiProviderId is null)
             && Matches(e.Host, canonical));
 
         return mode == NetworkMode.Whitelist

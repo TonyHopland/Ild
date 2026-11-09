@@ -20,7 +20,7 @@ import type {
 import ConfirmModal from "../../../components/ConfirmModal";
 import { NumericSettingField, Segmented, SettingRow, Switch } from "../controls";
 import { AddForwardRow, ForwardTable } from "./NetworkForwards";
-import { AddRuleRow, RuleTable } from "./NetworkRules";
+import { AddRuleRow, RuleTable, scopeFields } from "./NetworkRules";
 import { PROTECTED_ANCHOR, ProtectedDestinations } from "./NetworkProtected";
 import { describeError } from "./networkShared";
 
@@ -93,7 +93,7 @@ interface LogGroup {
 export function groupConsecutive(entries: NetworkLogEntry[]): LogGroup[] {
   const groups: LogGroup[] = [];
   for (const entry of entries) {
-    const signature = `${entry.host}:${entry.port}:${entry.decision}:${entry.aiProviderId ?? ""}:${entry.reason ?? ""}`;
+    const signature = `${entry.host}:${entry.port}:${entry.decision}:${entry.aiProviderId ?? ""}:${entry.installer ?? ""}:${entry.reason ?? ""}`;
     const last = groups[groups.length - 1];
     if (last && last.key === signature) {
       last.count += 1;
@@ -316,18 +316,17 @@ export default function NetworkSettings() {
     else void changeMode(next);
   };
 
-  const addEntry = async (host: string, kind: NetworkListKind, aiProviderId: string | null) => {
-    const created = await networkService.addEntry({ host, listKind: kind, aiProviderId });
+  const addEntry = async (host: string, kind: NetworkListKind, scope: string) => {
+    const created = await networkService.addEntry({ host, listKind: kind, ...scopeFields(scope) });
     entryList.add(created);
   };
 
-  const updateEntry = async (
-    id: string,
-    host: string,
-    kind: NetworkListKind,
-    aiProviderId: string | null,
-  ) => {
-    const updated = await networkService.updateEntry(id, { host, listKind: kind, aiProviderId });
+  const updateEntry = async (id: string, host: string, kind: NetworkListKind, scope: string) => {
+    const updated = await networkService.updateEntry(id, {
+      host,
+      listKind: kind,
+      ...scopeFields(scope),
+    });
     entryList.replace(updated);
   };
 
@@ -382,7 +381,7 @@ export default function NetworkSettings() {
    */
   const whitelistForwardHost = async (host: string) => {
     try {
-      await addEntry(host, "Whitelist", null);
+      await addEntry(host, "Whitelist", "");
       await refreshForwards();
     } catch (err) {
       setForwardError(describeError(err, "Failed to add the host to the whitelist."));
@@ -392,7 +391,9 @@ export default function NetworkSettings() {
   /** Take a host straight off the log onto a list, without retyping it. */
   const promote = async (entry: NetworkLogEntry, kind: NetworkListKind) => {
     try {
-      const created = await networkService.addLogEntryToList(entry.id, kind);
+      const created = entry.installer
+        ? await networkService.addLogEntryToList(entry.id, kind, false, true)
+        : await networkService.addLogEntryToList(entry.id, kind);
       entryList.add(created);
     } catch (err) {
       setListError(describeError(err, "Failed to add the host to the list."));
@@ -437,7 +438,11 @@ export default function NetworkSettings() {
         }));
   }, [log, logFilter, decisionFilter, grouped]);
 
-  const ruleFor = (host: string) => entries.find((e) => coversHost(e.host, host));
+  // An installer's connection is judged by the global and the installers' rules, any other by the global and its provider's.
+  const ruleFor = (host: string, installer?: string | null) =>
+    entries.find(
+      (e) => (installer ? e.aiProviderId === null : !e.installers) && coversHost(e.host, host),
+    );
 
   const activeMode = MODES.find((m) => m.value === mode);
   // Agents run in containers or pods (enforced) unless ILD itself runs under dotnet run.
@@ -537,6 +542,11 @@ export default function NetworkSettings() {
         <div className="settings-card-header">
           <h3 className="settings-card-title">Rules</h3>
         </div>
+        <p className="settings-card-note">
+          The Installers scope covers what a toolchain installer downloads while it installs a run's
+          tools, which no provider's rules apply to; its default allow list names the hosts mise,
+          npm, pip, cargo and the NuGet credential provider fetch from. Edit it like any other rule.
+        </p>
         {mode === "monitor" && (
           <p className="settings-card-note">
             Monitor blocks nothing, so no rule is in effect. Every destination is logged.
@@ -648,13 +658,13 @@ export default function NetworkSettings() {
                 <th>When</th>
                 <th>Destination</th>
                 <th>Decision</th>
-                <th>Provider</th>
+                <th>Provider or installer</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {visibleLog.map((group) => {
-                const rule = ruleFor(group.entry.host);
+                const rule = ruleFor(group.entry.host, group.entry.installer);
                 return (
                   <tr key={group.key + group.lastAt}>
                     <td className="net-sub">
@@ -681,9 +691,11 @@ export default function NetworkSettings() {
                       {group.entry.reason && <span className="net-sub"> {group.entry.reason}</span>}
                     </td>
                     <td className="net-sub">
-                      {group.entry.aiProviderId
-                        ? (providers.find((p) => p.id === group.entry.aiProviderId)?.name ?? "—")
-                        : "—"}
+                      {group.entry.installer
+                        ? `Installer: ${group.entry.installer}`
+                        : group.entry.aiProviderId
+                          ? (providers.find((p) => p.id === group.entry.aiProviderId)?.name ?? "—")
+                          : "—"}
                     </td>
                     <td className="net-actions">
                       {group.entry.reason ? (

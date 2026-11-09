@@ -431,6 +431,43 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     private static readonly string PrettierFolder = RunToolStore.RepositoryFolder([new RunTool("npm:prettier", "3")], false);
 
     [Fact]
+    public async Task An_installer_pod_reaches_only_ilds_proxy_through_a_policy_made_first_and_removed_with_it()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
+        AnswerInstallers(AgentNodeLine, PiLine);
+        var inner = _api.OnExec!;
+        V1NetworkPolicy? policy = null;
+        _api.OnExec = e =>
+        {
+            if (e.Pod.StartsWith("ild-tools-", StringComparison.Ordinal)) policy = _api.Get<V1NetworkPolicy>("networkpolicies", e.Pod);
+            return inner(e);
+        };
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        var pod = Assert.Single(_installerPods.Values);
+        Assert.NotNull(policy);
+        Assert.Equal(["Ingress", "Egress"], policy.Spec.PolicyTypes);
+        Assert.Equal(pod.Metadata.Labels["ild/installer"], policy.Spec.PodSelector.MatchLabels["ild/installer"]);
+        var toIld = Assert.Single(policy.Spec.Egress);
+        Assert.Equal("ild", toIld.To.Single().PodSelector.MatchLabels["app.kubernetes.io/name"]);
+        Assert.Equal([3128], toIld.Ports.Select(p => int.Parse(p.Port.Value)).ToArray());
+        Assert.Empty(policy.Spec.Ingress);
+
+        // Names are resolved only by the proxy: ILD's own name is pinned in the pod, and the nameserver is nothing.
+        Assert.Equal("None", pod.Spec.DnsPolicy);
+        Assert.Equal(["127.0.0.1"], pod.Spec.DnsConfig.Nameservers);
+        Assert.Equal("10.96.0.20", Assert.Single(pod.Spec.HostAliases).Ip);
+        Assert.Equal("http://installer:agents@ild.example:3128", EnvOf(pod, "HTTPS_PROXY"));
+        Assert.Equal("1", EnvOf(pod, "NODE_USE_ENV_PROXY"));
+
+        // Created before the pod, and gone with it.
+        Assert.True(_api.Created.IndexOf($"networkpolicies/{pod.Metadata.Name}") < _api.Created.IndexOf($"pods/{pod.Metadata.Name}"));
+        Assert.Contains($"networkpolicies/{pod.Metadata.Name}", _api.Deleted);
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", pod.Metadata.Name));
+    }
+
+    [Fact]
     public async Task With_a_tools_claim_each_zone_of_the_store_is_filled_by_an_installer_pod_that_mounts_only_it_and_mounted_read_only_in_the_run()
     {
         var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
@@ -1548,6 +1585,20 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(orphan, leftover.Location);
         Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
         Assert.Contains($"pods/{orphan}", _api.Deleted);
+    }
+
+    [Fact]
+    public async Task An_installers_network_policy_left_without_its_pod_is_a_leftover_and_deleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var name = "ild-tools-" + Guid.NewGuid().ToString("N");
+        _api.SeedTools(name, Instance, "networkpolicies");
+
+        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct));
+
+        Assert.Equal(name, leftover.Location);
+        Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
+        Assert.Contains($"networkpolicies/{name}", _api.Deleted);
     }
 
     [Fact]

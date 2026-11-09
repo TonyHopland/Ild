@@ -29,7 +29,7 @@ public class SignalRNetworkNotifier : INetworkNotifier
 
     public Task LogEntryAppendedAsync(NetworkLogEntry entry)
         => Send("NetworkLogAppended", new NetworkLogAppendedPayload(
-            entry.Id, entry.Host, entry.Port, entry.Timestamp, entry.Decision.ToString(), entry.AiProviderId, entry.Reason));
+            entry.Id, entry.Host, entry.Port, entry.Timestamp, entry.Decision.ToString(), entry.AiProviderId, entry.Reason, entry.Installer));
 
     public Task LogClearedAsync()
         => Send("NetworkLogCleared", new NetworkLogClearedPayload());

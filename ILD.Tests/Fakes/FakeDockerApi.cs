@@ -169,6 +169,18 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         lock (_gate) _containers[name] = new FakeContainer(name, new JsonObject(), labels) { Running = true };
     }
 
+    /// <summary>Puts an installer's network in the engine as if a run host had made it: no run label, the tools role.</summary>
+    public void SeedToolsNetwork(string name, string instance)
+    {
+        var labels = new Dictionary<string, string>
+        {
+            ["app.kubernetes.io/managed-by"] = "ild",
+            ["ild/instance"] = instance,
+            ["ild/role"] = "tools",
+        };
+        lock (_gate) _networks[name] = new FakeNetwork(name, NextSubnet(), labels, new JsonObject());
+    }
+
     private int NextSubnet() => _nextNetwork++;
 
     // -- Server ------------------------------------------------------------------

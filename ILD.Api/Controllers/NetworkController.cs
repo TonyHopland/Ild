@@ -66,6 +66,9 @@ public class NetworkController : ControllerBase
         public NetworkListKind ListKind { get; set; }
 
         public Guid? AiProviderId { get; set; }
+
+        /// <summary>The installers' scope (toolchain installers, ADR-0035); not with a provider.</summary>
+        public bool Installers { get; set; }
     }
 
     public sealed class AddForwardRequest
@@ -86,6 +89,9 @@ public class NetworkController : ControllerBase
     {
         /// <summary>Scope the new entry to the log entry's provider instead of making it global.</summary>
         public bool ScopeToProvider { get; set; }
+
+        /// <summary>Scope the new entry to the installers instead of making it global; for a destination a toolchain installer asked for.</summary>
+        public bool ScopeToInstallers { get; set; }
     }
 
     [HttpGet("status")]
@@ -127,7 +133,7 @@ public class NetworkController : ControllerBase
         var (invalid, host) = await ValidateEntryAsync(request);
         if (invalid is not null) return invalid;
 
-        var (entry, created) = await AddOrFindAsync(host, request.ListKind, request.AiProviderId, ct);
+        var (entry, created) = await AddOrFindAsync(host, request.ListKind, request.AiProviderId, request.Installers, ct);
         return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
     }
 
@@ -136,13 +142,13 @@ public class NetworkController : ControllerBase
     {
         var (invalid, host) = await ValidateEntryAsync(request);
         if (invalid is not null) return invalid;
-        if (await _store.FindEntryAsync(request.ListKind, host, request.AiProviderId, ct) is { } other && other.Id != id)
+        if (await _store.FindEntryAsync(request.ListKind, host, request.AiProviderId, ct, request.Installers) is { } other && other.Id != id)
             return RuleExists(request.ListKind, host);
 
         NetworkPolicyEntry? entry;
         try
         {
-            entry = await _store.UpdateEntryAsync(id, host, request.ListKind, request.AiProviderId, ct);
+            entry = await _store.UpdateEntryAsync(id, host, request.ListKind, request.AiProviderId, ct, request.Installers);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -165,6 +171,8 @@ public class NetworkController : ControllerBase
             return (BadRequest(new { error = "listKind must be 'Whitelist' or 'Blacklist'" }), string.Empty);
         if (!EgressRules.TryNormalizePattern(request.Host, out var host, out var error))
             return (BadRequest(new { error }), string.Empty);
+        if (request.Installers && request.AiProviderId is not null)
+            return (BadRequest(new { error = "An entry is for the installers or for one provider, not both" }), string.Empty);
         if (request.AiProviderId is { } providerId && await _providers.GetAiProviderByIdAsync(providerId) is null)
             return (BadRequest(new { error = "Unknown AI provider" }), string.Empty);
         return (null, host);
@@ -289,13 +297,13 @@ public class NetworkController : ControllerBase
 
     [HttpPost("log/{id:guid}/whitelist")]
     public Task<IActionResult> WhitelistFromLog(Guid id, [FromBody] AddFromLogRequest? request, CancellationToken ct)
-        => AddFromLogAsync(id, NetworkListKind.Whitelist, request?.ScopeToProvider ?? false, ct);
+        => AddFromLogAsync(id, NetworkListKind.Whitelist, request?.ScopeToProvider ?? false, request?.ScopeToInstallers ?? false, ct);
 
     [HttpPost("log/{id:guid}/blacklist")]
     public Task<IActionResult> BlacklistFromLog(Guid id, [FromBody] AddFromLogRequest? request, CancellationToken ct)
-        => AddFromLogAsync(id, NetworkListKind.Blacklist, request?.ScopeToProvider ?? false, ct);
+        => AddFromLogAsync(id, NetworkListKind.Blacklist, request?.ScopeToProvider ?? false, request?.ScopeToInstallers ?? false, ct);
 
-    private async Task<IActionResult> AddFromLogAsync(Guid logId, NetworkListKind kind, bool scopeToProvider, CancellationToken ct)
+    private async Task<IActionResult> AddFromLogAsync(Guid logId, NetworkListKind kind, bool scopeToProvider, bool scopeToInstallers, CancellationToken ct)
     {
         var logged = await _store.GetLogEntryAsync(logId, ct);
         if (logged is null) return NotFound();
@@ -305,8 +313,9 @@ public class NetworkController : ControllerBase
         var providerId = scopeToProvider ? logged.AiProviderId : null;
         if (providerId is { } id && await _providers.GetAiProviderByIdAsync(id) is null)
             providerId = null;
+        var installers = scopeToInstallers && logged.Installer is not null;
 
-        var (entry, created) = await AddOrFindAsync(host, kind, providerId, ct);
+        var (entry, created) = await AddOrFindAsync(host, kind, providerId, installers, ct);
         return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
     }
 
@@ -316,9 +325,9 @@ public class NetworkController : ControllerBase
     /// unique index on (list, host, scope) covers two clicks racing, whose loser
     /// re-reads the winner instead of failing.
     /// </summary>
-    private async Task<(NetworkPolicyEntry Entry, bool Created)> AddOrFindAsync(string host, NetworkListKind kind, Guid? providerId, CancellationToken ct)
+    private async Task<(NetworkPolicyEntry Entry, bool Created)> AddOrFindAsync(string host, NetworkListKind kind, Guid? providerId, bool installers, CancellationToken ct)
     {
-        if (await _store.FindEntryAsync(kind, host, providerId, ct) is { } existing)
+        if (await _store.FindEntryAsync(kind, host, providerId, ct, installers) is { } existing)
             return (existing, false);
 
         var entry = new NetworkPolicyEntry
@@ -327,6 +336,7 @@ public class NetworkController : ControllerBase
             Host = host,
             ListKind = kind,
             AiProviderId = providerId,
+            Installers = installers,
             CreatedAt = DateTime.UtcNow,
         };
         try
@@ -335,7 +345,7 @@ public class NetworkController : ControllerBase
         }
         catch (DbUpdateException)
         {
-            var winner = await _store.FindEntryAsync(kind, host, providerId, ct);
+            var winner = await _store.FindEntryAsync(kind, host, providerId, ct, installers);
             if (winner is null) throw;
             return (winner, false);
         }
@@ -350,7 +360,7 @@ public class NetworkController : ControllerBase
     }
 
     private static object View(NetworkPolicyEntry e)
-        => new { id = e.Id, host = e.Host, listKind = e.ListKind, aiProviderId = e.AiProviderId, createdAt = e.CreatedAt };
+        => new { id = e.Id, host = e.Host, listKind = e.ListKind, aiProviderId = e.AiProviderId, installers = e.Installers, createdAt = e.CreatedAt };
 
     /// <summary>
     /// A forward plus the two things about it that are not in its row: what the
@@ -374,5 +384,5 @@ public class NetworkController : ControllerBase
         => new { id = p.Id, name = p.Name, hosts = p.Hosts, addresses = p.Addresses.Select(a => a.ToString()), enabled = p.Enabled };
 
     private static object View(NetworkLogEntry l)
-        => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId, reason = l.Reason };
+        => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId, installer = l.Installer, reason = l.Reason };
 }

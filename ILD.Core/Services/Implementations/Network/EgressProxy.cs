@@ -29,6 +29,8 @@ namespace ILD.Core.Services.Implementations.Network;
 /// provider gets <c>http://provider:&lt;id&gt;@127.0.0.1:port</c>, so the
 /// <c>Proxy-Authorization</c> header names the provider whose scoped entries
 /// apply. A connection without one is judged by the global entries alone.
+/// A toolchain installer gets <c>http://installer:&lt;zone&gt;@127.0.0.1:port</c> instead, and is judged by the global
+/// entries and the installers' scope, with its zone in the log.
 /// </para>
 ///
 /// <para>
@@ -158,11 +160,11 @@ public sealed class EgressProxy : BackgroundService
                 }
 
                 var snapshot = await _policy.GetAsync(stoppingToken).ConfigureAwait(false);
-                var decision = snapshot.Decide(request.Host, request.AiProviderId);
+                var decision = snapshot.Decide(request.Host, request.AiProviderId, installer: request.Installer);
 
                 if (decision == NetworkDecision.Blocked)
                 {
-                    _log.Record(request.Host, request.Port, decision, request.AiProviderId);
+                    _log.Record(request.Host, request.Port, decision, request.AiProviderId, installer: request.Installer);
                     await RefuseAsync(stream, request, "ILD network policy blocks " + request.Host + ".", stoppingToken).ConfigureAwait(false);
                     return;
                 }
@@ -175,7 +177,7 @@ public sealed class EgressProxy : BackgroundService
                 }
                 catch (Exception ex) when (ex is SocketException or ArgumentException)
                 {
-                    _log.Record(request.Host, request.Port, decision, request.AiProviderId);
+                    _log.Record(request.Host, request.Port, decision, request.AiProviderId, installer: request.Installer);
                     await WriteUnreachableAsync(stream, request, (ex as SocketException)?.SocketErrorCode.ToString() ?? "invalid host name", stoppingToken).ConfigureAwait(false);
                     return;
                 }
@@ -183,12 +185,12 @@ public sealed class EgressProxy : BackgroundService
                 var isForward = request.Kind == RequestKind.Connect && snapshot.IsForward(request.Host, request.Port);
                 if (snapshot.CheckAddresses(addresses, isForward) is { } refusal)
                 {
-                    _log.Record(request.Host, request.Port, NetworkDecision.Blocked, request.AiProviderId, refusal.Reason);
+                    _log.Record(request.Host, request.Port, NetworkDecision.Blocked, request.AiProviderId, refusal.Reason, request.Installer);
                     await RefuseAsync(stream, request, "ILD refuses " + request.Host + " (" + refusal.Reason + ").", stoppingToken).ConfigureAwait(false);
                     return;
                 }
 
-                _log.Record(request.Host, request.Port, decision, request.AiProviderId);
+                _log.Record(request.Host, request.Port, decision, request.AiProviderId, installer: request.Installer);
                 await RelayAsync(stream, request, addresses, head.Value, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
@@ -221,7 +223,8 @@ public sealed class EgressProxy : BackgroundService
             await _relay.RelayAsync(client, upstreamStream, request.Host, request.Port, request.AiProviderId, stoppingToken,
                 token => SendHeadAsync(client, upstreamStream, request, head, token),
                 exchange is null ? null : exchange.CopyRequestAsync,
-                exchange is null ? null : exchange.CopyResponseAsync).ConfigureAwait(false);
+                exchange is null ? null : exchange.CopyResponseAsync,
+                request.Installer).ConfigureAwait(false);
         }
         finally
         {
@@ -326,6 +329,7 @@ public sealed class EgressProxy : BackgroundService
 
         var (method, target, version) = (requestLine[0], requestLine[1], requestLine[2]);
         Guid? provider = null;
+        string? installer = null;
         string? hostHeader = null;
         var forwarded = new StringBuilder();
         var sawHostHeader = false;
@@ -342,7 +346,7 @@ public sealed class EgressProxy : BackgroundService
 
             if (name.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase))
             {
-                provider ??= ReadProviderScope(value);
+                if (provider is null && installer is null) (provider, installer) = ReadScope(value);
                 continue;
             }
             if (name.Equals("Proxy-Connection", StringComparison.OrdinalIgnoreCase)
@@ -366,7 +370,7 @@ public sealed class EgressProxy : BackgroundService
         if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
         {
             if (!TrySplitHostPort(target, TlsDefaultPort, out var connectHost, out var connectPort)) return null;
-            return new ProxyRequest(RequestKind.Connect, connectHost, connectPort, provider, bodyStart, Array.Empty<byte>());
+            return new ProxyRequest(RequestKind.Connect, connectHost, connectPort, provider, bodyStart, Array.Empty<byte>(), Installer: installer);
         }
 
         string host;
@@ -399,7 +403,7 @@ public sealed class EgressProxy : BackgroundService
             .Append(forwarded)
             .Append("Connection: close\r\n\r\n")
             .ToString();
-        return new ProxyRequest(RequestKind.Http, host, port, provider, bodyStart, Encoding.ASCII.GetBytes(headText), chunked, contentLength, asksUpgrade);
+        return new ProxyRequest(RequestKind.Http, host, port, provider, bodyStart, Encoding.ASCII.GetBytes(headText), chunked, contentLength, asksUpgrade, installer);
     }
 
     /// <summary>
@@ -432,27 +436,37 @@ public sealed class EgressProxy : BackgroundService
     }
 
     /// <summary>
-    /// The provider a launch was made for, carried as the Basic password of the
-    /// proxy URL (<see cref="EgressProxyOptions.ClientUrl"/>) behind the fixed
-    /// <see cref="EgressProxyOptions.ScopeUser"/> name. Credentials of any other
-    /// shape are somebody else's and attribute nothing.
+    /// What a launch was made for, carried as the Basic password of the proxy URL (<see cref="EgressProxyOptions.ClientUrl"/>,
+    /// <see cref="EgressProxyOptions.InstallerUrl"/>): a provider behind the fixed <see cref="EgressProxyOptions.ScopeUser"/>
+    /// name, or a toolchain zone behind <see cref="EgressProxyOptions.InstallerUser"/>. Credentials of any other shape are
+    /// somebody else's and attribute nothing.
     /// </summary>
-    internal static Guid? ReadProviderScope(string proxyAuthorization)
+    internal static (Guid? Provider, string? Installer) ReadScope(string proxyAuthorization)
     {
         var parts = proxyAuthorization.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 2 || !parts[0].Equals("Basic", StringComparison.OrdinalIgnoreCase)) return null;
+        if (parts.Length != 2 || !parts[0].Equals("Basic", StringComparison.OrdinalIgnoreCase)) return (null, null);
         try
         {
             var credentials = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
             var colon = credentials.IndexOf(':');
-            if (colon < 0 || !credentials.AsSpan(0, colon).SequenceEqual(EgressProxyOptions.ScopeUser)) return null;
-            return Guid.TryParse(credentials.AsSpan(colon + 1), out var id) ? id : null;
+            if (colon < 0) return (null, null);
+            var user = credentials.AsSpan(0, colon);
+            var secret = credentials[(colon + 1)..];
+            if (user.SequenceEqual(EgressProxyOptions.ScopeUser))
+                return (Guid.TryParse(secret, out var id) ? id : null, null);
+            if (user.SequenceEqual(EgressProxyOptions.InstallerUser))
+                return (null, IsZone(secret) ? secret : null);
+            return (null, null);
         }
         catch (FormatException)
         {
-            return null;
+            return (null, null);
         }
     }
+
+    /// <summary>A toolchain zone name: lower-case letters, digits and hyphens, short enough for the log column.</summary>
+    private static bool IsZone(string value)
+        => value.Length is > 0 and <= EgressProxyOptions.MaxZoneLength && value.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '-');
 
     private static bool TrySplitHostPort(string authority, int defaultPort, out string host, out int port)
     {
@@ -485,5 +499,5 @@ public sealed class EgressProxy : BackgroundService
     /// <param name="AsksUpgrade">A plain request names a protocol to switch to, the only case a 101 answers.</param>
     internal sealed record ProxyRequest(
         RequestKind Kind, string Host, int Port, Guid? AiProviderId, int BodyStart, byte[] ForwardedHead,
-        bool ChunkedBody = false, long ContentLength = 0, bool AsksUpgrade = false);
+        bool ChunkedBody = false, long ContentLength = 0, bool AsksUpgrade = false, string? Installer = null);
 }

@@ -31,6 +31,12 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
     /// </summary>
     public const string ScopeUser = "provider";
 
+    /// <summary>The Basic-auth user name on an installer-scoped proxy URL, whose password is the toolchain zone the installer fills.</summary>
+    public const string InstallerUser = "installer";
+
+    /// <summary>The longest zone name the log column holds.</summary>
+    public const int MaxZoneLength = 64;
+
     /// <summary>
     /// ILD's own plain-HTTP port on loopback, where the proxy hands a request for an agents' preview hostname
     /// (<see cref="Interfaces.PreviewProxyBase.AgentHost"/>); null when ILD listens on no plain-HTTP port it can name.
@@ -83,4 +89,8 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
             ? $"http://{ScopeUser}:{id:D}@{ListenAddress}:{Port}"
             : $"http://{ListenAddress}:{Port}";
     }
+
+    /// <summary>The URL a toolchain installer for <paramref name="zone"/> (<c>agents</c>, <c>toolchains</c>, <c>repo-&lt;id&gt;</c>) is pointed at, or null when the proxy is disabled.</summary>
+    public string? InstallerUrl(string zone)
+        => Enabled ? $"http://{InstallerUser}:{zone}@{ListenAddress}:{Port}" : null;
 }
