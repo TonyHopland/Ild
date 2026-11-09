@@ -465,7 +465,7 @@ public sealed class NetworkControllerTests : IDisposable
     [InlineData(RunHostKind.Local, "advisory")]
     [InlineData(RunHostKind.Container, "unverified")]
     [InlineData(RunHostKind.Kubernetes, "unverified")]
-    public void Status_reports_enforcement_by_where_runs_execute_and_Off_as_always_available(RunHostKind kind, string enforcement)
+    public void Status_reports_enforcement_by_where_runs_execute(RunHostKind kind, string enforcement)
     {
         var status = Body<Dictionary<string, object>>(Build(kind).GetStatus());
 
@@ -473,7 +473,7 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(Proxied.ReasonFor(kind), status["reason"].ToString());
         Assert.Equal("True", status["proxyEnabled"].ToString());
         Assert.Equal("3128", status["proxyPort"].ToString());
-        Assert.Equal("True", status["offAvailable"].ToString());
+        Assert.False(status.ContainsKey("offAvailable"));
     }
 
     private sealed record UpdatedEntryView(Guid Id, string Host, NetworkListKind ListKind, Guid? AiProviderId, DateTime CreatedAt);

@@ -21,14 +21,12 @@ const enforced: NetworkStatus = {
   reason: "nftables rules drop everything uid 10002 sends except loopback and DNS.",
   proxyEnabled: true,
   proxyPort: 3128,
-  offAvailable: true,
 };
 const advisory: NetworkStatus = {
   enforcement: "advisory",
   reason: "NET_ADMIN is not granted to the container.",
   proxyEnabled: true,
   proxyPort: 3128,
-  offAvailable: true,
 };
 
 const github: NetworkPolicyEntry = {

@@ -96,7 +96,6 @@ public class NetworkController : ControllerBase
             reason = _enforcement.ReasonFor(_runHost.Kind),
             proxyEnabled = _enforcement.ProxyEnabled,
             proxyPort = _enforcement.ProxyPort,
-            offAvailable = true,
         });
 
     public sealed class SetProtectedRequest
