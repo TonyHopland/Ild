@@ -215,7 +215,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     /// <summary>
     /// The create request every container ILD makes shares: the runner image as the runner user, with every capability
     /// dropped and no new privileges. A <paramref name="placement"/> puts it on a network of its own, reaching only ILD;
-    /// without one it is on the engine's default network, as the installers and sign-ins need to download. A run's
+    /// without one it is on the engine's default network, as the sign-in needs to reach its provider. A run's
     /// <paramref name="limits"/> are its memory and CPU.
     /// </summary>
     private object ContainerBody(
@@ -682,7 +682,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         {
             var agents = agent is null ? (IReadOnlyList<RunAgent>)[] : Agents().Where(a => a.Agent.Key == agent.Key).ToList();
             var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), agents, null, ct);
-            // The engine's default network, as the toolchain installer has; no volume of a run or chat, no ILD address.
+            // The engine's default network, for the OAuth flow; no volume of a run or chat, no ILD address.
             await PostCreateAsync(
                 name,
                 ContainerBody(new[] { $"HOME={SignInHome}" }.Concat(tools?.For(SignInHome) ?? []), SignInLabels(), ToolBinds(tools?.Zones ?? [])),

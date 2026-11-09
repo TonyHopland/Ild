@@ -157,6 +157,8 @@ own environment, so a launch can present another provider's id and inherit its
 scoped entries. Provider scope is a convenience for keeping lists tidy per tool,
 not a boundary between agents — anything that must hold against a hostile agent
 belongs on the global lists.
+
+A toolchain installer (ADR-0035) gets `http://installer:<zone>@127.0.0.1:<port>` instead, with the toolchain zone as the password. Its connections are judged by the global entries and the single **Installers** scope, not by any provider's, and the log records the zone. The scope is one list for every zone, and like provider scope it is attribution rather than authentication.
 Per-run or per-repository lists need either the per-run-uid follow-up from
 ADR-0014 or a per-run credential the agent's client presents, and are a later
 layer.

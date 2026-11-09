@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Toolchain installers go through the egress proxy**, under an Installers scope in Settings → Network whose allow list starts with the hosts installs need.
 - **Runs can no longer reach ILD's database, the WorkItem Server or the Kubernetes API**, unless you switch that protection off in Settings → Network or declare a forward to it.
 - **A repository can no longer plant code that every other run executes through the shared toolchain store.**
 

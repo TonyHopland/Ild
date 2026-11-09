@@ -29,6 +29,8 @@ namespace ILD.Core.Services.Implementations.Network;
 /// provider gets <c>http://provider:&lt;id&gt;@127.0.0.1:port</c>, so the
 /// <c>Proxy-Authorization</c> header names the provider whose scoped entries
 /// apply. A connection without one is judged by the global entries alone.
+/// A toolchain installer gets <c>http://installer:&lt;zone&gt;@127.0.0.1:port</c> instead, and is judged by the global
+/// entries and the installers' scope, with its zone in the log.
 /// </para>
 ///
 /// <para>
