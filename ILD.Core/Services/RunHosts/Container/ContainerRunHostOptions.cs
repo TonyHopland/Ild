@@ -43,6 +43,9 @@ public sealed record ContainerRunHostOptions
     public IReadOnlyDictionary<string, string> GitIdentity { get; init; } = new Dictionary<string, string>();
 
     public TimeSpan SweepInterval { get; init; } = TimeSpan.FromMinutes(10);
+    /// <summary>How long the chat container may be idle before the sweep removes it; zero never removes it.</summary>
+    public TimeSpan ChatIdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
     public TimeSpan ReadyTimeout { get; init; } = TimeSpan.FromMinutes(2);
 
     /// <summary>ILD's address as the run reaches it (<c>ILD_API_URL</c>): a host name the run's container is given the address of ILD for.</summary>
@@ -91,6 +94,7 @@ public sealed record ContainerRunHostOptions
             ReadyTimeout = TimeSpan.FromSeconds(PositiveInt(Value(ReadyTimeoutSetting), ReadyTimeoutSetting) ?? 120),
             GitIdentity = GitIdentitySettings.Select(name => (name, value: Value(name))).Where(e => e.value is not null).ToDictionary(e => e.name, e => e.value!),
             IldUrl = ildUrl,
+            ChatIdleTimeout = RunHostOptions.ChatIdleTimeoutOf(Value(RunHostOptions.ChatIdleTimeoutSetting)),
             Toolchains = RunHostOptions.ToolchainsOn(Value(RunHostOptions.ToolchainsSetting)),
             ToolsVolume = DockerName(Value(ToolsVolumeSetting), ToolsVolumeSetting) ?? defaults.ToolsVolume,
         };

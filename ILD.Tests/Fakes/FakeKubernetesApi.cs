@@ -44,6 +44,9 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
 
     public List<FakeExec> Execs { get; } = [];
 
+    /// <summary>Awaited, with "kind/name", before a delete is carried out; a test holds one back with it.</summary>
+    public Func<string, Task>? BeforeDelete { get; set; }
+
     /// <summary>What a command does; every command ends at once with code 0 until this is set.</summary>
     public Func<FakeExec, Task> OnExec { get; set; } = exec => exec.ExitAsync(0);
 
@@ -236,6 +239,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
 
     private async Task<IResult> Delete(HttpContext http, string ns, string kind, string name)
     {
+        if (BeforeDelete is { } before) await before($"{kind}/{name}");
         using var reader = new StreamReader(http.Request.Body);
         var graceless = (await reader.ReadToEndAsync()).Replace(" ", "").Contains("\"gracePeriodSeconds\":0", StringComparison.Ordinal);
         object removed;

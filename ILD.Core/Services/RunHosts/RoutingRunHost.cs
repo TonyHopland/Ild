@@ -119,6 +119,8 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
         => (isolated.HostsChats ? isolated : local).CreateChatFolderAsync(chatId, localRoot, ct);
 
+    public IDisposable HoldChat(string chatPath) => For(chatPath).HoldChat(chatPath);
+
     public Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
         => For(chatPath).AddChatToolsAsync(chatPath, basePath, ct);
 

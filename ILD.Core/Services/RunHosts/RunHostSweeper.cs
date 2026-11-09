@@ -40,6 +40,7 @@ public sealed class RunHostSweeper(
             if (await isolated.DeleteLeftoverAsync(leftover, ct))
                 logger?.LogInformation("Removed the leftover {Run}, which is finished or gone", leftover.Location);
         }
+        await isolated.ReapIdleChatAsync(ct);
     }
 
     private static async Task<bool> WaitForNextAsync(PeriodicTimer timer, CancellationToken ct)

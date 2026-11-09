@@ -17,6 +17,13 @@ namespace ILD.Core.Services.RunHosts;
 /// </summary>
 public interface IRunHost
 {
+    private sealed class NoHold : IDisposable
+    {
+        public static readonly NoHold Instance = new();
+
+        public void Dispose() { }
+    }
+
     /// <summary>The setting value that selects this host.</summary>
     RunHostKind Kind { get; }
 
@@ -123,6 +130,9 @@ public interface IRunHost
 
     /// <summary>Add the toolchains the repository checked out at <paramref name="basePath"/> (ILD's own clone) needs to those of the chat that holds <paramref name="chatPath"/>. A host that gives chats no toolchains does nothing.</summary>
     Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default);
+
+    /// <summary>Counts the chat that holds <paramref name="chatPath"/> as busy until the result is disposed, for work that is not a command in its container (a clone). A host that removes nothing for idleness does nothing.</summary>
+    IDisposable HoldChat(string chatPath) => NoHold.Instance;
 
     /// <summary>The names of the directories directly below <paramref name="directory"/>, leaving out links and names starting with '.'; none when there is no such directory.</summary>
     Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default);

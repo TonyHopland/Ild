@@ -46,6 +46,9 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     /// <summary>Every request, as <c>METHOD path</c>, in order.</summary>
     public List<string> Requests { get; } = [];
 
+    /// <summary>Awaited, with "METHOD path", before the engine answers a request; a test holds one back with it.</summary>
+    public Func<string, Task>? BeforeRequest { get; set; }
+
     /// <summary>What a command does; every command ends at once with code 0 until this is set.</summary>
     public Func<FakeDockerExec, Task> OnExec { get; set; } = exec => exec.ExitAsync(0);
 
@@ -208,6 +211,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
                 var request = await ReadRequestAsync(reader);
                 if (request is null) return;
                 lock (_gate) Requests.Add($"{request.Method} {request.Path}");
+                if (BeforeRequest is { } before) await before($"{request.Method} {request.Path}");
 
                 if (Down)
                 {

@@ -402,7 +402,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     private async Task<string> EnsureChatPodAsync(CancellationToken ct)
     {
         await ChatIldAddressAsync(ct);
-        if (await ChatPodStateAsync(ct) is { } pod && IsReady(pod) && pod.Metadata.DeletionTimestamp is null && IsCurrent(pod)) return ChatPodName;
+        if (!ChatBeingRemoved && await ChatPodStateAsync(ct) is { } pod && IsReady(pod) && pod.Metadata.DeletionTimestamp is null && IsCurrent(pod)) return ChatPodName;
 
         await _chatGate.WaitAsync(ct);
         try
@@ -425,6 +425,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
                 await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.ChatPod(_chatIldAddress), _namespace, cancellationToken: ct));
             }
             await WaitReadyAsync(ChatPodName, "the chats", ct);
+            if (TakeRemovedForIdle()) Logger?.LogInformation("The chat pod {Name} is back, made for a chat after it was deleted for idleness", ChatPodName);
             return ChatPodName;
         }
         finally
@@ -499,6 +500,13 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             }
         }));
     }
+
+    protected override TimeSpan ChatIdleTimeout => _options.ChatIdleTimeout;
+
+    // By its name, never by what ILD manages: a run's pod, parked or waiting for a human, is not the chat's to reap.
+    public override Task ReapIdleChatAsync(CancellationToken ct = default)
+        => ReapChatAsync(_chatGate, ChatPodName, token =>
+            IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: token)), ct);
 
     private Task<V1Pod?> ChatPodStateAsync(CancellationToken ct) => ReadPodOrNullAsync(ChatPodName, ct);
 

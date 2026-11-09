@@ -56,6 +56,9 @@ public sealed record KubernetesRunHostOptions
     public IReadOnlyDictionary<string, string> GitIdentity { get; init; } = new Dictionary<string, string>();
 
     public TimeSpan SweepInterval { get; init; } = TimeSpan.FromMinutes(10);
+    /// <summary>How long the chat pod may be idle before the sweep deletes it; zero never deletes it.</summary>
+    public TimeSpan ChatIdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
     public TimeSpan ReadyTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>A kubeconfig file to reach the cluster with, for an ILD that does not run in it; null means the pod's service account.</summary>
@@ -108,6 +111,7 @@ public sealed record KubernetesRunHostOptions
             GitIdentity = GitIdentitySettings.Select(name => (name, value: Value(name))).Where(e => e.value is not null).ToDictionary(e => e.name, e => e.value!),
             Kubeconfig = Value(KubeconfigSetting),
             IldUrl = ildUrl,
+            ChatIdleTimeout = RunHostOptions.ChatIdleTimeoutOf(Value(RunHostOptions.ChatIdleTimeoutSetting)),
             Toolchains = RunHostOptions.ToolchainsOn(Value(RunHostOptions.ToolchainsSetting)),
             ToolsClaim = Value(ToolsClaimSetting),
         };
