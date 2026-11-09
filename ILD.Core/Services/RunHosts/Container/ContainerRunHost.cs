@@ -496,8 +496,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     private async Task<bool> OnOpenNetworkAsync(string container, CancellationToken ct)
         => (await _api.GetAsync($"/containers/{Escaped(container)}/json", ct, HttpStatusCode.NotFound))?["NetworkSettings"]?["Networks"]?[OpenNetworkName] is not null;
 
-    // A run made with DNS on has the engine's own nameserver, which is not ours to replace for good: it is put aside when the route opens and back when it closes.
-    private async Task<bool> HasOwnDnsAsync(string container, CancellationToken ct)
+    // A run made with DNS on has the engine's own nameserver (no Dns in its HostConfig), which closing the route writes back.
+    private async Task<bool> UsesEngineDnsAsync(string container, CancellationToken ct)
         => (await _api.GetAsync($"/containers/{Escaped(container)}/json", ct))?["HostConfig"]?["Dns"] is not JsonArray { Count: > 0 };
 
     protected override async Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct)
@@ -515,14 +515,15 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             }
         }
         // The container was made with no nameserver, which HostConfig fixes; root, who owns the file, writes one for as long as it has the route.
-        await SetNameServerAsync(container, await OpenNameServerAsync(ct), keepOriginal: await HasOwnDnsAsync(container, ct), restore: false, ct);
+        await SetNameServerAsync(container, await GatewayNameServerAsync(OpenNetworkName, ct), ct);
     }
 
     protected override async Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct)
     {
         var container = ContainerOf(owner);
         if (!await OnOpenNetworkAsync(container, ct)) return;
-        await SetNameServerAsync(container, NameServers(dns: false)[0], keepOriginal: await HasOwnDnsAsync(container, ct), restore: true, ct);
+        // What the container was made with: nothing when its HostConfig has a nameserver, else the engine's own for its network.
+        await SetNameServerAsync(container, await UsesEngineDnsAsync(container, ct) ? await GatewayNameServerAsync(container, ct) : NameServers(dns: false)[0], ct);
         await _api.PostAsync($"/networks/{Escaped(OpenNetworkName)}/disconnect", new { Container = container }, ct);
     }
 
@@ -546,25 +547,18 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     /// Where a container on the open network resolves names: Podman's DNS answers on the network's gateway; Docker's resolver is in
     /// every container on a network of its own, at 127.0.0.11.
     /// </summary>
-    private async Task<string> OpenNameServerAsync(CancellationToken ct)
+    private async Task<string> GatewayNameServerAsync(string network, CancellationToken ct)
     {
         if (!(_podman ?? await DetectPodmanAsync(ct))) return "127.0.0.11";
-        var network = await _api.GetAsync($"/networks/{Escaped(OpenNetworkName)}", ct);
-        return network?["IPAM"]?["Config"]?.AsArray().Select(c => c?["Gateway"]?.GetValue<string>()).FirstOrDefault(g => !string.IsNullOrEmpty(g))
-            ?? throw new InvalidOperationException($"the network {OpenNetworkName} has no gateway address, which is where names are resolved on it");
+        var inspected = await _api.GetAsync($"/networks/{Escaped(network)}", ct);
+        return inspected?["IPAM"]?["Config"]?.AsArray().Select(c => c?["Gateway"]?.GetValue<string>()).FirstOrDefault(g => !string.IsNullOrEmpty(g))
+            ?? throw new InvalidOperationException($"the network {network} has no gateway address, which is where names are resolved on it");
     }
 
-    private const string SavedResolvConf = RunPaths.StateDirectory + "/resolv.conf.orig";
-
-    // keepOriginal: the container has the engine's own nameserver, so opening saves the file and closing puts it back; otherwise it is ours to write.
-    private async Task SetNameServerAsync(string container, string nameServer, bool keepOriginal, bool restore, CancellationToken ct)
+    // Root owns the file and needs no capability to write it; a failed write is reported, since the redirect's status is the script's.
+    private async Task SetNameServerAsync(string container, string nameServer, CancellationToken ct)
     {
-        var script = (keepOriginal, restore) switch
-        {
-            (true, true) => $"[ -f {SavedResolvConf} ] && cat {SavedResolvConf} > /etc/resolv.conf && rm -f {SavedResolvConf}; true",
-            (true, false) => $"[ -f {SavedResolvConf} ] || cp /etc/resolv.conf {SavedResolvConf}; printf 'nameserver %s\\n' \"$1\" > /etc/resolv.conf",
-            _ => "printf 'nameserver %s\\n' \"$1\" > /etc/resolv.conf",
-        };
+        const string script = "printf 'nameserver %s\\n' \"$1\" > /etc/resolv.conf";
         using var exec = await DockerExec.OpenAsync(
             _api, container, ["/bin/sh", "-c", script, "sh", nameServer], stdin: false, tty: false, ExitStatusTimeout, ct, user: "0");
         var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);

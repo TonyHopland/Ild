@@ -838,9 +838,12 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.NotEmpty(LaunchEnvironment());
     }
 
-    [Fact]
-    public async Task A_run_with_its_own_dns_gets_its_nameserver_back_when_the_route_closes()
+    [Theory]
+    [InlineData(false, "127.0.0.11")]
+    [InlineData(true, @"^10\.89\.\d+\.1$")]
+    public async Task A_run_with_its_own_dns_gets_the_engines_nameserver_back_when_the_route_closes(bool podman, string expected)
     {
+        if (podman) _api.LibpodInfo = new JsonObject();
         _api.OnExec = async e =>
         {
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
@@ -848,15 +851,15 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         };
         await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo, Dns: true), TestContext.Current.CancellationToken);
         using (await StartAsync(NetworkMode.Off)) { }
-        var open = _api.Execs.Single(e => e.Joined.Contains("resolv.conf.orig", StringComparison.Ordinal));
-        Assert.Contains("cp /etc/resolv.conf", open.Joined);
+        var openGateway = _api.Execs.Single(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal)).Command[^1];
 
         using var process = await StartAsync(NetworkMode.Monitor);
 
-        var close = _api.Execs.Last(e => e.Joined.Contains("resolv.conf.orig", StringComparison.Ordinal));
-        Assert.NotSame(open, close);
-        Assert.Contains("cat /run/ild/resolv.conf.orig > /etc/resolv.conf", close.Joined);
-        Assert.DoesNotContain("printf", close.Joined);
+        var close = _api.Execs.Last(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal));
+        Assert.Equal("0", close.User);
+        Assert.Matches(expected, close.Command[^1]);
+        Assert.NotEqual("127.0.0.1", close.Command[^1]);
+        if (podman) Assert.NotEqual(openGateway, close.Command[^1]);
     }
 
     [Fact]
