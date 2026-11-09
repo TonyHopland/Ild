@@ -61,6 +61,15 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     /// <summary>Whether a container was stopped (and not started since): an exec into it is refused with 409, as an engine refuses it.</summary>
     public bool IsStopped(string name) { lock (_gate) return _containers.TryGetValue(name, out var c) && c.Stopped; }
 
+    /// <summary>
+    /// What an exec into a stopped container answers: Podman's 500 (the default) or Docker's 409. The two engines word it differently,
+    /// and a client must treat both as "the container is not running".
+    /// </summary>
+    public int StoppedExecStatus { get; set; } = 500;
+
+    /// <summary>What starting an exec answers before the raw stream: Docker's 101 (the default) or Podman's 200.</summary>
+    public int HijackStatus { get; set; } = 101;
+
     /// <summary>What <c>/info</c> answers; null answers 404.</summary>
     public JsonNode? Info { get; set; }
 
@@ -286,7 +295,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
                 ("POST", ["networks", var name, "disconnect"]) => Connect(name, request, connect: false),
 
                 ("POST", ["containers", "create"]) => CreateContainer(request),
-                ("GET", ["containers", "json"]) => (200, _containers.Values.Where(c => Matches(request, c.Labels)).Select(c => new { Names = new[] { "/" + c.Name }, c.Labels }).ToList()),
+                ("GET", ["containers", "json"]) => (200, _containers.Values.Where(c => (request.Param("all") is "true" or "1" || c.Running || c.Started) && Matches(request, c.Labels)).Select(c => new { Names = new[] { "/" + c.Name }, c.Labels }).ToList()),
                 ("GET", ["containers", var name, "json"]) => InspectContainer(name),
                 ("POST", ["containers", var name, "start"]) => StartContainer(name),
                 ("POST", ["containers", var name, "stop"]) => StopContainer(name),
@@ -444,8 +453,10 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     private (int, object?) CreateExec(string container, Request request)
     {
         if (!_containers.TryGetValue(container, out var target)) return Failure(404, $"no such container: {container}");
-        // As Podman answers; Docker answers 409.
-        if (target.Stopped) return Failure(500, "can only create exec sessions on running containers: container state improper");
+        if (target.Stopped)
+            return StoppedExecStatus == 409
+                ? Failure(409, $"container {target.Name} is not running")
+                : Failure(StoppedExecStatus, "can only create exec sessions on running containers: container state improper");
         var body = JsonNode.Parse(request.Body)!;
         var id = $"exec-{++_nextExec}";
         var exec = new FakeDockerExec(
@@ -482,7 +493,11 @@ internal sealed class FakeDockerApi : IAsyncDisposable
             return;
         }
 
-        await network.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"));
+        // Docker switches protocols; Podman answers a plain 200 and then streams.
+        var head = HijackStatus == 200
+            ? "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n"
+            : "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n";
+        await network.WriteAsync(Encoding.ASCII.GetBytes(head));
         exec.Attach(network, reader, socket);
         try
         {

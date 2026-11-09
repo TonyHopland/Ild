@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Container;
 using ILD.Core.Services.Implementations.Adapters;
@@ -662,11 +663,12 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await CreateRunAsync();
         var previous = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
         Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", "8080");
+        // Set before the start info is made: it copies ILD's environment when it is created.
+        Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", "8080");
         try
         {
             var psi = Command(WorkingDirectory, "dotnet", "run");
             psi.Environment["ASPNETCORE_HTTP_PORTS"] = "8080";
-            Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", "8080");
 
             using var process = await _host.StartCommandAsync(
                 RunCommand.Prepared(psi, _run, new Dictionary<string, string> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }),
@@ -682,6 +684,60 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", previous);
             Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", null);
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task None_of_ilds_secrets_or_inherited_variables_reach_a_command_in_the_container(bool asAgent)
+    {
+        await CreateRunAsync();
+        const string extra = "ILD_TEST_EXTRA_SECRET";
+        var previousDenylist = Environment.GetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar);
+        Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, extra);
+        Environment.SetEnvironmentVariable("ILD_INHERITED_PROBE", "inherited-probe");
+        try
+        {
+            var psi = Command(WorkingDirectory, "/bin/sh", "-c", "true");
+            var secrets = AgentIsolation.SecretEnvironmentKeys;
+            Assert.Contains(extra, secrets);
+            foreach (var name in secrets) psi.Environment[name] = "secret-" + name;
+            psi.Environment["ILD_CALLER_SET"] = "kept";
+
+            var command = asAgent
+                ? RunCommand.Agent(psi, _run, null, NetworkMode.Whitelist, null)
+                : RunCommand.Prepared(psi, _run);
+            using var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+            var launch = _api.Execs.Last().Command;
+            Assert.Contains("ILD_CALLER_SET=kept", launch);
+            foreach (var name in secrets)
+                Assert.DoesNotContain(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) || c.Contains("secret-" + name, StringComparison.Ordinal));
+            Assert.DoesNotContain(launch, c => c.StartsWith("ILD_INHERITED_PROBE=", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, previousDenylist);
+            Environment.SetEnvironmentVariable("ILD_INHERITED_PROBE", null);
+        }
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
+    [InlineData(NetworkMode.Blacklist)]
+    public async Task An_agent_launch_in_a_proxied_mode_gets_the_proxy_at_ilds_host_in_the_container(NetworkMode mode)
+    {
+        await CreateRunAsync();
+        var providerId = Guid.NewGuid();
+
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Agent(Command(WorkingDirectory, "claude", "-p", "hi"), _run, providerId, mode, null),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", _api.Execs.Last().Command);
     }
 
     // -- Kill leftovers ----------------------------------------------------------
@@ -1702,11 +1758,15 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains(_api.Execs, e => e.Container == Name(_run) && e.Command.Contains("make-it"));
     }
 
-    [Fact]
-    public async Task A_run_container_stopped_by_a_restart_of_the_engine_is_started_again_by_its_next_command()
+    // Podman refuses an exec into a stopped container with a 500, Docker with a 409.
+    [Theory]
+    [InlineData(500)]
+    [InlineData(409)]
+    public async Task A_run_container_stopped_by_a_restart_of_the_engine_is_started_again_by_its_next_command(int refusal)
     {
         await CreateRunAsync();
         _api.Stop(Name(_run));
+        _api.StoppedExecStatus = refusal;
         var ct = TestContext.Current.CancellationToken;
 
         using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), ct);
@@ -1714,6 +1774,43 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.Equal(0, process.ExitCode);
         Assert.False(_api.IsStopped(Name(_run)));
+    }
+
+    // Docker switches the exec connection to the stream with a 101, Podman answers 200.
+    [Theory]
+    [InlineData(101)]
+    [InlineData(200)]
+    public async Task A_streaming_command_reads_its_output_whichever_status_the_engine_starts_the_stream_with(int status)
+    {
+        await CreateRunAsync();
+        _api.HijackStatus = status;
+        _api.OnExec = async e =>
+        {
+            await e.WriteStdoutAsync("streamed\n");
+            await e.ExitAsync(0);
+        };
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), TestContext.Current.CancellationToken);
+        var output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal("streamed\n", output);
+    }
+
+    [Fact]
+    public async Task The_fake_engine_lists_a_stopped_container_only_when_asked_for_all()
+    {
+        await CreateRunAsync();
+        _api.Stop(Name(_run));
+        using var client = new DockerApiClient(_api.SocketPath);
+        var ct = TestContext.Current.CancellationToken;
+
+        var running = (await client.GetAsync("/containers/json", ct))!.AsArray();
+        var all = (await client.GetAsync("/containers/json?all=true", ct))!.AsArray();
+
+        Assert.DoesNotContain(running, c => c!["Names"]![0]!.GetValue<string>() == "/" + Name(_run));
+        Assert.Contains(all, c => c!["Names"]![0]!.GetValue<string>() == "/" + Name(_run));
     }
 
     [Fact]

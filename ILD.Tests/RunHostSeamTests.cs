@@ -97,7 +97,7 @@ public class RunHostSeamTests
 
         var fail = Assert.IsType<NodeOutcome.Fail>(outcomes.Last());
         Assert.DoesNotContain("failed to kill", fail.Reason);
-        Assert.True(Assert.Single(host.Started) is { });
+        Assert.True(Assert.Single(host.Processes).WasKilled);
     }
 
     [Fact]

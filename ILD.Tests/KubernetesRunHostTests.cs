@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.RunHosts.Isolated;
@@ -814,11 +815,12 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         await CreateRunAsync();
         var previous = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
         Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", "8080");
+        // Set before the start info is made: it copies ILD's environment when it is created.
+        Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", "8080");
         try
         {
             var psi = Command(WorkingDirectory, "dotnet", "run");
             psi.Environment["ASPNETCORE_HTTP_PORTS"] = "8080";
-            Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", "8080");
 
             using var process = await _host.StartCommandAsync(
                 RunCommand.Prepared(psi, _run, new Dictionary<string, string> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }),
@@ -834,6 +836,60 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", previous);
             Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", null);
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task None_of_ilds_secrets_or_inherited_variables_reach_a_command_in_the_pod(bool asAgent)
+    {
+        await CreateRunAsync();
+        const string extra = "ILD_TEST_EXTRA_SECRET";
+        var previousDenylist = Environment.GetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar);
+        Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, extra);
+        Environment.SetEnvironmentVariable("ILD_INHERITED_PROBE", "inherited-probe");
+        try
+        {
+            var psi = Command(WorkingDirectory, "/bin/sh", "-c", "true");
+            var secrets = AgentIsolation.SecretEnvironmentKeys;
+            Assert.Contains(extra, secrets);
+            foreach (var name in secrets) psi.Environment[name] = "secret-" + name;
+            psi.Environment["ILD_CALLER_SET"] = "kept";
+
+            var command = asAgent
+                ? RunCommand.Agent(psi, _run, null, NetworkMode.Whitelist, null)
+                : RunCommand.Prepared(psi, _run);
+            using var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+            var launch = _api.Execs.Last().Command;
+            Assert.Contains("ILD_CALLER_SET=kept", launch);
+            foreach (var name in secrets)
+                Assert.DoesNotContain(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) || c.Contains("secret-" + name, StringComparison.Ordinal));
+            Assert.DoesNotContain(launch, c => c.StartsWith("ILD_INHERITED_PROBE=", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, previousDenylist);
+            Environment.SetEnvironmentVariable("ILD_INHERITED_PROBE", null);
+        }
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
+    [InlineData(NetworkMode.Blacklist)]
+    public async Task An_agent_launch_in_a_proxied_mode_gets_the_proxy_at_ilds_host_in_the_pod(NetworkMode mode)
+    {
+        await CreateRunAsync();
+        var providerId = Guid.NewGuid();
+
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Agent(Command(WorkingDirectory, "claude", "-p", "hi"), _run, providerId, mode, null),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", _api.Execs.Last().Command);
     }
 
     // -- Kill leftovers ----------------------------------------------------------
