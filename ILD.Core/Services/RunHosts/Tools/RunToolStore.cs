@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -6,9 +7,41 @@ namespace ILD.Core.Services.RunHosts.Tools;
 /// <summary>What a run's commands get from the store: the directories to put first on <c>PATH</c>, the ones to put
 /// last (<see cref="Fallback"/>), and the variables a toolchain needs (<c>DOTNET_ROOT</c>, <c>JAVA_HOME</c>).</summary>
 public sealed record RunToolEnvironment(
-    IReadOnlyList<string> Path, IReadOnlyDictionary<string, string> Variables, IReadOnlyList<string> Installed, IReadOnlyList<string>? Fallback = null)
+    IReadOnlyList<string> Path, IReadOnlyDictionary<string, string> Variables, IReadOnlyList<string> Installed, IReadOnlyList<string>? Fallback = null,
+    IReadOnlyList<RunToolMount>? Mounts = null)
 {
     public static readonly RunToolEnvironment None = new([], new Dictionary<string, string>(), []);
+
+    /// <summary>The zones of the store the run mounts, read-only: only those it has something in.</summary>
+    public IReadOnlyList<RunToolMount> Zones => Mounts ?? [];
+
+    /// <summary>
+    /// What one run gets from the store's zones: the repository's tools after the core toolchains, both before the agents,
+    /// and the agents' Node last. A variable the first zone names is kept.
+    /// </summary>
+    public static RunToolEnvironment Merge(RunToolEnvironment? agents, RunToolEnvironment? toolchains, RunToolEnvironment? repository)
+    {
+        RunToolEnvironment[] parts = [.. new[] { toolchains, repository, agents }.OfType<RunToolEnvironment>()];
+        var variables = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var part in parts)
+            foreach (var (name, value) in part.Variables)
+                variables.TryAdd(name, value);
+        var first = parts.SelectMany(p => p.Path).Distinct(StringComparer.Ordinal).ToList();
+        return new RunToolEnvironment(
+            first,
+            variables,
+            [.. parts.SelectMany(p => p.Installed)],
+            [.. parts.SelectMany(p => p.Fallback ?? []).Except(first, StringComparer.Ordinal).Distinct(StringComparer.Ordinal)],
+            [.. parts.SelectMany(p => p.Zones)]);
+    }
+
+    /// <summary>The variables a toolchain installer needs to find the tools already installed: their <c>PATH</c> ahead of the image's, and what they set.</summary>
+    public IReadOnlyList<string> ForInstaller()
+        =>
+        [
+            $"PATH={string.Join(':', Path.Append(ImagePath).Distinct(StringComparer.Ordinal))}",
+            .. Variables.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => $"{v.Key}={v.Value}"),
+        ];
 
     /// <summary>The image's own <c>PATH</c>, after everything the store and the run's home add.</summary>
     public const string ImagePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -32,6 +65,47 @@ public sealed record RunToolEnvironment(
     }
 }
 
+/// <summary>The three zones of the store (docs/adr/0035-run-toolchains.md): each is written by an installer that mounts only it.</summary>
+public enum RunToolZone
+{
+    /// <summary>The agents' Node and the agent CLIs: ILD's own picks.</summary>
+    Agents,
+
+    /// <summary>The mise core tools, shared by every repository.</summary>
+    Toolchains,
+
+    /// <summary>Everything else a repository names: one folder of the repository's own for each set of specs.</summary>
+    Repository,
+}
+
+/// <summary>A zone as a run or installer mounts it: <see cref="RepositoryId"/> says which repository's folder for <see cref="RunToolZone.Repository"/>.</summary>
+public sealed record RunToolMount(RunToolZone Zone, Guid RepositoryId = default)
+{
+    /// <summary>Where the zone is mounted. A repository's zone is always at the same path, since a container mounts only one.</summary>
+    public string MountPath => Zone switch
+    {
+        RunToolZone.Agents => RunToolStore.Root,
+        RunToolZone.Toolchains => RunToolStore.ToolchainsRoot,
+        _ => RunToolStore.RepositoryToolsRoot,
+    };
+
+    /// <summary>The name of the volume holding the zone on a container engine, from the agents' volume's.</summary>
+    public string VolumeName(string agentsVolume) => Zone switch
+    {
+        RunToolZone.Agents => agentsVolume,
+        RunToolZone.Toolchains => $"{agentsVolume}-toolchains",
+        _ => $"{agentsVolume}-repo-{RepositoryId:N}",
+    };
+
+    /// <summary>The folder of the store's claim the zone is on Kubernetes, mounted as a <c>subPath</c>.</summary>
+    public string SubPath => Zone switch
+    {
+        RunToolZone.Agents => "ild",
+        RunToolZone.Toolchains => "toolchains",
+        _ => $"repo-tools/{RepositoryId:N}",
+    };
+}
+
 /// <summary>
 /// The shared, read-only store of toolchains and agent CLIs runs mount (docs/adr/0035-run-toolchains.md). ILD fills it
 /// by running <see cref="InstallScript"/> as the runner's user in a short-lived installer that mounts it writable:
@@ -40,24 +114,47 @@ public sealed record RunToolEnvironment(
 /// </summary>
 public static class RunToolStore
 {
-    /// <summary>Where the store is mounted, in the installer and in every run.</summary>
+    /// <summary>Where the agents' zone is mounted, in its installer and in every run.</summary>
     public const string Root = "/opt/ild-tools";
+
+    /// <summary>Where the core toolchains' zone is mounted.</summary>
+    public const string ToolchainsRoot = "/opt/ild-toolchains";
+
+    /// <summary>Where the zone of the run's repository is mounted; its folders are <see cref="RepositoryFolder"/>.</summary>
+    public const string RepositoryToolsRoot = "/opt/ild-repo-tools";
+
+    /// <summary>
+    /// The folder in a repository's zone for these specs: a short hash of the sorted specs, so when a repository changes
+    /// what it names it gets a fresh folder, and what an earlier set installed is not what the new one runs.
+    /// </summary>
+    public static string RepositoryFolder(IReadOnlyList<RunTool> tools, bool ignoreScripts)
+    {
+        var specs = string.Join('\n', tools.Select(t => t.ToString()).Order(StringComparer.Ordinal)) + (ignoreScripts ? "\nignore-scripts" : "");
+        return $"{RepositoryToolsRoot}/{Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(specs)))[..16]}";
+    }
 
     /// <summary>The Node the agent CLIs run on, whatever the project's is.</summary>
     public static readonly RunTool AgentNode = new("node", RunToolDetector.DefaultNodeVersion);
 
-    /// <summary>The installer's environment: mise's data in the store, its own state in the installer's scratch.</summary>
-    public static IReadOnlyList<string> InstallerEnvironment =>
-    [
-        "HOME=/tmp",
-        $"MISE_DATA_DIR={Root}/mise",
-        $"MISE_CACHE_DIR={Root}/cache/mise",
-        "MISE_STATE_DIR=/tmp/mise-state",
-        "MISE_CONFIG_DIR=/tmp/mise-config",
-        "MISE_YES=1",
-        "MISE_DOTNET_ISOLATED=1",
-        $"npm_config_cache={Root}/cache/npm",
-    ];
+    /// <summary>
+    /// The installer's environment: mise's data in <paramref name="root"/>, its own state in the installer's scratch.
+    /// Install scripts (npm's postinstall) are off unless <paramref name="ignoreScripts"/> is false, which only the
+    /// agents' zone's own npm call and a repository that did not opt out in its own zone allow.
+    /// </summary>
+    public static IReadOnlyList<string> InstallerEnvironment(string root, bool ignoreScripts)
+        =>
+        [
+            "HOME=/tmp",
+            $"ILD_TOOLS_ROOT={root}",
+            $"MISE_DATA_DIR={root}/mise",
+            $"MISE_CACHE_DIR={root}/cache/mise",
+            "MISE_STATE_DIR=/tmp/mise-state",
+            "MISE_CONFIG_DIR=/tmp/mise-config",
+            "MISE_YES=1",
+            "MISE_DOTNET_ISOLATED=1",
+            $"npm_config_cache={root}/cache/npm",
+            .. ignoreScripts ? new[] { "npm_config_ignore_scripts=true" } : [],
+        ];
 
     /// <summary>The script's arguments: the agents' Node first, then each toolchain, then each agent.</summary>
     public static IReadOnlyList<string> Arguments(IReadOnlyList<RunTool> tools, IReadOnlyList<RunAgent> agents)
@@ -169,7 +266,7 @@ public static class RunToolStore
               # npm runs only the install scripts its package.json approves: the agent's own, nothing it depends on.
               printf '{"allowScripts":{"%s":true}}' "$package" > "$dir/package.json"
               (cd "$dir" && PATH="$agent_node:$base_path" npm install "$package@$version" --prefix "$dir" \
-                --no-audit --no-fund --no-package-lock) >&2
+                --ignore-scripts=false --no-audit --no-fund --no-package-lock) >&2
               target="$(readlink -f "$dir/node_modules/.bin/$bin")"
               if head -n1 "$target" | grep -q '^#!.*node'; then
                 printf '#!/bin/sh\nexec "%s/node" "%s" "$@"\n' "$agent_node" "$target" > "$dir/wrap/$bin"
@@ -195,8 +292,9 @@ public static class RunToolStore
         """;
 
     /// <summary>The environment the script's output names, toolchains in the order asked, then agents.</summary>
-    public static RunToolEnvironment Parse(string output)
+    public static RunToolEnvironment Parse(string output, string? root = null)
     {
+        var prefixes = root is null ? new[] { Root + "/", ToolchainsRoot + "/", RepositoryToolsRoot + "/" } : [root.TrimEnd('/') + "/"];
         var tools = new List<(string Spec, List<string> Path, Dictionary<string, string> Env, string Version)>();
         var agents = new List<(string Key, List<string> Path, string Version)>();
         var fallback = new List<string>();
@@ -206,7 +304,7 @@ public static class RunToolStore
             try { item = JsonNode.Parse(line); }
             catch (JsonException) { continue; }
             var path = item?["path"] is JsonArray entries
-                ? entries.Select(e => e?.GetValue<string>()).OfType<string>().Where(p => p.StartsWith(Root + "/", StringComparison.Ordinal)).ToList()
+                ? entries.Select(e => e?.GetValue<string>()).OfType<string>().Where(p => prefixes.Any(prefix => p.StartsWith(prefix, StringComparison.Ordinal))).ToList()
                 : [];
             var version = item?["version"]?.GetValue<string>() ?? "?";
             switch (item?["kind"]?.GetValue<string>())

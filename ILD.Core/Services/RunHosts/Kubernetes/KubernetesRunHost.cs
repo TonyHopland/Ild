@@ -27,8 +27,6 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     private readonly ConcurrentDictionary<Guid, string> _podAddresses = new();
 
     // What the store gave each set of toolchains and agents asked for, and the pods exec'd into that are not a run's.
-    private readonly ConcurrentDictionary<string, RunToolEnvironment> _tools = new(StringComparer.Ordinal);
-    private readonly SemaphoreSlim _toolsGate = new(1, 1);
     private readonly SemaphoreSlim _chatGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, string> _execNames = new();
     // The sign-in pods open now, which the sweep leaves alone.
@@ -75,7 +73,7 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         if (await IsHealthyAsync(owner, ct))
             return new RunEnvironment(owner, workingDirectory);
 
-        var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), ct);
+        var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
         var secret = await CreateOwnerAsync(owner, ct);
         try
         {
@@ -195,46 +193,31 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     // -- Toolchains --------------------------------------------------------------
 
     /// <summary>
-    /// What the run's commands get from the toolchain store, installed into it first when it lacks them; null when the
-    /// runs mount no store (toolchains off, or no claim to hold it), so the run has only what the runner image has.
+    /// What the run's commands get from the toolchain store, each zone installed into it first when it lacks them; null
+    /// when the runs mount no store (toolchains off, or no claim to hold it), so the run has only what the runner image has.
     /// </summary>
-    protected override async Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, CancellationToken ct)
+    protected override async Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, Guid? repositoryId, CancellationToken ct)
+        => _options.UsesToolStore ? await ToolZonesAsync(label, plan, Agents(), repositoryId, ct) : null;
+
+    protected override string ToolZoneName(RunToolMount zone) => $"{_options.ToolsClaim}/{zone.SubPath}";
+
+    protected override async Task<T> WithToolInstallerAsync<T>(ToolInstaller toolInstaller, Func<Guid, Task<T>> work, CancellationToken ct)
     {
-        if (!_options.UsesToolStore) return null;
-
-        var agents = Agents();
-        var key = string.Join('\n', RunToolStore.Arguments(plan.Tools, agents));
-        if (key.Length == 0) return RunToolEnvironment.None;
-        if (_tools.TryGetValue(key, out var known)) return known;
-
-        await _toolsGate.WaitAsync(ct);
+        var installer = Guid.NewGuid();
+        var name = $"ild-tools-{installer:N}";
+        _execNames[installer] = name;
         try
         {
-            if (_tools.TryGetValue(key, out known)) return known;
-            Logger?.LogInformation("{Owner} gets {Plan}, and the agents {Agents}, from the toolchain store {Claim}",
-                label, plan, string.Join(", ", agents.Select(a => $"{a.Agent.Key}@{a.Version}")), _options.ToolsClaim);
-
-            var installer = Guid.NewGuid();
-            var name = $"ild-tools-{installer:N}";
-            _execNames[installer] = name;
-            try
-            {
-                await _client.CoreV1.CreateNamespacedPodAsync(_manifests.ToolsInstaller(name), _namespace, cancellationToken: ct);
-                await WaitInstallerReadyAsync(name, ct);
-                var environment = await InstallToolsAsync(installer, plan.Tools, agents, ct);
-                Logger?.LogInformation("{Owner} has {Installed}", label, string.Join(", ", environment.Installed));
-                return _tools[key] = environment;
-            }
-            finally
-            {
-                _execNames.TryRemove(installer, out _);
-                await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(
-                    name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: CancellationToken.None));
-            }
+            await _client.CoreV1.CreateNamespacedPodAsync(
+                _manifests.ToolsInstaller(name, toolInstaller.Writable, toolInstaller.ReadOnly, toolInstaller.Environment), _namespace, cancellationToken: ct);
+            await WaitInstallerReadyAsync(name, ct);
+            return await work(installer);
         }
         finally
         {
-            _toolsGate.Release();
+            _execNames.TryRemove(installer, out _);
+            await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(
+                name, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: CancellationToken.None));
         }
     }
 
@@ -286,9 +269,9 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
 
         try
         {
-            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), ct);
+            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), null, ct);
             await _client.CoreV1.CreateNamespacedPodAsync(
-                _manifests.SignIn(name, SignInHome, tools?.For(SignInHome) ?? [], mountTools: tools is { Path.Count: > 0 }), _namespace, cancellationToken: ct);
+                _manifests.SignIn(name, SignInHome, tools?.For(SignInHome) ?? [], tools?.Zones ?? []), _namespace, cancellationToken: ct);
             await WaitReadyAsync(name, "the provider sign-in", ct);
 
             var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), stdin: true, tty: true, ct);

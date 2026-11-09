@@ -10,6 +10,19 @@ public sealed partial record RunTool(string Name, string Version)
 {
     public override string ToString() => $"{Name}@{Version}";
 
+    /// <summary>The tools mise builds into itself: it installs each from the upstream's own release and runs no code a repository chose.</summary>
+    private static readonly HashSet<string> CoreNames = new(StringComparer.Ordinal)
+    {
+        "bun", "deno", "dotnet", "elixir", "erlang", "go", "java", "node", "python", "ruby", "rust", "swift", "zig",
+    };
+
+    /// <summary>
+    /// Whether this is a mise core tool by its plain name. Every other spec (a backend such as <c>npm:prettier</c>, or a
+    /// registry short name such as <c>prettier</c>, which mise resolves to a backend) installs a package whose install
+    /// scripts a repository chose, so it never goes in the store every run shares (docs/adr/0035-run-toolchains.md).
+    /// </summary>
+    public bool IsCore => CoreNames.Contains(Name);
+
     /// <summary><c>name@version</c>, or a bare name for its newest release; null when either part is not one mise takes.</summary>
     public static RunTool? Parse(string? spec)
     {

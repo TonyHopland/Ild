@@ -136,16 +136,19 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     }
 
     public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null)
-        => BuildPod(Meta(ownerId, owner), KubernetesNames.RunRoot(ownerId), KubernetesNames.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(KubernetesNames.HomeDirectory(ownerId)), tools is { Path.Count: > 0 }, limits: true);
+        => BuildPod(Meta(ownerId, owner), KubernetesNames.RunRoot(ownerId), KubernetesNames.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(KubernetesNames.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true);
+
+    // The zones every chat mounts: the agents' and the shared toolchains, never a repository's own tools.
+    private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];
 
     /// <summary>
-    /// The pod that keeps every chat, long-lived: the claim of the chats at their root, and the store's claim read-only
-    /// whenever there is a store, since a pod's volumes are fixed when it is made and a chat may need toolchains later.
-    /// No CPU or memory limit, as chats had in ILD's own container.
+    /// The pod that keeps every chat, long-lived: the claim of the chats at their root, and the agents' and toolchain
+    /// zones of the store's claim read-only whenever there is a store, since a pod's volumes are fixed when it is made and
+    /// a chat may need toolchains later. No CPU or memory limit, as chats had in ILD's own container.
     /// </summary>
     public V1Pod ChatPod()
     {
-        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore, limits: false);
+        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore ? ChatToolZones : [], limits: false);
         pod.Metadata.Annotations = new Dictionary<string, string> { [KubernetesNames.SpecAnnotation] = SpecOf(pod) };
         return pod;
     }
@@ -160,7 +163,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
     }
 
-    private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, bool mountTools, bool limits)
+    private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, IReadOnlyList<RunToolMount> zones, bool limits)
     {
         return new V1Pod
         {
@@ -224,9 +227,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         [
                             new V1VolumeMount { Name = WorkVolume, MountPath = root },
                             new V1VolumeMount { Name = StateVolume, MountPath = KubernetesNames.StateDirectory },
-                            .. (mountTools && options.ToolsClaim is not null
-                                ? [new V1VolumeMount { Name = ToolsVolume, MountPath = RunToolStore.Root, ReadOnlyProperty = true }]
-                                : Array.Empty<V1VolumeMount>()),
+                            .. ToolMounts(zones, readOnly: true),
                         ],
                     },
                 ],
@@ -234,20 +235,32 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 [
                     new V1Volume { Name = WorkVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = claimName } },
                     new V1Volume { Name = StateVolume, EmptyDir = new V1EmptyDirVolumeSource { Medium = "Memory", SizeLimit = new ResourceQuantity("64Mi") } },
-                    .. (mountTools && options.ToolsClaim is { } claim
-                        ? [new V1Volume { Name = ToolsVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = claim, ReadOnlyProperty = true } }]
-                        : Array.Empty<V1Volume>()),
+                    .. ToolVolumes(zones, readOnly: true),
                 ],
             },
         };
     }
 
+    // Each zone of the store is a folder of its claim (a subPath), so a pod mounts only the zones it names and never the
+    // claim's root, where every repository's folder is.
+    private IEnumerable<V1VolumeMount> ToolMounts(IEnumerable<RunToolMount> zones, bool readOnly)
+        => options.ToolsClaim is null
+            ? []
+            : zones.Select(z => new V1VolumeMount { Name = ToolsVolume, MountPath = z.MountPath, SubPath = z.SubPath, ReadOnlyProperty = readOnly });
+
+    private IEnumerable<V1Volume> ToolVolumes(IReadOnlyList<RunToolMount> zones, bool readOnly)
+        => zones.Count > 0 && options.ToolsClaim is { } claim
+            ? [new V1Volume { Name = ToolsVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = claim, ReadOnlyProperty = readOnly } }]
+            : [];
+
     /// <summary>
-    /// A short-lived pod of the runner image with the store's claim mounted writable, which ILD runs the store's install
-    /// script in. It carries no run label: no run's NetworkPolicy selects it, so it can download, and the sweep never
-    /// takes it for a run's.
+    /// A short-lived pod of the runner image that mounts only the zone being installed writable (and the shared
+    /// toolchains read-only for a repository's), which ILD runs the store's install script in. A first container of ILD's
+    /// own, which runs a fixed <c>mkdir</c> and no repository's code, makes the zone's folder first, since the kubelet
+    /// would make it as root. The pod carries no run label: no run's NetworkPolicy selects it, so it can download, and
+    /// the sweep never takes it for a run's.
     /// </summary>
-    public V1Pod ToolsInstaller(string name) => new()
+    public V1Pod ToolsInstaller(string name, RunToolMount writable, RunToolMount? shared, IEnumerable<string> environment) => new()
     {
         Metadata = new V1ObjectMeta
         {
@@ -274,6 +287,21 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 FsGroup = RunnerUid,
                 SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" },
             },
+            InitContainers =
+            [
+                new V1Container
+                {
+                    Name = "make-zone",
+                    Image = options.RunnerImage,
+                    Command = ["mkdir", "-p", $"/claim/{writable.SubPath}"],
+                    SecurityContext = new V1SecurityContext
+                    {
+                        AllowPrivilegeEscalation = false,
+                        Capabilities = new V1Capabilities { Drop = ["ALL"] },
+                    },
+                    VolumeMounts = [new V1VolumeMount { Name = ToolsVolume, MountPath = "/claim" }],
+                },
+            ],
             Containers =
             [
                 new V1Container
@@ -281,13 +309,17 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                     Name = RunnerContainer,
                     Image = options.RunnerImage,
                     Command = ["/usr/bin/tini", "--", "sleep", "infinity"],
-                    Env = [.. RunToolStore.InstallerEnvironment.Select(EnvVar)],
+                    Env = [.. environment.Select(EnvVar)],
                     SecurityContext = new V1SecurityContext
                     {
                         AllowPrivilegeEscalation = false,
                         Capabilities = new V1Capabilities { Drop = ["ALL"] },
                     },
-                    VolumeMounts = [new V1VolumeMount { Name = ToolsVolume, MountPath = RunToolStore.Root }],
+                    VolumeMounts =
+                    [
+                        .. ToolMounts([writable], readOnly: false),
+                        .. shared is null ? [] : ToolMounts([shared], readOnly: true),
+                    ],
                 },
             ],
             Volumes = [new V1Volume { Name = ToolsVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = options.ToolsClaim } }],
@@ -299,7 +331,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// comes from it, and nothing of a run or chat. It carries no run label, so no run's NetworkPolicy selects it and the
     /// OAuth flow can reach the provider, and the sweep finds it by its role.
     /// </summary>
-    public V1Pod SignIn(string name, string home, IEnumerable<string> toolEnvironment, bool mountTools) => new()
+    public V1Pod SignIn(string name, string home, IEnumerable<string> toolEnvironment, IReadOnlyList<RunToolMount> zones) => new()
     {
         Metadata = new V1ObjectMeta
         {
@@ -339,14 +371,10 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         AllowPrivilegeEscalation = false,
                         Capabilities = new V1Capabilities { Drop = ["ALL"] },
                     },
-                    VolumeMounts = mountTools && options.ToolsClaim is not null
-                        ? [new V1VolumeMount { Name = ToolsVolume, MountPath = RunToolStore.Root, ReadOnlyProperty = true }]
-                        : [],
+                    VolumeMounts = [.. ToolMounts(zones, readOnly: true)],
                 },
             ],
-            Volumes = mountTools && options.ToolsClaim is { } claim
-                ? [new V1Volume { Name = ToolsVolume, PersistentVolumeClaim = new V1PersistentVolumeClaimVolumeSource { ClaimName = claim, ReadOnlyProperty = true } }]
-                : [],
+            Volumes = [.. ToolVolumes(zones, readOnly: true)],
         },
     };
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A repository can no longer plant code that every other run executes through the shared toolchain store.** A tool that is not a mise core tool installs into a folder only that repository's runs mount, and install scripts are off in the shared parts. The first run after upgrading installs its toolchains again.
+
 ### Added
 
 - **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets. Settings warns when the container socket is not rootless or cannot be reached.

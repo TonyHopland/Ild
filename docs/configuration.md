@@ -107,11 +107,19 @@ What a run gets: a named volume, an `internal` network that reaches only ILD, an
 
 ### Run toolchains
 
-In a container or a pod, a run's image has no language toolchain and no coding agent. A run gets the toolchains its repository needs, and the agents ILD has installed, from a **toolchain store** it mounts read-only at `/opt/ild-tools` ([ADR-0035](adr/0035-run-toolchains.md)).
+In a container or a pod, a run's image has no language toolchain and no coding agent. A run gets the toolchains its repository needs, and the agents ILD has installed, from a **toolchain store** it mounts read-only ([ADR-0035](adr/0035-run-toolchains.md)). The store has three zones, and an installer writes only the zone it installs into:
+
+| Zone | Mounted at | Holds | Docker / Podman volume | Kubernetes `subPath` of the claim |
+| --- | --- | --- | --- | --- |
+| Agents | `/opt/ild-tools` | The agents' Node and the agent CLIs: ILD's own picks | `ild-tools` | `ild` |
+| Toolchains | `/opt/ild-toolchains` | The mise core tools (`node`, `python`, `dotnet`, `go`, `java`, `ruby`, `rust`, `bun`, `deno`, `elixir`, `erlang`, `swift`, `zig`), shared by every repository | `ild-tools-toolchains` | `toolchains` |
+| Repository tools | `/opt/ild-repo-tools` | Every other tool a repository names (`npm:prettier`, `cargo:…`, `pipx:…`, `aqua:…`, `prettier`), in a folder for its set of specs | `ild-tools-repo-<repository id>` | `repo-tools/<repository id>` |
+
+  A run mounts the zones it has something in, and only its own repository's. A **chat** shares one container, so it gets the agents and toolchains zones and no repository tools; ILD logs the ones it skips.
 
 - **What a run needs** is read from ILD's checkout of the base branch, in this order:
   1. `run.tools` in [`ild.config.json`](#ildconfigjson)
-  2. the project's `mise.toml` or `.tool-versions`
+  2. the project's `mise.toml` or `.tool-versions` (any mise backend is accepted; a tool that is not a core one goes in the repository's own zone)
   3. marker files at the top of the repository or one or two folders down:
 
 | Marker | Toolchain | Version from |
@@ -126,9 +134,11 @@ In a container or a pod, a run's image has no language toolchain and no coding a
 
 - **Agents** are the CLIs ILD has a current install of, at that install's version: what **Settings** shows, after the update cooldown and any rollback. Each one starts on a Node of its own, whatever Node the project pins. That Node is also last on the run's `PATH`, so `npx` starts the [custom MCP servers](#custom-mcp-servers-json) a provider names in every run, while a Node project's own Node comes first.
 - **Chrome** is in the runner image, at `/opt/google/chrome/chrome`, for the chrome-devtools MCP server.
-- **The first run that needs a version** installs it into the store, in a short-lived installer of the runner image that has the engine's default network (a pod with no NetworkPolicy on Kubernetes). It downloads from the toolchains' own sites, GitHub and the npm registry. Later runs that need the same start without it. If an install fails, the run fails with the installer's last lines.
+- **The first run that needs a version** installs it into the store, in a short-lived installer of the runner image that mounts only the zone it writes (and the toolchains read-only, for a repository's tools) and has the engine's default network (a pod with no NetworkPolicy on Kubernetes). It downloads from the toolchains' own sites, GitHub and the npm registry. Later runs that need the same start without it. If an install fails, the run fails with the installer's last lines.
+- **Install scripts** (npm's `postinstall`, cargo's `build.rs`) are off in the agents and toolchains zones. In a repository's own zone they run, since that zone is only ever mounted by that repository's runs; `"run": { "ignoreScripts": true }` in `ild.config.json` turns them off there too. A change to a repository's tool specs installs into a fresh folder, so what an earlier set installed is not what the new one runs.
+- **Upgrading** from a version with one store installs everything once more into the new zones; the old store contents are unused and can be removed.
 - **`npm install -g`** and `cargo install` go into the run's home (`$HOME/.local`), which is on `PATH`. When the run's Node has corepack, `pnpm` and `yarn` are its shims, at the version the project's `packageManager` pins.
-- **The store is never pruned.** Remove the volume (`docker volume rm ild-tools`) or empty the claim to start over.
+- **The store is never pruned.** Remove the volumes (`docker volume rm ild-tools ild-tools-toolchains` and the `ild-tools-repo-…` ones) or empty the claim to start over.
 
 ## Agent telemetry
 
@@ -325,6 +335,7 @@ Place an `ild.config.json` file in the root of a repository to enable QA preview
 | `preview.profiles`       | object | Map of profile name → profile definition                       |
 | `run.tools`              | array or object | The [toolchains](#run-toolchains) a loop run gets in a container or pod, as mise names them: `["node@22", "dotnet@10", "pnpm@9"]` or `{"node": "22"}`. Each wins over what ILD finds for the same tool |
 | `run.detect`             | boolean | Default `true`. `false`: the run gets only `run.tools` |
+| `run.ignoreScripts`      | boolean | Default `false`. `true`: tools in the repository's own [toolchain zone](#run-toolchains) (`npm:…`, `cargo:…`) install with their install scripts off. They are always off for the shared toolchains |
 
 ILD reads `run` from its checkout of the repository's base branch when a run starts, so a change the agent makes to it on its branch applies only once it is merged.
 
