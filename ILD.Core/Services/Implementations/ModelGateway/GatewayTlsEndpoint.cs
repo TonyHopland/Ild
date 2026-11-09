@@ -13,7 +13,6 @@ namespace ILD.Core.Services.Implementations.ModelGateway;
 public sealed class GatewayTlsEndpoint
 {
     public const string PortVariable = "ILD_GATEWAY_TLS_PORT";
-    public const string CaFileVariable = "ILD_GATEWAY_CA_FILE";
     public const int DefaultPort = 8442;
     private static readonly TimeSpan RenewWithin = TimeSpan.FromDays(30);
 
