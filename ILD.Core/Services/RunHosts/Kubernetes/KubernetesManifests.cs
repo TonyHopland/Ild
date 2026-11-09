@@ -166,6 +166,8 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         var ports = new List<V1NetworkPolicyPort> { new() { Protocol = "TCP", Port = options.IldPort } };
         if (options.EgressProxyPort > 0)
             ports.Add(new V1NetworkPolicyPort { Protocol = "TCP", Port = options.EgressProxyPort });
+        if (options.GatewayTlsPort > 0)
+            ports.Add(new V1NetworkPolicyPort { Protocol = "TCP", Port = options.GatewayTlsPort });
 
         return new V1NetworkPolicy
         {

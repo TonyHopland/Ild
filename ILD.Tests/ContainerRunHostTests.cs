@@ -165,6 +165,25 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_copilot_launch_reaches_the_listener_where_the_container_reaches_ild_and_trusts_the_staged_certificate()
+    {
+        await CreateRunAsync();
+        var readRoot = Path.Combine(_scratch, "agent-read");
+        var ca = Path.Combine(_scratch, "gateway-tls.pem");
+        File.WriteAllText(ca, "-----BEGIN CERTIFICATE-----");
+        var written = new Dictionary<string, string>();
+        var host = AgentReadHost(readRoot, written);
+
+        await CopilotLaunch.RunAsync(host, _run, WorkingDirectory, readRoot, ca, "http://ild.example:8080");
+
+        var launch = _api.Execs.Last().Command;
+        Assert.Contains("GH_HOST=ild.example:8442", launch);
+        var staged = Assert.Single(launch, c => c.StartsWith("NODE_EXTRA_CA_CERTS=", StringComparison.Ordinal))["NODE_EXTRA_CA_CERTS=".Length..];
+        Assert.StartsWith(RunPaths.AgentReadDirectory + "/", staged);
+        Assert.Equal("-----BEGIN CERTIFICATE-----", written[staged]);
+    }
+
+    [Fact]
     public async Task Paths_in_a_prompt_are_not_copied_into_the_container()
     {
         await CreateRunAsync();

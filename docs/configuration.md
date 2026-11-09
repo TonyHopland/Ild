@@ -30,6 +30,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_MAX_ATTACHMENTS_TOTAL_MB`               | Largest total of attachments one work item may hold, in MB (default `250`; set on both containers)                         |
 | `ILD_AGENT_UPDATE_COOLDOWN_DAYS`             | Days a coding-agent release must have been published before it is installed automatically (default `1`; see below)        |
 | `ILD_NETWORK_PROXY_PORT`                     | Port of the agent egress proxy; ILD's image sets `3128`. Under `dotnet run`, unset means no proxy ([network limits](#agent-network-limits)) |
+| `ILD_GATEWAY_TLS_PORT`                       | Port of the model gateway's HTTPS listener, which the Copilot CLI needs (default `8442`; `0` switches it off, and Copilot runs then fail). Under `dotnet run` it listens on loopback; in a container or pod it listens on all interfaces, with a certificate that names the host of `ILD_API_URL`, since runs reach it there |
 | `DO_NOT_TRACK`                               | Asks the agent CLIs not to send telemetry; compose defaults it to `1`. Opting back in has caveats (see below)              |
 | `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                             |
 | `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                                      |
@@ -71,6 +72,7 @@ Nothing in ILD is specific to a CNI or a storage backend. The cluster needs Kube
 | `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT` (older names `ILD_K8S_CPU_LIMIT` / `ILD_K8S_MEMORY_LIMIT`) | What a pod may use (default `4` / `8Gi`); `0` means no limit. Requests below limits make the pods Burstable. Run concurrency is the cap that protects the nodes from memory overload |
 | `ILD_K8S_ILD_POD_SELECTOR` | Comma-separated `key=value` labels of ILD's own pods (default `app.kubernetes.io/name=ild`). The run's network policy lets the pod reach only pods with these labels, and be reached only by them |
 | `ILD_NETWORK_PROXY_PORT` | As elsewhere. On Kubernetes the egress proxy listens on all interfaces, and the pod's network policy allows that port |
+| `ILD_GATEWAY_TLS_PORT` | As elsewhere. The Copilot listener's port is allowed in the pod's network policy, and ILD's Service must expose it |
 | `ILD_K8S_SWEEP_INTERVAL_MINUTES` | How often the sweeper removes the objects of finished or missing runs (default `10`); it also runs once at startup |
 | `ILD_CHAT_IDLE_TIMEOUT_MINUTES` | Minutes the shared chat pod may sit idle before the sweep deletes it (default `30`; `0` never deletes it). Idle means no chat command or agent turn running, no chat preview or preview service running, and no repository being cloned into a chat. The claim and network policy stay; the next chat makes the pod again. Run pods are never touched |
 | `ILD_K8S_READY_TIMEOUT_SECONDS` | How long a starting run waits for its pod to be Ready, image pull included (default `300`) |
@@ -102,6 +104,7 @@ When ILD's image runs outside Kubernetes, each **loop run** gets a container, a 
 | `ILD_CONTAINER_INSTANCE` | Names this ILD install, default `default`. Every object is labelled `ild/instance=<it>` and the sweeper only touches its own, so two installs can share an engine if they set different names |
 | `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT` | What a run's container may use (default `4` / `8Gi`); Kubernetes quantities such as `500m`, `1.5`, `512Mi`. `0` means no limit, for a rootless engine where the cgroup controller is not delegated. The Kubernetes host reads the same two settings, and its older `ILD_K8S_CPU_LIMIT` / `ILD_K8S_MEMORY_LIMIT` when they are unset |
 | `ILD_NETWORK_PROXY_PORT` | As elsewhere. The egress proxy listens on all of ILD's container's interfaces, since the run reaches it over its network |
+| `ILD_GATEWAY_TLS_PORT` | As elsewhere. The Copilot listener binds all of ILD's container's interfaces, so the run reaches it over its network |
 | `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES` | How often the sweeper removes the objects of finished or missing runs (default `10`); it also runs once at startup |
 | `ILD_CHAT_IDLE_TIMEOUT_MINUTES` | Minutes the shared chat container may sit idle before the sweep removes it (default `30`; `0` never removes it). Idle means no chat command or agent turn running, no chat preview or preview service running, and no repository being cloned into a chat. The volume and network stay; the next chat makes the container again. Run containers are never touched |
 | `ILD_CONTAINER_READY_TIMEOUT_SECONDS` | How long a starting run waits for its container to run (default `120`) |
@@ -906,7 +909,7 @@ connect directly the same way.
 for, so `localhost`, a name that resolves to `127.0.0.1`, `::1`, an IPv4-mapped
 loopback, `0.0.0.0` and `::` are refused in every mode, whatever the lists say and
 for a forward too: ILD's own loopback holds its forward listeners, its preview
-listeners and the gateway's HTTPS listener.
+listeners. (The gateway's HTTPS listener answers on ILD's run-facing address instead.)
 
 **Protected destinations.** Settings → Network lists ILD's own infrastructure,
 each switched on by default: ILD's own addresses, ILD's database (the host of its

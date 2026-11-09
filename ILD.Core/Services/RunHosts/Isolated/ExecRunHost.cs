@@ -252,7 +252,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return RunFacingHost(uri.Host) == uri.Host ? ildUrl : new UriBuilder(uri) { Host = RunFacingHost(uri.Host) }.Uri.ToString().TrimEnd('/');
     }
 
-    internal static string RunFacingHost(string host)
+    public static string RunFacingHost(string host)
         => ILD.Core.Services.Interfaces.PreviewProxyBase.AgentHost.Equals(host, StringComparison.OrdinalIgnoreCase)
             || ILD.Core.Services.Interfaces.PreviewProxyBase.AgentHost.EndsWith("." + host, StringComparison.OrdinalIgnoreCase)
             ? host + "-api"

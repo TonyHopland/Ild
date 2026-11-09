@@ -75,20 +75,41 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     /// <summary>
     /// Points Copilot at the gateway's HTTPS listener, the only endpoint it accepts for GitHub, and trusts
     /// that listener's certificate. The token has the shape of a GitHub OAuth token, which the CLI checks
-    /// before it makes a request; it is the run's placeholder, not a credential. False without a listener.
+    /// before it makes a request; it is the run's placeholder, not a credential. The listener is reached at the
+    /// host the gateway lease names, the address the run reaches ILD on, and <paramref name="caCopy"/> is this
+    /// launch's own copy of the certificate, which the run host stages into the run. False without a listener.
     /// </summary>
-    public static bool TryApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, IProcessEnvironment environment)
+    public static bool TryApplyGateway(ProcessStartInfo psi, ModelGatewayLease gateway, IProcessEnvironment environment, string caCopy)
     {
         var port = environment.Get(GatewayTlsEndpoint.PortVariable);
-        var caFile = environment.Get(GatewayTlsEndpoint.CaFileVariable);
-        if (string.IsNullOrEmpty(port) || string.IsNullOrEmpty(caFile)) return false;
-        psi.Environment["GH_HOST"] = $"127.0.0.1:{port}";
+        if (string.IsNullOrEmpty(port) || string.IsNullOrEmpty(caCopy)
+            || !Uri.TryCreate(gateway.BaseUrl, UriKind.Absolute, out var ild)) return false;
+        psi.Environment["GH_HOST"] = $"{ild.Host}:{port}";
         psi.Environment["COPILOT_GITHUB_TOKEN"] = gateway.GitHubPlaceholder;
-        psi.Environment["NODE_EXTRA_CA_CERTS"] = caFile;
+        psi.Environment["NODE_EXTRA_CA_CERTS"] = caCopy;
         psi.Environment.Remove("GH_TOKEN");
         psi.Environment.Remove("GITHUB_TOKEN");
         psi.ArgumentList.Insert(0, "--no-auto-update");
         return true;
+    }
+
+    /// <summary>
+    /// A copy of the listener's certificate for this launch, in the agent read root under a name that carries the
+    /// owner, so a run host that cannot share the file stages it into the run. Null without a certificate file.
+    /// </summary>
+    private string? TryWriteCaCopy(AgentExecutionContext ctx)
+    {
+        var source = EnvironmentVariables.Get(GatewayTlsEndpoint.CaFileVariable);
+        if (string.IsNullOrEmpty(source)) return null;
+        try
+        {
+            return IldMcpServer.TryWriteFile("ild-copilot-ca", OwnerOf(ctx), File.ReadAllBytes(source), ".pem", _logger, EnvironmentVariables);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not read the gateway certificate {Path}", source);
+            return null;
+        }
     }
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
@@ -100,6 +121,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 "[copilot-error] the Copilot CLI cannot run without its tools, so it cannot take a call that must have none.");
 
         string? mcpConfigPath = null;
+        string? caCopy = null;
         try
         {
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
@@ -119,11 +141,12 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
                 if (gateway is not null)
                 {
-                    if (!TryApplyGateway(psi, gateway, EnvironmentVariables))
+                    caCopy = TryWriteCaCopy(ctx);
+                    if (caCopy is null || !TryApplyGateway(psi, gateway, EnvironmentVariables, caCopy))
                         return NodeExecutionResult.Fail(
                             $"[copilot-error] the model gateway has no HTTPS listener, which the Copilot CLI needs: set {GatewayTlsEndpoint.PortVariable} to a free loopback port.");
                 }
-                proc = await StartAgentProcessAsync(psi, ctx, [mcpConfigPath]);
+                proc = await StartAgentProcessAsync(psi, ctx, [mcpConfigPath, caCopy]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -189,6 +212,10 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             if (!string.IsNullOrEmpty(mcpConfigPath))
             {
                 try { File.Delete(mcpConfigPath); } catch { /* best effort */ }
+            }
+            if (!string.IsNullOrEmpty(caCopy))
+            {
+                try { File.Delete(caCopy); } catch { /* best effort */ }
             }
         }
     }

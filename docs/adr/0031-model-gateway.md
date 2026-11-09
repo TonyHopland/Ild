@@ -17,7 +17,7 @@ An agent CLI used to run with the provider's login on disk where the agent uid c
 |---|---|---|
 | Claude Code | The long-lived token `claude setup-token` prints, saved encrypted on the provider (or an API key). Until one is saved, the stored login's access token while it is valid. | `ANTHROPIC_BASE_URL`, a placeholder `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
 | Codex (ChatGPT) | The stored login's access token and account. ILD refreshes it itself (see below). | A provider of its own with `supports_websockets=false`, so Codex uses streamed HTTP; a placeholder `auth.json` in a per-run `CODEX_HOME` |
-| Copilot | The GitHub token of the stored login | `GH_HOST` set to the gateway's loopback HTTPS listener, a `gho_`-shaped placeholder, `NODE_EXTRA_CA_CERTS`, `--no-auto-update` |
+| Copilot | The GitHub token of the stored login | `GH_HOST` set to the gateway's HTTPS listener at the host runs reach ILD on, a `gho_`-shaped placeholder, `NODE_EXTRA_CA_CERTS` pointing at a per-launch copy of the certificate staged into the run, `--no-auto-update` |
 | OpenCode, Pi (base URL and key) | The provider's key | The gateway URL as `baseURL`, a placeholder key |
 | Pi (built-in providers and its own `/login`) | Not covered, so a **read-only copy** | A per-run agent directory holding a `0400` copy of Pi's `auth.json` |
 
@@ -36,6 +36,6 @@ The matrix behind these rows, with what was run live, is `docs/run-hosts/provide
 - **A leaked placeholder is worth nothing after its execution ends.** During it, an agent can ask the gateway for the provider's model, which it could always do; it cannot take the credential away, and the gateway answers only the routes above (for Copilot, only `copilot_internal/` and `*.githubcopilot.com` endpoints).
 - **Gateway traffic is not accounted.** Cost and usage still come from each CLI's own output. Counting them from gateway traffic is a follow-up.
 - **A gateway outage looks like a hang.** Codex in particular reports "Reconnecting…" rather than an error.
-- **The Copilot listener needs a port.** `ILD_GATEWAY_TLS_PORT` (default 8442, loopback only); `0` switches it off, and Copilot runs then fail with a message that says so.
+- **The Copilot listener needs a port.** `ILD_GATEWAY_TLS_PORT` (default 8442). It is bound where runs reach ILD, by the rule of the egress proxy's bind address (loopback under `dotnet run`, all interfaces in a container or pod), and its certificate names loopback and the host of `ILD_API_URL`, replaced at startup when a name is missing. On Kubernetes the run's network policy admits the port and ILD's Service must expose it. `0` switches it off, and Copilot runs then fail with a message that says so.
 - **Network mode Off launches bypass the proxy**, so the host block does not apply to them; they hold only a placeholder either way.
 - **Logins made before this change still work** for Codex, Copilot and OpenCode/Pi keys, which are read from the store or provider. Claude needs its one-time token.

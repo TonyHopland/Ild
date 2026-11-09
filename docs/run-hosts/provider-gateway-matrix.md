@@ -14,7 +14,7 @@ Everything below was run live in the agent pod on 2026-11-06. No ILD code change
 | Claude Code 2.1.318 | API key | **Gateway works** | `ANTHROPIC_BASE_URL` + placeholder `ANTHROPIC_API_KEY` |
 | Codex 0.167.0 | ChatGPT subscription | **Gateway works**, with a custom `model_providers` entry | `-c chatgpt_base_url=…` + `-c model_providers.<id>={…}` + placeholder `auth.json` |
 | Codex 0.167.0 | API key | **Gateway works** | `model_providers.<id>` with `base_url` + `env_key`, placeholder `OPENAI_API_KEY` |
-| Copilot 1.0.105 | GitHub login | **Gateway works**, but HTTPS-only and the gateway must rewrite one JSON response | `GH_HOST=<gateway host:port>` + placeholder `COPILOT_GITHUB_TOKEN` + `NODE_EXTRA_CA_CERTS` |
+| Copilot 1.0.105 | GitHub login | **Gateway works**, but HTTPS-only and the gateway must rewrite one JSON response | `GH_HOST=<ILD's run-facing host:HTTPS port>` + placeholder `COPILOT_GITHUB_TOKEN` + `NODE_EXTRA_CA_CERTS` (a copy of the certificate staged into the run) |
 | OpenCode 1.19.5 | Base URL + key | **Gateway works** | `provider.<id>.options.baseURL` / `apiKey` (what the adapter already writes) |
 | Pi 1.5.0 | Base URL + key | **Gateway works** | `models.json` `baseUrl` / `apiKey` (what the adapter already writes) |
 

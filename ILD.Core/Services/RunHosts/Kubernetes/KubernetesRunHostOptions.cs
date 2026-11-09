@@ -16,6 +16,7 @@ public sealed record KubernetesRunHostOptions
     public const string MemoryLimitSetting = "ILD_K8S_MEMORY_LIMIT";
     public const string IldPodSelectorSetting = "ILD_K8S_ILD_POD_SELECTOR";
     public const string EgressProxyPortSetting = "ILD_NETWORK_PROXY_PORT";
+    public const string GatewayTlsPortSetting = "ILD_GATEWAY_TLS_PORT";
     public const string SweepIntervalSetting = "ILD_K8S_SWEEP_INTERVAL_MINUTES";
     public const string ReadyTimeoutSetting = "ILD_K8S_READY_TIMEOUT_SECONDS";
     public const string KubeconfigSetting = "ILD_K8S_KUBECONFIG";
@@ -51,6 +52,9 @@ public sealed record KubernetesRunHostOptions
 
     /// <summary>The port of ILD's egress proxy; 0 when there is none.</summary>
     public int EgressProxyPort { get; init; }
+
+    /// <summary>The port of the model gateway's HTTPS listener, which the Copilot CLI is pointed at; 0 when there is none.</summary>
+    public int GatewayTlsPort { get; init; } = ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.DefaultPort;
 
     /// <summary>The git author and committer identity ILD was given (<c>GIT_AUTHOR_NAME</c> and the like), which the pod has no <c>.gitconfig</c> to take from.</summary>
     public IReadOnlyDictionary<string, string> GitIdentity { get; init; } = new Dictionary<string, string>();
@@ -106,6 +110,7 @@ public sealed record KubernetesRunHostOptions
             IldPodSelector = Value(IldPodSelectorSetting) is { } selector ? ParseSelector(selector) : defaults.IldPodSelector,
             IldPort = uri.Port,
             EgressProxyPort = int.TryParse(Value(EgressProxyPortSetting), out var proxyPort) ? proxyPort : 0,
+            GatewayTlsPort = ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortFrom(Value(GatewayTlsPortSetting)) ?? 0,
             SweepInterval = TimeSpan.FromMinutes(PositiveInt(Value(SweepIntervalSetting), SweepIntervalSetting) ?? 10),
             ReadyTimeout = TimeSpan.FromSeconds(PositiveInt(Value(ReadyTimeoutSetting), ReadyTimeoutSetting) ?? 300),
             GitIdentity = GitIdentitySettings.Select(name => (name, value: Value(name))).Where(e => e.value is not null).ToDictionary(e => e.name, e => e.value!),

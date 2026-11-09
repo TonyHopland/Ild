@@ -16,7 +16,8 @@ namespace ILD.Core.Services.Implementations;
 ///   <item>the MCP configs handed to Copilot and Claude Code, and the ILD MCP
 ///   settings and custom-server launch files handed to Codex,
 ///   <c>AgentReadRoot/ild-mcp-config/*-&lt;id&gt;-*.json</c>, which a turn also
-///   deletes when its CLI exits;</item>
+///   deletes when its CLI exits, and the copy of the gateway certificate Copilot trusts,
+///   <c>ild-copilot-ca-&lt;id&gt;-*.pem</c> beside them;</item>
 ///   <item>the package feed npm configs, <c>AgentReadRoot/ild-package-feeds/*.npmrc</c>,
 ///   which their launch or preview also deletes when it ends; only a run's own
 ///   (<c>&lt;id&gt;-*.npmrc</c>) go with the run;</item>
