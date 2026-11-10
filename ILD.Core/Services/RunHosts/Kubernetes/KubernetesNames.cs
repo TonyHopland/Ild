@@ -17,10 +17,13 @@ public static class KubernetesNames
     /// <summary>The role of a provider sign-in pod, which the sweep removes once ILD no longer has it open.</summary>
     public const string SignInRole = "signin";
 
+    /// <summary>The label that names one sign-in pod, so its NetworkPolicy selects that pod alone.</summary>
+    public const string SignInLabel = "ild/signin";
+
     /// <summary>The name of a provider sign-in pod.</summary>
     public static string SignInName(Guid id) => $"ild-signin-{id:N}";
 
-    /// <summary>The name of a run's Secret, volume claim, network policy and pod.</summary>
+    /// <summary>The name of a run's owner ConfigMap, volume claim, network policy and pod.</summary>
     public static string ObjectName(Guid ownerId) => $"ild-run-{ownerId:N}";
 
     /// <summary>The name of the chat pod, its volume claim and its network policy: one of each for the instance.</summary>

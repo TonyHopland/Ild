@@ -48,7 +48,7 @@ public sealed class KubernetesRunHostFollowUpTests
         var failed = Guid.NewGuid();
         var ended = Guid.NewGuid();
         foreach (var run in new[] { failed, ended })
-            api.Seed("secrets", KubernetesNames.ObjectName(run), "main", run);
+            api.Seed("configmaps", KubernetesNames.ObjectName(run), "main", run);
         var options = KubernetesRunHostOptions.From(n => n switch { "ILD_API_URL" => "http://ild:8080", "ILD_K8S_RUNNER_IMAGE" => "i", "ILD_K8S_INSTANCE" => "main", _ => null });
         var host = new KubernetesRunHost(api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner())
         {

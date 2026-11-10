@@ -254,7 +254,7 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
 ### Setup
 
 1. Pick a namespace for the run objects. The examples use `ild-runs`, and ILD in `ild`.
-2. Apply the manifests in [`docs/kubernetes`](kubernetes/): the ServiceAccount, the Role with its RoleBinding (pods, pods/exec, volume claims, Secrets and network policies in the run namespace, and nothing else), and optionally the ClusterRole that lets ILD read StorageClasses for the reclaim-policy warning.
+2. Apply the manifests in [`docs/kubernetes`](kubernetes/): the ServiceAccount, the Role with its RoleBinding (pods, pods/exec, volume claims, ConfigMaps and network policies in the run namespace, and nothing else), the run namespace's `pod-security.kubernetes.io/enforce: restricted` label (in `role.yaml`), the [default-deny policy](#default-deny-in-the-run-namespace), and optionally the ClusterRole that lets ILD read StorageClasses for the reclaim-policy warning.
 3. Set `serviceAccountName: ild` on the ILD Deployment, and:
 
    ```yaml
@@ -265,9 +265,9 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
      - { name: ILD_K8S_TOOLS_CLAIM, value: ild-tools }
    ```
 
-   The runner image is published with the same tags as the ILD image; pin the version ILD runs. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have.
+   The runner image is published with the same tags as the ILD image; pin the version ILD runs. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have (ILD refuses to start on an empty or malformed selector, since an empty one selects every pod). The runs' policies admit ILD's pods only from ILD's own namespace: ILD reads it from its service account, and `ILD_K8S_ILD_NAMESPACE` sets it (required with `ILD_K8S_KUBECONFIG`).
 
-   `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains), in folders (`ild`, `toolchains`, `repo-tools/<repository id>`) that pods mount as `subPath`s, so a run never mounts the claim's root: ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs egress only to ILD's egress proxy port: ILD gives each such pod a NetworkPolicy for that, and a namespace that denies egress by default needs no rule for it. The provider sign-in terminal's short-lived pod, labelled `ild/role=signin`, still needs to reach the internet, so allow that label egress if the namespace denies it by default. Without a ReadWriteMany class, build a runner image of your own `FROM ghcr.io/tonyhopland/ild-runner` with the toolchains and agent CLIs your runs need, and set `ILD_RUN_TOOLCHAINS=off`.
+   `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains), in folders (`ild`, `toolchains`, `repo-tools/<repository id>`) that pods mount as `subPath`s, so a run never mounts the claim's root: ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs egress only to ILD's egress proxy port: ILD gives each such pod a NetworkPolicy for that, and a namespace that denies egress by default needs no rule for it. The provider sign-in terminal's short-lived pod, labelled `ild/role=signin`, needs to reach the internet for the OAuth flow: ILD gives it a NetworkPolicy that allows all egress and no ingress, made before the pod and deleted after it. Without a ReadWriteMany class, build a runner image of your own `FROM ghcr.io/tonyhopland/ild-runner` with the toolchains and agent CLIs your runs need, and set `ILD_RUN_TOOLCHAINS=off`.
 
 4. The preview proxy forwards to the pod's address, so ILD must be able to reach pod IPs, as any pod in the cluster can.
 
@@ -275,13 +275,19 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
 
 `ILD_K8S_STORAGE_CLASS` and `ILD_K8S_STORAGE_SIZE` decide the volume of each run; unset, the cluster's default class is used. For run scratch, a class that keeps one copy next to the pod is enough, since a run's code is also on the remote. On Longhorn, [`storageclass-longhorn-example.yaml`](kubernetes/storageclass-longhorn-example.yaml) is such a class (`numberOfReplicas: 1`, `dataLocality: best-effort`). It is an operator's choice; ILD has no Longhorn-specific behaviour.
 
+### Default deny in the run namespace
+
+[`default-deny-networkpolicy.yaml`](kubernetes/default-deny-networkpolicy.yaml) denies all ingress and egress for pods labelled `app.kubernetes.io/managed-by=ild` in the run namespace. ILD's per-pod policies open what each pod needs on top of it. Without it a pod that has no policy (one started before the network plugin has applied its policy, or after it is deleted) is fully open. ILD warns in **Settings > General** when no such policy is in the namespace. ILD also deletes a pod before its policies, so a pod that is slow to stop keeps its restrictions; one still there after `ILD_K8S_READY_TIMEOUT_SECONDS` is deleted with a grace period of 0.
+
+The `ild-runs` namespace in `role.yaml` carries `pod-security.kubernetes.io/enforce: restricted`, which every pod ILD makes meets. Keep the label on a namespace of your own: ILD's Role can create pods, and without it a compromised ILD could make a privileged one.
+
 ### Who may reach ILD's proxy
 
 Nothing restricts ingress to ILD's pod by default, so any pod in the cluster could use its egress proxy as a relay. [`ild-ingress-networkpolicy.yaml`](kubernetes/ild-ingress-networkpolicy.yaml) admits only the pods ILD makes (runs, chats, tools) on the proxy port and leaves the web and gateway port open to its usual callers; adjust its namespaces and ports first.
 
 ### Cleanup
 
-Deleting a run's Secret deletes its pod, volume claim and network policy through their owner references. A sweeper runs at startup and every `ILD_K8S_SWEEP_INTERVAL_MINUTES`, and deletes the labelled objects of runs that are finished or no longer exist; it only touches objects whose `ild/instance` is its own. An ILD that is killed mid-run therefore leaves nothing behind after its next start.
+ILD deletes a run's pod, waits until it is gone, and only then deletes its owner ConfigMap, whose deletion removes the volume claim and network policies through their owner references. A sweeper runs at startup and every `ILD_K8S_SWEEP_INTERVAL_MINUTES`, and deletes the labelled objects of runs that are finished or no longer exist; it only touches objects whose `ild/instance` is its own. An ILD that is killed mid-run therefore leaves nothing behind after its next start.
 
 ## Container run host
 
@@ -477,7 +483,7 @@ docker volume rm ild-tools-agents ild-tools-toolchains ild-tools   # the toolcha
 ```
 
 (`podman` takes the same commands.) On Kubernetes, run
-`kubectl delete pods,pvc,secrets,networkpolicies -l app.kubernetes.io/managed-by=ild`
+`kubectl delete pods,pvc,configmaps,networkpolicies -l app.kubernetes.io/managed-by=ild`
 in the run namespace, then delete the `ILD_K8S_TOOLS_CLAIM` claim if you made one.
 
 ## First-startup behavior

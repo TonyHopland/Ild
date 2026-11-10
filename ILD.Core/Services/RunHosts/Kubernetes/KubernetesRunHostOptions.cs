@@ -21,6 +21,7 @@ public sealed record KubernetesRunHostOptions
     public const string ReadyTimeoutSetting = "ILD_K8S_READY_TIMEOUT_SECONDS";
     public const string KubeconfigSetting = "ILD_K8S_KUBECONFIG";
     public const string ToolsClaimSetting = "ILD_K8S_TOOLS_CLAIM";
+    public const string IldNamespaceSetting = "ILD_K8S_ILD_NAMESPACE";
 
     private static readonly string[] GitIdentitySettings = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 
@@ -46,6 +47,9 @@ public sealed record KubernetesRunHostOptions
     /// <summary>The labels of ILD's own pods, which the run's network policy lets the run reach and be reached by.</summary>
     public IReadOnlyDictionary<string, string> IldPodSelector { get; init; }
         = new Dictionary<string, string> { ["app.kubernetes.io/name"] = "ild" };
+
+    /// <summary>The namespace ILD runs in, which is the only one the run's network policy accepts ILD's pods from; set from the setting or, in the cluster, from ILD's service account.</summary>
+    public string IldNamespace { get; init; } = string.Empty;
 
     /// <summary>The port of ILD's HTTP endpoint, which serves the model gateway and the MCP endpoint.</summary>
     public int IldPort { get; init; } = 8080;
@@ -119,6 +123,7 @@ public sealed record KubernetesRunHostOptions
             ChatIdleTimeout = RunHostOptions.ChatIdleTimeoutOf(Value(RunHostOptions.ChatIdleTimeoutSetting)),
             Toolchains = RunHostOptions.ToolchainsOn(Value(RunHostOptions.ToolchainsSetting)),
             ToolsClaim = Value(ToolsClaimSetting),
+            IldNamespace = Value(IldNamespaceSetting) ?? string.Empty,
         };
     }
 
@@ -143,16 +148,27 @@ public sealed record KubernetesRunHostOptions
             : throw new InvalidOperationException($"{name} is '{value}'; it must be a positive whole number.");
     }
 
+    // An empty selector selects every pod, so nothing that parses to one gets through, and every key and value must be label syntax.
     private static IReadOnlyDictionary<string, string> ParseSelector(string selector)
     {
+        var malformed = new InvalidOperationException($"{IldPodSelectorSetting} is '{selector}'; it must be a comma-separated list of key=value labels, with at least one.");
         var labels = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var pair in selector.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var pair in selector.Split(',', StringSplitOptions.TrimEntries))
         {
             var eq = pair.IndexOf('=');
-            if (eq <= 0)
-                throw new InvalidOperationException($"{IldPodSelectorSetting} is '{selector}'; it must be a comma-separated list of key=value labels.");
-            labels[pair[..eq].Trim()] = pair[(eq + 1)..].Trim();
+            if (eq <= 0) throw malformed;
+            var key = pair[..eq].Trim();
+            var value = pair[(eq + 1)..].Trim();
+            if (key.Length > 316 || !LabelKey.IsMatch(key) || !LabelValue.IsMatch(value) || value.Length == 0) throw malformed;
+            labels[key] = value;
         }
-        return labels;
+        return labels.Count > 0 ? labels : throw malformed;
     }
+
+    // A label key is an optional DNS subdomain prefix and a name of at most 63 characters; a value is empty or a name.
+    private static readonly System.Text.RegularExpressions.Regex LabelKey = new(
+        "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static readonly System.Text.RegularExpressions.Regex LabelValue = new(
+        "^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 }

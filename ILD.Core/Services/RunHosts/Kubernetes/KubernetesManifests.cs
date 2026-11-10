@@ -5,8 +5,9 @@ using k8s.Models;
 namespace ILD.Core.Services.RunHosts.Kubernetes;
 
 /// <summary>
-/// The objects of one run. The Secret is the owner: the volume claim, the network policy and the pod carry an
-/// owner reference to it, so deleting it is what removes the rest.
+/// The objects of one run. The ConfigMap is the owner: the volume claim, the network policy and the pod carry an
+/// owner reference to it, so deleting it removes whatever is left. ILD deletes the pod first and the policies only after it,
+/// so a pod is never without its policy.
 /// </summary>
 internal sealed class KubernetesManifests(KubernetesRunHostOptions options, string namespaceName)
 {
@@ -47,19 +48,18 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
 
     public V1PersistentVolumeClaim ChatClaim() => new() { Metadata = ChatMeta(), Spec = ClaimSpec() };
 
-    public V1Secret Secret(Guid ownerId) => new()
+    public V1ConfigMap Owner(Guid ownerId) => new()
     {
         Metadata = Meta(ownerId),
-        Type = "Opaque",
-        StringData = new Dictionary<string, string> { ["run"] = ownerId.ToString("N") },
+        Data = new Dictionary<string, string> { ["run"] = ownerId.ToString("N") },
     };
 
-    public static V1OwnerReference OwnerReference(V1Secret secret) => new()
+    public static V1OwnerReference OwnerReference(V1ConfigMap owner) => new()
     {
         ApiVersion = "v1",
-        Kind = "Secret",
-        Name = secret.Metadata.Name,
-        Uid = secret.Metadata.Uid,
+        Kind = "ConfigMap",
+        Name = owner.Metadata.Name,
+        Uid = owner.Metadata.Uid,
         BlockOwnerDeletion = true,
     };
 
@@ -88,7 +88,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
 
     /// <summary>
     /// What a run's pod has while a launch is in network mode Off: egress to anywhere, DNS included. NetworkPolicies add up, so this
-    /// opens what <see cref="Policy(Guid, V1OwnerReference, bool)"/> closes; deleting it closes it again. It belongs to the run's Secret like the others.
+    /// opens what <see cref="Policy(Guid, V1OwnerReference, bool)"/> closes; deleting it closes it again. It belongs to the run's owner like the others.
     /// </summary>
     public V1NetworkPolicy OpenPolicy(Guid ownerId, V1OwnerReference owner)
     {
@@ -151,7 +151,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 [
                     new V1NetworkPolicyEgressRule
                     {
-                        To = [new V1NetworkPolicyPeer { PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string>(options.IldPodSelector) }, NamespaceSelector = new V1LabelSelector() }],
+                        To = [new V1NetworkPolicyPeer { PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string>(options.IldPodSelector) }, NamespaceSelector = IldNamespaceSelector() }],
                         Ports = [new V1NetworkPolicyPort { Protocol = "TCP", Port = options.EgressProxyPort }],
                     },
                 ],
@@ -180,7 +180,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 [
                     new V1NetworkPolicyEgressRule
                     {
-                        To = [new V1NetworkPolicyPeer { PodSelector = ild, NamespaceSelector = new V1LabelSelector() }],
+                        To = [new V1NetworkPolicyPeer { PodSelector = ild, NamespaceSelector = IldNamespaceSelector() }],
                         Ports = ports,
                     },
                     .. dns ? new[] { DnsEgress() } : [],
@@ -189,12 +189,42 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 [
                     new V1NetworkPolicyIngressRule
                     {
-                        FromProperty = [new V1NetworkPolicyPeer { PodSelector = ild, NamespaceSelector = new V1LabelSelector() }],
+                        FromProperty = [new V1NetworkPolicyPeer { PodSelector = ild, NamespaceSelector = IldNamespaceSelector() }],
                     },
                 ],
             },
         };
     }
+
+    // ILD's own namespace and no other: a pod elsewhere in the cluster with ILD's labels is not ILD.
+    private V1LabelSelector IldNamespaceSelector()
+        => new() { MatchLabels = new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = options.IldNamespace } };
+
+    /// <summary>
+    /// What the sign-in pod needs now that the namespace denies by default: egress to anywhere, so the OAuth flow can reach the
+    /// provider, and no ingress. It is made before the pod and deleted after the pod is gone.
+    /// </summary>
+    public V1NetworkPolicy SignInPolicy(string name, Guid id) => new()
+    {
+        Metadata = new V1ObjectMeta
+        {
+            Name = name,
+            NamespaceProperty = namespaceName,
+            Labels = new Dictionary<string, string>
+            {
+                [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
+                [RunPaths.InstanceLabel] = options.Instance,
+                [RunPaths.RoleLabel] = KubernetesNames.SignInRole,
+            },
+        },
+        Spec = new V1NetworkPolicySpec
+        {
+            PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { [KubernetesNames.SignInLabel] = id.ToString("N") } },
+            PolicyTypes = ["Ingress", "Egress"],
+            Egress = [new V1NetworkPolicyEgressRule()],
+            Ingress = [],
+        },
+    };
 
     private static V1NetworkPolicyEgressRule DnsEgress()
         => new()
@@ -441,10 +471,10 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
 
     /// <summary>
     /// A short-lived pod of the runner image for a provider's sign-in terminal: the store's claim read-only when the CLI
-    /// comes from it, and nothing of a run or chat. It carries no run label, so no run's NetworkPolicy selects it and the
-    /// OAuth flow can reach the provider, and the sweep finds it by its role.
+    /// comes from it, and nothing of a run or chat. It carries no run label, so no run's NetworkPolicy selects it; its own SignInPolicy lets the
+    /// OAuth flow reach the provider, and the sweep finds it by its role.
     /// </summary>
-    public V1Pod SignIn(string name, string home, IEnumerable<string> toolEnvironment, IReadOnlyList<RunToolMount> zones) => new()
+    public V1Pod SignIn(string name, Guid id, string home, IEnumerable<string> toolEnvironment, IReadOnlyList<RunToolMount> zones) => new()
     {
         Metadata = new V1ObjectMeta
         {
@@ -455,6 +485,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                 [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
                 [RunPaths.InstanceLabel] = options.Instance,
                 [RunPaths.RoleLabel] = KubernetesNames.SignInRole,
+                [KubernetesNames.SignInLabel] = id.ToString("N"),
             },
         },
         Spec = new V1PodSpec

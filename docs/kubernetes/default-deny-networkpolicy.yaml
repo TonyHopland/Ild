@@ -1,0 +1,14 @@
+# Denies all ingress and egress to every pod ILD makes in the run namespace (they all carry
+# app.kubernetes.io/managed-by=ild). NetworkPolicies add up, so ILD's own per-pod policies open exactly what
+# each pod needs on top of this. Without it a pod that has no policy yet (one started before the network plugin
+# has applied it) or no longer has one is fully open, DNS included. ILD warns in Settings when it is missing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ild-default-deny
+  namespace: ild-runs
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: ild
+  policyTypes: [Ingress, Egress]
