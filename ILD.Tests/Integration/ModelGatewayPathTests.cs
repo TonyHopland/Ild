@@ -70,6 +70,7 @@ public class ModelGatewayPathTests : IAsyncLifetime
     [Theory]
     [InlineData("copilot", "/gateway/github/copilot_internal/%252e%252e/user/repos", "")]
     [InlineData("copilot", "/gateway/github/copilot_internal/.%252e/user/repos", "")]
+    [InlineData("copilot", "/gateway/github/copilot_internal/v2/token", "")]
     [InlineData("copilot", "/gateway/github/user/repos", "")]
     [InlineData("copilot", "/gateway/github/mcp/readonly", "")]
     [InlineData("copilot", "/gateway/github/_ep", "")]

@@ -171,7 +171,10 @@ public sealed partial class ModelGatewayMiddleware
     // What each agent CLI calls on its route. An entry ending in '/' is a prefix; any other is the exact path.
     private static readonly Dictionary<string, string[]> AllowedPaths = new()
     {
-        [GatewayRoutes.GitHub] = ["copilot_internal/"],
+        // Exactly what the Copilot CLI calls. copilot_internal/v2/token is left out on purpose: it mints a short-lived
+        // Copilot bearer token that would work outside the gateway and after the lease ends.
+        [GatewayRoutes.GitHub] =
+            ["copilot_internal/user", "copilot_internal/managed_settings", "copilot_internal/team_customizations", "copilot_internal/content_exclusion"],
         // wham/usage is the Codex CLI's rate-limit check; the rest of wham/ is the user's Codex cloud tasks.
         [GatewayRoutes.ChatGpt] = ["codex/", "wham/usage"],
         [GatewayRoutes.Anthropic] = ["v1/messages", "v1/messages/count_tokens", "v1/models", "v1/models/"],

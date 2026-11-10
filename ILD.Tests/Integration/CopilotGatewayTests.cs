@@ -21,6 +21,7 @@ public class CopilotGatewayTests : IAsyncLifetime
     private ApiFactory _factory = null!;
     private string? _seenAuthorization;
     private string? _seenAcceptEncoding;
+    private int _unlistedHits;
     private readonly StubSource _source = new();
 
     public async ValueTask InitializeAsync()
@@ -28,7 +29,22 @@ public class CopilotGatewayTests : IAsyncLifetime
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         _upstream = builder.Build();
-        _upstream.MapGet("/copilot_internal/denied", () => Results.StatusCode(401));
+        _upstream.MapGet("/copilot_internal/managed_settings", (HttpRequest request) =>
+        {
+            _seenAuthorization = request.Headers.Authorization.ToString();
+            return Results.StatusCode(401);
+        });
+        foreach (var path in new[] { "team_customizations", "content_exclusion" })
+            _upstream.MapGet("/copilot_internal/" + path, (HttpRequest request) =>
+            {
+                _seenAuthorization = request.Headers.Authorization.ToString();
+                return Results.Text("{}", "application/json");
+            });
+        _upstream.Map("/{**rest}", (HttpContext context) =>
+        {
+            Interlocked.Increment(ref _unlistedHits);
+            return Results.Text("{\"token\":\"tid=minted-copilot-token\"}", "application/json");
+        });
         _upstream.MapGet("/copilot_internal/user", (HttpRequest request) =>
         {
             _seenAuthorization = request.Headers.Authorization.ToString();
@@ -123,13 +139,47 @@ public class CopilotGatewayTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData("/gateway/github/copilot_internal/v2/token")]
+    [InlineData("/gateway/github/copilot_internal/")]
+    [InlineData("/gateway/github/copilot_internal/user/extra")]
+    [InlineData("/gateway/github/copilot_internal/embeddings_index")]
+    [InlineData("/gateway/github/copilot_internal/subscribe_limited_user")]
+    [InlineData("/gateway/github/copilot_internal/denied")]
+    public async Task A_copilot_internal_path_off_the_list_is_refused_and_never_reaches_the_provider(string path)
+    {
+        using var lease = await OpenAsync();
+
+        using var response = await _factory.CreateClient().SendAsync(Request(path, lease.GitHubToken), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(0, _unlistedHits);
+        Assert.DoesNotContain("minted-copilot-token", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("user")]
+    [InlineData("managed_settings")]
+    [InlineData("team_customizations")]
+    [InlineData("content_exclusion")]
+    public async Task Each_listed_copilot_internal_path_is_forwarded_with_the_real_token(string name)
+    {
+        using var lease = await OpenAsync();
+
+        using var response = await _factory.CreateClient()
+            .SendAsync(Request("/gateway/github/copilot_internal/" + name, lease.GitHubToken), TestContext.Current.CancellationToken);
+
+        Assert.Equal("Bearer gho_real", _seenAuthorization);
+        Assert.Equal(0, _unlistedHits);
+    }
+
     [Fact]
     public async Task A_401_from_the_provider_tells_the_credential_source_it_was_rejected()
     {
         using var lease = await OpenAsync();
 
         using var response = await _factory.CreateClient()
-            .SendAsync(Request("/gateway/github/copilot_internal/denied", lease.GitHubToken), TestContext.Current.CancellationToken);
+            .SendAsync(Request("/gateway/github/copilot_internal/managed_settings", lease.GitHubToken), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Equal([GatewayRoutes.GitHub], _source.RejectedRoutes);
