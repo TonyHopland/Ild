@@ -268,7 +268,15 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
 
-                _log.Record(request.Host, request.Port, decision, request.AiProviderId, installer: request.Installer);
+                // No connection is allowed that cannot be logged: with the log queue full, the row would be lost and the connection unseen.
+                if (!_log.Record(request.Host, request.Port, decision, request.AiProviderId, installer: request.Installer))
+                {
+                    if (request.Kind == RequestKind.Tls)
+                        await RefuseAsync(stream, request, string.Empty, stoppingToken).ConfigureAwait(false);
+                    else
+                        await WriteResponseAsync(stream, "503 Service Unavailable", "The egress proxy could not log this connection; try again shortly.", stoppingToken).ConfigureAwait(false);
+                    return;
+                }
                 await RelayAsync(stream, request, addresses, head.Value, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }

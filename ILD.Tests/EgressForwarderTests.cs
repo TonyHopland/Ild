@@ -472,7 +472,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
             get { lock (_entries) return _entries.ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
+        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
         {
             lock (_entries)
             {
@@ -483,6 +483,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
                     _waiters.Remove(waiter);
                 }
             }
+            return true;
         }
 
         /// <summary>Completes once at least <paramref name="count"/> destinations have been recorded.</summary>

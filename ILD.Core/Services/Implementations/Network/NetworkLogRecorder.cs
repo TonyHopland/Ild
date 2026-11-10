@@ -17,7 +17,11 @@ namespace ILD.Core.Services.Implementations.Network;
 /// </summary>
 public interface INetworkLogRecorder
 {
-    void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null);
+    /// <summary>
+    /// Queues the entry. False when the queue is full and the entry was not kept: a connection that is allowed must not go
+    /// unlogged, so the caller refuses it.
+    /// </summary>
+    bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null);
 }
 
 public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
@@ -28,8 +32,11 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
         new BoundedChannelOptions(QueueCapacity)
         {
             SingleReader = true,
-            FullMode = BoundedChannelFullMode.DropOldest,
+            // A full queue refuses the new entry and keeps the earlier ones: a run flooding the queue cannot push its own earlier connections out.
+            FullMode = BoundedChannelFullMode.Wait,
         });
+    private static readonly TimeSpan DropReportInterval = TimeSpan.FromMinutes(1);
+    private long _dropped;
     private readonly IServiceScopeFactory _scopes;
     private readonly INetworkNotifier _notifier;
     private readonly ILogger<NetworkLogRecorder> _log;
@@ -43,10 +50,10 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
         _log = log;
     }
 
-    public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
+    public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
     {
         if (installer is not null && decision == NetworkDecision.Blocked) _refusals?.Note(installer, host, port);
-        _queue.Writer.TryWrite(new NetworkLogEntry
+        var queued = _queue.Writer.TryWrite(new NetworkLogEntry
         {
             Id = Guid.NewGuid(),
             Host = host.Length > EgressRules.MaxHostLength ? host[..EgressRules.MaxHostLength] : host,
@@ -57,10 +64,31 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
             Reason = reason,
             Installer = installer,
         });
+        if (!queued) Interlocked.Increment(ref _dropped);
+        return queued;
+    }
+
+    /// <summary>Logs how many entries did not fit since the last report, and starts counting again; nothing when there were none.</summary>
+    internal void ReportDropped()
+    {
+        if (Interlocked.Exchange(ref _dropped, 0) is > 0 and var dropped)
+            _log.LogWarning("The network log queue was full: {Count} connection entries were not recorded in the last {Seconds} s", dropped, DropReportInterval.TotalSeconds);
+    }
+
+    private async Task ReportDropsAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(DropReportInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+                ReportDropped();
+        }
+        catch (OperationCanceledException) { }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _ = ReportDropsAsync(stoppingToken);
         var reader = _queue.Reader;
         while (await reader.WaitToReadAsync(stoppingToken).ConfigureAwait(false))
         {

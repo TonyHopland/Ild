@@ -420,6 +420,24 @@ public sealed class EgressProxyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_allowed_connection_that_cannot_be_logged_is_refused_with_503_and_reaches_nothing()
+    {
+        await SetModeAsync(NetworkMode.Whitelist);
+        await ListAsync("localhost", NetworkListKind.Whitelist);
+        _log.Full = true;
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed(
+            $"GET http://localhost:{_upstreamPort}/things HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\n\r\n")), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream);
+
+        Assert.StartsWith("HTTP/1.1 503", response);
+        Assert.DoesNotContain("X-Saw", response);
+    }
+
+    [Fact]
     public async Task A_plain_http_request_to_a_blocked_host_gets_403()
     {
         await SetModeAsync(NetworkMode.Blacklist);
@@ -1506,14 +1524,19 @@ public sealed class EgressProxyTests : IAsyncLifetime
             get { lock (_entries) return _installers.ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
+        /// <summary>The queue is full: entries are refused, as a recorder that cannot take another does.</summary>
+        public bool Full { get; set; }
+
+        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
         {
+            if (Full) return false;
             lock (_entries)
             {
                 _entries.Add((host, port, decision, aiProviderId));
                 _reasons.Add(reason);
                 _installers.Add(installer);
             }
+            return true;
         }
     }
 
@@ -1563,6 +1586,40 @@ public sealed class NetworkLogRecorderTests : IDisposable
         Assert.Equal(NetworkDecision.Allowed, anthropic.Decision);
         Assert.Equal(providerId, anthropic.AiProviderId);
         Assert.Contains(notifier.Appended, e => e.Host == "evil.example" && e.Decision == NetworkDecision.Blocked);
+    }
+
+    [Fact]
+    public void A_full_queue_keeps_the_earlier_entries_refuses_the_new_ones_and_counts_them()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<INetworkPolicyStore>(_db.Network);
+        using var provider = services.BuildServiceProvider();
+        var log = new ListLogger<NetworkLogRecorder>();
+        var recorder = new NetworkLogRecorder(provider.GetRequiredService<IServiceScopeFactory>(), new RecordingNotifier(), log);
+
+        var accepted = 0;
+        while (recorder.Record("first.example", 443, NetworkDecision.Blocked, null)) accepted++;
+        Assert.True(accepted > 0);
+        Assert.False(recorder.Record("later.example", 443, NetworkDecision.Allowed, null));
+        Assert.False(recorder.Record("later.example", 443, NetworkDecision.Blocked, null));
+
+        recorder.ReportDropped();
+        recorder.ReportDropped();
+
+        var warning = Assert.Single(log.Messages);
+        Assert.Contains("3 connection entries", warning);
+    }
+
+    private sealed class ListLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<string> Messages { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Messages.Add(formatter(state, exception));
     }
 
     private sealed class RecordingNotifier : INetworkNotifier
