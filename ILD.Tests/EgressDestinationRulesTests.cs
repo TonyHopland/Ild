@@ -61,7 +61,7 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
         _upstream.Start();
         _ = ServeAsync(_upstream);
 
-        var options = new EgressProxyOptions(true, 0) { WebPort = ((IPEndPoint)_upstream.LocalEndpoint).Port };
+        var options = new EgressProxyOptions(true, 0) { PreviewsEnabled = true, WebPort = ((IPEndPoint)_upstream.LocalEndpoint).Port };
         _proxy = new EgressProxy(options, EgressProxyTests.Creds, _policy, _log, NullLogger<EgressProxy>.Instance, ResolveAsync, DialAsync);
         await _proxy.StartAsync(CancellationToken.None);
         _proxyPort = await _proxy.BoundPort.WaitAsync(Timeout);
@@ -359,9 +359,10 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
             get { lock (_entries) return _entries.Select(e => e.Reason).ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
+        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
         {
             lock (_entries) _entries.Add((host, port, decision, reason));
+            return true;
         }
     }
 }

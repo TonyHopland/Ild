@@ -1,3 +1,5 @@
+using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -10,10 +12,14 @@ namespace ILD.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly LoginThrottle _throttle;
+    private readonly IProtectedDestinationSource _protected;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, LoginThrottle throttle, IProtectedDestinationSource protectedSource)
     {
+        _protected = protectedSource;
         _authService = authService;
+        _throttle = throttle;
     }
 
     // The one endpoint that mints the token everything else demands.
@@ -24,6 +30,16 @@ public class AuthController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
+        // A run container can reach this port, so guessing is slowed per caller address, and per user name for a caller in a run
+        // network: a user-name wait for everyone would let a run keep the operator out.
+        var address = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var fromRun = await _protected.IsInRunNetworkAsync(HttpContext.Connection.RemoteIpAddress, HttpContext.RequestAborted);
+        if (_throttle.TryBegin(address, request.Username, fromRun) is { } wait)
+        {
+            Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = "Too many failed sign-ins; try again later" });
+        }
+
         try
         {
             // The user agent and caller address are labels for the
@@ -33,12 +49,13 @@ public class AuthController : ControllerBase
                 request.Username,
                 request.Password,
                 Request.Headers.UserAgent.ToString(),
-                HttpContext.Connection.RemoteIpAddress?.ToString());
+                address);
 
             if (!result.Success || string.IsNullOrEmpty(result.SessionToken))
             {
                 return Unauthorized(new { error = result.ErrorMessage ?? "Invalid username or password" });
             }
+            _throttle.Succeeded(address, request.Username, fromRun);
             return Ok(new LoginResponse(result.SessionToken, result.Username, result.ExpiresAt));
         }
         catch

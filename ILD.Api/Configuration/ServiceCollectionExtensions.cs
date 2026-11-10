@@ -42,6 +42,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ILogger<ModelCredentialSource>>()));
 
         services.AddScoped<IAuthService, AuthService>();
+        services.AddSingleton<LoginThrottle>();
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
         services.AddScoped<IHumanInputProposalService, HumanInputProposalService>();
@@ -219,6 +220,7 @@ public static class ServiceCollectionExtensions
             var kind = RunHostOptions.Detect(name => config[name]);
             return EgressProxyOptions.FromEnvironment() with
             {
+                PreviewsEnabled = sp.GetRequiredService<PreviewProxyBase>().Enabled,
                 BindAddress = EgressProxyOptions.BindAddressFor(kind),
                 AcceptsClient = EgressProxyOptions.ClientFilterFor(kind, name => Environment.GetEnvironmentVariable(name) ?? config[name]),
             };
@@ -231,6 +233,7 @@ public static class ServiceCollectionExtensions
             string? Read(string name) => Environment.GetEnvironmentVariable(name) ?? config[name];
             return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>(),
                 isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]),
+                controlPlane: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.ControlPlaneAddressesAsync(ct) : Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]),
                 logger: sp.GetRequiredService<ILogger<ProtectedDestinationSource>>());
         });
         services.AddSingleton<IEgressPolicy, EgressPolicy>();

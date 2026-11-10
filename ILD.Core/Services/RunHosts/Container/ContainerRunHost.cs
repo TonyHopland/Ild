@@ -270,7 +270,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     /// The create request every container ILD makes shares: the runner image as the runner user, with every capability
     /// dropped and no new privileges. A <paramref name="placement"/> puts it on a network of its own, reaching only ILD;
     /// without one it is on the engine's default network, as the sign-in needs to reach its provider. A run's
-    /// <paramref name="limits"/> are its memory and CPU.
+    /// <paramref name="limits"/> are its memory and CPU; every container has the process limit.
     /// </summary>
     private object ContainerBody(
         IEnumerable<string> env, IDictionary<string, string> labels, IEnumerable<string> binds,
@@ -294,6 +294,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             ["HostConfig"] = host,
         };
         if (workingDirectory is not null) body["WorkingDir"] = workingDirectory;
+        if (_options.PidsLimit is { } pids) host["PidsLimit"] = pids;
         if (limits is { } l)
         {
             host["Memory"] = l.Memory;
@@ -405,7 +406,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             await CreateInternalNetworkAsync(name, labels, ct);
             var ild = await IldAddressAsync(name, "the toolchain installer", ct);
             await PostCreateAsync(
-                name, ContainerBody(toolInstaller.Environment, labels, binds, placement: new Placement(name, ild, Dns: false)), tolerateConflict: false, ct);
+                name, ContainerBody(toolInstaller.Environment, labels, binds, placement: new Placement(name, ild, Dns: false), limits: (_options.MemoryBytes ?? 0, _options.NanoCpus ?? 0)),
+                tolerateConflict: false, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             await WaitRunningAsync(name, ct);
             return await work(installer);

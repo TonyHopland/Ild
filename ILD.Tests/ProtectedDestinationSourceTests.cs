@@ -68,6 +68,46 @@ public sealed class ProtectedDestinationSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_resolver_that_fails_keeps_what_the_host_last_resolved_to()
+    {
+        var clock = new ILD.Tests.Fakes.ManualTimeProvider();
+        var fail = false;
+        var source = new ProtectedDestinationSource(
+            _services.GetRequiredService<IServiceScopeFactory>(), name => name == "ILD_DB_CONNECTION_STRING" ? "Host=db.example" : null, RunHostKind.Container, clock,
+            (_, _) => fail ? throw new InvalidOperationException("resolver down") : Task.FromResult(new[] { IPAddress.Parse("10.0.0.7") }), () => []);
+        var ct = TestContext.Current.CancellationToken;
+        Assert.Equal([IPAddress.Parse("10.0.0.7")], (await source.GetAsync(ct)).Single(e => e.Id == ProtectedDestination.Database).Addresses);
+
+        fail = true;
+        clock.Advance(ProtectedDestinationSource.CacheTtl + TimeSpan.FromSeconds(1));
+
+        Assert.Equal([IPAddress.Parse("10.0.0.7")], (await source.GetAsync(ct)).Single(e => e.Id == ProtectedDestination.Database).Addresses);
+    }
+
+    [Fact]
+    public async Task The_kubernetes_api_entry_covers_the_endpoints_of_the_kubernetes_service_and_keeps_them_when_they_cannot_be_read()
+    {
+        var clock = new ILD.Tests.Fakes.ManualTimeProvider();
+        var readable = true;
+        var source = new ProtectedDestinationSource(
+            _services.GetRequiredService<IServiceScopeFactory>(), name => name == "KUBERNETES_SERVICE_HOST" ? "10.96.0.1" : null, RunHostKind.Kubernetes, clock,
+            (_, _) => Task.FromResult(new[] { IPAddress.Parse("10.96.0.1") }), () => [],
+            controlPlane: _ => readable ? Task.FromResult<IReadOnlyList<IPAddress>>([IPAddress.Parse("192.168.1.10")]) : throw new InvalidOperationException("forbidden"));
+        var ct = TestContext.Current.CancellationToken;
+
+        var api = (await source.GetAsync(ct)).Single(e => e.Id == ProtectedDestination.KubernetesApi);
+        Assert.True(api.Covers(IPAddress.Parse("10.96.0.1")));
+        Assert.True(api.Covers(IPAddress.Parse("192.168.1.10")));
+
+        readable = false;
+        clock.Advance(ProtectedDestinationSource.CacheTtl + TimeSpan.FromSeconds(1));
+
+        api = (await source.GetAsync(ct)).Single(e => e.Id == ProtectedDestination.KubernetesApi);
+        Assert.True(api.Covers(IPAddress.Parse("10.96.0.1")));
+        Assert.True(api.Covers(IPAddress.Parse("192.168.1.10")));
+    }
+
+    [Fact]
     public async Task Each_entry_is_derived_from_the_configuration_ILD_already_has()
     {
         await _db.Settings.UpsertAsync(AppSettingKeys.WorkItemServerUrl, "http://workitems.example:5000/", TestContext.Current.CancellationToken);

@@ -45,6 +45,12 @@ public static class EgressRules
     };
 
     /// <summary>
+    /// A host taken from a connection that is written as a pattern, with a leading <c>.</c> or <c>*</c>. A real destination never is,
+    /// and a pattern in the log would become a suffix rule when whitelisted.
+    /// </summary>
+    public static bool LooksLikePattern(string host) => host.Length > 0 && host[0] is '.' or '*';
+
+    /// <summary>
     /// Canonical form of a host as it appears on the wire: lower-case, no
     /// trailing dot, IPv6 brackets removed.
     /// </summary>

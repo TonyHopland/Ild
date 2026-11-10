@@ -290,6 +290,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             ? host + "-api"
             : host;
 
+    /// <summary>The addresses the cluster's API server answers on (the endpoints behind the <c>kubernetes</c> service); none where there is no cluster.</summary>
+    public virtual Task<IReadOnlyList<System.Net.IPAddress>> ControlPlaneAddressesAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]);
+
     /// <summary>
     /// The addresses of the networks and pods this host made for runs, which the egress proxy, being on every one of them, must never
     /// dial for a run: another run's dev server or preview is there. Empty for a host that has none.
@@ -442,13 +446,26 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     /// <summary>Tries, from inside the environment and without the proxy, to connect out; true when it connected.</summary>
-    private async Task<bool?> ConnectDirectlyAsync(Guid owner, string host, int port, CancellationToken ct)
+    private async Task<bool?> ConnectDirectlyAsync(ExecOwner owner, string host, int port, CancellationToken ct)
     {
-        var result = await RunScriptAsync(owner, "timeout 3 bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' probe \"$1\" \"$2\" 2>/dev/null; echo $?",
+        // Absolute paths, under the fixed PATH and empty environment of IldScript: nothing in the run's own PATH can answer for the probe.
+        var result = await RunScriptAsync(owner, "/usr/bin/timeout 3 /bin/bash -c 'exec 3<>\"/dev/tcp/$1/$2\"' probe \"$1\" \"$2\" 2>/dev/null; echo $?",
             [host, port.ToString(System.Globalization.CultureInfo.InvariantCulture)], ct);
         if (!result.Success) return null;
         return result.StdOut.Trim() switch { "0" => true, "1" or "124" => false, _ => null };
     }
+
+    /// <summary>
+    /// Probes the chat container, which runs have no part in and which the probe of a run therefore never covers. Taken under the route
+    /// gate and skipped while a chat command in mode Off has the direct route open, since that connection would be no escape.
+    /// </summary>
+    private Task ProbeChatAsync(ExecOwner owner, ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe probe)
+        => probe.ProbeAsync(async (host, port, token) =>
+        {
+            using var gate = await RouteGateAsync(owner, token);
+            if (_liveOff.Any(e => e.Value > 0 && e.Key.Chat) || await HasDirectRouteAsync(owner, token)) return null;
+            return await ConnectDirectlyAsync(owner, host, port, token);
+        }, CancellationToken.None, ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope);
 
     /// <summary>Make the environment ready to work in: the run's home and the code the base repository has.</summary>
     protected async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
@@ -527,6 +544,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         if (!direct)
         {
             await CloseDirectRouteIfUnusedAsync(owner, ct);
+            if (owner.Chat && Probe is { } probe && !probe.Probed(ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope))
+                _ = ProbeChatAsync(owner, probe);
             return await StartRoutedAsync(command, owner, direct: false, ct);
         }
 

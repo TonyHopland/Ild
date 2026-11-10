@@ -670,6 +670,21 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
             .ToList();
     }
 
+    /// <summary>
+    /// The endpoints of <c>default/kubernetes</c>: the ClusterIP is not the only way to the API server, and a node address reaches it as well.
+    /// Reading them needs a Role the operator may not have granted (<c>docs/kubernetes</c>); without it the ClusterIP alone is protected.
+    /// </summary>
+    public override async Task<IReadOnlyList<System.Net.IPAddress>> ControlPlaneAddressesAsync(CancellationToken ct = default)
+    {
+        var endpoints = await _client.CoreV1.ReadNamespacedEndpointsAsync("kubernetes", "default", cancellationToken: ct);
+        return (endpoints.Subsets ?? [])
+            .SelectMany(s => s.Addresses ?? [])
+            .Select(a => System.Net.IPAddress.TryParse(a.Ip, out var address) ? address : null)
+            .OfType<System.Net.IPAddress>()
+            .Distinct()
+            .ToList();
+    }
+
     // -- Sweep -------------------------------------------------------------------
 
     public override async Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)

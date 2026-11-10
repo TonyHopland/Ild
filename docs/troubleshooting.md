@@ -51,7 +51,7 @@ ILD's log says why at startup, and **Settings > General** shows the reason. Chec
 
 **A run's container fails to start with `crun: open 'memory.max'`**
 
-The rootless engine's cgroup controllers are not delegated. Set `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0` in `.env`; see [Deployment](deployment.md#which-socket).
+The rootless engine's cgroup controllers are not delegated. Set `ILD_RUN_CPU_LIMIT=0`, `ILD_RUN_MEMORY_LIMIT=0` and `ILD_RUN_PIDS_LIMIT=0` in `.env`; see [Deployment](deployment.md#which-socket).
 
 **Open in VS Code does nothing, or VS Code cannot find the container**
 

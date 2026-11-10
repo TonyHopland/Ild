@@ -1253,6 +1253,29 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(new LaunchScope(LaunchKind.Run, _run, providerId), AgentIsolationEgressTests.ScopeInEnvironment(Env(_api.Execs.Last()), EgressProxyTests.Creds));
     }
 
+    [Fact]
+    public async Task No_exec_url_carries_the_launchs_proxy_credential_which_travels_in_the_pods_env_file()
+    {
+        await CreateRunAsync();
+
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Agent(Command(WorkingDirectory, "claude", "-p", "hi"), _run, Guid.NewGuid(), NetworkMode.Monitor, null),
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        // The credential is the password of the proxy URL, which is in the environment of the launch.
+        var proxyUrl = Assert.Single(Env(_api.Execs.Last()), e => e.StartsWith("HTTPS_PROXY=", StringComparison.Ordinal))["HTTPS_PROXY=".Length..];
+        var credential = new Uri(proxyUrl).UserInfo.Split(':', 2)[1];
+        Assert.True(credential.Length >= 16);
+        Assert.NotEmpty(_api.Execs);
+        foreach (var exec in _api.Execs)
+        {
+            // What the API server logs for an exec is its URL: the pod, the container and the command's arguments.
+            Assert.DoesNotContain(credential, exec.Joined, StringComparison.Ordinal);
+            Assert.DoesNotContain("HTTPS_PROXY", exec.Joined, StringComparison.Ordinal);
+        }
+    }
+
     // -- Kill leftovers ----------------------------------------------------------
 
     [Fact]

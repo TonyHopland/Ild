@@ -227,6 +227,20 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.IsType<NotFoundResult>(await controller.WhitelistFromLog(Guid.NewGuid(), null, TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData(".example.com")]
+    [InlineData("*.com")]
+    public async Task A_log_row_whose_host_was_sent_as_a_pattern_cannot_become_a_rule(string host)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var logged = new NetworkLogEntry { Host = host, Port = 443, Timestamp = DateTime.UtcNow, Decision = NetworkDecision.Blocked };
+        await _db.Network.AppendLogAsync(new[] { logged }, ct);
+
+        Assert.IsType<BadRequestObjectResult>(await Build().WhitelistFromLog(logged.Id, null, ct));
+
+        Assert.Empty(await _db.Network.GetEntriesAsync(ct));
+    }
+
     [Fact]
     public async Task Clearing_the_log_empties_it_and_broadcasts()
     {

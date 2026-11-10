@@ -202,10 +202,27 @@ public sealed class EgressProxy : BackgroundService
                 }
                 request = request with { AiProviderId = scope.Provider, Installer = scope.Installer };
 
+                // A host the agent wrote as a suffix pattern (".example.com", "*.com") names no machine; logged as sent, whitelisting the
+                // row would turn it into a rule covering every subdomain, so it is refused and never reaches a list.
+                if (EgressRules.LooksLikePattern(request.Host))
+                {
+                    _log.Record(request.Host, request.Port, NetworkDecision.Blocked, request.AiProviderId, "malformed host name", request.Installer);
+                    if (request.Kind == RequestKind.Tls)
+                        await RefuseAsync(stream, request, string.Empty, stoppingToken).ConfigureAwait(false);
+                    else
+                        await WriteResponseAsync(stream, "400 Bad Request", "The egress proxy refuses a host name that starts with '.' or '*'.", stoppingToken).ConfigureAwait(false);
+                    return;
+                }
+
                 // An agents' preview hostname is ILD's own preview proxy, not a host on the network: handed to ILD's
                 // web port on loopback under no network policy, with the preview host as its Host so it reaches nothing else of ILD's.
                 if (Interfaces.PreviewProxyBase.IsAgentHost(request.Host))
                 {
+                    if (!_options.PreviewsEnabled)
+                    {
+                        await WriteResponseAsync(stream, "404 Not Found", "Worktree previews are not enabled.", stoppingToken).ConfigureAwait(false);
+                        return;
+                    }
                     if (request.Kind != RequestKind.Http || _options.WebPort is not int webPort)
                     {
                         await WriteResponseAsync(stream, "400 Bad Request",
@@ -251,7 +268,15 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
 
-                _log.Record(request.Host, request.Port, decision, request.AiProviderId, installer: request.Installer);
+                // No connection is allowed that cannot be logged: with the log queue full, the row would be lost and the connection unseen.
+                if (!_log.Record(request.Host, request.Port, decision, request.AiProviderId, installer: request.Installer))
+                {
+                    if (request.Kind == RequestKind.Tls)
+                        await RefuseAsync(stream, request, string.Empty, stoppingToken).ConfigureAwait(false);
+                    else
+                        await WriteResponseAsync(stream, "503 Service Unavailable", "The egress proxy could not log this connection; try again shortly.", stoppingToken).ConfigureAwait(false);
+                    return;
+                }
                 await RelayAsync(stream, request, addresses, head.Value, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
@@ -407,7 +432,6 @@ public sealed class EgressProxy : BackgroundService
         string? credential = null;
         string? hostHeader = null;
         var forwarded = new StringBuilder();
-        var sawHostHeader = false;
         var transferEncodings = new List<string>();
         var contentLengths = new List<string>();
         var asksUpgrade = false;
@@ -430,8 +454,7 @@ public sealed class EgressProxy : BackgroundService
             if (name.Equals("Host", StringComparison.OrdinalIgnoreCase))
             {
                 hostHeader = value;
-                sawHostHeader = true;
-                if (hostOverride is not null) continue;
+                continue;
             }
             else if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
                 transferEncodings.Add(value);
@@ -456,7 +479,9 @@ public sealed class EgressProxy : BackgroundService
             host = EgressRules.NormalizeHost(uri.Host);
             port = uri.IsDefaultPort ? HttpDefaultPort : uri.Port;
             originTarget = uri.PathAndQuery.Length == 0 ? "/" : uri.PathAndQuery;
-            hostHeader ??= uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+            // The authority the policy judged and the log recorded is the one the upstream is told; a Host header that
+            // says otherwise is dropped, not forwarded.
+            hostHeader = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
         }
         else if (target.StartsWith('/') && hostHeader is not null)
         {
@@ -470,11 +495,10 @@ public sealed class EgressProxy : BackgroundService
 
         if (!TryReadBodyFraming(transferEncodings, contentLengths, out var chunked, out var contentLength)) return null;
 
-        // An absolute-form request may legitimately omit Host (the authority is in
-        // the target); the origin-form request the upstream gets may not.
+        // The Host the upstream gets is always written here, from what was judged, and the client's own line is never copied.
         var headText = new StringBuilder()
             .Append(method).Append(' ').Append(originTarget).Append(' ').Append(version).Append("\r\n")
-            .Append(sawHostHeader && hostOverride is null ? string.Empty : "Host: " + (hostOverride ?? hostHeader) + "\r\n")
+            .Append("Host: ").Append(hostOverride ?? hostHeader).Append("\r\n")
             .Append(forwarded)
             .Append("Connection: close\r\n\r\n")
             .ToString();

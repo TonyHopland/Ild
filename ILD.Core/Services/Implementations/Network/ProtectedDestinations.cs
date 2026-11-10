@@ -53,6 +53,17 @@ public interface IProtectedDestinationSource
     ValueTask<IReadOnlyList<IpRange>> GetIsolatedRangesAsync(CancellationToken ct = default) => ValueTask.FromResult<IReadOnlyList<IpRange>>([]);
 }
 
+public static class RunNetworkCallers
+{
+    /// <summary>Whether <paramref name="caller"/> is inside a run network or pod, as a run's agent calling ILD's web port is.</summary>
+    public static async ValueTask<bool> IsInRunNetworkAsync(this IProtectedDestinationSource source, IPAddress? caller, CancellationToken ct = default)
+    {
+        if (caller is null) return false;
+        var address = caller.IsIPv4MappedToIPv6 ? caller.MapToIPv4() : caller;
+        return (await source.GetIsolatedRangesAsync(ct).ConfigureAwait(false)).Any(r => r.Contains(address));
+    }
+}
+
 public sealed class ProtectedDestinationSource : IProtectedDestinationSource
 {
     public static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
@@ -65,15 +76,21 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
     private readonly Func<IReadOnlyList<IPAddress>> _ownAddresses;
     private readonly SemaphoreSlim _reload = new(1, 1);
     private readonly Func<CancellationToken, Task<IReadOnlyList<IpRange>>> _isolated;
+    private readonly Func<CancellationToken, Task<IReadOnlyList<IPAddress>>> _controlPlane;
     private readonly ILogger? _logger;
+    private readonly Dictionary<string, IPAddress[]> _lastResolved = new(StringComparer.Ordinal);
+    private IReadOnlyList<ProtectedDestination>? _lastBuilt;
+    private bool _controlPlaneWarned;
     private IReadOnlyList<IpRange> _lastIsolated = [];
     private (IReadOnlyList<ProtectedDestination> Value, IReadOnlyList<IpRange> Isolated, long At)? _cached;
 
     public ProtectedDestinationSource(IServiceScopeFactory scopes, Func<string, string?> environment, RunHostKind kind, TimeProvider clock,
         Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<IReadOnlyList<IPAddress>>? ownAddresses = null,
-        Func<CancellationToken, Task<IReadOnlyList<IpRange>>>? isolatedRanges = null, ILogger? logger = null)
+        Func<CancellationToken, Task<IReadOnlyList<IpRange>>>? isolatedRanges = null, ILogger? logger = null,
+        Func<CancellationToken, Task<IReadOnlyList<IPAddress>>>? controlPlane = null)
     {
         _logger = logger;
+        _controlPlane = controlPlane ?? (_ => Task.FromResult<IReadOnlyList<IPAddress>>([]));
         _isolated = isolatedRanges ?? (_ => Task.FromResult<IReadOnlyList<IpRange>>([]));
         _scopes = scopes;
         _environment = environment;
@@ -96,7 +113,7 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
         try
         {
             if (Fresh() is { } raced) return raced;
-            var loaded = (await BuildAsync(ct).ConfigureAwait(false), await IsolatedAsync(ct).ConfigureAwait(false), _clock.GetTimestamp());
+            var loaded = (await BuildOrKeepAsync(ct).ConfigureAwait(false), await IsolatedAsync(ct).ConfigureAwait(false), _clock.GetTimestamp());
             _cached = loaded;
             return loaded;
         }
@@ -119,6 +136,22 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
             _logger?.LogWarning(ex, "Could not list the run networks the egress proxy keeps agents off; keeping the {Count} ranges that last loaded for {Seconds} s",
                 _lastIsolated.Count, CacheTtl.TotalSeconds);
             return _lastIsolated;
+        }
+    }
+
+    // A failure while building the list (the settings store, say) must not leave the proxy with no protected destinations: the list that
+    // last built stays in force, as the ranges above do.
+    private async Task<IReadOnlyList<ProtectedDestination>> BuildOrKeepAsync(CancellationToken ct)
+    {
+        try
+        {
+            return _lastBuilt = await BuildAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested && _lastBuilt is not null)
+        {
+            _logger?.LogWarning(ex, "Could not rebuild the destinations the egress proxy protects; keeping the {Count} that last loaded for {Seconds} s",
+                _lastBuilt.Count, CacheTtl.TotalSeconds);
+            return _lastBuilt;
         }
     }
 
@@ -149,10 +182,33 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
             var apiHosts = new List<string>();
             if (_environment("KUBERNETES_SERVICE_HOST") is { Length: > 0 } serviceHost) apiHosts.Add(serviceHost.Trim());
             apiHosts.Add("kubernetes.default.svc");
-            result.Add(new(ProtectedDestination.KubernetesApi, "Kubernetes API", apiHosts, await ResolveAllAsync(apiHosts, ct).ConfigureAwait(false)));
+            var apiAddresses = await ResolveAllAsync(apiHosts, ct).ConfigureAwait(false);
+            apiAddresses.AddRange(await ControlPlaneAsync(ct).ConfigureAwait(false));
+            result.Add(new(ProtectedDestination.KubernetesApi, "Kubernetes API", apiHosts, apiAddresses.Distinct().ToList()));
         }
         result.Add(ProtectedDestination.LinkLocalRanges);
         return result;
+    }
+
+    // The service's endpoints are the API server's real addresses. When they cannot be read the last ones stay, and the ClusterIP still stands.
+    private async Task<IReadOnlyList<IPAddress>> ControlPlaneAsync(CancellationToken ct)
+    {
+        const string key = "kubernetes-endpoints";
+        try
+        {
+            var addresses = (await _controlPlane(ct).ConfigureAwait(false)).ToArray();
+            lock (_lastResolved) _lastResolved[key] = addresses;
+            return addresses;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            if (!_controlPlaneWarned)
+            {
+                _controlPlaneWarned = true;
+                _logger?.LogWarning(ex, "Could not read the endpoints of the kubernetes service, so the egress proxy refuses the API server only at its ClusterIP and what it last read; grant the Role in docs/kubernetes to cover its real addresses");
+            }
+            lock (_lastResolved) return _lastResolved.GetValueOrDefault(key) ?? [];
+        }
     }
 
     private async Task<List<IPAddress>> ResolveAllAsync(IEnumerable<string> hosts, CancellationToken ct)
@@ -162,10 +218,15 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
         {
             try
             {
-                all.AddRange(await _resolve(host, ct).ConfigureAwait(false));
+                var resolved = await _resolve(host, ct).ConfigureAwait(false);
+                lock (_lastResolved) _lastResolved[host] = resolved;
+                all.AddRange(resolved);
             }
-            catch (Exception ex) when (ex is System.Net.Sockets.SocketException or ArgumentException)
+            catch (Exception) when (!ct.IsCancellationRequested)
             {
+                // A resolver that fails must not turn a protected host into an empty set: what it last resolved to stays.
+                lock (_lastResolved)
+                    if (_lastResolved.TryGetValue(host, out var last)) all.AddRange(last);
             }
         }
         return all;

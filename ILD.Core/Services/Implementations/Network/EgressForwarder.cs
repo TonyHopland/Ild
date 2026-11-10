@@ -370,7 +370,9 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
                     _log.Record(forward.Host, forward.Port, NetworkDecision.Blocked, aiProviderId: null, refusal.Reason);
                     return;
                 }
-                _log.Record(forward.Host, forward.Port, decision, aiProviderId: null);
+                // As the proxy: a connection that cannot be logged is not allowed.
+                if (!_log.Record(forward.Host, forward.Port, decision, aiProviderId: null))
+                    return;
 
                 TcpClient upstream;
                 try
