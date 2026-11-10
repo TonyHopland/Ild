@@ -106,8 +106,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         Assert.True(await mgr.CommitAsync(wt, "first"));
 
         _agentSide.Write(Path.Combine(wt, "note.txt"), "second\n");
-        var diff = await mgr.GetDiffAsync(wt);
-        Assert.Contains("second", diff);
+        Assert.True(await mgr.HasUncommittedChangesAsync(wt));
         Assert.True(await mgr.CommitAsync(wt, "second"));
 
         Assert.True((await mgr.RebaseAsync(wt, "origin/main", ct)).Success);
@@ -149,7 +148,8 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         var ran = entries.Select(e => e.Name).ToHashSet();
         Assert.Contains("pre-commit", ran);
         Assert.Contains("filter", ran);
-        Assert.Contains("textconv", ran);
+        // No textconv: ILD asks only whether the tree differs and never reads the diff, so nothing converts it.
+        Assert.DoesNotContain("textconv", ran);
         Assert.Contains("pre-push", ran);
     }
 

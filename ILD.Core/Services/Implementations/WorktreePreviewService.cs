@@ -25,6 +25,9 @@ namespace ILD.Core.Services.Implementations;
 public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposable
 {
     private const string ConfigFileName = "ild.config.json";
+
+    /// <summary>How much of an install command's output is kept; the rest is read and dropped.</summary>
+    private readonly RunReadLimits _outputLimits = RunReadLimits.FromEnvironment();
     private static readonly Regex TemplateTokenRegex = new("\\$\\{([^}]+)\\}", RegexOptions.Compiled);
 
     /// <summary>
@@ -2323,8 +2326,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     {
         using var process = await _host.StartCommandAsync(PreparedCommand(resolved), cancellationToken);
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        var limit = _outputLimits.MaxOutputBytes;
+        var stdoutTask = BoundedOutput.PumpAsync(process.StandardOutput, limit, text => { stdout.Append(text); return Task.CompletedTask; }, cancellationToken);
+        var stderrTask = BoundedOutput.PumpAsync(process.StandardError, limit, text => { stderr.Append(text); return Task.CompletedTask; }, cancellationToken);
 
         try
         {
@@ -2337,7 +2343,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw;
         }
 
-        return new CommandResult(process.ExitCode, await stdoutTask, await stderrTask);
+        await Task.WhenAll(stdoutTask, stderrTask);
+        return new CommandResult(process.ExitCode, stdout.ToString(), stderr.ToString());
     }
 
     private sealed record PendingStart(

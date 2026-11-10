@@ -29,7 +29,7 @@ public class PRNodeExecutorPushClearsSnapshotTests
         try
         {
             var repoManager = new Mock<IRepositoryManager>();
-            repoManager.Setup(m => m.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoManager.Setup(m => m.HasUncommittedChangesAsync(worktree)).ReturnsAsync(false);
             repoManager.Setup(m => m.GetHeadCommitAsync(worktree)).ReturnsAsync("pushed-sha");
             repoManager.Setup(m => m.PushAsync(worktree, It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
                 .ReturnsAsync(pushSucceeds ? (true, (string?)null) : (false, "rejected"));

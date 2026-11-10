@@ -60,7 +60,7 @@ public class RunHostSeamTests
         var started = Assert.Single(host.Started);
         Assert.Equal(["-c", "echo hi"], started.Start.ArgumentList);
         Assert.Equal(Worktree, started.Start.WorkingDirectory);
-        Assert.Contains("hello\n", progress);
+        Assert.Contains("hello\n", string.Concat(progress));
     }
 
     [Fact]

@@ -101,8 +101,7 @@ public sealed class RepositoryManagerTests : IDisposable
 
         Assert.True((await mgr.CommitAsync(path, "add file")));
 
-        var diff = await mgr.GetDiffAsync(path);
-        Assert.NotNull(diff);
+        Assert.False(await mgr.HasUncommittedChangesAsync(path));
 
         // CommitAsync runs `git add -A`, so anything the worktree setup dropped
         // on disk rides along into the run commit — and from there into the PR.

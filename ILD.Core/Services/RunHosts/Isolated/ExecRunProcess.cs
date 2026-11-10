@@ -87,7 +87,7 @@ internal sealed class ExecRunProcess : IRunProcess
         finally
         {
             if (status is null)
-                _stderr.Append(Encoding.UTF8.GetBytes($"the connection to the run's {_where} ended before the command did\n"));
+                await AppendNoticeAsync(Encoding.UTF8.GetBytes($"the connection to the run's {_where} ended before the command did\n"));
             _exitCode = status ?? ConnectionLostExitCode;
             _stdout.Complete();
             _stderr.Complete();
@@ -103,7 +103,7 @@ internal sealed class ExecRunProcess : IRunProcess
         {
             int read;
             while ((read = await from.ReadAsync(buffer)) > 0)
-                to.Append(buffer.AsSpan(0, read));
+                await to.AppendAsync(buffer.AsMemory(0, read));
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException)
         {
@@ -111,7 +111,20 @@ internal sealed class ExecRunProcess : IRunProcess
         }
     }
 
-    public void Dispose() => _exec.Dispose();
+    // A notice the reader may never collect must not hold the process open.
+    private async Task AppendNoticeAsync(byte[] notice)
+    {
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        try { await _stderr.AppendAsync(notice, limit.Token); }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _exec.Dispose();
+        _stdout.Dispose();
+        _stderr.Dispose();
+    }
 
     private sealed class StdinStream(IExecStream exec) : Stream
     {

@@ -35,6 +35,9 @@ public sealed record DirectRoute(Guid OwnerId, bool Chat);
 /// </summary>
 public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRunHost
 {
+    /// <summary>How much of what a run holds or prints ILD reads before it stops.</summary>
+    public RunReadLimits ReadLimits { get; init; } = RunReadLimits.Default;
+
     // Each command is a process group of its own, recorded under a name, so it can be killed as a group
     // without a connection to the command: the runtime does not reliably kill what an exec ran when its stream closes.
     // Arguments: the directory, the command's name, the file its environment is sourced from and removed ("" for none), the entries put in
@@ -833,11 +836,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         {
             return await ExecAsync(owner, ["/bin/sh", "-c", CommandWrapper, "sh", "/", id, "", "", fileName, .. arguments], streams?.StandardInputFrom, streams?.StandardOutputTo, ct);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (Exception ex) when (ex is OperationCanceledException && ct.IsCancellationRequested || ex is ReadLimitExceededException)
         {
             using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             try { await KillCommandAsync(owner, id, limit.Token); }
-            catch (Exception ex) when (ex is not OutOfMemoryException) { Logger?.LogWarning(ex, "A cancelled tool in the run's {Noun} could not be killed", Noun); }
+            catch (Exception killFailure) when (killFailure is not OutOfMemoryException) { Logger?.LogWarning(killFailure, "A tool in the run's {Noun} that was stopped could not be killed", Noun); }
             throw;
         }
     }
@@ -846,7 +849,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     public async Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default)
     {
-        var result = await RunScriptAsync(OwnerFor(path), "[ -f \"$1\" ] || exit 3; cat -- \"$1\"", [path], ct);
+        var limit = ReadLimits.MaxFileBytes;
+        var result = await ExecAsync(
+            OwnerFor(path), IldScript("/bin/bash", FileWithinLimitScript + "cat -- \"$1\"", path, limit.ToString()), null, null, ct, limit);
+        if (result.ExitCode == FileTooLarge) throw new ReadLimitExceededException(limit);
         return result.Success ? result.StdOut : null;
     }
 
@@ -862,10 +868,18 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return new WriteBackStream(content.ToArray(), (bytes, token) => WriteFileInRunAsync(OwnerFor(path), path, new MemoryStream(bytes), readOnly: false, token));
     }
 
+    private const int FileTooLarge = 4;
+
+    /// <summary>Exits 3 when <c>$1</c> is not a file and <see cref="FileTooLarge"/> when it is longer than <c>$2</c> bytes, so a file past the limit is never started on.</summary>
+    private const string FileWithinLimitScript = "[ -f \"$1\" ] || exit 3; [ \"$(stat -c %s -- \"$1\")\" -le \"$2\" ] || exit 4; ";
+
     private async Task<MemoryStream?> ReadAllAsync(string path, CancellationToken ct)
     {
         var content = new MemoryStream();
-        var result = await ExecAsync(OwnerFor(path), IldScript("/bin/sh", "[ -f \"$1\" ] || exit 3; exec cat -- \"$1\"", path), null, content, ct);
+        var limit = ReadLimits.MaxFileBytes;
+        var result = await ExecAsync(
+            OwnerFor(path), IldScript("/bin/sh", FileWithinLimitScript + "exec cat -- \"$1\"", path, limit.ToString()), null, new CappedWriteStream(content, limit), ct);
+        if (result.ExitCode == FileTooLarge) throw new ReadLimitExceededException(limit);
         if (!result.Success) return null;
         content.Position = 0;
         return content;
@@ -879,10 +893,12 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     private async Task<Stream?> ReadRangeAsync(string path, long offset, long count, CancellationToken ct = default)
     {
+        // The range is held in memory, so one longer than a file may be is refused before the command runs.
+        if (count > ReadLimits.MaxFileBytes) throw new ReadLimitExceededException(ReadLimits.MaxFileBytes);
         var content = new MemoryStream();
         var result = await ExecAsync(
             OwnerFor(path), IldScript("/bin/sh", "[ -f \"$1\" ] || exit 3; tail -c \"+$(( $2 + 1 ))\" -- \"$1\" | head -c \"$3\"", path, offset.ToString(), count.ToString()),
-            null, content, ct);
+            null, new CappedWriteStream(content, ReadLimits.MaxFileBytes), ct);
         if (!result.Success) return null;
         content.Position = 0;
         return content;
@@ -1034,7 +1050,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             using var file = PrivateTempFile.Create("ild-preview-data-");
             RunHostOutput packed;
             await using (var sink = file.OpenWrite())
-                packed = await ExecAsync(owner, IldScript("/bin/bash", $"[ -d \"$1\" ] || exit {NoPreviewDataCopy}; exec tar -c -C \"$1\" .", RunPaths.PreviewData(owner)), null, sink, ct);
+                packed = await ExecAsync(
+                    owner, IldScript("/bin/bash", $"[ -d \"$1\" ] || exit {NoPreviewDataCopy}; exec tar -c -C \"$1\" .", RunPaths.PreviewData(owner)),
+                    null, new CappedWriteStream(sink, ReadLimits.MaxPreviewDataBytes), ct);
             if (packed.ExitCode == NoPreviewDataCopy) return;
             if (!packed.Success)
             {
@@ -1043,6 +1061,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             }
             await using var archive = file.OpenRead();
             await store.ReplaceAsync(repositoryId, archive, ct);
+        }
+        catch (ReadLimitExceededException)
+        {
+            Logger?.LogWarning("The preview data of run {Run} is larger than the {Limit} MB ILD reads, so the stored copy is unchanged", owner, ReadLimits.MaxPreviewDataBytes / RunReadLimits.Megabyte);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1390,41 +1412,64 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// A command in the run, to its end. <paramref name="stdin"/> is sent and closed; <paramref name="stdout"/> receives
     /// the output when given, otherwise it is collected as text.
     /// </summary>
-    private async Task<RunHostOutput> ExecAsync(ExecOwner owner, IReadOnlyList<string> command, Stream? stdin, Stream? stdout, CancellationToken ct)
+    private async Task<RunHostOutput> ExecAsync(
+        ExecOwner owner, IReadOnlyList<string> command, Stream? stdin, Stream? stdout, CancellationToken ct, long? collectedLimit = null)
     {
         using var exec = await OpenExecAsync(owner, command, environment: null, stdin is not null, tty: false, ct);
         using var collected = new MemoryStream();
         using var errors = new MemoryStream();
-        var output = Drain(exec.Stdout, stdout ?? collected, ct);
-        var failures = Drain(exec.Stderr!, errors, ct);
+        using var errorsKept = new TruncatingWriteStream(errors, StderrKeptBytes);
+        // Output ILD keeps stops at the limit: the command is stopped there, not read to its end and cut afterwards.
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var output = Drain(exec.Stdout, stdout ?? new CappedWriteStream(collected, collectedLimit ?? ReadLimits.MaxOutputBytes), stop);
+        var failures = Drain(exec.Stderr!, errorsKept, stop);
 
-        if (stdin is not null)
+        int? status;
+        try
         {
-            try
+            if (stdin is not null)
             {
-                var buffer = new byte[64 * 1024];
-                int read;
-                while ((read = await stdin.ReadAsync(buffer, ct)) > 0)
-                    await exec.WriteStdinAsync(buffer.AsMemory(0, read), ct);
-                await exec.CloseStdinAsync(ct);
+                try
+                {
+                    var buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = await stdin.ReadAsync(buffer, stop.Token)) > 0)
+                        await exec.WriteStdinAsync(buffer.AsMemory(0, read), stop.Token);
+                    await exec.CloseStdinAsync(stop.Token);
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException)
+                {
+                    // The command ended without reading it all; its status says how.
+                }
             }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException)
-            {
-                // The command ended without reading it all; its status says how.
-            }
-        }
 
-        var status = await exec.Status.WaitAsync(ct);
-        await Task.WhenAll(output, failures);
+            status = await exec.Status.WaitAsync(stop.Token);
+            await Task.WhenAll(output, failures);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && stop.IsCancellationRequested)
+        {
+            await output;
+            throw;
+        }
         var stderr = Encoding.UTF8.GetString(errors.ToArray());
+        if (errorsKept.Truncated)
+            stderr += "\n…truncated\n";
         if (status is null)
             stderr += $"the connection to the run's {Noun} ended before the command did\n";
         return new RunHostOutput(status ?? ExecRunProcess.ConnectionLostExitCode, Encoding.UTF8.GetString(collected.ToArray()), stderr);
     }
 
-    private static async Task Drain(Stream from, Stream to, CancellationToken ct)
+    /// <summary>What of a command's stderr is kept: it is read by a person, so past this it is cut with a marker.</summary>
+    private const int StderrKeptBytes = 64 * 1024;
+
+    private static async Task Drain(Stream from, Stream to, CancellationTokenSource stop)
     {
-        try { await from.CopyToAsync(to, ct); }
+        try { await from.CopyToAsync(to, stop.Token); }
+        catch (ReadLimitExceededException)
+        {
+            stop.Cancel();
+            throw;
+        }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException) { }
     }
 

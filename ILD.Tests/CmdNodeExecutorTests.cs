@@ -56,6 +56,23 @@ public class CmdNodeExecutorTests : IDisposable
         return outcomes;
     }
 
+    [Fact]
+    public async Task Output_without_a_newline_is_kept_up_to_the_limit_with_a_marker()
+    {
+        var progress = new System.Text.StringBuilder();
+        var ctx = Context(
+            "head -c 300000 /dev/zero | tr '\\0' x", TestContext.Current.CancellationToken, text => { lock (progress) progress.Append(text); return Task.CompletedTask; });
+        var outcomes = new List<NodeOutcome>();
+
+        await foreach (var outcome in new CmdNodeExecutor(new ILD.Core.Services.RunHosts.RunReadLimits { MaxOutputBytes = 1000 }).ExecuteAsync(ctx)) outcomes.Add(outcome);
+
+        var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success));
+        Assert.StartsWith(new string('x', 1000), success.Output);
+        Assert.Contains("truncated", success.Output);
+        Assert.InRange(success.Output!.Length, 1000, 1100);
+        Assert.Equal(1000, progress.ToString().Count(c => c == 'x'));
+    }
+
     [Theory]
     // The command reaches /bin/sh as one argv entry, so the shell — not .NET's
     // argument parser, and not a hand-rolled escape — is what interprets it.

@@ -14,6 +14,7 @@ public static class ContainerRunHostFactory
     {
         var host = new ContainerRunHost(ContainerRunHostOptions.From(setting), runner, loggers.CreateLogger<ContainerRunHost>())
         {
+            ReadLimits = RunReadLimits.FromEnvironment(setting),
             Credentials = credentials ?? ILD.Core.Services.Implementations.Network.EgressCredentials.Random(),
             RetainedRuns = retainedRuns ?? (_ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>())),
         };

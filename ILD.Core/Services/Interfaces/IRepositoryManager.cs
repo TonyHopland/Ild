@@ -67,10 +67,11 @@ public interface IRepositoryManager
     Task<bool> ResetHardAsync(string worktreePath, string revision, CancellationToken cancellationToken = default);
     Task<bool> CommitAsync(string worktreePath, string message);
     Task<(bool Success, string? Error)> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
-    Task<string?> GetDiffAsync(string worktreePath);
+    /// <summary>Whether the working tree differs from <c>HEAD</c>, staged or not. The diff itself is not read.</summary>
+    Task<bool> HasUncommittedChangesAsync(string worktreePath);
 
     /// <summary>
-    /// The file list behind <see cref="GetDiffAsync"/>: tracked paths that differ
+    /// The file list behind <see cref="HasUncommittedChangesAsync"/>: tracked paths that differ
     /// from <c>HEAD</c>, staged or not. Untracked files are deliberately excluded —
     /// a rebase leaves them alone, and treating repository build output as "dirty"
     /// would block the operation for no gain.

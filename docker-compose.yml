@@ -114,6 +114,11 @@ services:
       # above, which enforces them again on its own. See docs/configuration.md.
       - ILD_MAX_ATTACHMENT_MB=${ILD_MAX_ATTACHMENT_MB:-25}
       - ILD_MAX_ATTACHMENTS_TOTAL_MB=${ILD_MAX_ATTACHMENTS_TOTAL_MB:-250}
+      # What ILD reads out of a run before it stops, in whole MB. See docs/configuration.md.
+      - ILD_MAX_RUN_FILE_MB=${ILD_MAX_RUN_FILE_MB:-64}
+      - ILD_MAX_RUN_OUTPUT_MB=${ILD_MAX_RUN_OUTPUT_MB:-16}
+      - ILD_MAX_BUNDLE_MB=${ILD_MAX_BUNDLE_MB:-2048}
+      - ILD_MAX_PREVIEW_DATA_MB=${ILD_MAX_PREVIEW_DATA_MB:-1024}
       # Days a coding-agent release must have been published before ILD installs
       # it automatically, 0 to 365. See docs/configuration.md.
       - ILD_AGENT_UPDATE_COOLDOWN_DAYS=${ILD_AGENT_UPDATE_COOLDOWN_DAYS:-1}

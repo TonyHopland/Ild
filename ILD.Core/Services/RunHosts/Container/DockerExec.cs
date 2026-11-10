@@ -92,7 +92,7 @@ internal sealed class DockerExec : IExecStream
         var buffer = new byte[16 * 1024];
         int read;
         while ((read = await _reader.ReadAsync(buffer, _gone)) > 0)
-            _stdout.Append(buffer.AsSpan(0, read));
+            await _stdout.AppendAsync(buffer.AsMemory(0, read), _gone);
     }
 
     private async Task DemultiplexAsync()
@@ -111,7 +111,7 @@ internal sealed class DockerExec : IExecStream
             {
                 var read = await _reader.ReadAsync(buffer.AsMemory(0, (int)Math.Min(remaining, (uint)buffer.Length)), _gone);
                 if (read == 0) return;
-                if (header[0] is 1 or 2 or 3) target.Append(buffer.AsSpan(0, read));
+                if (header[0] is 1 or 2 or 3) await target.AppendAsync(buffer.AsMemory(0, read), _gone);
                 remaining -= (uint)read;
             }
         }
@@ -139,6 +139,8 @@ internal sealed class DockerExec : IExecStream
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+        _stdout.Dispose();
+        _stderr?.Dispose();
         _disposed.Cancel();
         _disposed.Dispose();
         _reader.Dispose();
