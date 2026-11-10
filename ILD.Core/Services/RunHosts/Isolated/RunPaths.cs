@@ -26,6 +26,9 @@ public static class RunPaths
     /// <summary>The role of the network (or NetworkPolicy) that gives a run or chat a direct route in network mode Off.</summary>
     public const string OpenRole = "open";
 
+    /// <summary>The label of an open network naming whose it is: a run's id, or "chat".</summary>
+    public const string OpenOwnerLabel = "ild/open-owner";
+
     public static string RunRoot(Guid ownerId) => $"{RunsRoot}/{ownerId:N}";
 
     public static string WorkingDirectory(Guid ownerId) => $"{RunRoot(ownerId)}/repo";

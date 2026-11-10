@@ -869,9 +869,11 @@ relay still goes through the proxy). In a container or pod that takes a direct r
 for the run, which is a hole in the network described above:
 
 - **Docker and Podman:** ILD connects the run's container (or the chat container) to a
-  second network, `ild-open-<instance>`, that is not internal and has DNS, and
-  points the container's `/etc/resolv.conf` at that network's resolver. The network
-  is labelled like the others and the sweep removes it once nothing is on it.
+  second network of its own, `ild-open-<instance>-<run id>` (`-chat` for the chat
+  container), that is not internal and has DNS, and points the container's
+  `/etc/resolv.conf` at that network's resolver. Two containers in `off` are on different
+  networks, so they cannot reach each other's ports. The network is labelled like the
+  others and the sweep removes it once nothing is on it.
 - **Kubernetes:** ILD adds a second NetworkPolicy, `<run object>-open`, that allows all
   egress, DNS included, for the run's (or the chat's) pod, owned by the run's Secret
   like the others. It needs a CNI that enforces NetworkPolicy, as the run's own

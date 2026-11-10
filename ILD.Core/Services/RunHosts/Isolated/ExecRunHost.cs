@@ -553,7 +553,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
         var directory = string.IsNullOrEmpty(psi.WorkingDirectory) ? RunPaths.WorkingDirectory(owner.Id) : psi.WorkingDirectory;
         // Only a command started for the run itself is one KillAllAsync ends; a preview service, which has no owner, outlives a retry.
-        // A process launched in mode Off is told by its name, which is what says whether the route is still needed.
+        // A process launched in mode Off is told by its name.
         var id = $"{(command.OwnerId != Guid.Empty ? command.OwnerId.ToString("N") : "unowned")}/{(direct ? OffPrefix : "")}{Guid.NewGuid():N}";
         var (execEnvironment, envFile) = await DeliverEnvironmentAsync(owner, id, environment, ct);
         var wrapped = new List<string> { "/bin/sh", "-c", CommandWrapper, "sh", directory, id, envFile, merged.PathPrefix, fileName };
@@ -566,21 +566,12 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     // -- The direct route (network mode Off) ---------------------------------------
 
-    /// <summary>What the name of a process launched in network mode Off starts with, after its owner's directory in the run's process directory.</summary>
+    /// <summary>What the name of a process launched in network mode Off starts with, after its owner's directory in the run's process directory; kill-by-id reads it, the route never does.</summary>
     internal const string OffPrefix = "off-";
 
-    // Exits 1 when a process launched in mode Off is still running anywhere in the pod or container (a chat container is every chat's).
-    internal const string OffRunningScript = $$"""
-        for f in "{{RunPaths.ProcessDirectory}}"/*/{{OffPrefix}}*; do
-            [ -f "$f" ] || continue
-            pid=$(cat -- "$f" 2>/dev/null)
-            case "$pid" in ''|*[!0-9]*) continue ;; esac
-            kill -0 -- "-$pid" 2>/dev/null && exit 1
-        done
-        exit 0
-        """;
-
-    // Off processes this ILD has started and not seen end: they cover the moment between the launch and its pid file.
+    // Off processes this ILD has started and not seen end. This is the only thing that keeps a route open: nothing in the container is trusted,
+    // since the run writes its own process files. After a restart it is empty, so the next proxied launch closes the route.
+    // A process launched in mode Off is named so, which only kill-by-id reads.
     private readonly ConcurrentDictionary<ExecOwner, int> _liveOff = new();
 
     // Opening and closing a route are one at a time for a container or pod; every chat shares one.
@@ -618,7 +609,6 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         if (!await HasDirectRouteAsync(owner, ct)) return;
         // A chat container is every chat's, so one chat's Off process keeps it for all.
         if (_liveOff.Any(e => e.Value > 0 && (owner.Chat ? e.Key.Chat : e.Key == owner))) return;
-        if (!(await RunScriptAsync(owner, OffRunningScript, [], ct)).Success) return;
         await CloseDirectRouteAsync(owner, ct);
     }
 

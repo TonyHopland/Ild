@@ -818,14 +818,48 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
     // -- The direct route (network mode Off) -------------------------------------
 
-    private async Task<IRunProcess> StartAsync(NetworkMode mode, bool prepared = false)
+    private async Task<IRunProcess> StartAsync(NetworkMode mode, bool prepared = false, ContainerRunHost? host = null, Guid? run = null)
     {
-        var psi = Command(WorkingDirectory, "ssh", "-T", "git@github.com");
-        var command = prepared ? RunCommand.Prepared(psi, _run, networkMode: mode) : RunCommand.Agent(psi, _run, Guid.NewGuid(), mode, null);
-        var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
+        var process = await LaunchAsync(mode, prepared, host, run);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
         return process;
     }
+
+    // A launch that is not waited for, so one that is held keeps running.
+    private async Task<IRunProcess> LaunchAsync(NetworkMode mode, bool prepared = false, ContainerRunHost? host = null, Guid? run = null)
+    {
+        var owner = run ?? _run;
+        var psi = Command(RunPaths.WorkingDirectory(owner), "ssh", "-T", "git@github.com");
+        var command = prepared ? RunCommand.Prepared(psi, owner, networkMode: mode) : RunCommand.Agent(psi, owner, Guid.NewGuid(), mode, null);
+        return await (host ?? _host).StartCommandAsync(command, TestContext.Current.CancellationToken);
+    }
+
+    private string OpenNetwork(Guid run) => _host.OpenNetworkName(new ExecOwner(run, Chat: false));
+
+    private string ChatOpenNetwork => _host.OpenNetworkName(new ExecOwner(Guid.Empty, Chat: true));
+
+    private static bool IsOffLaunch(FakeDockerExec e) => e.Joined.Contains($"/{ExecRunHost.OffPrefix}", StringComparison.Ordinal) && e.Joined.Contains("setsid -w", StringComparison.Ordinal);
+
+    // The exec of every launch in mode Off stays running until released; anything else ends at once.
+    private TaskCompletionSource HoldOffLaunches()
+    {
+        var release = new TaskCompletionSource();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (IsOffLaunch(e)) await release.Task;
+            await e.ExitAsync(0);
+        };
+        return release;
+    }
+
+    // As if the container always said a process group in mode Off were alive, which is all a run can make it say.
+    private void PlantAnOffFile()
+        => _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(e.Joined.Contains("setsid -w", StringComparison.Ordinal) || e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal) ? 0 : 1);
+        };
 
     private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
 
@@ -840,14 +874,14 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task A_launch_in_off_connects_the_container_to_the_open_network_and_gets_no_proxy_variables(bool prepared)
     {
         await CreateRunAsync();
-        Assert.DoesNotContain(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+        Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
 
         using var process = await StartAsync(NetworkMode.Off, prepared);
 
-        Assert.Contains(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+        Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
         Assert.Empty(LaunchEnvironment());
         Assert.Contains(LaunchExec().Command, c => c.StartsWith($"{_run:N}/{ExecRunHost.OffPrefix}", StringComparison.Ordinal));
-        var open = _api.Network(_host.OpenNetworkName)!;
+        var open = _api.Network(OpenNetwork(_run))!;
         Assert.False(open["Internal"]!.GetValue<bool>());
         Assert.Equal("open", open["Labels"]![RunPaths.RoleLabel]!.GetValue<string>());
         Assert.Equal(Instance, open["Labels"]![RunPaths.InstanceLabel]!.GetValue<string>());
@@ -890,11 +924,11 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         using (await StartAsync(NetworkMode.Off)) { }
-        Assert.Contains(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+        Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
 
         using var process = await StartAsync(mode);
 
-        Assert.DoesNotContain(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+        Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
         var restore = _api.Execs.Last(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal));
         Assert.Equal("127.0.0.1", restore.Command[^1]);
         Assert.NotEmpty(LaunchEnvironment());
@@ -942,18 +976,134 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task Returning_to_a_proxied_mode_with_an_off_process_still_running_keeps_the_route()
     {
         await CreateRunAsync();
-        using (await StartAsync(NetworkMode.Off)) { }
-        // The pid file of a process launched in Off, whose process group is alive.
-        _api.OnExec = async e =>
-        {
-            if (e.Command.Count > 5 && e.Command[5] == ExecRunHost.OffRunningScript) await e.ExitAsync(1);
-            else await e.ExitAsync(0);
-        };
+        var release = HoldOffLaunches();
+        using var off = await LaunchAsync(NetworkMode.Off);
 
         using var process = await StartAsync(NetworkMode.Monitor);
 
-        Assert.Contains(_host.OpenNetworkName, _api.NetworksOf(Name(_run)));
+        Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
         Assert.NotEmpty(LaunchEnvironment());
+        release.SetResult();
+        await off.WaitForExitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_planted_off_file_does_not_keep_the_route_once_ilds_own_off_launches_have_ended()
+    {
+        await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+        PlantAnOffFile();
+
+        using var process = await StartAsync(NetworkMode.Monitor);
+
+        Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
+        Assert.NotEmpty(LaunchEnvironment());
+    }
+
+    [Fact]
+    public async Task The_route_closes_on_the_first_proxied_launch_after_the_last_off_launch_ended_and_not_before()
+    {
+        await CreateRunAsync();
+        var release = HoldOffLaunches();
+        using var first = await LaunchAsync(NetworkMode.Off);
+        using var second = await LaunchAsync(NetworkMode.Off);
+        _api.OnExec = async e => await e.ExitAsync(0);
+        // Both running: the route stays. Ending one is not enough.
+        using (await StartAsync(NetworkMode.Whitelist)) { }
+        Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
+        release.SetResult();
+        await Task.WhenAll(first.WaitForExitAsync(TestContext.Current.CancellationToken), second.WaitForExitAsync(TestContext.Current.CancellationToken));
+
+        using var process = await StartAsync(NetworkMode.Whitelist);
+
+        Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
+    }
+
+    [Fact]
+    public async Task A_restarted_ild_closes_a_route_it_finds_on_its_first_proxied_launch()
+    {
+        await CreateRunAsync();
+        var release = HoldOffLaunches();
+        using var off = await LaunchAsync(NetworkMode.Off);
+        Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
+        _api.OnExec = async e => await e.ExitAsync(0);
+        using var restarted = NewHost(Options());
+
+        using var process = await StartAsync(NetworkMode.Monitor, host: restarted);
+
+        Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
+        release.SetResult();
+    }
+
+    private async Task<IRunProcess> ChatLaunchAsync(Guid chat, NetworkMode mode)
+        => await _host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "git", "status"), chat, networkMode: mode), TestContext.Current.CancellationToken);
+
+    [Fact]
+    public async Task A_planted_off_file_does_not_keep_the_chat_containers_route_once_no_off_chat_launch_is_live()
+    {
+        var ended = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(ended, "/unused", TestContext.Current.CancellationToken);
+        await _host.CreateChatFolderAsync(other, "/unused", TestContext.Current.CancellationToken);
+        using (var off = await ChatLaunchAsync(ended, NetworkMode.Off)) await off.WaitForExitAsync(TestContext.Current.CancellationToken);
+        Assert.Contains(ChatOpenNetwork, _api.NetworksOf(ChatContainer));
+        PlantAnOffFile();
+
+        using var process = await ChatLaunchAsync(other, NetworkMode.Monitor);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(ChatOpenNetwork, _api.NetworksOf(ChatContainer));
+    }
+
+    [Fact]
+    public async Task A_live_off_launch_of_one_chat_keeps_the_chat_containers_route_for_a_proxied_launch_of_another()
+    {
+        var live = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(live, "/unused", TestContext.Current.CancellationToken);
+        await _host.CreateChatFolderAsync(other, "/unused", TestContext.Current.CancellationToken);
+        var release = HoldOffLaunches();
+        using var off = await ChatLaunchAsync(live, NetworkMode.Off);
+
+        using var process = await ChatLaunchAsync(other, NetworkMode.Monitor);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(ChatOpenNetwork, _api.NetworksOf(ChatContainer));
+        release.SetResult();
+    }
+
+    [Fact]
+    public async Task Two_runs_in_off_are_on_networks_of_their_own_and_each_is_reported_with_a_route()
+    {
+        var other = Guid.NewGuid();
+        await CreateRunAsync();
+        await _host.CreateAsync(new RunEnvironmentRequest(other, MakeBaseRepository("base-other"), "ild/wi-2-run", Repo), TestContext.Current.CancellationToken);
+        using var first = await StartAsync(NetworkMode.Off);
+        using var second = await StartAsync(NetworkMode.Off, run: other);
+
+        Assert.NotEqual(OpenNetwork(_run), OpenNetwork(other));
+        Assert.Equal([OpenNetwork(_run)], _api.NetworksOf(Name(_run)).Where(n => n.StartsWith("ild-open-", StringComparison.Ordinal)));
+        Assert.Equal([OpenNetwork(other)], _api.NetworksOf(Name(other)).Where(n => n.StartsWith("ild-open-", StringComparison.Ordinal)));
+        var routes = await _host.DirectRoutesAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, routes.Count);
+        Assert.Contains(new DirectRoute(_run, Chat: false), routes);
+        Assert.Contains(new DirectRoute(other, Chat: false), routes);
+        Assert.Equal(other.ToString("N"), _api.Network(OpenNetwork(other))!["Labels"]![RunPaths.OpenOwnerLabel]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Closing_the_route_also_disconnects_a_container_an_older_ild_left_on_the_shared_open_network()
+    {
+        await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+        var shared = _host.SharedOpenNetworkName;
+        _api.SeedOpenNetwork(shared, Instance, Name(_run));
+        Assert.Contains(shared, _api.NetworksOf(Name(_run)));
+
+        using var process = await StartAsync(NetworkMode.Monitor);
+
+        Assert.DoesNotContain(shared, _api.NetworksOf(Name(_run)));
+        Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
     }
 
     [Fact]
@@ -964,8 +1114,8 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         using var process = await StartAsync(NetworkMode.Monitor);
 
-        Assert.DoesNotContain(_host.OpenNetworkName, _api.Networks());
-        Assert.DoesNotContain(_api.Execs.Skip(execs), e => e.Command.Count > 5 && e.Command[5] == ExecRunHost.OffRunningScript);
+        Assert.DoesNotContain(OpenNetwork(_run), _api.Networks());
+        Assert.Equal(execs + 1, _api.Execs.Count);
     }
 
     [Fact]
@@ -986,12 +1136,34 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         using (await StartAsync(NetworkMode.Off)) { }
         var ct = TestContext.Current.CancellationToken;
 
-        Assert.DoesNotContain(await _host.ListLeftoversAsync(new HashSet<Guid> { _run }, ct), l => l.Location == _host.OpenNetworkName);
+        Assert.DoesNotContain(await _host.ListLeftoversAsync(new HashSet<Guid> { _run }, ct), l => l.Location == OpenNetwork(_run));
 
         using (await StartAsync(NetworkMode.Monitor)) { }
-        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid> { _run }, ct), l => l.Location == _host.OpenNetworkName);
+        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid> { _run }, ct), l => l.Location == OpenNetwork(_run));
         Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
-        Assert.DoesNotContain(_host.OpenNetworkName, _api.Networks());
+        Assert.DoesNotContain(OpenNetwork(_run), _api.Networks());
+    }
+
+    [Fact]
+    public async Task The_sweep_removes_every_empty_open_network_the_old_shared_one_included_and_keeps_the_ones_in_use()
+    {
+        var other = Guid.NewGuid();
+        await CreateRunAsync();
+        await _host.CreateAsync(new RunEnvironmentRequest(other, MakeBaseRepository("base-other"), "ild/wi-2-run", Repo), TestContext.Current.CancellationToken);
+        using (await StartAsync(NetworkMode.Off)) { }
+        using var live = await StartAsync(NetworkMode.Off, run: other);
+        _api.SeedOpenNetwork(_host.SharedOpenNetworkName, Instance);
+        var ct = TestContext.Current.CancellationToken;
+        using (await StartAsync(NetworkMode.Monitor)) { }
+
+        var leftovers = (await _host.ListLeftoversAsync(new HashSet<Guid> { _run, other }, ct)).Select(l => l.Location).Order().ToList();
+
+        Assert.Equal(new[] { OpenNetwork(_run), _host.SharedOpenNetworkName }.Order(), leftovers);
+        foreach (var location in leftovers)
+            Assert.True(await _host.DeleteLeftoverAsync(new RunLeftover(ContainerRunHost.RunLeftoverKind, location), ct));
+        Assert.Contains(OpenNetwork(other), _api.Networks());
+        Assert.DoesNotContain(OpenNetwork(_run), _api.Networks());
+        Assert.DoesNotContain(_host.SharedOpenNetworkName, _api.Networks());
     }
 
     // -- Kill leftovers ----------------------------------------------------------

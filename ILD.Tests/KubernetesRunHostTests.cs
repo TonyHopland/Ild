@@ -704,14 +704,43 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     private string OpenPolicyName => KubernetesNames.OpenName(Name(_run));
 
-    private async Task<IRunProcess> StartAsync(NetworkMode mode, bool prepared = false)
+    private async Task<IRunProcess> StartAsync(NetworkMode mode, bool prepared = false, KubernetesRunHost? host = null)
     {
-        var psi = Command(WorkingDirectory, "ssh", "-T", "git@github.com");
-        var command = prepared ? RunCommand.Prepared(psi, _run, networkMode: mode) : RunCommand.Agent(psi, _run, Guid.NewGuid(), mode, null);
-        var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
+        var process = await LaunchAsync(mode, prepared, host);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
         return process;
     }
+
+    // A launch that is not waited for, so one that is held keeps running.
+    private async Task<IRunProcess> LaunchAsync(NetworkMode mode, bool prepared = false, KubernetesRunHost? host = null)
+    {
+        var psi = Command(WorkingDirectory, "ssh", "-T", "git@github.com");
+        var command = prepared ? RunCommand.Prepared(psi, _run, networkMode: mode) : RunCommand.Agent(psi, _run, Guid.NewGuid(), mode, null);
+        return await (host ?? _host).StartCommandAsync(command, TestContext.Current.CancellationToken);
+    }
+
+    private static bool IsOffLaunch(FakeExec e) => e.Joined.Contains($"/{ExecRunHost.OffPrefix}", StringComparison.Ordinal) && e.Joined.Contains("setsid -w", StringComparison.Ordinal);
+
+    // The exec of every launch in mode Off stays running until released; anything else ends at once.
+    private TaskCompletionSource HoldOffLaunches()
+    {
+        var release = new TaskCompletionSource();
+        _api.OnExec = async e =>
+        {
+            if (IsOffLaunch(e)) await release.Task;
+            await e.ExitAsync(0);
+        };
+        return release;
+    }
+
+    // As if the pod always said a process group in mode Off were alive, which is all a run can make it say.
+    private void PlantAnOffFile()
+        => _api.OnExec = e => e.ExitAsync(e.Joined.Contains("setsid -w", StringComparison.Ordinal) ? 0 : 1);
+
+    private async Task<IRunProcess> ChatLaunchAsync(Guid chat, NetworkMode mode)
+        => await _host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "git", "status"), chat, networkMode: mode), TestContext.Current.CancellationToken);
+
+    private string ChatOpenPolicyName => KubernetesNames.OpenName(ChatPodName);
 
     private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
 
@@ -770,12 +799,98 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     public async Task Returning_to_a_proxied_mode_with_an_off_process_still_running_keeps_the_open_policy()
     {
         await CreateRunAsync();
-        using (await StartAsync(NetworkMode.Off)) { }
-        _api.OnExec = async e => await e.ExitAsync(e.Command.Count > 5 && e.Command[5] == ExecRunHost.OffRunningScript ? 1 : 0);
+        var release = HoldOffLaunches();
+        using var off = await LaunchAsync(NetworkMode.Off);
 
         using var process = await StartAsync(NetworkMode.Monitor);
 
         Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+        release.SetResult();
+        await off.WaitForExitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_planted_off_file_does_not_keep_the_open_policy_once_ilds_own_off_launches_have_ended()
+    {
+        await CreateRunAsync();
+        using (await StartAsync(NetworkMode.Off)) { }
+        PlantAnOffFile();
+
+        using var process = await StartAsync(NetworkMode.Monitor);
+
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+        Assert.NotEmpty(LaunchProxyVariables());
+    }
+
+    [Fact]
+    public async Task A_restarted_ild_closes_an_open_policy_it_finds_on_its_first_proxied_launch()
+    {
+        await CreateRunAsync();
+        var release = HoldOffLaunches();
+        using var off = await LaunchAsync(NetworkMode.Off);
+        _api.OnExec = e => e.ExitAsync(0);
+        var restarted = NewHost(Options());
+
+        using var process = await StartAsync(NetworkMode.Monitor, host: restarted);
+
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+        release.SetResult();
+    }
+
+    [Fact]
+    public async Task A_planted_off_file_does_not_keep_the_chat_pods_open_policy_once_no_off_chat_launch_is_live()
+    {
+        var ended = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(ended, "/unused", TestContext.Current.CancellationToken);
+        await _host.CreateChatFolderAsync(other, "/unused", TestContext.Current.CancellationToken);
+        using (var off = await ChatLaunchAsync(ended, NetworkMode.Off)) await off.WaitForExitAsync(TestContext.Current.CancellationToken);
+        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", ChatOpenPolicyName));
+        PlantAnOffFile();
+
+        using var process = await ChatLaunchAsync(other, NetworkMode.Monitor);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", ChatOpenPolicyName));
+    }
+
+    [Fact]
+    public async Task A_live_off_launch_of_one_chat_keeps_the_chat_pods_open_policy_for_a_proxied_launch_of_another()
+    {
+        var live = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(live, "/unused", TestContext.Current.CancellationToken);
+        await _host.CreateChatFolderAsync(other, "/unused", TestContext.Current.CancellationToken);
+        var release = HoldOffLaunches();
+        using var off = await ChatLaunchAsync(live, NetworkMode.Off);
+
+        using var process = await ChatLaunchAsync(other, NetworkMode.Monitor);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", ChatOpenPolicyName));
+        release.SetResult();
+    }
+
+    [Fact]
+    public async Task Two_pods_in_off_cannot_reach_each_other_because_a_pods_policy_takes_ingress_from_ilds_pod_only_and_the_open_policy_adds_none()
+    {
+        await CreateRunAsync();
+        using var process = await StartAsync(NetworkMode.Off);
+
+        foreach (var name in new[] { Name(_run), OpenPolicyName })
+        {
+            var spec = _api.Get<V1NetworkPolicy>("networkpolicies", name)!.Spec;
+            if (name == OpenPolicyName)
+            {
+                Assert.DoesNotContain("Ingress", spec.PolicyTypes);
+                Assert.Empty(spec.Ingress ?? []);
+                continue;
+            }
+            Assert.Contains("Ingress", spec.PolicyTypes);
+            var from = Assert.Single(Assert.Single(spec.Ingress).FromProperty);
+            Assert.Equal(Options().IldPodSelector, from.PodSelector.MatchLabels);
+            Assert.Null(from.IpBlock);
+        }
     }
 
     [Fact]
