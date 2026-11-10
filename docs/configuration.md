@@ -928,8 +928,12 @@ listeners. (The gateway's HTTPS listener answers on ILD's run-facing address ins
 
 **Protected destinations.** Settings → Network lists ILD's own infrastructure,
 each switched on by default: ILD's own addresses, ILD's database (the host of its
-connection string), the WorkItem Server (the host of its URL) and, on Kubernetes,
-the Kubernetes API. While one is on, the proxy refuses a connection whose resolved
+connection string), the WorkItem Server (the host of its URL), on Kubernetes
+the Kubernetes API, and with containers the machine ILD's container runs on, where
+the ports the stack publishes answer: the gateways of ILD's networks and the engine's
+name for the host (`host.docker.internal`, `host.containers.internal`). That machine's
+other addresses, the LAN's, cannot be told from inside a container, so a published
+port stays reachable there unless the mode is `whitelist`. While one is on, the proxy refuses a connection whose resolved
 addresses match it in every proxied mode, and a whitelist entry does not override
 it; the Network Log records it as `protected: <name>` with a link to the switch.
 Switching one off asks for confirmation, warns while it is off, and applies to the

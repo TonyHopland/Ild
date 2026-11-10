@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Runs can no longer reach ILD or the WorkItem Server through the ports the stack publishes on its machine**, unless you switch that protection off in Settings → Network.
+- **Runs start on Docker 29, and survive a restart of ILD on Podman.**
 - **A run can no longer stall other runs' network access by flooding the network log, or exhaust ILD's memory through a coding agent's output**; the output limit is `ILD_MAX_AGENT_OUTPUT_MB`.
 - **A git host's webhook needs no ILD token.** It is let in by its provider's webhook secret alone, so remove any `?access_token=` from the webhook URL in the git host's settings.
 - **Repeated sign-in attempts are slowed down**, per caller address and, for a run, per user name, so a run can no longer guess the admin password at full speed; the wait doubles from 1 s to 5 minutes, and the operator signing in from outside a run network is never held up by a run.

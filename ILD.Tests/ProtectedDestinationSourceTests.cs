@@ -139,6 +139,30 @@ public sealed class ProtectedDestinationSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task With_containers_the_machine_ilds_container_runs_on_is_protected_at_the_addresses_it_is_reached_by()
+    {
+        var source = new ProtectedDestinationSource(
+            _services.GetRequiredService<IServiceScopeFactory>(), _ => null, RunHostKind.Container, TimeProvider.System,
+            resolve: (_, _) => Task.FromResult<IPAddress[]>([]), ownAddresses: () => [IPAddress.Parse("172.20.0.4")],
+            hostAddresses: () => [IPAddress.Parse("172.20.0.1"), IPAddress.Parse("192.168.65.254"), IPAddress.Parse("172.20.0.4")]);
+
+        var host = (await source.GetAsync(TestContext.Current.CancellationToken)).Single(e => e.Id == ProtectedDestination.Host);
+
+        Assert.Equal([IPAddress.Parse("172.20.0.1"), IPAddress.Parse("192.168.65.254")], host.Addresses);
+        Assert.True(host.Enabled);
+    }
+
+    [Theory]
+    [InlineData("172.20.0.4", 16, "172.20.0.1")]
+    [InlineData("10.213.0.18", 28, "10.213.0.17")]
+    [InlineData("10.0.0.5", 32, null)]
+    [InlineData("10.0.0.5", 31, null)]
+    public void A_bridges_gateway_is_the_first_address_of_the_subnet(string address, int prefix, string? expected)
+    {
+        Assert.Equal(expected is null ? null : IPAddress.Parse(expected), ProtectedDestinationSource.FirstOfSubnet(IPAddress.Parse(address), prefix));
+    }
+
+    [Fact]
     public void The_guard_matches_an_ipv4_mapped_address_against_the_protected_one()
     {
         var destination = new ProtectedDestination(ProtectedDestination.Database, "ILD database", ["db"], [IPAddress.Parse("10.0.0.7")]);

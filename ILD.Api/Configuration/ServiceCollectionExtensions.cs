@@ -240,7 +240,8 @@ public static class ServiceCollectionExtensions
             return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>(),
                 isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]),
                 controlPlane: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.ControlPlaneAddressesAsync(ct) : Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]),
-                logger: sp.GetRequiredService<ILogger<ProtectedDestinationSource>>());
+                logger: sp.GetRequiredService<ILogger<ProtectedDestinationSource>>(),
+                hostAddresses: ProtectedDestinationSource.HostMachineAddresses);
         });
         services.AddSingleton<IEgressPolicy, EgressPolicy>();
         services.AddSingleton<INetworkNotifier, SignalRNetworkNotifier>();

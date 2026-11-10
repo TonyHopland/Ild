@@ -27,8 +27,9 @@ public sealed record ProtectedDestination(string Id, string Name, IReadOnlyList<
     public const string WorkItemServer = "workitem-server";
     public const string KubernetesApi = "kubernetes-api";
     public const string LinkLocal = "link-local";
+    public const string Host = "host";
 
-    public static readonly IReadOnlyList<string> AllIds = [Ild, Database, WorkItemServer, KubernetesApi, LinkLocal];
+    public static readonly IReadOnlyList<string> AllIds = [Ild, Database, WorkItemServer, KubernetesApi, Host, LinkLocal];
 
     /// <summary>Link-local addresses, where cloud metadata services answer (169.254.169.254, AWS's IPv6 form), with the credentials of the machine ILD runs on.</summary>
     public static readonly ProtectedDestination LinkLocalRanges = new(LinkLocal, "Link-local and cloud metadata addresses", [], [])
@@ -74,6 +75,7 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
     private readonly TimeProvider _clock;
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
     private readonly Func<IReadOnlyList<IPAddress>> _ownAddresses;
+    private readonly Func<IReadOnlyList<IPAddress>> _hostAddresses;
     private readonly SemaphoreSlim _reload = new(1, 1);
     private readonly Func<CancellationToken, Task<IReadOnlyList<IpRange>>> _isolated;
     private readonly Func<CancellationToken, Task<IReadOnlyList<IPAddress>>> _controlPlane;
@@ -87,8 +89,9 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
     public ProtectedDestinationSource(IServiceScopeFactory scopes, Func<string, string?> environment, RunHostKind kind, TimeProvider clock,
         Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<IReadOnlyList<IPAddress>>? ownAddresses = null,
         Func<CancellationToken, Task<IReadOnlyList<IpRange>>>? isolatedRanges = null, ILogger? logger = null,
-        Func<CancellationToken, Task<IReadOnlyList<IPAddress>>>? controlPlane = null)
+        Func<CancellationToken, Task<IReadOnlyList<IPAddress>>>? controlPlane = null, Func<IReadOnlyList<IPAddress>>? hostAddresses = null)
     {
+        _hostAddresses = hostAddresses ?? (() => []);
         _logger = logger;
         _controlPlane = controlPlane ?? (_ => Task.FromResult<IReadOnlyList<IPAddress>>([]));
         _isolated = isolatedRanges ?? (_ => Task.FromResult<IReadOnlyList<IpRange>>([]));
@@ -186,8 +189,42 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
             apiAddresses.AddRange(await ControlPlaneAsync(ct).ConfigureAwait(false));
             result.Add(new(ProtectedDestination.KubernetesApi, "Kubernetes API", apiHosts, apiAddresses.Distinct().ToList()));
         }
+        // Ports the compose stack publishes (ILD's own, the WorkItem Server's) answer on the machine's addresses, which are none of the containers'.
+        if (_kind == RunHostKind.Container && _hostAddresses().Except(own).ToList() is { Count: > 0 } host)
+            result.Add(new(ProtectedDestination.Host, "The machine ILD's container runs on", HostNames, host));
         result.Add(ProtectedDestination.LinkLocalRanges);
         return result;
+    }
+
+    private static readonly string[] HostNames = ["host.docker.internal", "gateway.docker.internal", "host.containers.internal"];
+
+    /// <summary>
+    /// How the machine a container runs on is reached from inside it: the gateway of each of its networks, which a bridge puts
+    /// at the first address of the subnet, and the names the engines give the host. Its other addresses (the LAN's) cannot be known from here.
+    /// </summary>
+    public static IReadOnlyList<IPAddress> HostMachineAddresses()
+    {
+        var found = new List<IPAddress>();
+        foreach (var properties in NetworkInterface.GetAllNetworkInterfaces().Select(i => i.GetIPProperties()))
+        {
+            found.AddRange(properties.GatewayAddresses.Select(g => g.Address));
+            found.AddRange(properties.UnicastAddresses.Select(a => FirstOfSubnet(a.Address, a.PrefixLength)).OfType<IPAddress>());
+        }
+        foreach (var name in HostNames)
+        {
+            try { found.AddRange(Dns.GetHostAddresses(name)); }
+            catch (Exception ex) when (ex is System.Net.Sockets.SocketException or ArgumentException) { }
+        }
+        return found.Where(a => !EgressDestinationGuard.IsLoopback(a) && !a.Equals(IPAddress.Any) && !a.Equals(IPAddress.IPv6Any)).Distinct().ToList();
+    }
+
+    internal static IPAddress? FirstOfSubnet(IPAddress address, int prefixLength)
+    {
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || prefixLength is <= 0 or >= 31) return null;
+        var bytes = address.GetAddressBytes();
+        var value = (uint)(bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3]);
+        var first = (value & (uint.MaxValue << (32 - prefixLength))) + 1;
+        return new IPAddress([(byte)(first >> 24), (byte)(first >> 16), (byte)(first >> 8), (byte)first]);
     }
 
     // The service's endpoints are the API server's real addresses. When they cannot be read the last ones stay, and the ClusterIP still stands.
