@@ -250,3 +250,7 @@ unrelated pod or a storage export by pod IP, and to the machine's LAN address, n
 cover. The lists keep their plain meaning for everything else. The way for a run to reach a LAN or in-cluster service is now a
 declared forward (ADR-0020), one decision per host and port, which is exempt from the protection (for plain HTTP as well as
 `CONNECT`); the operator can also switch `network.protect.private` off.
+
+**Amendment (work item 634).** The model gateway (ADR-0031) is under this policy too: its upstream host is judged by the mode and
+lists with the provider as the scope, and logged in the Network Log, marked as gateway traffic. Like a declared forward, it is
+exempt from the protected destinations, since the host is the operator's own provider configuration.

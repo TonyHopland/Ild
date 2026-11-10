@@ -32,4 +32,8 @@ public class NetworkLogEntry
     /// <summary>Why a refusal was not the lists' doing (<c>loopback</c>, <c>protected: ILD database</c>); null otherwise.</summary>
     [MaxLength(128)]
     public string? Reason { get; set; }
+
+    /// <summary>What carried the connection when it was not the proxy: <c>gateway</c> for a model call ILD made on a run's behalf (ADR-0031); null for a connection the proxy relayed.</summary>
+    [MaxLength(32)]
+    public string? Via { get; set; }
 }

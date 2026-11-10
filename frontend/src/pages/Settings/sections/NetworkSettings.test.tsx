@@ -330,6 +330,24 @@ describe("Network settings", () => {
     await waitFor(() => expect(promote).toHaveBeenCalledWith("l2", "Whitelist", false, true));
   });
 
+  test("marks a model call made through the gateway and keeps it apart from a proxied connection to the same host", async () => {
+    mockServices();
+    const row = {
+      port: 443,
+      timestamp: "2026-09-02T12:00:00Z",
+      decision: "Allowed",
+      aiProviderId: null,
+    } as const;
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([
+      { ...row, id: "g1", host: "api.example", via: "gateway" },
+      { ...row, id: "g2", host: "api.example" },
+    ]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    expect(await screen.findAllByText(/via model gateway/)).toHaveLength(1);
+    expect(screen.getAllByText("api.example")).toHaveLength(2);
+  });
+
   test("spells out what the pattern being typed will match", async () => {
     mockServices();
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });

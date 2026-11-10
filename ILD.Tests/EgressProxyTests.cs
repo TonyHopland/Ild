@@ -1008,7 +1008,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     public void A_log_row_budget_is_per_source_and_refills_over_time()
     {
         long now = 0;
-        var budget = new LogRowBudget(new EgressLimits { LogRowBurst = 2, LogRowsPerSecond = 1 }, () => now);
+        var budget = new LogRowBudget<IPAddress>(new EgressLimits { LogRowBurst = 2, LogRowsPerSecond = 1 }, () => now);
         var (a, b) = (IPAddress.Parse("10.0.0.1"), IPAddress.Parse("10.0.0.2"));
 
         Assert.True(budget.TryTake(a));
@@ -1561,7 +1561,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
         /// <summary>The queue is full: entries are refused, as a recorder that cannot take another does.</summary>
         public bool Full { get; set; }
 
-        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
+        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null, string? via = null)
         {
             if (Full) return false;
             lock (_entries)

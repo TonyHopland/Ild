@@ -136,6 +136,8 @@ export interface WorkItem {
    * repository had reached its parallelism limit; null otherwise.
    */
   repositoryParallelismHold?: RepositoryParallelismHold | null;
+  /** `gateway` for a model call ILD made on a run's behalf through the model gateway; absent for a connection the proxy relayed. */
+  via?: string | null;
 }
 
 /** A repository's slot count and limit as of the scheduler pass that held an item back. */
@@ -1595,6 +1597,8 @@ export interface NetworkLogEntry {
   installer?: string | null;
   /** Why ILD refused it when the lists were not the reason: `loopback` or `protected: <name>`. */
   reason?: string | null;
+  /** `gateway` for a model call ILD made on a run's behalf through the model gateway; absent for a connection the proxy relayed. */
+  via?: string | null;
 }
 
 /**

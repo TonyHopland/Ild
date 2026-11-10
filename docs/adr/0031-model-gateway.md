@@ -39,3 +39,11 @@ The matrix behind these rows, with what was run live, is `docs/run-hosts/provide
 - **The Copilot listener needs a port.** `ILD_GATEWAY_TLS_PORT` (default 8442). It is bound where runs reach ILD, by the rule of the egress proxy's bind address (loopback under `dotnet run`, all interfaces in a container or pod), and its certificate names loopback and the host of `ILD_API_URL`, replaced at startup when a name is missing. On Kubernetes the run's network policy admits the port and ILD's Service must expose it. Its certificate is set on that listener alone; every other HTTPS endpoint keeps its own. `0` switches it off, and Copilot runs then fail with a message that says so.
 - **Network mode Off launches bypass the proxy**, so the host block does not apply to them; they hold only a placeholder either way.
 - **Logins made before this change still work** for Codex, Copilot and OpenCode/Pi keys, which are read from the store or provider. Claude needs its one-time token.
+
+**Amendment (work item 634).** The gateway is under the network policy. Its upstream is judged by the mode and lists
+(`EgressPolicySnapshot.DecideUpstream`, scoped to the calling lease's provider), exempt from the protected destinations like a
+declared forward because it is the operator's own provider configuration, and logged in the Network Log, one row per request,
+marked `gateway`, from a budget of rows of its own per lease. A refusal is a 403 naming the host. ILD whitelists each
+provider's upstream hosts for it when the provider is created or changed, and once at startup for existing providers, so
+`whitelist` mode does not stop model calls; an operator who deletes such an entry gets the refusal. ILD's own calls that are not
+on a run's behalf (the Codex login refresh, version checks, mirror fetches) stay outside the lists.

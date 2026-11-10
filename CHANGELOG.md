@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A run's model calls now follow the network mode and lists, and appear in the Network Log as "via model gateway"**; in `whitelist` mode ILD adds each provider's model host for it, and deleting that entry blocks the provider.
 - **Runs can no longer reach private and cluster-internal addresses (the LAN, other pods, storage exports) through the egress proxy**; a run that reached a LAN or in-cluster service through the proxy loses that until you declare a forward to it or switch the protection off in Settings → Network.
 - **Runs can no longer reach ILD or the WorkItem Server through the ports the stack publishes on its machine**, unless you switch that protection off in Settings → Network.
 - **Runs start on Docker 29, and survive a restart of ILD on Podman.**

@@ -39,6 +39,7 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
         entry.ListKind = kind;
         entry.AiProviderId = aiProviderId;
         entry.Installers = installers;
+        entry.AddedForProvider = false;
         await _db.SaveChangesAsync(ct);
         return entry;
     }

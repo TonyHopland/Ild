@@ -267,7 +267,7 @@ public sealed class EgressPrivateDestinationTests : IAsyncLifetime
 
     private sealed class Log(List<string?> reasons) : INetworkLogRecorder
     {
-        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
+        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null, string? via = null)
         {
             if (decision == NetworkDecision.Blocked) lock (reasons) reasons.Add(reason);
             return true;

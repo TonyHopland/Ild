@@ -29,5 +29,8 @@ public class NetworkPolicyEntry
     /// <summary>The entry applies to the connections of toolchain installers and to no agent launch.</summary>
     public bool Installers { get; set; }
 
+    /// <summary>ILD added this entry for the provider's model gateway upstream (ADR-0031), and removes or replaces it when the provider changes; an operator's own entry is never marked.</summary>
+    public bool AddedForProvider { get; set; }
+
     public DateTime CreatedAt { get; set; }
 }

@@ -51,7 +51,7 @@ public sealed class EgressProxy : BackgroundService
     private readonly ILogger<EgressProxy> _logger;
     private readonly EgressRelay _relay;
     private readonly ConnectionLimiter _limiter;
-    private readonly LogRowBudget _logRows;
+    private readonly LogRowBudget<IPAddress> _logRows;
     private readonly Dictionary<IPAddress, DateTime> _refusalLogged = new();
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
     private readonly Func<IPAddress[], int, CancellationToken, Task<TcpClient>> _dial;
@@ -69,7 +69,7 @@ public sealed class EgressProxy : BackgroundService
         _logger = logger;
         _relay = new EgressRelay(policy, log, logger, options.Limits.IdleTimeout);
         _limiter = new ConnectionLimiter(options.Limits);
-        _logRows = new LogRowBudget(options.Limits);
+        _logRows = new LogRowBudget<IPAddress>(options.Limits);
     }
 
     /// <summary>The port actually bound, once listening; lets a test ask for port 0.</summary>

@@ -21,7 +21,7 @@ public interface INetworkLogRecorder
     /// Queues the entry. False when the queue is full and the entry was not kept: a connection that is allowed must not go
     /// unlogged, so the caller refuses it.
     /// </summary>
-    bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null);
+    bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null, string? via = null);
 }
 
 public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
@@ -50,7 +50,7 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
         _log = log;
     }
 
-    public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null)
+    public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null, string? via = null)
     {
         if (installer is not null && decision == NetworkDecision.Blocked) _refusals?.Note(installer, host, port);
         var queued = _queue.Writer.TryWrite(new NetworkLogEntry
@@ -63,6 +63,7 @@ public sealed class NetworkLogRecorder : BackgroundService, INetworkLogRecorder
             AiProviderId = aiProviderId,
             Reason = reason,
             Installer = installer,
+            Via = via,
         });
         if (!queued) Interlocked.Increment(ref _dropped);
         return queued;
