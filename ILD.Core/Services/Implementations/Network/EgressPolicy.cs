@@ -15,6 +15,9 @@ public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<Networ
     /// <summary>ILD's own infrastructure, each with the operator's switch; empty where ILD derives none (a test, a host that runs no proxy).</summary>
     public IReadOnlyList<ProtectedDestination> Protected { get; init; } = Array.Empty<ProtectedDestination>();
 
+    /// <summary>ILD's run networks and pods, which no run may reach through the proxy, switch or no switch.</summary>
+    public IReadOnlyList<IpRange> Isolated { get; init; } = Array.Empty<IpRange>();
+
     /// <summary>The declared forwards' destinations: a connection to exactly one is the operator's own decision (ADR-0020), exempt from the protected destinations.</summary>
     public IReadOnlyList<(string Host, int Port)> Forwards { get; init; } = Array.Empty<(string, int)>();
 
@@ -25,7 +28,7 @@ public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<Networ
     }
 
     public DestinationRefusal? CheckAddresses(IEnumerable<System.Net.IPAddress> resolved, bool isForward)
-        => EgressDestinationGuard.Check(resolved, Protected, isForward);
+        => EgressDestinationGuard.Check(resolved, Protected, isForward, Isolated);
 
     /// <summary>
     /// While an agent holds a model gateway lease for its provider, that provider's model hosts are closed
@@ -149,6 +152,7 @@ public sealed class EgressPolicy : IEgressPolicy
         return new EgressPolicySnapshot(mode, entries, _gateway)
         {
             Protected = protectedDestinations,
+            Isolated = _protected is null ? [] : await _protected.GetIsolatedRangesAsync(ct),
             Forwards = forwards.Select(f => (f.Host, f.Port)).ToList(),
         };
     }

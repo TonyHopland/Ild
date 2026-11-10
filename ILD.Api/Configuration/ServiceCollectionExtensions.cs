@@ -202,9 +202,18 @@ public static class ServiceCollectionExtensions
         // saw, and the enforcement status the entrypoint reported. All keyed off
         // ILD_NETWORK_PROXY_PORT; unset, nothing listens and launches are untouched.
         // A run's pod or container reaches the egress proxy over the network, not on ILD's loopback.
-        services.AddSingleton(sp => EgressProxyOptions.FromEnvironment() with
+        // Each launch is given a token ILD signs, which the proxy requires and takes the launch's scope from. The key is loaded once,
+        // in Program, before anything builds a launch's environment.
+        services.AddSingleton(_ => EgressCredentials.Current);
+        services.AddSingleton(sp =>
         {
-            BindAddress = EgressProxyOptions.BindAddressFor(RunHostOptions.Detect(name => sp.GetRequiredService<IConfiguration>()[name])),
+            var config = sp.GetRequiredService<IConfiguration>();
+            var kind = RunHostOptions.Detect(name => config[name]);
+            return EgressProxyOptions.FromEnvironment() with
+            {
+                BindAddress = EgressProxyOptions.BindAddressFor(kind),
+                AcceptsClient = EgressProxyOptions.ClientFilterFor(kind, name => Environment.GetEnvironmentVariable(name) ?? config[name]),
+            };
         });
         services.AddSingleton(sp => new NetworkEnforcementProbe(name => Environment.GetEnvironmentVariable(name) ?? sp.GetRequiredService<IConfiguration>()[name]));
         services.AddSingleton(sp => NetworkEnforcementStatus.FromEnvironment(sp.GetRequiredService<EgressProxyOptions>()) with { Probe = sp.GetRequiredService<NetworkEnforcementProbe>() });
@@ -212,7 +221,8 @@ public static class ServiceCollectionExtensions
         {
             var config = sp.GetRequiredService<IConfiguration>();
             string? Read(string name) => Environment.GetEnvironmentVariable(name) ?? config[name];
-            return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>());
+            return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>(),
+                isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]));
         });
         services.AddSingleton<IEgressPolicy, EgressPolicy>();
         services.AddSingleton<INetworkNotifier, SignalRNetworkNotifier>();

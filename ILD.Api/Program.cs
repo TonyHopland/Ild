@@ -46,6 +46,9 @@ try
         ?? Path.Combine(dataPath, worktreesSubdir);
 
     builder.Configuration["App:DataPath"] = dataPath;
+    // The key the egress proxy's launch credentials are signed with lives in the data path, so a run that outlives a restart keeps a token that verifies.
+    ILD.Core.Services.Implementations.Network.EgressCredentials.Use(
+        ILD.Core.Services.Implementations.Network.EgressCredentials.Load(Path.Combine(dataPath, "egress", "proxy.key")));
     builder.Configuration["App:WorktreesPath"] = worktreesPath;
 
     if (!Directory.Exists(dataPath))

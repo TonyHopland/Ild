@@ -458,7 +458,9 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal("None", pod.Spec.DnsPolicy);
         Assert.Equal(["127.0.0.1"], pod.Spec.DnsConfig.Nameservers);
         Assert.Equal("10.96.0.20", Assert.Single(pod.Spec.HostAliases).Ip);
-        Assert.Equal("http://installer:agents@ild.example:3128", EnvOf(pod, "HTTPS_PROXY"));
+        Assert.EndsWith("@ild.example:3128", EnvOf(pod, "HTTPS_PROXY"));
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressCredentials.Current, EnvOf(pod, "HTTPS_PROXY"), out var scope));
+        Assert.Equal(new LaunchScope(Installer: "agents"), scope);
         Assert.Equal("1", EnvOf(pod, "NODE_USE_ENV_PROXY"));
 
         // Created before the pod, and gone with it.
@@ -1114,7 +1116,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", Env(_api.Execs.Last()));
+        Assert.Contains(Env(_api.Execs.Last()), e => e.StartsWith("HTTPS_PROXY=http://ild:", StringComparison.Ordinal) && e.EndsWith("@ild.example:3128", StringComparison.Ordinal));
+        Assert.Equal(new LaunchScope(Provider: providerId), AgentIsolationEgressTests.ScopeInEnvironment(Env(_api.Execs.Last())));
     }
 
     // -- Kill leftovers ----------------------------------------------------------

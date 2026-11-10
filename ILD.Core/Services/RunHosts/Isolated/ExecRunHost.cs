@@ -283,6 +283,13 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             ? host + "-api"
             : host;
 
+    /// <summary>
+    /// The addresses of the networks and pods this host made for runs, which the egress proxy, being on every one of them, must never
+    /// dial for a run: another run's dev server or preview is there. Empty for a host that has none.
+    /// </summary>
+    public virtual Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>>([]);
+
     /// <summary>The port of ILD's egress proxy; 0 when there is none.</summary>
     protected abstract int EgressProxyPort { get; }
 

@@ -10,6 +10,8 @@ export const PROTECTED_WARNINGS: Record<string, string> = {
   "workitem-server":
     "agents can reach the WorkItem Server directly, outside ILD's own access rules",
   "kubernetes-api": "agents can reach the Kubernetes API with any credentials they hold",
+  "link-local":
+    "agents can reach link-local and cloud metadata addresses, which can hold the credentials of the machine ILD runs on",
 };
 
 export const PROTECTED_ANCHOR = "network-protected";

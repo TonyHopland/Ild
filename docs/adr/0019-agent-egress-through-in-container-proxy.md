@@ -153,24 +153,22 @@ change; one that is now blocked is reset rather than allowed to finish.
 This is the opposite of baking resolved IPs into firewall rules, which would
 need a reload per edit and break on rotating addresses.
 
-## Per-provider scope, and why per-run is not here
+## Launch credentials, and what scope they carry
 
-A launch made for an AI provider gets a proxy URL of the form
-`http://provider:<providerId>@127.0.0.1:<port>`; the client sends that as
-`Proxy-Authorization`, and the proxy reads the provider back out to apply its
-scoped entries. A connection that carries no credentials is judged by the
-global entries alone. This is the only attribution the proxy has: all runs
-share one agent uid, so it cannot tell one run's connection from another's.
-And it is attribution, not authentication: the credentials sit in the agent's
-own environment, so a launch can present another provider's id and inherit its
-scoped entries. Provider scope is a convenience for keeping lists tidy per tool,
-not a boundary between agents — anything that must hold against a hostile agent
-belongs on the global lists.
+Every launch (a run's agent or command, a chat, a toolchain installer, a provider sign-in) gets a proxy URL of the form
+`http://ild:<token>@127.0.0.1:<port>`, and the client sends the token as `Proxy-Authorization`. The proxy **requires** it: a connection with no token, or one ILD did not sign, is refused with `407` (an `access_denied` alert for a redirected TLS flow, which has no header to carry one) and is logged as blocked. This also keeps everything else that can reach the proxy's port off it: other compose containers, other pods in a cluster, the LAN.
 
-A toolchain installer (ADR-0035) gets `http://installer:<zone>@127.0.0.1:<port>` instead, with the toolchain zone as the password. Its connections are judged by the global entries and the single **Installers** scope, not by any provider's, and the log records the zone. The scope is one list for every zone, and like provider scope it is attribution rather than authentication.
-Per-run or per-repository lists need either the per-run-uid follow-up from
-ADR-0014 or a per-run credential the agent's client presents, and are a later
-layer.
+The token is signed, not stored: `base64url(scope).base64url(HMAC-SHA256(scope))`, with a 32-byte key ILD keeps at `<data path>/egress/proxy.key` (mode 0600, made on first start). The scope inside is the provider whose scoped entries apply, or the installer zone, or neither. The proxy takes a launch's scope **only from a token it verified**, never from what the client claims, so an agent that sends `installer:agents` or another provider's id gets `407`, not that scope. Nothing is kept per launch, so a parked run or the chat container, reconnected after an ILD restart with the environment it was made with, still holds a token that verifies. Rotating the key (delete the file) invalidates every token at once.
+
+A launch with no provider gets a token with no scope, and is judged by the global entries alone. A toolchain installer (ADR-0035) gets a token whose scope is its zone: its connections are judged by the global entries and the single **Installers** scope, and the log records the zone.
+
+What this is not: the token sits in the launch's own environment, so it is that launch's to use, and it lives as long as the key does; ending a run does not revoke it. A leaked token carries only its own launch's scope. Provider scope is still a convenience for keeping lists tidy per tool, not a boundary between agents on the same launch. Per-run or per-repository lists need a scope in the token other than the provider, and are a later layer. With runs as local processes (`dotnet run`, a developer's machine) the agent runs as ILD's user and can read the key file; that mode is unconfined anyway (ADR-0036).
+
+### Where the proxy listens
+
+- **Local runs:** loopback, which only the machine's own processes reach.
+- **Container runs:** ILD has a different address on every run's network, so no single narrow bind serves them all and dynamic rebinding as networks come and go is not worth its moving parts. The proxy binds every interface, but answers only loopback and the subnet pool the run networks are cut from (`ILD_CONTAINER_SUBNET_POOL`), and drops any other peer before reading a byte. Compose peers and the LAN are outside the pool.
+- **Kubernetes:** a pod reaches ILD at ILD's pod address, which a narrower bind would equal anyway, so the proxy binds every interface. The token, and the optional ingress NetworkPolicy, do the narrowing; the token is what stops another pod in the cluster.
 
 ## Graceful degradation
 
@@ -239,6 +237,8 @@ it was listed a second time, and the modes would no longer say what they do.
   the Network Log records the decision. `NO_PROXY` stays loopback-only and the
   firewall drops non-loopback agent traffic, so a LAN connection cannot skip the
   proxy.
-- **To keep agents off the LAN or cloud metadata (`169.254.169.254`),** use
-  `whitelist`. `monitor` and `blacklist` do not protect them: a blacklist entry blocks
-  only the names and literals it lists, not other names that resolve to the same address.
+- **To keep agents off the LAN,** use `whitelist`. `monitor` and `blacklist` do not
+  protect it: a blacklist entry blocks only the names and literals it lists, not other
+  names that resolve to the same address. Link-local and cloud metadata addresses
+  (`169.254.169.254`) are refused by default (ADR-0036), and so is every other run's
+  network.

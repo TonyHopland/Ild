@@ -1,6 +1,7 @@
 using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
 
 namespace ILD.Core.Services.Implementations.Network;
 
@@ -16,23 +17,35 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
 {
     public static readonly IPAddress ListenAddress = IPAddress.Loopback;
 
-    /// <summary>What the proxy binds. Loopback, except where the agent runs in a container or pod and reaches the proxy at ILD's address.</summary>
+    /// <summary>What the proxy binds. Loopback, except where the agent runs in a container or pod and reaches the proxy at ILD's address
+    /// (the address differs on every run's network, so no narrower one serves them all; <see cref="AcceptsClient"/> and the credential do the narrowing).</summary>
     public IPAddress BindAddress { get; init; } = IPAddress.Loopback;
 
+    /// <summary>
+    /// Whom the proxy serves, besides a valid credential: a connection from any other address is dropped before a byte is read.
+    /// Null serves every address. Narrows a bind that cannot be narrow.
+    /// </summary>
+    public Func<IPAddress, bool>? AcceptsClient { get; init; }
+
+    /// <summary>Where the model gateway's TLS listener binds: loopback for local runs, else every interface, where the runs reach ILD.</summary>
     public static IPAddress BindAddressFor(RunHostKind kind) => kind == RunHostKind.Local ? IPAddress.Loopback : IPAddress.Any;
 
-    public static readonly EgressProxyOptions Disabled = new(false, 0);
-
     /// <summary>
-    /// The Basic-auth user name on a provider-scoped proxy URL. Some proxy clients
-    /// (undici among them) send <c>Proxy-Authorization</c> only when both user and
-    /// password are present, so the provider id travels as the password behind
-    /// this fixed name.
+    /// Whom the proxy serves for a run host. Local: loopback is all that can connect. Container: ILD has a different address on each
+    /// run's network, so no single bind fits and the proxy binds every interface; it answers loopback and the subnet pool the run
+    /// networks are cut from, and drops the rest (compose peers, the LAN). Kubernetes: every pod's route to ILD is its own, so there
+    /// is no filter, and the credential and the optional ingress NetworkPolicy do the narrowing.
     /// </summary>
-    public const string ScopeUser = "provider";
+    public static Func<IPAddress, bool>? ClientFilterFor(RunHostKind kind, Func<string, string?> setting)
+    {
+        if (kind != RunHostKind.Container) return null;
+        var pool = IpRange.TryParse(setting(ContainerRunHostOptions.SubnetPoolSetting)?.Trim() ?? string.Empty, out var configured)
+            ? configured
+            : IpRange.Parse(ContainerRunHostOptions.DefaultSubnetPool);
+        return address => EgressDestinationGuard.IsLoopback(address) || pool.Contains(address);
+    }
 
-    /// <summary>The Basic-auth user name on an installer-scoped proxy URL, whose password is the toolchain zone the installer fills.</summary>
-    public const string InstallerUser = "installer";
+    public static readonly EgressProxyOptions Disabled = new(false, 0);
 
     /// <summary>The longest zone name the log column holds.</summary>
     public const int MaxZoneLength = 64;
@@ -77,20 +90,17 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
             : Disabled;
 
     /// <summary>
-    /// The URL a launch's <c>HTTP_PROXY</c> is set to, or <c>null</c> when the
-    /// proxy is disabled. With an <paramref name="aiProviderId"/> the URL carries
-    /// the provider as credentials, which the proxy reads back out of
-    /// <c>Proxy-Authorization</c> to apply that provider's scoped list entries.
+    /// The URL a launch's <c>HTTP_PROXY</c> is set to, or <c>null</c> when the proxy is disabled. It always carries a credential
+    /// (<see cref="EgressCredentials"/>), which the proxy requires: with an <paramref name="aiProviderId"/> it also scopes the launch to
+    /// that provider's list entries. The scope is in the signed token, so the launch cannot change it.
     /// </summary>
     public string? ClientUrl(Guid? aiProviderId)
-    {
-        if (!Enabled) return null;
-        return aiProviderId is { } id
-            ? $"http://{ScopeUser}:{id:D}@{ListenAddress}:{Port}"
-            : $"http://{ListenAddress}:{Port}";
-    }
+        => Enabled ? UrlFor(new LaunchScope(Provider: aiProviderId)) : null;
 
     /// <summary>The URL a toolchain installer for <paramref name="zone"/> (<c>agents</c>, <c>toolchains</c>, <c>repo-&lt;id&gt;</c>) is pointed at, or null when the proxy is disabled.</summary>
     public string? InstallerUrl(string zone)
-        => Enabled ? $"http://{InstallerUser}:{zone}@{ListenAddress}:{Port}" : null;
+        => Enabled ? UrlFor(new LaunchScope(Installer: zone)) : null;
+
+    private string UrlFor(LaunchScope scope)
+        => $"http://{EgressCredentials.User}:{EgressCredentials.Current.Mint(scope)}@{ListenAddress}:{Port}";
 }

@@ -787,7 +787,8 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Contains($"HTTPS_PROXY=http://{EgressProxyOptions.ScopeUser}:{providerId:D}@ild.example:3128", _api.Execs.Last().Env);
+        Assert.Contains(_api.Execs.Last().Env, e => e.StartsWith("HTTPS_PROXY=http://ild:", StringComparison.Ordinal) && e.EndsWith("@ild.example:3128", StringComparison.Ordinal));
+        Assert.Equal(new LaunchScope(Provider: providerId), AgentIsolationEgressTests.ScopeInEnvironment(_api.Execs.Last().Env));
     }
 
     // -- The direct route (network mode Off) -------------------------------------
@@ -1861,7 +1862,10 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(["127.0.0.1"], hostConfig["Dns"]!.AsArray().Select(d => d!.GetValue<string>()));
         Assert.Null(hostConfig["Tmpfs"]);
 
-        var proxy = "http://installer:agents@ild.example:3128";
+        var proxy = EnvOf(config, "HTTPS_PROXY");
+        Assert.EndsWith("@ild.example:3128", proxy);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressCredentials.Current, proxy, out var scope));
+        Assert.Equal(new LaunchScope(Installer: "agents"), scope);
         foreach (var name in new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" })
             Assert.Equal(proxy, EnvOf(config, name));
         Assert.Equal("1", EnvOf(config, "NODE_USE_ENV_PROXY"));

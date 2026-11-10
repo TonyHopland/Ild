@@ -160,6 +160,11 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         catch (Exception ex) { Logger?.LogWarning(ex, "Could not remove the objects of run {Run} after its container failed to start; the next sweep removes them", owner); }
     }
 
+    /// <summary>Every run, chat and installer network is a /28 of the subnet pool, so the whole pool is other runs' address space.</summary>
+    public override Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>>(
+            ILD.Core.Services.Implementations.Network.IpRange.TryParse(_options.SubnetPool, out var pool) ? [pool] : []);
+
     private const int SubnetAttempts = 8;
 
     /// <summary>

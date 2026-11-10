@@ -45,44 +45,85 @@ public class AgentIsolationEgressTests
         Assert.Null(AgentIsolation.ResolveEgressProxyUrl("70000", null));
     }
 
+    /// <summary>The scope the proxy would read from the <c>Proxy-Authorization</c> a client sends for <paramref name="proxyUrl"/>, exactly as it does with the URL's user info.</summary>
+    internal static bool TryReadUrl(EgressCredentials credentials, string proxyUrl, out LaunchScope scope)
+        => credentials.TryRead("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(new Uri(proxyUrl).UserInfo)), out scope);
+
+    /// <summary>The scope in the proxy URL a run host put in <paramref name="environment"/> (<c>NAME=value</c> lines), read with the key launches are minted with.</summary>
+    internal static LaunchScope ScopeInEnvironment(IEnumerable<string> environment)
+    {
+        var url = environment.Single(e => e.StartsWith("HTTPS_PROXY=", StringComparison.Ordinal))["HTTPS_PROXY=".Length..];
+        Assert.True(TryReadUrl(EgressCredentials.Current, url, out var scope));
+        return scope;
+    }
+
     [Fact]
-    public void The_proxy_url_is_loopback_and_names_the_provider_when_there_is_one()
+    public void Every_proxy_url_carries_a_credential_that_names_its_scope()
     {
         var id = Guid.Parse("7f2b9c1e-3a4d-4e5f-8a6b-1c2d3e4f5a6b");
+        var credentials = EgressCredentials.Current;
 
-        Assert.Equal("http://127.0.0.1:3128", AgentIsolation.ResolveEgressProxyUrl("3128", null));
-        Assert.Equal($"http://provider:{id}@127.0.0.1:3128", AgentIsolation.ResolveEgressProxyUrl("3128", id));
-    }
+        var unscoped = AgentIsolation.ResolveEgressProxyUrl("3128", null)!;
+        var provider = AgentIsolation.ResolveEgressProxyUrl("3128", id)!;
+        var installer = new EgressProxyOptions(true, 3128).InstallerUrl("repo-0123abcd")!;
 
-    [Fact]
-    public void The_provider_in_the_url_round_trips_through_Proxy_Authorization()
-    {
-        // Exactly what a client does with the URL's user info.
-        var id = Guid.NewGuid();
-        var uri = new Uri(AgentIsolation.ResolveEgressProxyUrl("3128", id)!);
-        var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(uri.UserInfo));
-
-        Assert.Equal((id, (string?)null), EgressProxy.ReadScope(header));
-        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("provider:not-a-guid"))));
-        // Credentials some other tool put on the URL never attribute a provider,
-        // whatever their password looks like.
-        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"someone:{id}"))));
-        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(id.ToString()))));
-        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Bearer abc"));
-        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic %%%"));
-    }
-
-    [Fact]
-    public void The_installer_zone_in_the_url_round_trips_through_Proxy_Authorization()
-    {
-        var url = new Uri(new EgressProxyOptions(true, 3128).InstallerUrl("repo-0123abcd")!);
-        var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(url.UserInfo));
-
-        Assert.Equal(((Guid?)null, (string?)"repo-0123abcd"), EgressProxy.ReadScope(header));
-        // A zone that is not a short lower-case name attributes nothing, so the log column holds only what ILD wrote.
-        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("installer:Not A Zone"))));
-        Assert.Equal(((Guid?)null, (string?)null), EgressProxy.ReadScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("installer:" + new string('a', 65)))));
+        Assert.StartsWith("http://ild:", unscoped);
+        Assert.EndsWith("@127.0.0.1:3128", unscoped);
+        Assert.True(TryReadUrl(credentials, unscoped, out var none));
+        Assert.Equal(new LaunchScope(), none);
+        Assert.True(TryReadUrl(credentials, provider, out var scoped));
+        Assert.Equal(new LaunchScope(Provider: id), scoped);
+        Assert.True(TryReadUrl(credentials, installer, out var zoned));
+        Assert.Equal(new LaunchScope(Installer: "repo-0123abcd"), zoned);
         Assert.Null(new EgressProxyOptions(false, 0).InstallerUrl("agents"));
+    }
+
+    [Fact]
+    public void A_credential_a_client_made_up_has_no_scope()
+    {
+        var id = Guid.NewGuid();
+        var credentials = EgressProxyTests.Creds;
+        static string Basic(string text) => "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+        var valid = credentials.Mint(new LaunchScope(Provider: id));
+
+        // The shapes the proxy used to take its scope from.
+        Assert.False(credentials.TryRead(Basic($"provider:{id}"), out _));
+        Assert.False(credentials.TryRead(Basic("installer:agents"), out _));
+        Assert.False(credentials.TryRead(Basic("provider:not-a-guid"), out _));
+        // A real token under another user name, or with no user, or not Basic, or not base64.
+        Assert.False(credentials.TryRead(Basic($"someone:{valid}"), out _));
+        Assert.False(credentials.TryRead(Basic(valid), out _));
+        Assert.False(credentials.TryRead("Bearer " + valid, out _));
+        Assert.False(credentials.TryRead("Basic %%%", out _));
+        Assert.False(credentials.TryRead(null, out _));
+        // A token signed with another key.
+        var other = new EgressCredentials(new byte[32]);
+        Assert.False(credentials.TryRead(Basic($"ild:{other.Mint(new LaunchScope(Installer: "agents"))}"), out _));
+        // A valid token whose scope was swapped for another's, keeping the old signature.
+        var forged = other.Mint(new LaunchScope(Installer: "agents")).Split('.')[0] + "." + valid.Split('.')[1];
+        Assert.False(credentials.TryRead(Basic($"ild:{forged}"), out _));
+        Assert.True(credentials.TryRead(Basic($"ild:{valid}"), out var read));
+        Assert.Equal(id, read.Provider);
+    }
+
+    [Fact]
+    public void A_token_survives_a_restart_because_the_key_is_kept_in_a_file()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ild-egress-" + Guid.NewGuid().ToString("N"), "egress", "proxy.key");
+        try
+        {
+            var token = EgressCredentials.Load(path).Mint(new LaunchScope(Installer: "toolchains"));
+            var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("ild:" + token));
+
+            Assert.True(EgressCredentials.Load(path).TryRead(header, out var scope));
+            Assert.Equal("toolchains", scope.Installer);
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(Path.GetDirectoryName(path))!, recursive: true);
+        }
     }
 
     [Fact]
@@ -123,7 +164,10 @@ public class AgentIsolationEgressTests
     [InlineData(NetworkMode.Off, false)]
     public void Every_mode_but_Off_points_a_local_launch_at_the_proxy(NetworkMode mode, bool proxied)
     {
-        Assert.Equal(proxied ? "http://127.0.0.1:3128" : null, AgentIsolation.ResolveLaunchProxy(mode, "3128", null));
+        var url = AgentIsolation.ResolveLaunchProxy(mode, "3128", null);
+        Assert.Equal(proxied, url is not null);
+        if (url is not null)
+            Assert.EndsWith("@127.0.0.1:3128", url);
         Assert.Null(AgentIsolation.ResolveLaunchProxy(mode, null, null));
     }
 

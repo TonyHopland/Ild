@@ -25,14 +25,12 @@ namespace ILD.Core.Services.Implementations.Network;
 /// </para>
 ///
 /// <para>
-/// Per-provider scope rides on the proxy URL's credentials: a launch made for a
-/// provider gets <c>http://provider:&lt;id&gt;@127.0.0.1:port</c>, so the
-/// <c>Proxy-Authorization</c> header names the provider whose scoped entries
-/// apply. A connection without one is judged by the global entries alone.
-/// A toolchain installer gets <c>http://installer:&lt;zone&gt;@127.0.0.1:port</c> instead, and is judged by the global
-/// entries and the installers' scope, with its zone in the log.
+/// Every launch is pointed at <c>http://ild:&lt;token&gt;@127.0.0.1:port</c>, the token being one ILD signed (<see cref="EgressCredentials"/>)
+/// for that launch: a provider's, whose scoped entries apply, an installer's zone, whose entries and log name it, or neither. The scope
+/// is read from the verified token alone. A connection with no valid token is refused with <c>407</c> (an <c>access_denied</c> alert for
+/// a redirected TLS flow, which cannot carry one) and logged as blocked.
 /// </para>
-///
+
 /// <para>
 /// Open tunnels are tracked by host. When the policy changes each is re-judged
 /// and a now-blocked one is reset, so blacklisting a host ends a transfer already
@@ -46,6 +44,7 @@ public sealed class EgressProxy : BackgroundService
     private const int HttpDefaultPort = 80;
 
     private readonly EgressProxyOptions _options;
+    private readonly EgressCredentials _credentials;
     private readonly IEgressPolicy _policy;
     private readonly INetworkLogRecorder _log;
     private readonly ILogger<EgressProxy> _logger;
@@ -54,12 +53,13 @@ public sealed class EgressProxy : BackgroundService
     private readonly Func<IPAddress[], int, CancellationToken, Task<TcpClient>> _dial;
     private readonly TaskCompletionSource<int> _bound = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public EgressProxy(EgressProxyOptions options, IEgressPolicy policy, INetworkLogRecorder log, ILogger<EgressProxy> logger,
+    public EgressProxy(EgressProxyOptions options, EgressCredentials credentials, IEgressPolicy policy, INetworkLogRecorder log, ILogger<EgressProxy> logger,
         Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<IPAddress[], int, CancellationToken, Task<TcpClient>>? dial = null)
     {
         _resolve = resolve ?? EgressDestinationGuard.ResolveAsync;
         _dial = dial ?? EgressDestinationGuard.ConnectAsync;
         _options = options;
+        _credentials = credentials;
         _policy = policy;
         _log = log;
         _logger = logger;
@@ -110,6 +110,11 @@ public sealed class EgressProxy : BackgroundService
                 {
                     break;
                 }
+                if (_options.AcceptsClient is { } accepts && !(client.Client.RemoteEndPoint is IPEndPoint peer && accepts(peer.Address)))
+                {
+                    client.Dispose();
+                    continue;
+                }
                 _ = HandleConnectionAsync(client, stoppingToken);
             }
         }
@@ -140,6 +145,18 @@ public sealed class EgressProxy : BackgroundService
                     await WriteResponseAsync(stream, "400 Bad Request", "The egress proxy could not parse this request.", stoppingToken).ConfigureAwait(false);
                     return;
                 }
+
+                // Only a launch ILD made holds a credential it signed; the scope is read from that and from nothing the client says.
+                if (!_credentials.TryRead(request.Credential, out var scope))
+                {
+                    _log.Record(request.Host, request.Port, NetworkDecision.Blocked, null, "no valid proxy credential");
+                    if (request.Kind == RequestKind.Tls)
+                        await RefuseAsync(stream, request, string.Empty, stoppingToken).ConfigureAwait(false);
+                    else
+                        await WriteResponseAsync(stream, "407 Proxy Authentication Required", "The egress proxy needs the credential ILD gave this launch in its proxy URL.", stoppingToken, "Proxy-Authenticate: Basic realm=\"ILD egress proxy\"\r\n").ConfigureAwait(false);
+                    return;
+                }
+                request = request with { AiProviderId = scope.Provider, Installer = scope.Installer };
 
                 // An agents' preview hostname is ILD's own preview proxy, not a host on the network: handed to ILD's
                 // web port on loopback under no network policy, with the preview host as its Host so it reaches nothing else of ILD's.
@@ -274,10 +291,10 @@ public sealed class EgressProxy : BackgroundService
         await WriteResponseAsync(client, "403 Forbidden", reason, ct).ConfigureAwait(false);
     }
 
-    internal static async Task WriteResponseAsync(NetworkStream client, string status, string body, CancellationToken ct)
+    internal static async Task WriteResponseAsync(NetworkStream client, string status, string body, CancellationToken ct, string extraHeaders = "")
     {
         var payload = Encoding.UTF8.GetBytes(body + "\n");
-        var head = $"HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {payload.Length}\r\nConnection: close\r\nProxy-Connection: close\r\n\r\n";
+        var head = $"HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {payload.Length}\r\nConnection: close\r\nProxy-Connection: close\r\n{extraHeaders}\r\n";
         await client.WriteAsync(Encoding.ASCII.GetBytes(head), ct).ConfigureAwait(false);
         await client.WriteAsync(payload, ct).ConfigureAwait(false);
         await client.FlushAsync(ct).ConfigureAwait(false);
@@ -328,8 +345,7 @@ public sealed class EgressProxy : BackgroundService
         if (requestLine.Length != 3) return null;
 
         var (method, target, version) = (requestLine[0], requestLine[1], requestLine[2]);
-        Guid? provider = null;
-        string? installer = null;
+        string? credential = null;
         string? hostHeader = null;
         var forwarded = new StringBuilder();
         var sawHostHeader = false;
@@ -346,7 +362,7 @@ public sealed class EgressProxy : BackgroundService
 
             if (name.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase))
             {
-                if (provider is null && installer is null) (provider, installer) = ReadScope(value);
+                credential ??= value;
                 continue;
             }
             if (name.Equals("Proxy-Connection", StringComparison.OrdinalIgnoreCase)
@@ -370,7 +386,7 @@ public sealed class EgressProxy : BackgroundService
         if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
         {
             if (!TrySplitHostPort(target, TlsDefaultPort, out var connectHost, out var connectPort)) return null;
-            return new ProxyRequest(RequestKind.Connect, connectHost, connectPort, provider, bodyStart, Array.Empty<byte>(), Installer: installer);
+            return new ProxyRequest(RequestKind.Connect, connectHost, connectPort, null, bodyStart, Array.Empty<byte>(), Credential: credential);
         }
 
         string host;
@@ -403,7 +419,7 @@ public sealed class EgressProxy : BackgroundService
             .Append(forwarded)
             .Append("Connection: close\r\n\r\n")
             .ToString();
-        return new ProxyRequest(RequestKind.Http, host, port, provider, bodyStart, Encoding.ASCII.GetBytes(headText), chunked, contentLength, asksUpgrade, installer);
+        return new ProxyRequest(RequestKind.Http, host, port, null, bodyStart, Encoding.ASCII.GetBytes(headText), chunked, contentLength, asksUpgrade, Credential: credential);
     }
 
     /// <summary>
@@ -434,39 +450,6 @@ public sealed class EgressProxy : BackgroundService
         contentLength = length ?? 0;
         return true;
     }
-
-    /// <summary>
-    /// What a launch was made for, carried as the Basic password of the proxy URL (<see cref="EgressProxyOptions.ClientUrl"/>,
-    /// <see cref="EgressProxyOptions.InstallerUrl"/>): a provider behind the fixed <see cref="EgressProxyOptions.ScopeUser"/>
-    /// name, or a toolchain zone behind <see cref="EgressProxyOptions.InstallerUser"/>. Credentials of any other shape are
-    /// somebody else's and attribute nothing.
-    /// </summary>
-    internal static (Guid? Provider, string? Installer) ReadScope(string proxyAuthorization)
-    {
-        var parts = proxyAuthorization.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 2 || !parts[0].Equals("Basic", StringComparison.OrdinalIgnoreCase)) return (null, null);
-        try
-        {
-            var credentials = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
-            var colon = credentials.IndexOf(':');
-            if (colon < 0) return (null, null);
-            var user = credentials.AsSpan(0, colon);
-            var secret = credentials[(colon + 1)..];
-            if (user.SequenceEqual(EgressProxyOptions.ScopeUser))
-                return (Guid.TryParse(secret, out var id) ? id : null, null);
-            if (user.SequenceEqual(EgressProxyOptions.InstallerUser))
-                return (null, IsZone(secret) ? secret : null);
-            return (null, null);
-        }
-        catch (FormatException)
-        {
-            return (null, null);
-        }
-    }
-
-    /// <summary>A toolchain zone name: lower-case letters, digits and hyphens, short enough for the log column.</summary>
-    private static bool IsZone(string value)
-        => value.Length is > 0 and <= EgressProxyOptions.MaxZoneLength && value.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '-');
 
     private static bool TrySplitHostPort(string authority, int defaultPort, out string host, out int port)
     {
@@ -499,5 +482,5 @@ public sealed class EgressProxy : BackgroundService
     /// <param name="AsksUpgrade">A plain request names a protocol to switch to, the only case a 101 answers.</param>
     internal sealed record ProxyRequest(
         RequestKind Kind, string Host, int Port, Guid? AiProviderId, int BodyStart, byte[] ForwardedHead,
-        bool ChunkedBody = false, long ContentLength = 0, bool AsksUpgrade = false, string? Installer = null);
+        bool ChunkedBody = false, long ContentLength = 0, bool AsksUpgrade = false, string? Installer = null, string? Credential = null);
 }

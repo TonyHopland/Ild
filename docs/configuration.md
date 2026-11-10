@@ -942,16 +942,22 @@ out (a CNI that ignores NetworkPolicy, an engine that does not isolate internal
 networks), and `unverified` until a probe has run, which is also the answer when ILD
 reaches nothing outside.
 
-On Kubernetes, nothing restricts who may connect to ILD's proxy port, so any pod in
-the cluster could use ILD as a relay. [`docs/kubernetes/ild-ingress-networkpolicy.yaml`](./kubernetes/ild-ingress-networkpolicy.yaml)
-admits only run, chat and tools pods on that port and leaves the web port as it is.
+The proxy only serves a launch that presents the credential ILD signed for it, so another
+pod in the cluster, a compose peer or a machine on the LAN cannot use ILD as a relay even
+where the port is reachable; with container runs it also drops any peer outside the run
+networks' subnet pool. On Kubernetes
+[`docs/kubernetes/ild-ingress-networkpolicy.yaml`](./kubernetes/ild-ingress-networkpolicy.yaml)
+still admits only run, chat and tools pods on that port, as a second layer, and leaves the web port as it is.
+A run can never reach another run through the proxy: the container subnet pool and the
+IPs of ILD's pods are refused in every mode.
 
-LAN and private hosts (self-hosted git, a local model server, cloud metadata at
-`169.254.169.254`) go through the proxy like any other host: the mode and lists
-judge them and the Network Log records them. `monitor` and `blacklist` let
-agents reach them; only `whitelist` keeps agents off your LAN and cloud metadata,
+LAN and private hosts (self-hosted git, a local model server) go through the proxy
+like any other host: the mode and lists judge them and the Network Log records them.
+`monitor` and `blacklist` let agents reach them; only `whitelist` keeps agents off your LAN,
 since a blacklist entry blocks only the names and literals it lists, not other
-names that resolve to the same address. The proxy resolves each host once and
+names that resolve to the same address. Link-local and cloud metadata addresses
+(`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`) are a protected destination, refused by
+default and switchable in Settings → Network like the others. The proxy resolves each host once and
 connects to the addresses it resolved.
 
 Everything the agent runs is pointed at the proxy (under `dotnet run`, not in
