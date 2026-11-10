@@ -27,6 +27,9 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
     /// </summary>
     public Func<IPAddress, bool>? AcceptsClient { get; init; }
 
+    /// <summary>How long a connection may take to send its head or sit idle in a relay, and how many may be open at once.</summary>
+    public EgressLimits Limits { get; init; } = new();
+
     /// <summary>Where the model gateway's TLS listener binds: loopback for local runs, else every interface, where the runs reach ILD.</summary>
     public static IPAddress BindAddressFor(RunHostKind kind) => kind == RunHostKind.Local ? IPAddress.Loopback : IPAddress.Any;
 

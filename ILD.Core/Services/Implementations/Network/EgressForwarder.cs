@@ -53,6 +53,7 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
     private readonly INetworkNotifier _notifier;
     private readonly ILogger<EgressForwarder> _logger;
     private readonly EgressRelay _relay;
+    private readonly ConnectionLimiter _limiter;
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
     private readonly Func<IPAddress[], int, CancellationToken, Task<TcpClient>> _dial;
 
@@ -69,8 +70,10 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
         INetworkNotifier notifier,
         ILogger<EgressForwarder> logger,
         Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null,
-        Func<IPAddress[], int, CancellationToken, Task<TcpClient>>? dial = null)
+        Func<IPAddress[], int, CancellationToken, Task<TcpClient>>? dial = null,
+        EgressLimits? limits = null)
     {
+        limits ??= new EgressLimits();
         _resolve = resolve ?? EgressDestinationGuard.ResolveAsync;
         _dial = dial ?? EgressDestinationGuard.ConnectAsync;
         _scopes = scopes;
@@ -78,7 +81,8 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
         _log = log;
         _notifier = notifier;
         _logger = logger;
-        _relay = new EgressRelay(policy, log, logger);
+        _relay = new EgressRelay(policy, log, logger, limits.IdleTimeout);
+        _limiter = new ConnectionLimiter(limits);
     }
 
     /// <summary>The accept call on a listening socket; the test seam for a client that drops mid-handshake.</summary>
@@ -303,7 +307,13 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
             {
                 return;
             }
-            _ = HandleConnectionAsync(listener.Forward, client, token);
+            if (_limiter.TryAcquire((client.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.None) is not { } lease)
+            {
+                _logger.LogDebug("Forward {Name} refused a connection: too many connections open", listener.Forward.Name);
+                client.Dispose();
+                continue;
+            }
+            _ = HandleConnectionAsync(listener.Forward, client, lease, token);
         }
     }
 
@@ -326,8 +336,9 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
         Wake();
     }
 
-    private async Task HandleConnectionAsync(NetworkForwardEntry forward, TcpClient client, CancellationToken ct)
+    private async Task HandleConnectionAsync(NetworkForwardEntry forward, TcpClient client, IDisposable lease, CancellationToken ct)
     {
+        using (lease)
         using (client)
         {
             try

@@ -869,6 +869,142 @@ public sealed class EgressProxyTests : IAsyncLifetime
         return response[(end + 4)..];
     }
 
+    // -- Bounds on what a client can hold open ------------------------------------
+
+    private async Task<(EgressProxy Proxy, int Port)> StartBoundedProxyAsync(EgressLimits limits, Action<EgressProxy>? configure = null)
+    {
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { Limits = limits }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+        configure?.Invoke(proxy);
+        _extraProxies.Add(proxy);
+        await proxy.StartAsync(CancellationToken.None);
+        return (proxy, await proxy.BoundPort.WaitAsync(Timeout, TestContext.Current.CancellationToken));
+    }
+
+    private static async Task<TcpClient> OpenSilentAsync(int port)
+    {
+        var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
+        return client;
+    }
+
+    /// <summary>Whether the server has closed (or reset) the connection within <paramref name="within"/>, sending nothing first.</summary>
+    private static async Task<bool> ClosesWithinAsync(TcpClient client, TimeSpan within)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cts.CancelAfter(within);
+        try
+        {
+            return await client.GetStream().ReadAsync(new byte[1], cts.Token) == 0;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    [Theory]
+    [InlineData(SocketError.TooManyOpenSockets)]
+    [InlineData(SocketError.ConnectionReset)]
+    public async Task A_failed_accept_does_not_end_the_proxy(SocketError error)
+    {
+        var failures = 2;
+        var (proxy, port) = await StartBoundedProxyAsync(new EgressLimits(), p =>
+        {
+            p.AcceptRetryDelay = TimeSpan.FromMilliseconds(20);
+            p.AcceptClient = (listener, ct) => Interlocked.Decrement(ref failures) >= 0
+                ? ValueTask.FromException<TcpClient>(new SocketException((int)error))
+                : listener.AcceptTcpClientAsync(ct);
+        });
+
+        var (client, status) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            Assert.True(Volatile.Read(ref failures) < 0, "the failed accepts were never staged");
+            Assert.False(proxy.ExecuteTask!.IsCompleted);
+        }
+    }
+
+    [Fact]
+    public async Task A_connection_that_sends_no_head_is_closed_after_the_head_timeout()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromMilliseconds(200), TimeSpan.FromMinutes(1), 10, 10));
+
+        using var silent = await OpenSilentAsync(port);
+
+        Assert.True(await ClosesWithinAsync(silent, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task A_connection_over_the_per_source_cap_is_refused_until_one_closes()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), 2, 100));
+        using var first = await OpenSilentAsync(port);
+        using var second = await OpenSilentAsync(port);
+        using var third = await OpenSilentAsync(port);
+
+        Assert.True(await ClosesWithinAsync(third, TimeSpan.FromSeconds(2)));
+        Assert.False(await ClosesWithinAsync(first, TimeSpan.FromMilliseconds(300)));
+        Assert.False(await ClosesWithinAsync(second, TimeSpan.FromMilliseconds(300)));
+
+        first.Dispose();
+        // The slot frees when the proxy notices the close; try until a connection is served.
+        var deadline = DateTime.UtcNow + Timeout;
+        while (true)
+        {
+            var served = false;
+            try
+            {
+                var (client, status) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+                using (client) served = status.StartsWith("HTTP/1.1 200");
+            }
+            catch (IOException) { }
+            if (served) break;
+            Assert.True(DateTime.UtcNow < deadline, "a slot never freed after a connection closed");
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task A_connection_over_the_total_cap_is_refused_whatever_its_source()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), 100, 2));
+        using var first = await OpenSilentAsync(port);
+        using var second = await OpenSilentAsync(port);
+        using var third = await OpenSilentAsync(port);
+
+        Assert.True(await ClosesWithinAsync(third, TimeSpan.FromSeconds(2)));
+        Assert.False(await ClosesWithinAsync(first, TimeSpan.FromMilliseconds(300)));
+    }
+
+    [Fact]
+    public async Task A_tunnel_with_no_traffic_is_reset_after_the_idle_timeout_and_one_with_traffic_is_not()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(600), 10, 10));
+        var (busy, busyStatus) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+        var (idle, idleStatus) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+        using (busy)
+        using (idle)
+        {
+            Assert.StartsWith("HTTP/1.1 200", busyStatus);
+            Assert.StartsWith("HTTP/1.1 200", idleStatus);
+
+            // Well past the idle timeout in total, but never idle for that long.
+            for (var i = 0; i < 10; i++)
+            {
+                Assert.Equal("ping", await EchoAsync(busy, "ping"));
+                await Task.Delay(150, TestContext.Current.CancellationToken);
+            }
+
+            Assert.True(await ClosesWithinAsync(idle, TimeSpan.FromSeconds(3)));
+            Assert.Equal("still here", await EchoAsync(busy, "still here"));
+        }
+    }
+
     // -- Agents' preview hostnames ------------------------------------------------
 
     /// <summary>A proxy whose web port, ILD's own, is the test's upstream.</summary>

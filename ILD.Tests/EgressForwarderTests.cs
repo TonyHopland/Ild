@@ -510,4 +510,46 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         public Task LogEntryAppendedAsync(NetworkLogEntry entry) => Task.CompletedTask;
         public Task LogClearedAsync() => Task.CompletedTask;
     }
+
+    private async Task RestartWithLimitsAsync(EgressLimits limits)
+    {
+        await _forwarder!.StopAsync(CancellationToken.None);
+        _forwarder = new EgressForwarder(
+            _services.GetRequiredService<IServiceScopeFactory>(), _policy, _log, new SilentNotifier(), _diagnostics,
+            (_, _) => Task.FromResult(new[] { _resolvedTo }),
+            static async (_, port, ct) =>
+            {
+                var client = new TcpClient { NoDelay = true };
+                await client.ConnectAsync(IPAddress.Loopback, port, ct);
+                return client;
+            },
+            limits);
+        await _forwarder.StartAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task A_connection_over_the_cap_is_closed_at_once()
+    {
+        await RestartWithLimitsAsync(new EgressLimits(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(1), 1, 10));
+        var forward = await DeclareAsync();
+
+        using var first = await DialAsync(forward.LocalPort);
+        Assert.Equal("one", await EchoAsync(first, "one"));
+        using var second = await DialAsync(forward.LocalPort);
+
+        await AssertEndsPromptlyAsync(second);
+        Assert.Equal("still open", await EchoAsync(first, "still open"));
+    }
+
+    [Fact]
+    public async Task A_relay_with_no_traffic_is_closed_after_the_idle_timeout()
+    {
+        await RestartWithLimitsAsync(new EgressLimits(TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(300), 10, 10));
+        var forward = await DeclareAsync();
+
+        using var client = await DialAsync(forward.LocalPort);
+        Assert.Equal("hello", await EchoAsync(client, "hello"));
+
+        await AssertEndsPromptlyAsync(client);
+    }
 }

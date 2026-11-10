@@ -40,6 +40,7 @@ namespace ILD.Core.Services.Implementations.Network;
 public sealed class EgressProxy : BackgroundService
 {
     internal const int MaxHeadBytes = 64 * 1024;
+    private const int InitialHeadBytes = 4 * 1024;
     private const int TlsDefaultPort = 443;
     private const int HttpDefaultPort = 80;
 
@@ -49,6 +50,8 @@ public sealed class EgressProxy : BackgroundService
     private readonly INetworkLogRecorder _log;
     private readonly ILogger<EgressProxy> _logger;
     private readonly EgressRelay _relay;
+    private readonly ConnectionLimiter _limiter;
+    private readonly Dictionary<IPAddress, DateTime> _refusalLogged = new();
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
     private readonly Func<IPAddress[], int, CancellationToken, Task<TcpClient>> _dial;
     private readonly TaskCompletionSource<int> _bound = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -63,13 +66,20 @@ public sealed class EgressProxy : BackgroundService
         _policy = policy;
         _log = log;
         _logger = logger;
-        _relay = new EgressRelay(policy, log, logger);
+        _relay = new EgressRelay(policy, log, logger, options.Limits.IdleTimeout);
+        _limiter = new ConnectionLimiter(options.Limits);
     }
 
     /// <summary>The port actually bound, once listening; lets a test ask for port 0.</summary>
     public Task<int> BoundPort => _bound.Task;
 
     public int OpenTunnelCount => _relay.OpenCount;
+
+    /// <summary>The accept call on the listening socket; the test seam for an accept that fails.</summary>
+    internal Func<TcpListener, CancellationToken, ValueTask<TcpClient>> AcceptClient { get; set; } = static (s, ct) => s.AcceptTcpClientAsync(ct);
+
+    /// <summary>How long the loop waits after an accept fails for a reason that is not the client's, so a descriptor ceiling is not a spin.</summary>
+    internal TimeSpan AcceptRetryDelay { get; set; } = TimeSpan.FromSeconds(1);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -104,18 +114,37 @@ public sealed class EgressProxy : BackgroundService
                 TcpClient client;
                 try
                 {
-                    client = await listener.AcceptTcpClientAsync(stoppingToken).ConfigureAwait(false);
+                    client = await AcceptClient(listener, stoppingToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     break;
+                }
+                catch (SocketException ex) when (EgressForwarder.IsAbandonedHandshake(ex.SocketErrorCode))
+                {
+                    _logger.LogDebug(ex, "Egress proxy lost a connection before accepting it ({Error})", ex.SocketErrorCode);
+                    continue;
+                }
+                catch (SocketException ex)
+                {
+                    _logger.LogError(ex, "Egress proxy could not accept a connection ({Error}); trying again", ex.SocketErrorCode);
+                    try { await Task.Delay(AcceptRetryDelay, stoppingToken).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                    continue;
                 }
                 if (_options.AcceptsClient is { } accepts && !(client.Client.RemoteEndPoint is IPEndPoint peer && accepts(peer.Address)))
                 {
                     client.Dispose();
                     continue;
                 }
-                _ = HandleConnectionAsync(client, stoppingToken);
+                var source = (client.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.None;
+                if (_limiter.TryAcquire(source) is not { } lease)
+                {
+                    LogRefusal(source);
+                    client.Dispose();
+                    continue;
+                }
+                _ = HandleConnectionAsync(client, lease, stoppingToken);
             }
         }
         finally
@@ -128,15 +157,30 @@ public sealed class EgressProxy : BackgroundService
 
     private void OnPolicyChanged() => _ = _relay.ResetNewlyBlockedAsync();
 
-    private async Task HandleConnectionAsync(TcpClient client, CancellationToken stoppingToken)
+    private void LogRefusal(IPAddress source)
     {
+        lock (_refusalLogged)
+        {
+            var now = DateTime.UtcNow;
+            if (_refusalLogged.TryGetValue(source, out var last) && now - last < TimeSpan.FromMinutes(1)) return;
+            _refusalLogged[source] = now;
+            if (_refusalLogged.Count > 1024)
+                foreach (var stale in _refusalLogged.Where(e => now - e.Value >= TimeSpan.FromMinutes(1)).Select(e => e.Key).ToList())
+                    _refusalLogged.Remove(stale);
+        }
+        _logger.LogWarning("Egress proxy refused a connection from {Source}: too many connections open", source);
+    }
+
+    private async Task HandleConnectionAsync(TcpClient client, IDisposable lease, CancellationToken stoppingToken)
+    {
+        using (lease)
         using (client)
         {
             try
             {
                 client.NoDelay = true;
                 var stream = client.GetStream();
-                var head = await ReadHeadAsync(stream, stoppingToken).ConfigureAwait(false);
+                var head = await ReadHeadAsync(stream, _options.Limits.HeadTimeout, stoppingToken).ConfigureAwait(false);
                 if (head is null) return;
 
                 var request = ParseRequest(head.Value);
@@ -305,13 +349,29 @@ public sealed class EgressProxy : BackgroundService
     /// record for a redirected flow, or through the blank line ending the HTTP
     /// head otherwise. Returns null on a closed or oversized head.
     /// </summary>
-    private static async Task<ArraySegment<byte>?> ReadHeadAsync(NetworkStream stream, CancellationToken ct)
+    private static async Task<ArraySegment<byte>?> ReadHeadAsync(NetworkStream stream, TimeSpan timeout, CancellationToken stoppingToken)
     {
-        var buffer = new byte[MaxHeadBytes];
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        deadline.CancelAfter(timeout);
+        var ct = deadline.Token;
+        var buffer = new byte[InitialHeadBytes];
         var filled = 0;
-        while (filled < buffer.Length)
+        while (true)
         {
-            var read = await stream.ReadAsync(buffer.AsMemory(filled), ct).ConfigureAwait(false);
+            if (filled == buffer.Length)
+            {
+                if (buffer.Length >= MaxHeadBytes) return null;
+                Array.Resize(ref buffer, Math.Min(buffer.Length * 2, MaxHeadBytes));
+            }
+            int read;
+            try
+            {
+                read = await stream.ReadAsync(buffer.AsMemory(filled), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+            {
+                return null;
+            }
             if (read == 0) return null;
             filled += read;
 
@@ -325,7 +385,6 @@ public sealed class EgressProxy : BackgroundService
             if (span.IndexOf("\r\n\r\n"u8) >= 0)
                 return new ArraySegment<byte>(buffer, 0, filled);
         }
-        return null;
     }
 
     internal static ProxyRequest? ParseRequest(ArraySegment<byte> head, string? hostOverride = null)
