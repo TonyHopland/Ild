@@ -63,7 +63,7 @@ public sealed class ConfigTools
         "install[].cwd": "Optional. Working directory relative to the worktree root. Defaults to the worktree root.",
         "install[].command": "Required. Shell command run once to provision the worktree (e.g. dependency install).",
         "install[].env": "Optional. Extra environment variables for the step.",
-        "services[].name": "Required. Unique (case-insensitive) service name within the profile.",
+        "services[].name": "Required. Unique (case-insensitive) service name within the profile; it names the service's log file, so it starts with a letter or digit and holds only letters, digits, '.', '_' and '-'.",
         "services[].command": "Required. Shell command that starts the long-running service in the foreground.",
         "services[].cwd": "Optional. Working directory relative to the worktree root.",
         "services[].port": "Required. Port alias; ILD allocates a real free port for it and surfaces it as ${PORT}.",
@@ -141,7 +141,7 @@ public sealed class ConfigTools
           "service": {
             "type": "object",
             "properties": {
-              "name": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
               "command": { "type": "string", "minLength": 1 },
               "cwd": { "type": "string" },
               "env": { "type": "object", "additionalProperties": { "type": "string" } },

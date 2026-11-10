@@ -70,6 +70,8 @@ public sealed class PreviewDataStore(string root, ILogger? logger = null)
             return false;
         }
 
+        await DropEscapingLinksAsync(incoming, repositoryId, ct);
+
         var generation = Path.Combine(incoming, GenerationFile);
         if (ReadGeneration(generation) != ReadGeneration(Path.Combine(target, GenerationFile)))
             logger?.LogWarning("The preview data of repository {Repository} was stored by another run after this one took its copy; this run's copy replaces it", repositoryId);
@@ -94,6 +96,57 @@ public sealed class PreviewDataStore(string root, ILogger? logger = null)
         }
         if (hadPrevious) await AgentWritableFiles.DeleteAsync([previous], CancellationToken.None);
         return true;
+    }
+
+    /// <summary>
+    /// Deletes every link under <paramref name="folder"/> that is rooted or reaches outside it, so ILD never keeps one
+    /// that a later write of its own could follow. Relative links that stay inside, such as <c>node_modules/.bin</c>,
+    /// are kept. Links are never followed while walking; a target that climbs back down through a name and up again
+    /// (<c>x/..</c>) is dropped too, since a link at <c>x</c> would make that mean something else than it reads as.
+    /// </summary>
+    private async Task DropEscapingLinksAsync(string folder, Guid repositoryId, CancellationToken ct)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        var pending = new Stack<string>();
+        pending.Push(root);
+        var doomed = new List<string>();
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos())
+            {
+                if (entry.LinkTarget is { } target)
+                {
+                    if (!LinkStaysInside(root, directory, target)) doomed.Add(entry.FullName);
+                }
+                else if (entry is DirectoryInfo child)
+                {
+                    pending.Push(child.FullName);
+                }
+            }
+        }
+
+        if (doomed.Count == 0) return;
+        foreach (var path in doomed)
+            logger?.LogWarning("Dropped the link {Link} from the preview data of repository {Repository}: it points outside the data", Path.GetRelativePath(root, path), repositoryId);
+        await AgentWritableFiles.DeleteAsync(doomed, ct);
+    }
+
+    private static bool LinkStaysInside(string root, string directory, string target)
+    {
+        if (Path.IsPathRooted(target)) return false;
+        var segments = target.Split('/', '\\');
+        var seenName = false;
+        foreach (var segment in segments)
+        {
+            if (segment == "..")
+            {
+                if (seenName) return false;
+            }
+            else if (segment is not ("" or ".")) seenName = true;
+        }
+        var resolved = Path.GetFullPath(Path.Combine(directory, target));
+        return resolved == root || resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     /// <summary>The generation in the file, read without following a link; null when there is none.</summary>

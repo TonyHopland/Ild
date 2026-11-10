@@ -123,6 +123,30 @@ public sealed class LocalRunHostPreviewDataTests : IDisposable
     }
 
     [Fact]
+    public async Task Links_that_leave_the_data_are_dropped_when_it_is_stored_and_links_inside_are_kept()
+    {
+        var source = Directory.CreateDirectory(Path.Combine(_root, "source")).FullName;
+        Directory.CreateDirectory(Path.Combine(source, "data", "pkg"));
+        File.WriteAllText(Path.Combine(source, "data", "pkg", "tool"), "t");
+        Directory.CreateDirectory(Path.Combine(source, "data", ".bin"));
+        File.CreateSymbolicLink(Path.Combine(source, "data", ".bin", "tool"), "../pkg/tool");
+        File.CreateSymbolicLink(Path.Combine(source, "data", "absolute.log"), "/etc/passwd");
+        File.CreateSymbolicLink(Path.Combine(source, "data", "up.log"), "../../elsewhere");
+        File.CreateSymbolicLink(Path.Combine(source, "data", "pkg", "round.log"), "../.bin/../../x");
+        using var archive = new MemoryStream();
+        await PreviewDataStore.PackFolderAsync(source, archive, Ct);
+        archive.Position = 0;
+        var store = new PreviewDataStore(PreviewVolumes.Root(Configuration));
+
+        Assert.True(await store.ReplaceAsync(_repository, archive, Ct));
+
+        Assert.Equal("../pkg/tool", new FileInfo(Path.Combine(StoredFolder, "data", ".bin", "tool")).LinkTarget);
+        Assert.False(File.Exists(Path.Combine(StoredFolder, "data", "absolute.log")) || new FileInfo(Path.Combine(StoredFolder, "data", "absolute.log")).LinkTarget != null);
+        Assert.Null(new FileInfo(Path.Combine(StoredFolder, "data", "up.log")).LinkTarget);
+        Assert.Null(new FileInfo(Path.Combine(StoredFolder, "data", "pkg", "round.log")).LinkTarget);
+    }
+
+    [Fact]
     public async Task A_copy_replaced_by_a_link_is_not_put_back_and_the_stored_copy_is_unchanged()
     {
         Store("data/seed", "old");

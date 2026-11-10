@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
+using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Isolated;
@@ -702,7 +703,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // name with a path separator (or "..") could escape it. StartServiceAsync
         // composes the path the same way; reject anything that isn't a bare file
         // name rather than reading an arbitrary file off disk.
-        if (!string.Equals(serviceName, Path.GetFileName(serviceName), StringComparison.Ordinal))
+        if (!IsSafeServiceName(serviceName))
             return null;
 
         var normalized = NormalizeWorktreePath(worktreePath);
@@ -1052,10 +1053,20 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// satisfy to be started. Duplicate-name detection across a profile stays in
     /// <see cref="ValidateProfile"/> since it is inherently cross-service.
     /// </summary>
+    private static readonly Regex SafeServiceNameRegex = new(@"^[A-Za-z0-9][A-Za-z0-9._-]*\z", RegexOptions.Compiled);
+
+    /// <summary>
+    /// A service name becomes the file name of its log, so it must be a bare name: no separator, no
+    /// <c>..</c>, nothing rooted. The one rule for the write side (validation) and the read side.
+    /// </summary>
+    internal static bool IsSafeServiceName(string? name) => name != null && SafeServiceNameRegex.IsMatch(name);
+
     private static void ValidateService(string profileName, PreviewServiceConfig service)
     {
         if (string.IsNullOrWhiteSpace(service.Name))
             throw new InvalidOperationException($"Preview profile '{profileName}' has a service with no name.");
+        if (!IsSafeServiceName(service.Name))
+            throw new InvalidOperationException($"Preview service name '{service.Name}' must start with a letter or digit and contain only letters, digits, '.', '_' and '-'.");
         if (string.IsNullOrWhiteSpace(service.Command))
             throw new InvalidOperationException($"Preview service '{service.Name}' has no command.");
         if (string.IsNullOrWhiteSpace(service.Port))
@@ -1418,7 +1429,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             builder.AppendLine($"> {resolved.Command}");
             if (!string.IsNullOrWhiteSpace(result.StdOut)) builder.AppendLine(result.StdOut.TrimEnd());
             if (!string.IsNullOrWhiteSpace(result.StdErr)) builder.AppendLine(result.StdErr.TrimEnd());
-            await File.AppendAllTextAsync(installLogPath, builder.ToString() + Environment.NewLine, cancellationToken);
+            await using (var installLog = AppendLog.Open(runtime.LogDirectory, installLogPath))
+            {
+                var bytes = Encoding.UTF8.GetBytes(builder.ToString() + Environment.NewLine);
+                await installLog.WriteAsync(bytes, cancellationToken);
+            }
 
             if (result.ExitCode != 0)
             {
@@ -1450,7 +1465,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             var resolved = await BuildResolvedStepAsync(service, runtime, service.Port, feeds, mode, cancellationToken);
             var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
-            writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+            writer = new StreamWriter(AppendLog.Open(runtime.LogDirectory, logPath))
             {
                 AutoFlush = true,
             };
