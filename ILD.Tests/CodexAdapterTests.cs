@@ -465,7 +465,9 @@ public sealed class CodexAdapterTests : IDisposable
             Assert.Equal("npx", root.GetProperty("command").GetString());
             Assert.Equal(new[] { "-y", "docs-mcp" }, root.GetProperty("args").EnumerateArray().Select(a => a.GetString()).ToArray());
             var env = root.GetProperty("env");
-            var proxy = AgentIsolation.ResolveEgressProxyUrl("3128", provider.Id)!;
+            var proxy = Assert.IsType<string>(env.GetProperty("HTTPS_PROXY").GetString());
+            Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, proxy, out var proxyScope));
+            Assert.Equal(provider.Id, proxyScope.Provider);
             Assert.Equal("docs-secret", env.GetProperty("DOCS_TOKEN").GetString());
             Assert.Equal(proxy, env.GetProperty("HTTP_PROXY").GetString());
             Assert.Equal(proxy, env.GetProperty("https_proxy").GetString());
@@ -788,12 +790,12 @@ public sealed class CodexAdapterTests : IDisposable
     private CodexAdapter Adapter(SnapshotDb? store = null)
     {
         if (store is null)
-            return new CodexAdapter(_logger, _environment);
+            return new CodexAdapter(_logger, _environment, EgressProxyTests.Creds);
         var services = new ServiceCollection();
         services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         store.Register(services);
         var provider = services.BuildServiceProvider();
-        return new CodexAdapter(provider.GetRequiredService<IServiceScopeFactory>(), _logger, _environment);
+        return new CodexAdapter(provider.GetRequiredService<IServiceScopeFactory>(), _logger, _environment, EgressProxyTests.Creds);
     }
 
     private AiProvider Provider(string binaryPath, string model = "", string? extraArgs = null, string? customMcpServersJson = null)

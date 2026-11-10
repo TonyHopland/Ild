@@ -137,7 +137,7 @@ public class CmdNodeExecutorTests : IDisposable
         Assert.Equal(_worktree, psi.WorkingDirectory);
 
         // What reaches the command is the environment its caller names (the package feeds), merged by the host.
-        var launched = LocalRunHost.Launch(RunCommand.Prepared(psi, environment: new Dictionary<string, string?> { ["FEED"] = "f" }));
+        var launched = LocalRunHost.Launch(RunCommand.Prepared(psi, environment: new Dictionary<string, string?> { ["FEED"] = "f" }), EgressProxyTests.Creds);
         Assert.Equal("f", launched.Environment["FEED"]);
         Assert.False(launched.Environment.ContainsKey("ILD_ONLY_ON_THE_START_INFO"));
     }

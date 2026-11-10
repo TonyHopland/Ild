@@ -5,6 +5,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.Network;
 
@@ -15,12 +16,25 @@ namespace ILD.Core.Services.Implementations.Network;
 /// </summary>
 public sealed record ProtectedDestination(string Id, string Name, IReadOnlyList<string> Hosts, IReadOnlyList<IPAddress> Addresses, bool Enabled = true)
 {
+    /// <summary>Whole ranges the destination covers as well as its <see cref="Addresses"/> (link-local and cloud metadata).</summary>
+    public IReadOnlyList<IpRange> Ranges { get; init; } = [];
+
+    public bool Covers(IPAddress address)
+        => Addresses.Any(p => IpRange.Single(p).Contains(address)) || Ranges.Any(r => r.Contains(address));
+
     public const string Ild = "ild";
     public const string Database = "database";
     public const string WorkItemServer = "workitem-server";
     public const string KubernetesApi = "kubernetes-api";
+    public const string LinkLocal = "link-local";
 
-    public static readonly IReadOnlyList<string> AllIds = [Ild, Database, WorkItemServer, KubernetesApi];
+    public static readonly IReadOnlyList<string> AllIds = [Ild, Database, WorkItemServer, KubernetesApi, LinkLocal];
+
+    /// <summary>Link-local addresses, where cloud metadata services answer (169.254.169.254, AWS's IPv6 form), with the credentials of the machine ILD runs on.</summary>
+    public static readonly ProtectedDestination LinkLocalRanges = new(LinkLocal, "Link-local and cloud metadata addresses", [], [])
+    {
+        Ranges = [IpRange.Parse("169.254.0.0/16"), IpRange.Parse("fe80::/10"), IpRange.Parse("fd00:ec2::254/128")],
+    };
 
     public string RefusalReason => "protected: " + Name;
 
@@ -31,6 +45,12 @@ public interface IProtectedDestinationSource
 {
     /// <summary>The destinations ILD derives from its own configuration, each switched on; the policy applies the operator's toggles.</summary>
     ValueTask<IReadOnlyList<ProtectedDestination>> GetAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// The address ranges of ILD's run networks and pods. Always refused (<see cref="EgressDestinationGuard.Check"/>), whatever the
+    /// operator's toggles, so one run cannot reach another through the proxy.
+    /// </summary>
+    ValueTask<IReadOnlyList<IpRange>> GetIsolatedRangesAsync(CancellationToken ct = default) => ValueTask.FromResult<IReadOnlyList<IpRange>>([]);
 }
 
 public sealed class ProtectedDestinationSource : IProtectedDestinationSource
@@ -44,11 +64,17 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
     private readonly Func<IReadOnlyList<IPAddress>> _ownAddresses;
     private readonly SemaphoreSlim _reload = new(1, 1);
-    private (IReadOnlyList<ProtectedDestination> Value, long At)? _cached;
+    private readonly Func<CancellationToken, Task<IReadOnlyList<IpRange>>> _isolated;
+    private readonly ILogger? _logger;
+    private IReadOnlyList<IpRange> _lastIsolated = [];
+    private (IReadOnlyList<ProtectedDestination> Value, IReadOnlyList<IpRange> Isolated, long At)? _cached;
 
     public ProtectedDestinationSource(IServiceScopeFactory scopes, Func<string, string?> environment, RunHostKind kind, TimeProvider clock,
-        Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<IReadOnlyList<IPAddress>>? ownAddresses = null)
+        Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<IReadOnlyList<IPAddress>>? ownAddresses = null,
+        Func<CancellationToken, Task<IReadOnlyList<IpRange>>>? isolatedRanges = null, ILogger? logger = null)
     {
+        _logger = logger;
+        _isolated = isolatedRanges ?? (_ => Task.FromResult<IReadOnlyList<IpRange>>([]));
         _scopes = scopes;
         _environment = environment;
         _kind = kind;
@@ -58,15 +84,21 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
     }
 
     public async ValueTask<IReadOnlyList<ProtectedDestination>> GetAsync(CancellationToken ct = default)
+        => (await LoadAsync(ct).ConfigureAwait(false)).Value;
+
+    public async ValueTask<IReadOnlyList<IpRange>> GetIsolatedRangesAsync(CancellationToken ct = default)
+        => (await LoadAsync(ct).ConfigureAwait(false)).Isolated;
+
+    private async ValueTask<(IReadOnlyList<ProtectedDestination> Value, IReadOnlyList<IpRange> Isolated, long At)> LoadAsync(CancellationToken ct)
     {
         if (Fresh() is { } cached) return cached;
         await _reload.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             if (Fresh() is { } raced) return raced;
-            var value = await BuildAsync(ct).ConfigureAwait(false);
-            _cached = (value, _clock.GetTimestamp());
-            return value;
+            var loaded = (await BuildAsync(ct).ConfigureAwait(false), await IsolatedAsync(ct).ConfigureAwait(false), _clock.GetTimestamp());
+            _cached = loaded;
+            return loaded;
         }
         finally
         {
@@ -74,8 +106,24 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
         }
     }
 
-    private IReadOnlyList<ProtectedDestination>? Fresh()
-        => _cached is { } c && _clock.GetElapsedTime(c.At) < CacheTtl ? c.Value : null;
+    // Asking the cluster for its pods can fail (an API blip, throttling). That must not stop all egress, so the ranges that last loaded
+    // stay in force, and the failure is cached with them for the TTL rather than retried by every connection.
+    private async Task<IReadOnlyList<IpRange>> IsolatedAsync(CancellationToken ct)
+    {
+        try
+        {
+            return _lastIsolated = await _isolated(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _logger?.LogWarning(ex, "Could not list the run networks the egress proxy keeps agents off; keeping the {Count} ranges that last loaded for {Seconds} s",
+                _lastIsolated.Count, CacheTtl.TotalSeconds);
+            return _lastIsolated;
+        }
+    }
+
+    private (IReadOnlyList<ProtectedDestination> Value, IReadOnlyList<IpRange> Isolated, long At)? Fresh()
+        => _cached is { } c && _clock.GetElapsedTime(c.At) < CacheTtl ? c : null;
 
     private async Task<IReadOnlyList<ProtectedDestination>> BuildAsync(CancellationToken ct)
     {
@@ -103,6 +151,7 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
             apiHosts.Add("kubernetes.default.svc");
             result.Add(new(ProtectedDestination.KubernetesApi, "Kubernetes API", apiHosts, await ResolveAllAsync(apiHosts, ct).ConfigureAwait(false)));
         }
+        result.Add(ProtectedDestination.LinkLocalRanges);
         return result;
     }
 

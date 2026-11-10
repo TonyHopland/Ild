@@ -62,7 +62,7 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
         _ = ServeAsync(_upstream);
 
         var options = new EgressProxyOptions(true, 0) { WebPort = ((IPEndPoint)_upstream.LocalEndpoint).Port };
-        _proxy = new EgressProxy(options, _policy, _log, NullLogger<EgressProxy>.Instance, ResolveAsync, DialAsync);
+        _proxy = new EgressProxy(options, EgressProxyTests.Creds, _policy, _log, NullLogger<EgressProxy>.Instance, ResolveAsync, DialAsync);
         await _proxy.StartAsync(CancellationToken.None);
         _proxyPort = await _proxy.BoundPort.WaitAsync(Timeout);
     }
@@ -148,7 +148,7 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, _proxyPort);
         var stream = client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(request));
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(EgressProxyTests.Authed(request)));
         var buffer = new byte[4096];
         var read = await stream.ReadAsync(buffer).AsTask().WaitAsync(Timeout);
         return Encoding.ASCII.GetString(buffer, 0, read);
@@ -261,10 +261,42 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("192.168.1.20")]
     [InlineData("169.254.169.254")]
+    [InlineData("[fd00:ec2::254]")]
+    [InlineData("[fe80::1]")]
+    [InlineData("169.254.1.1")]
+    public async Task Link_local_and_cloud_metadata_addresses_are_refused_by_default_and_handed_back_when_switched_off(string host)
+    {
+        Assert.StartsWith("HTTP/1.1 403", await ConnectAsync(host, 80));
+        Assert.StartsWith("HTTP/1.1 403", await GetAsync(host, 80));
+        Assert.Equal(0, DialCount);
+        Assert.Equal("protected: Link-local and cloud metadata addresses", _log.Reasons.Last());
+
+        await SetProtectionAsync(ProtectedDestination.LinkLocal, false);
+        Assert.StartsWith("HTTP/1.1 200", await ConnectAsync(host, 80));
+        Assert.Equal(1, DialCount);
+    }
+
+    [Theory]
+    [InlineData("10.213.4.18")]
+    [InlineData("10.213.255.254")]
+    public async Task Another_runs_network_is_refused_even_when_forwarded_or_every_protection_is_off(string host)
+    {
+        foreach (var id in ProtectedDestination.AllIds) await SetProtectionAsync(id, false);
+        await ForwardAsync(host, 3000);
+
+        Assert.StartsWith("HTTP/1.1 403", await ConnectAsync(host, 3000));
+        Assert.StartsWith("HTTP/1.1 403", await GetAsync(host, 3000));
+        Assert.Equal(0, DialCount);
+        Assert.Equal("another run's network", _log.Reasons.Last());
+        // Just outside the pool is judged like any other address.
+        Assert.StartsWith("HTTP/1.1 200", await ConnectAsync("10.214.0.1", 3000));
+    }
+
+    [Theory]
+    [InlineData("192.168.1.20")]
     [InlineData("lan.example")]
-    public async Task A_lan_or_metadata_address_is_judged_by_the_mode_and_lists_alone(string host)
+    public async Task A_lan_address_is_judged_by_the_mode_and_lists_alone(string host)
     {
         Assert.StartsWith("HTTP/1.1 200", await ConnectAsync(host, 80));
         Assert.Equal(1, DialCount);
@@ -306,7 +338,11 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
                 new(ProtectedDestination.Database, "ILD database", ["db.internal.example"], [Infrastructure["db.internal.example"]]),
                 new(ProtectedDestination.WorkItemServer, "WorkItem Server", ["workitems.internal.example"], [Infrastructure["workitems.internal.example"]]),
                 new(ProtectedDestination.KubernetesApi, "Kubernetes API", ["kubernetes.default.svc"], [Infrastructure["kubernetes.default.svc"]]),
+                ProtectedDestination.LinkLocalRanges,
             ]);
+
+        public ValueTask<IReadOnlyList<IpRange>> GetIsolatedRangesAsync(CancellationToken ct = default)
+            => ValueTask.FromResult<IReadOnlyList<IpRange>>([IpRange.Parse("10.213.0.0/16")]);
     }
 
     private sealed class RecordingLog : INetworkLogRecorder

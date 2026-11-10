@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Agents can no longer use the egress proxy without their launch's own credential, or reach other runs through it.** The proxy refuses a connection that does not carry the token ILD signed for its launch and takes the provider or installer scope only from that token, on the container host it serves only the run networks, and it always refuses another run's network and, by default, link-local and cloud metadata addresses.
 - **Preview commands and Cmd nodes always run inside the run, never on ILD's own machine**, and preview data kept between runs works with container and Kubernetes runs.
 - **A `{{WorkTree.File:...}}` placeholder reads only files inside the worktree.**
 - **The model gateway forwards only model calls**, so nothing in a run can use your Copilot or ChatGPT login for GitHub's hosted MCP or your Codex cloud tasks.

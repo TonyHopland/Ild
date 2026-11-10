@@ -251,6 +251,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     internal Func<string> AgentReadRoot { get; init; } = () => AgentIsolation.AgentReadRoot;
 
     /// <summary>The runs whose environments are kept whatever the caller of <see cref="ListLeftoversAsync"/> says is live: those that have not ended, a failed one included, since it can be retried in the environment it has.</summary>
+    /// <summary>What signs the egress proxy credential of each launch (<see cref="ILD.Core.Services.Implementations.Network.EgressCredentials"/>); a key of its own, which no proxy verifies, until the host is given ILD's.</summary>
+    public ILD.Core.Services.Implementations.Network.EgressCredentials Credentials { get; init; } = ILD.Core.Services.Implementations.Network.EgressCredentials.Random();
+
     internal Func<CancellationToken, Task<IReadOnlySet<Guid>>> RetainedRuns { get; init; } = _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>());
 
     public abstract RunHostKind Kind { get; }
@@ -282,6 +285,13 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             || ILD.Core.Services.Interfaces.PreviewProxyBase.AgentHost.EndsWith("." + host, StringComparison.OrdinalIgnoreCase)
             ? host + "-api"
             : host;
+
+    /// <summary>
+    /// The addresses of the networks and pods this host made for runs, which the egress proxy, being on every one of them, must never
+    /// dial for a run: another run's dev server or preview is there. Empty for a host that has none.
+    /// </summary>
+    public virtual Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>>([]);
 
     /// <summary>The port of ILD's egress proxy; 0 when there is none.</summary>
     protected abstract int EgressProxyPort { get; }
@@ -626,7 +636,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
                 defaults[line[..line.IndexOf('=')]] = line[(line.IndexOf('=') + 1)..];
 
         var hostOwned = new Dictionary<string, string?>(StringComparer.Ordinal) { ["HOME"] = owner.Home, ["NPM_CONFIG_PREFIX"] = owner.Chat ? $"{owner.Home}/.local" : null };
-        if (command.NetworkMode != ILD.Data.Enums.NetworkMode.Off && AgentIsolation.EgressProxyUrl(command.ProviderId) is { } proxy)
+        if (command.NetworkMode != ILD.Data.Enums.NetworkMode.Off && AgentIsolation.EgressProxyUrl(Credentials, new ILD.Core.Services.Implementations.Network.LaunchScope(owner.Chat ? ILD.Core.Services.Implementations.Network.LaunchKind.Chat : ILD.Core.Services.Implementations.Network.LaunchKind.Run, owner.Id, command.ProviderId)) is { } proxy)
             foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
                 hostOwned[name] = value;
 
@@ -696,7 +706,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// </summary>
     private IEnumerable<string> InstallerNetwork(string scope)
     {
-        if (new ILD.Core.Services.Implementations.Network.EgressProxyOptions(EgressProxyPort > 0, EgressProxyPort).InstallerUrl(scope) is not { } proxy)
+        if (new ILD.Core.Services.Implementations.Network.EgressProxyOptions(EgressProxyPort > 0, EgressProxyPort).InstallerUrl(Credentials, scope) is not { } proxy)
             throw new InvalidOperationException(
                 $"could not install the run's toolchains: the egress proxy is not enabled ({AgentIsolation.EgressProxyPortEnvVar} is unset), and a toolchain installer's network reaches only through it");
         var ild = new Uri(IldUrl).Host;

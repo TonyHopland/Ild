@@ -44,7 +44,7 @@ public sealed class LocalRunHostUserToolsTests : IDisposable
         var psi = new ProcessStartInfo("/bin/sh");
         return LocalRunHost.Launch(agent
             ? RunCommand.Agent(psi, Guid.NewGuid(), null, NetworkMode.Off, environment)
-            : RunCommand.Prepared(psi, environment: environment));
+            : RunCommand.Prepared(psi, environment: environment), EgressProxyTests.Creds);
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public sealed class LocalRunHostUserToolsTests : IDisposable
         var psi = new ProcessStartInfo("/bin/sh");
         psi.Environment["ILD_ONLY_ON_THE_START_INFO"] = "x";
 
-        var launched = LocalRunHost.Launch(RunCommand.Prepared(psi));
+        var launched = LocalRunHost.Launch(RunCommand.Prepared(psi), EgressProxyTests.Creds);
 
         Assert.False(launched.Environment.ContainsKey("ILD_ONLY_ON_THE_START_INFO"));
     }
@@ -138,7 +138,7 @@ public sealed class LocalRunHostUserToolsTests : IDisposable
             EgressProxy = "http://127.0.0.1:3128",
         };
 
-        var launched = LocalRunHost.Launch(command);
+        var launched = LocalRunHost.Launch(command, EgressProxyTests.Creds);
 
         Assert.Equal("http://127.0.0.1:3128", launched.Environment["HTTP_PROXY"]);
         Assert.Equal("1", launched.Environment["NODE_USE_ENV_PROXY"]);

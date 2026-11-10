@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.Files;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.RunHosts;
@@ -45,17 +46,20 @@ namespace ILD.Core.Services.Implementations.Adapters;
 public sealed class CodexAdapter : CliAgentAdapterBase
 {
     private readonly ILogger _logger;
+    private readonly EgressCredentials? _credentials;
 
-    public CodexAdapter(ILogger<CodexAdapter>? logger = null, IProcessEnvironment? environment = null)
+    public CodexAdapter(ILogger<CodexAdapter>? logger = null, IProcessEnvironment? environment = null, EgressCredentials? credentials = null)
         : base(environment)
     {
+        _credentials = credentials;
         _logger = logger ?? NullLogger<CodexAdapter>.Instance;
     }
 
     public CodexAdapter(
-        IServiceScopeFactory scopeFactory, ILogger<CodexAdapter>? logger = null, IProcessEnvironment? environment = null)
+        IServiceScopeFactory scopeFactory, ILogger<CodexAdapter>? logger = null, IProcessEnvironment? environment = null, EgressCredentials? credentials = null)
         : base(scopeFactory, environment)
     {
+        _credentials = credentials;
         _logger = logger ?? NullLogger<CodexAdapter>.Instance;
     }
 
@@ -156,7 +160,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[codex-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx));
+            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx), _credentials);
 
             using var gateway = OpenGateway(ctx);
             var codexHome = RunHost.RunHomeFor(worktreePath) is { } runHome
@@ -424,9 +428,10 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     /// configured; the process environment by default.
     /// </param>
     /// <param name="mode">The execution's network mode; custom servers are given the proxy only when it is proxied.</param>
+    /// <param name="credentials">What signs the proxy credential of the custom servers; without it they are given no proxy.</param>
     public static IReadOnlyList<CodexMcpServer> WriteMcpServers(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, NetworkMode mode,
-        Guid? chatSessionId = null, ILogger? logger = null, IProcessEnvironment? environment = null)
+        Guid? chatSessionId = null, ILogger? logger = null, IProcessEnvironment? environment = null, EgressCredentials? credentials = null)
     {
         logger ??= NullLogger.Instance;
         environment ??= ProcessEnvironment.Current;
@@ -455,7 +460,9 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             if (customServers.Count == 0)
                 return servers;
 
-            var proxyUrl = AgentIsolation.ResolveLaunchProxy(mode, environment.Get(AgentIsolation.EgressProxyPortEnvVar), provider.Id);
+            var proxyUrl = credentials is null ? null : AgentIsolation.ResolveLaunchProxy(
+                credentials, mode, environment.Get(AgentIsolation.EgressProxyPortEnvVar),
+                new LaunchScope(chatSessionId is null ? LaunchKind.Run : LaunchKind.Chat, chatSessionId ?? runContext.LoopRunId, provider.Id));
             foreach (var server in customServers)
             {
                 if (!ConfigKeyName.IsMatch(server.Name) || dll is null)

@@ -61,7 +61,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         NetworkMode: mode);
 
     private static ProcessStartInfo Prepare(ProcessStartInfo psi, AgentExecutionContext ctx)
-        => LocalRunHost.PrepareAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment is null ? null : CommandEnvironment.Of(ctx.Environment));
+        => LocalRunHost.PrepareAgentLaunch(psi, EgressProxyTests.Creds, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment is null ? null : CommandEnvironment.Of(ctx.Environment));
 
     [Theory]
     [InlineData(NetworkMode.Monitor)]
@@ -71,7 +71,9 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     {
         var psi = Prepare(new ProcessStartInfo("claude"), Execution(mode));
 
-        Assert.StartsWith("http://provider:", psi.Environment["HTTPS_PROXY"]);
+        Assert.StartsWith("http://ild:", psi.Environment["HTTPS_PROXY"]);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, psi.Environment["HTTPS_PROXY"]!, out var scope));
+        Assert.NotNull(scope.Provider);
         Assert.EndsWith("@127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
         Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
     }
@@ -100,6 +102,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton(new Mock<IWorkItemManager>().Object);
         services.AddSingleton(NoPackageFeeds.Resolver);
+        services.AddSingleton(EgressProxyTests.Creds);
         if (policy is not null) services.AddSingleton(policy);
         var ctx = new NodeExecutionContext(
             new LoopRun { Id = Guid.NewGuid(), WorktreePath = _worktree },
@@ -126,7 +129,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     [InlineData(NetworkMode.Monitor)]
     [InlineData(NetworkMode.Whitelist)]
     public async Task A_Cmd_node_runs_proxied_in_every_other_mode(NetworkMode mode)
-        => Assert.Equal("http://127.0.0.1:3128", (await RunCmdNodeAsync(EgressPolicies.Reporting(mode))).Trim());
+        => AssertUnscopedProxy(await RunCmdNodeAsync(EgressPolicies.Reporting(mode)));
 
     // What an isolated host reads to leave the proxy off (and open the direct route) for a command it runs in the run's own environment.
     [Theory]
@@ -155,12 +158,21 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
 
     [Fact]
     public async Task A_Cmd_node_without_a_policy_runs_proxied_as_Monitor()
-        => Assert.Equal("http://127.0.0.1:3128", (await RunCmdNodeAsync(null)).Trim());
+        => AssertUnscopedProxy(await RunCmdNodeAsync(null));
+
+    private static void AssertUnscopedProxy(string url)
+    {
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, url.Trim(), out var scope));
+        Assert.Equal(LaunchKind.Run, scope.Kind);
+        Assert.Null(scope.Provider);
+        Assert.Null(scope.Installer);
+        Assert.EndsWith("@127.0.0.1:3128", url.Trim());
+    }
 
     private async Task<string> RunTerminalAsync(IEgressPolicy? policy)
     {
         var (server, client) = WebSocketPair.Create();
-        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance, policy);
+        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance, policy, host: new LocalRunHost(credentials: EgressProxyTests.Creds));
         var provider = new AiProvider
         {
             Id = Guid.NewGuid(),

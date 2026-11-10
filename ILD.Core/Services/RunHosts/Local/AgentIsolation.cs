@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Network;
 using System.Diagnostics;
 using ILD.Data.Enums;
 
@@ -89,15 +90,8 @@ public static class AgentIsolation
     };
 
     /// <summary>
-    /// Give an agent launch what every launch in <paramref name="mode"/> gets: the build-server switches and,
-    /// unless the mode is Off, the egress proxy for <paramref name="aiProviderId"/>. Returns <paramref name="psi"/>.
-    /// </summary>
-    public static ProcessStartInfo ApplyLaunchEnvironment(ProcessStartInfo psi, Guid? aiProviderId, NetworkMode mode)
-        => ApplyLaunchEnvironment(psi, LaunchProxy(mode, aiProviderId));
-
-    /// <summary>
-    /// <see cref="ApplyLaunchEnvironment(ProcessStartInfo, Guid?, NetworkMode)"/> with the proxy URL already
-    /// resolved; null or blank for none.
+    /// Give an agent launch what every launch gets: the build-server switches and, with a proxy URL (<paramref name="egressProxy"/>,
+    /// from <see cref="LaunchProxy"/>; null or blank for none), the egress proxy. Returns <paramref name="psi"/>.
     /// </summary>
     public static ProcessStartInfo ApplyLaunchEnvironment(ProcessStartInfo psi, string? egressProxy)
     {
@@ -163,47 +157,39 @@ public static class AgentIsolation
 
     /// <summary>
     /// The command line for a terminal to start <paramref name="fileName"/> as an agent launch would be: with the
-    /// egress proxy for <paramref name="aiProviderId"/> under <paramref name="mode"/> in its environment.
+    /// egress proxy for <paramref name="aiProviderId"/> under <paramref name="mode"/> in its environment, signed by <paramref name="credentials"/>.
     /// </summary>
-    public static AgentCommand TerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? aiProviderId, NetworkMode mode)
-        => TerminalCommand(fileName, arguments, LaunchProxy(mode, aiProviderId));
+    public static AgentCommand TerminalCommand(string fileName, IReadOnlyList<string> arguments, EgressCredentials credentials, Guid? aiProviderId, NetworkMode mode)
+        => TerminalCommand(fileName, arguments, LaunchProxy(credentials, mode, new LaunchScope(LaunchKind.SignIn, Provider: aiProviderId)));
 
-    /// <inheritdoc cref="TerminalCommand(string, IReadOnlyList{string}, Guid?, NetworkMode)"/>
+    /// <inheritdoc cref="TerminalCommand(string, IReadOnlyList{string}, EgressCredentials, Guid?, NetworkMode)"/>
     public static AgentCommand TerminalCommand(string fileName, IReadOnlyList<string> arguments, string? egressProxy)
         => new(fileName, arguments, NonEmpty(egressProxy) is { } proxy ? EgressProxyEnvironment(proxy) : EmptyEnvironment);
 
-    /// <summary>The proxy URL a launch in <paramref name="mode"/> is pointed at; null in mode Off or when no proxy runs.</summary>
-    public static string? LaunchProxy(NetworkMode mode, Guid? aiProviderId)
-        => ResolveLaunchProxy(mode, Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), aiProviderId);
+    /// <summary>The proxy URL a launch of <paramref name="scope"/> in <paramref name="mode"/> is pointed at; null in mode Off or when no proxy runs.</summary>
+    public static string? LaunchProxy(EgressCredentials credentials, NetworkMode mode, LaunchScope scope)
+        => ResolveLaunchProxy(credentials, mode, Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), scope);
 
-    /// <inheritdoc cref="LaunchProxy(NetworkMode, Guid?)"/>
+    /// <inheritdoc cref="LaunchProxy(EgressCredentials, NetworkMode, LaunchScope)"/>
+    /// <param name="credentials">What signs the launch's credential.</param>
     /// <param name="mode">The mode the launch follows.</param>
     /// <param name="configuredPort">The configured proxy port, or null/blank for no proxy. Explicit form for tests.</param>
-    /// <param name="aiProviderId">The provider the launch is made for, if any.</param>
-    public static string? ResolveLaunchProxy(NetworkMode mode, string? configuredPort, Guid? aiProviderId)
-        => ResolveLaunchProxy(mode, ResolveEgressProxyUrl(configuredPort, aiProviderId));
-
-    /// <inheritdoc cref="LaunchProxy(NetworkMode, Guid?)"/>
-    /// <param name="mode">The mode the launch follows.</param>
-    /// <param name="proxyUrl">The proxy URL the launch would use in a proxied mode, or null for none.</param>
-    public static string? ResolveLaunchProxy(NetworkMode mode, string? proxyUrl)
-        => mode == NetworkMode.Off ? null : NonEmpty(proxyUrl);
+    /// <param name="scope">What the launch is, which its credential carries.</param>
+    public static string? ResolveLaunchProxy(EgressCredentials credentials, NetworkMode mode, string? configuredPort, LaunchScope scope)
+        => mode == NetworkMode.Off ? null : ResolveEgressProxyUrl(credentials, configuredPort, scope);
 
     /// <summary>
-    /// The proxy URL a launch is pointed at, or <c>null</c> when
-    /// <see cref="EgressProxyPortEnvVar"/> is unset. With an
-    /// <paramref name="aiProviderId"/> the URL carries the provider as Basic-auth
-    /// credentials, which the proxy reads back out of <c>Proxy-Authorization</c>
-    /// to apply that provider's scoped list entries.
+    /// The proxy URL a launch is pointed at, or <c>null</c> when <see cref="EgressProxyPortEnvVar"/> is unset. It carries the
+    /// credential <paramref name="credentials"/> signed for <paramref name="scope"/>, which the proxy requires and takes the launch's
+    /// scope (its provider's list entries, its installer zone) from.
     /// </summary>
-    public static string? EgressProxyUrl(Guid? aiProviderId)
-        => ResolveEgressProxyUrl(Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), aiProviderId);
+    public static string? EgressProxyUrl(EgressCredentials credentials, LaunchScope scope)
+        => ResolveEgressProxyUrl(credentials, Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), scope);
 
     /// <inheritdoc cref="EgressProxyUrl"/>
     /// <param name="configuredPort">The configured port, or null/blank for no proxy. Explicit form for tests.</param>
-    /// <param name="aiProviderId">The provider the launch is made for, if any.</param>
-    public static string? ResolveEgressProxyUrl(string? configuredPort, Guid? aiProviderId)
-        => ILD.Core.Services.Implementations.Network.EgressProxyOptions.Parse(configuredPort).ClientUrl(aiProviderId);
+    public static string? ResolveEgressProxyUrl(EgressCredentials credentials, string? configuredPort, LaunchScope scope)
+        => ILD.Core.Services.Implementations.Network.EgressProxyOptions.Parse(configuredPort).ClientUrl(credentials, scope);
 
     /// <summary>
     /// The variables that funnel a child's HTTP(S) traffic through

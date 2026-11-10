@@ -609,6 +609,21 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         }
     }
 
+    // -- Isolation ---------------------------------------------------------------
+
+    /// <summary>The IPs of every pod ILD made (runs, the chat pod, installers, sign-ins): a cluster has no network of its own per run, so these are what a run must not reach.</summary>
+    public override async Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default)
+    {
+        var pods = await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: KubernetesNames.SelectorFor(_options.Instance), cancellationToken: ct);
+        return pods.Items
+            .SelectMany(p => (p.Status?.PodIPs?.Select(i => i.Ip) ?? []).Append(p.Status?.PodIP))
+            .Distinct()
+            .Select(ip => System.Net.IPAddress.TryParse(ip, out var address) ? address : null)
+            .OfType<System.Net.IPAddress>()
+            .Select(ILD.Core.Services.Implementations.Network.IpRange.Single)
+            .ToList();
+    }
+
     // -- Sweep -------------------------------------------------------------------
 
     public override async Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)

@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
@@ -32,9 +33,9 @@ public class WorktreePreviewServiceLaunchTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private WorktreePreviewService BuildService(string? egressProxy = null)
+    private WorktreePreviewService BuildService(EgressProxyOptions? egressProxy = null)
         => new(new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, LocalRunHost.Shared, egressProxy, environment: _environment);
+            NullLogger<WorktreePreviewService>.Instance, LocalRunHost.Shared, egressProxy, EgressProxyTests.Creds, environment: _environment);
 
     private WorktreePreviewService.ResolvedStep Step(NetworkMode mode = NetworkMode.Monitor) => new(
         "npm run dev",
@@ -64,10 +65,14 @@ public class WorktreePreviewServiceLaunchTests : IDisposable
     [InlineData(NetworkMode.Off, false)]
     public void A_preview_is_proxied_in_every_mode_but_Off(NetworkMode mode, bool proxied)
     {
-        var service = BuildService("http://127.0.0.1:3128");
-        var psi = LocalRunHost.Launch(service.PreparedCommand(Step(mode)));
+        var service = BuildService(new EgressProxyOptions(true, 3128));
+        var psi = LocalRunHost.Launch(service.PreparedCommand(Step(mode)), EgressProxyTests.Creds);
 
-        Assert.Equal(proxied, psi.Environment.TryGetValue("HTTPS_PROXY", out var proxy) && proxy == "http://127.0.0.1:3128");
+        Assert.Equal(proxied, psi.Environment.TryGetValue("HTTPS_PROXY", out var proxy));
+        if (!proxied) return;
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, proxy!, out var scope));
+        Assert.Equal(LaunchKind.Preview, scope.Kind);
+        Assert.EndsWith("@127.0.0.1:3128", proxy);
     }
 
     [Fact]
@@ -78,7 +83,7 @@ public class WorktreePreviewServiceLaunchTests : IDisposable
             _stateDirectory,
             new Dictionary<string, string>(StringComparer.Ordinal) { ["UseSharedCompilation"] = "true" });
 
-        var psi = LocalRunHost.Launch(BuildService().PreparedCommand(step));
+        var psi = LocalRunHost.Launch(BuildService().PreparedCommand(step), EgressProxyTests.Creds);
 
         Assert.Equal("true", psi.Environment["UseSharedCompilation"]);
         Assert.Equal("1", psi.Environment["MSBUILDDISABLENODEREUSE"]);

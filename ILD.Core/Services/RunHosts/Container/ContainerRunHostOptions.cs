@@ -59,7 +59,9 @@ public sealed record ContainerRunHostOptions
     public string ToolsVolume { get; init; } = "ild-tools";
 
     /// <summary>The IPv4 range (CIDR) each run, chat and installer network gets a /28 of, so ILD can be put back on a network at a fixed address and the engine's default pools never run out.</summary>
-    public string SubnetPool { get; init; } = "10.213.0.0/16";
+    public string SubnetPool { get; init; } = DefaultSubnetPool;
+
+    public const string DefaultSubnetPool = "10.213.0.0/16";
 
     /// <summary>The host name in <see cref="IldUrl"/>.</summary>
     public string IldHost => new Uri(IldUrl).Host;
