@@ -59,7 +59,7 @@ public sealed class AgentControllerProposalValidationTests : IDisposable
             new Mock<IChatNotifier>().Object,
             TestActors.Instance);
         var http = new DefaultHttpContext();
-        http.Request.Headers["X-ILD-Run-Id"] = _runId.ToString();
+        http.User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, _runId);
         controller.ControllerContext = new ControllerContext { HttpContext = http };
         return controller;
     }

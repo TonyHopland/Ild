@@ -46,5 +46,7 @@ public record AgentExecutionContext(
     NetworkMode NetworkMode = NetworkMode.Monitor,
     // Files in the agent read root that ILD wrote for the whole execution (the package feed npm config) and that
     // arguments or environment of its launches point at; a launch's own files are declared by its adapter.
-    IReadOnlyList<string>? AgentFiles = null
+    IReadOnlyList<string>? AgentFiles = null,
+    // The token the launch's MCP server calls the agent API with; it names this run or chat, and ILD revokes it when the launch ends.
+    string? AgentApiToken = null
 );

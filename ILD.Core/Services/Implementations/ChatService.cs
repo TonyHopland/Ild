@@ -56,6 +56,7 @@ public sealed class ChatService : IChatService
     private readonly IEgressPolicy? _egressPolicy;
 
     private readonly IRunHost _runHost;
+    private readonly IAgentTokenService? _agentTokens;
 
     public ChatService(
         AppDbContext db,
@@ -72,9 +73,11 @@ public sealed class ChatService : IChatService
         IChatTitleScheduler? titles = null,
         IChatScheduleNotifier? schedules = null,
         ClaudeProjectFolders? claudeProjects = null,
-        IEgressPolicy? egressPolicy = null)
+        IEgressPolicy? egressPolicy = null,
+        IAgentTokenService? agentTokens = null)
     {
         _runHost = runHost;
+        _agentTokens = agentTokens;
         _db = db;
         _providers = providers;
         _registry = registry;
@@ -357,9 +360,11 @@ public sealed class ChatService : IChatService
             NetworkMode: await _egressPolicy.LaunchModeAsync(ct));
 
         NodeExecutionResult result;
+        IssuedAgentToken? agentToken = null;
         try
         {
-            result = await adapter.ExecuteAsync(agentCtx);
+            agentToken = _agentTokens is null ? null : await _agentTokens.IssueAsync(AgentTokenSource.Chat, session.Id, ct: ct);
+            result = await adapter.ExecuteAsync(agentCtx with { AgentApiToken = agentToken?.Token });
         }
         catch (OperationCanceledException)
         {
@@ -368,6 +373,11 @@ public sealed class ChatService : IChatService
         catch (Exception ex)
         {
             result = NodeExecutionResult.Fail($"[chat-error] {ex.Message}");
+        }
+        finally
+        {
+            if (agentToken is not null)
+                await _agentTokens!.RevokeAsync(agentToken.TokenId, CancellationToken.None);
         }
 
         var interrupted = ct.IsCancellationRequested;
@@ -782,6 +792,8 @@ public sealed class ChatService : IChatService
         // deleting it again retries. What the agent left in its own pi directories
         // is cleared too, but never holds the delete up.
         await AgentRunFiles.DeleteAsync(session.Id, ct);
+        if (_agentTokens is not null)
+            await _agentTokens.RevokeAllForAsync(AgentTokenSource.Chat, session.Id, ct);
 
         // Messages and adapter snapshots cascade-delete and schedule firings unlink
         // via their FKs; the usage moves into the analytics archive in the same

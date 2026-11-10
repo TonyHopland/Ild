@@ -168,7 +168,6 @@ try
     _ = app.Services.GetRequiredService<ILoggerFactory>();
     hostLogger = Log.Logger;
 
-    _ = app.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>();
 
     // Attached here rather than injected: the buffer is a sink, so it is built
     // before the container holding the hub is.
@@ -266,6 +265,11 @@ try
                 Log.Information("Session tokens are hashed with a keyed pepper (ILD_SESSION_TOKEN_PEPPER set)");
             else
                 Log.Warning("ILD_SESSION_TOKEN_PEPPER is not set — session tokens are hashed unkeyed, so anyone who can write the UserSessions table can mint a sign-in. Set it (setting it signs every device out once).");
+
+            // No agent launch survives the process that started it, so no token issued before this start is live.
+            await scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IAgentTokenService>().RevokeAllLiveAsync();
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ILD_AGENT_TOKEN")))
+                Log.Warning("ILD_AGENT_TOKEN is ignored: ILD issues each run and chat its own agent token.");
 
             // Before any run can start again: the token-bearing files of runs killed
             // with the previous process (see AgentRunFiles). Open runs and existing

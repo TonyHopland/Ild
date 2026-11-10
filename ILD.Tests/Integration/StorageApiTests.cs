@@ -40,7 +40,7 @@ public class StorageApiTests
         var anonymous = factory.CreateClient();
         var agent = factory.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
-            "Bearer", factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
+            "Bearer", factory.Services.IssueAgentToken());
         var ct = TestContext.Current.CancellationToken;
 
         foreach (var (caller, expected) in new[] { (anonymous, HttpStatusCode.Unauthorized), (agent, HttpStatusCode.Forbidden) })

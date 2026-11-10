@@ -35,7 +35,6 @@ namespace ILD.Tests.Integration;
 [SupportedOSPlatform("linux")]
 public class ChatRepositoryCloneApiTests
 {
-    private const string ChatHeader = "X-ILD-Chat-Session-Id";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -700,9 +699,10 @@ public class ChatRepositoryCloneApiTests
         public async Task<CloneResult> CloneAsync(string? chatHeader, string repositoryId, string? branch = null, CancellationToken? ct = null)
         {
             using var client = Factory.CreateClient();
-            var token = Factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+            var token = Guid.TryParse(chatHeader, out var chat)
+                ? Factory.Services.IssueAgentToken(AgentTokenSource.Chat, chat)
+                : Factory.Services.IssueAgentToken(AgentTokenSource.Run, Guid.NewGuid());
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            if (chatHeader is not null) client.DefaultRequestHeaders.Add(ChatHeader, chatHeader);
 
             var response = await client.PostAsJsonAsync(
                 $"/api/v1/agent/chat/repositories/{Uri.EscapeDataString(repositoryId)}/clone", new { branch }, ct ?? Ct);

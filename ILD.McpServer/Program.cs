@@ -26,10 +26,6 @@ static async Task RunServerAsync(string[] args)
         c.BaseAddress = new Uri(opts.ApiUrl.TrimEnd('/') + "/");
         if (!string.IsNullOrEmpty(opts.ApiToken))
             c.DefaultRequestHeaders.Add("Authorization", "Bearer " + opts.ApiToken);
-        if (!string.IsNullOrEmpty(opts.LoopRunId))
-            c.DefaultRequestHeaders.Add("X-ILD-Run-Id", opts.LoopRunId);
-        if (!string.IsNullOrEmpty(opts.ChatSessionId))
-            c.DefaultRequestHeaders.Add("X-ILD-Chat-Session-Id", opts.ChatSessionId);
     });
 
     builder.Services

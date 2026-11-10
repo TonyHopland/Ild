@@ -257,7 +257,7 @@ public class RepositoriesIntegrationTests(SharedApiFactory factory) : IClassFixt
     private static HttpClient CreateAgentClient(ApiFactory factory)
     {
         var client = factory.CreateClient();
-        var token = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        var token = factory.Services.IssueAgentToken();
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
         return client;
     }

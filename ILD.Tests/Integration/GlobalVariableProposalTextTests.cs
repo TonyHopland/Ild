@@ -43,8 +43,7 @@ public class GlobalVariableProposalTextTests
 
         var agent = factory.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Bearer", factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
-        agent.DefaultRequestHeaders.Add("X-ILD-Run-Id", run.Id.ToString());
+            "Bearer", factory.Services.IssueAgentToken(AgentTokenSource.Run, run.Id));
         return (factory, agent);
     }
 

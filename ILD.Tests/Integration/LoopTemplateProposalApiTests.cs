@@ -540,9 +540,11 @@ public class LoopTemplateProposalApiTests
         await using var host = await StartHostAsync();
         var templateId = await CreateTemplateAsync(host, "Release Loop");
         var (version, document) = await EditedDocumentAsync(host.Agent(), templateId, "make -j4");
-        var agent = host.Agent(
-            runId: header == SessionHeader.UnknownRun ? Guid.NewGuid() : null,
-            chatSessionId: header == SessionHeader.UnknownChat ? Guid.NewGuid() : null);
+        var agent = header == SessionHeader.None
+            ? host.Human
+            : host.Agent(
+                runId: header == SessionHeader.UnknownRun ? Guid.NewGuid() : null,
+                chatSessionId: header == SessionHeader.UnknownChat ? Guid.NewGuid() : null);
 
         var resp = await ProposeAsync(agent, templateId.ToString(), version, document.ToJsonString());
 

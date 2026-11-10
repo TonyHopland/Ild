@@ -47,7 +47,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
     /// <summary>The environment as the launch of <paramref name="ctx"/> sees ILD: for the config files that point the agent's MCP server at ILD.</summary>
     protected IProcessEnvironment RunFacingEnvironmentFor(AgentExecutionContext ctx)
-        => new RunFacingEnvironment(EnvironmentVariables, RunHost, ctx.RunContext.WorktreePath);
+        => new RunFacingEnvironment(EnvironmentVariables, RunHost, ctx.RunContext.WorktreePath, ctx.AgentApiToken);
 
     protected CliAgentAdapterBase(IProcessEnvironment? environment = null)
     {

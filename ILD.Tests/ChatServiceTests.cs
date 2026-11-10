@@ -823,6 +823,31 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Equal("first", ReadSession(chat.Id).Name);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_chat_turn_runs_on_a_token_for_its_chat_that_stops_working_when_the_turn_ends(bool adapterThrows)
+    {
+        var provider = await SeedProviderAsync();
+        var tokens = new AgentTokenService(_db.Context);
+        AgentTokenIdentity? duringTurn = null;
+        string? issued = null;
+        var svc = new ChatService(_db.Context, _db.Providers,
+            RegistryFor(new FakeAdapter(async ctx =>
+            {
+                duringTurn = await tokens.AuthenticateAsync(ctx.AgentApiToken!, TestContext.Current.CancellationToken);
+                issued = ctx.AgentApiToken;
+                return adapterThrows ? throw new InvalidOperationException("boom") : NodeExecutionResult.Ok("reply");
+            })),
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones, claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared, agentTokens: tokens);
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hello", CancellationToken.None);
+
+        Assert.Equal(new AgentTokenIdentity(duringTurn!.TokenId, AgentTokenSource.Chat, chat.Id), duringTurn);
+        Assert.Null(await tokens.AuthenticateAsync(issued!, TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task RenameAsync_names_the_owners_chat_manually_and_hints_the_owner()
     {

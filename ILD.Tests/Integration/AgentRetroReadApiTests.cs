@@ -379,7 +379,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
         {
             Content = JsonContent.Create(new { document }),
         };
-        put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        put.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(put, Ct);
         resp.EnsureSuccessStatusCode();
 

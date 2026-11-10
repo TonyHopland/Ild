@@ -42,7 +42,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 
 The ILD API log level is also changeable at runtime through `PUT /api/v1/logging/level` without restarting; `ILD_LOG_LEVEL` only sets the starting level. The WorkItem Server has no runtime endpoint; its level is fixed at startup.
 
-The ILD container additionally uses an `ILD_AGENT_TOKEN` for agent/MCP calls back into the local API. It is auto-generated at startup if unset, so you normally don't need to provide one.
+ILD issues each run and chat its own token for its agent's calls back into the API and revokes it when the launch ends, so there is nothing to configure. `ILD_AGENT_TOKEN` is no longer read; a webhook that authenticated with it must use a user token.
 
 ## Where runs execute
 

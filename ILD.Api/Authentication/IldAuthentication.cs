@@ -9,7 +9,7 @@ namespace ILD.Api.Authentication;
 /// Two principals exist and nothing else can authenticate: the <c>user</c> — the
 /// single seeded operator, holding a session token from <c>/api/v1/auth/login</c>
 /// — and the <c>agent</c>, ILD's own spawned MCP server presenting the
-/// process-lifetime service token (see <see cref="Configuration.AgentAuthTokenProvider"/>).
+/// per-launch token ILD issues to each run and chat it starts (see <see cref="ILD.Core.Services.Interfaces.IAgentTokenService"/>).
 /// Because those are the only two roles, "agent or user" is exactly "any
 /// authenticated caller".
 ///
@@ -24,6 +24,12 @@ public static class IldAuthentication
 
     public const string UserRole = "user";
     public const string AgentRole = "agent";
+
+    /// <summary>The claim naming what an agent token was issued for: <c>run</c> or <c>chat</c> (later a grant).</summary>
+    public const string SessionSourceClaim = "ild:session-source";
+
+    /// <summary>The claim carrying the id of the run or chat the agent token was issued for.</summary>
+    public const string SessionIdClaim = "ild:session-id";
 
     /// <summary>
     /// Any authenticated caller, agent included. The opt-out from the user-only

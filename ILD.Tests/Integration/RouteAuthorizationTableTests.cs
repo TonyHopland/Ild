@@ -67,7 +67,7 @@ public class RouteAuthorizationTableTests(RouteAuthorizationTableTests.Host host
         var anonymous = host.Factory.CreateClient();
         var agent = host.Factory.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
-            host.Factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
+            host.Factory.Services.IssueAgentToken());
 
         var mismatches = new List<string>();
         foreach (var probe in probes)

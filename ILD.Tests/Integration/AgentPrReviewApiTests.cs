@@ -126,6 +126,26 @@ public class AgentPrReviewApiTests
     private static ApiFactory FactoryWith(StubPrReviewService stub)
         => new(configureServices: services => services.AddScoped<IPrReviewService>(_ => stub));
 
+    private static async Task<Guid> SeedRunOnAsync(ApiFactory factory, string workItemId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "review-template" };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = version.Id,
+            Status = LoopRunStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.AddRange(template, version, run);
+        await db.SaveChangesAsync();
+        return run.Id;
+    }
+
     private static async Task<string> SeedWorkItemAsync(ApiFactory factory, HttpClient client)
     {
         using (var scope = factory.Services.CreateScope())
@@ -168,11 +188,11 @@ public class AgentPrReviewApiTests
         await using var factory = FactoryWith(stub);
         var client = await factory.CreateAuthenticatedClientAsync();
         var workItemId = await SeedWorkItemAsync(factory, client);
-        var runId = Guid.NewGuid();
+        var runId = await SeedRunOnAsync(factory, workItemId);
 
         var request = new HttpRequestMessage(HttpMethod.Get,
             $"/api/v1/agent/workitems/{workItemId}/pr-review?sinceCommit=7e932b3d");
-        request.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        request.ActAsRun(factory.Services, runId);
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -222,13 +242,13 @@ public class AgentPrReviewApiTests
         await using var factory = FactoryWith(stub);
         var client = await factory.CreateAuthenticatedClientAsync();
         var workItemId = await SeedWorkItemAsync(factory, client);
-        var runId = Guid.NewGuid();
+        var runId = await SeedRunOnAsync(factory, workItemId);
 
         var request = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/agent/workitems/{workItemId}/pr-review/reply")
         {
             Content = JsonContent.Create(new { commentId = "4049159495", body = "That compiles — C# allows a long array length." }),
         };
-        request.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        request.ActAsRun(factory.Services, runId);
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -397,7 +417,7 @@ public class AgentPrReviewApiTests
         {
             Content = JsonContent.Create(new { commentId = "4049159495", body = "An answer." }),
         };
-        request.Headers.Add("X-ILD-Chat-Session-Id", chat.ToString());
+        request.ActAsChat(factory.Services, chat);
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -412,11 +432,11 @@ public class AgentPrReviewApiTests
         await using var factory = FactoryWith(stub);
         var client = await factory.CreateAuthenticatedClientAsync();
         var workItemId = await SeedWorkItemAsync(factory, client);
-        var runId = Guid.NewGuid();
+        var runId = await SeedRunOnAsync(factory, workItemId);
 
         var request = new HttpRequestMessage(HttpMethod.Delete,
             $"/api/v1/agent/workitems/{workItemId}/pr-review/queue/5a03cb617874");
-        request.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        request.ActAsRun(factory.Services, runId);
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -440,7 +460,7 @@ public class AgentPrReviewApiTests
 
         var request = new HttpRequestMessage(HttpMethod.Delete,
             $"/api/v1/agent/workitems/{workItemId}/pr-review/queue/5a03cb617874");
-        request.Headers.Add("X-ILD-Chat-Session-Id", chat.ToString());
+        request.ActAsChat(factory.Services, chat);
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -486,10 +506,10 @@ public class AgentPrReviewApiTests
         await using var factory = FactoryWith(stub);
         var client = await factory.CreateAuthenticatedClientAsync();
         var workItemId = await SeedWorkItemAsync(factory, client);
-        var runId = Guid.NewGuid();
+        var runId = await SeedRunOnAsync(factory, workItemId);
 
         var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/agent/workitems/{workItemId}/pr-review/queue");
-        request.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        request.ActAsRun(factory.Services, runId);
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

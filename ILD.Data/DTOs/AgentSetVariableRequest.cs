@@ -5,7 +5,7 @@ namespace ILD.Data.DTOs;
 /// <summary>
 /// Request body for the agent-scoped set-loop-variable endpoint
 /// (<c>PUT /api/v1/agent/variables/{name}</c>). The variable is scoped to the
-/// run identified by the <c>X-ILD-Run-Id</c> header and becomes available to
+/// calling run, named by its token, and becomes available to
 /// templates as <c>{{Var.&lt;name&gt;}}</c>.
 /// </summary>
 public class AgentSetVariableRequest

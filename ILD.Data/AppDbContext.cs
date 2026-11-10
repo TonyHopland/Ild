@@ -33,6 +33,7 @@ public class AppDbContext : DbContext
     public DbSet<AiProviderTag> AiProviderTags => Set<AiProviderTag>();
     public DbSet<User> Users => Set<User>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<AgentToken> AgentTokens => Set<AgentToken>();
     public DbSet<UserPreference> UserPreferences => Set<UserPreference>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
@@ -369,6 +370,12 @@ public class AppDbContext : DbContext
             e.HasIndex(s => s.TokenHash).IsUnique();
             // Non-unique: a user has one of these per signed-in device.
             e.HasIndex(s => s.UserId);
+        });
+
+        modelBuilder.Entity<AgentToken>(e =>
+        {
+            e.HasIndex(t => t.TokenHash).IsUnique();
+            e.HasIndex(t => new { t.Source, t.SourceId });
         });
 
         modelBuilder.Entity<AppSetting>(e =>
