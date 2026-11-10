@@ -33,6 +33,63 @@ public sealed class ExecRunHostForwardsScriptTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 
+    private string PlantHostileTools(params string[] names)
+    {
+        var planted = Path.Combine(_dir, "planted");
+        Directory.CreateDirectory(planted);
+        foreach (var name in names)
+        {
+            var path = Path.Combine(planted, name);
+            File.WriteAllText(path, $"#!/bin/bash\ntouch \"{Path.Combine(_dir, "marker-" + name)}\"\nexit 0\n");
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        return planted;
+    }
+
+    [Fact]
+    public async Task The_hosts_script_does_not_run_a_binary_the_agent_planted_early_on_the_path()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux() && File.Exists("/usr/bin/mktemp") && File.Exists("/usr/bin/awk") && File.Exists("/usr/bin/cmp") && File.Exists("/usr/bin/cat") && File.Exists("/usr/bin/rm"), "needs Linux with coreutils and awk in /usr/bin");
+        var planted = PlantHostileTools("mktemp", "awk", "cmp", "cat", "rm");
+        File.WriteAllText(HostsFile, "127.0.0.1 localhost\n");
+        var psi = new ProcessStartInfo("bash") { RedirectStandardError = true };
+        foreach (var a in new[] { "-c", ExecRunHost.HostsScript, "bash", "127.9.9.9", "postgres" }) psi.ArgumentList.Add(a);
+        psi.Environment["PATH"] = $"{planted}:{Environment.GetEnvironmentVariable("PATH")}";
+        psi.Environment["ILD_HOSTS_FILE"] = HostsFile;
+        using var process = Process.Start(psi)!;
+        var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(process.ExitCode == 0, await error);
+        Assert.Empty(Directory.GetFiles(_dir, "marker-*"));
+        Assert.Equal("127.0.0.1 localhost\n# ild-forwards begin\n127.9.9.9 postgres\n# ild-forwards end\n", File.ReadAllText(HostsFile));
+    }
+
+    [Fact]
+    public async Task A_script_run_as_a_command_of_ILDs_does_not_run_a_planted_binary_or_the_bash_env_file()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux() && File.Exists("/usr/bin/env") && File.Exists("/usr/bin/mktemp") && File.Exists("/bin/bash"), "needs Linux with /usr/bin/env, mktemp and /bin/bash");
+        var planted = PlantHostileTools("mktemp", "stat");
+        var rc = Path.Combine(_dir, "rc");
+        File.WriteAllText(rc, $"touch \"{Path.Combine(_dir, "marker-bash-env")}\"\n");
+        var command = ExecRunHost.IldScript("/bin/bash", "f=$(mktemp) && stat -c %s -- \"$f\" >/dev/null; rm -f \"$f\"; echo \"$PATH\"");
+        var psi = new ProcessStartInfo(command[0]) { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in command.Skip(1)) psi.ArgumentList.Add(a);
+        psi.Environment["PATH"] = $"{planted}:{Environment.GetEnvironmentVariable("PATH")}";
+        psi.Environment["BASH_ENV"] = rc;
+        psi.Environment["ENV"] = rc;
+        using var process = Process.Start(psi)!;
+        var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(process.ExitCode == 0, await error);
+        Assert.Equal(ExecRunHost.FixedPath, (await output).Trim());
+        Assert.Empty(Directory.GetFiles(_dir, "marker-*"));
+    }
+
+
     private static bool Has(string tool)
     {
         try

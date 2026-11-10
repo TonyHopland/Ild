@@ -526,11 +526,14 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         }
     }
 
+    // What ILD's own execs as root start with: the container's PATH has directories the agent writes, which root must not run from.
+    private static readonly IReadOnlyDictionary<string, string> RootEnvironment = new Dictionary<string, string> { ["PATH"] = FixedPath };
+
     // Docker and Podman make the hosts file root's in each container, and root writes it without a capability, as it does
     // resolv.conf: the container keeps its capabilities and its commands keep their user.
     protected override async Task<RunHostOutput> RunHostsScriptAsync(ExecOwner owner, IReadOnlyList<string> arguments, CancellationToken ct)
     {
-        using var exec = await OpenExecStreamAsync(owner, ["/bin/bash", "-c", HostsScript, "bash", .. arguments], environment: null, stdin: false, tty: false, user: "0", ct);
+        using var exec = await OpenExecStreamAsync(owner, IldScript("/bin/bash", HostsScript, arguments.ToArray()), RootEnvironment, stdin: false, tty: false, user: "0", ct);
         var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);
         var error = new StreamReader(exec.Stderr!).ReadToEndAsync(ct);
         var status = await exec.Status;
@@ -634,7 +637,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     {
         const string script = "printf 'nameserver %s\\n' \"$1\" > /etc/resolv.conf";
         using var exec = await DockerExec.OpenAsync(
-            _api, container, ["/bin/sh", "-c", script, "sh", nameServer], stdin: false, tty: false, ExitStatusTimeout, ct, user: "0");
+            _api, container, IldScript("/bin/sh", script, nameServer), stdin: false, tty: false, ExitStatusTimeout, ct, user: "0", RootEnvironment);
         var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);
         var error = new StreamReader(exec.Stderr!).ReadToEndAsync(ct);
         var status = await exec.Status;

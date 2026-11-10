@@ -163,18 +163,19 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// commands do not run as root); the caller then keeps the loopback form only.
     /// </summary>
     internal const string HostsScript = """
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH
         f="${ILD_HOSTS_FILE:-/etc/hosts}"
         [ -w "$f" ] || exit 3
-        tmp=$(mktemp) || exit 1
-        trap 'rm -f "$tmp"' EXIT
-        awk '/^# ild-forwards begin$/ { skip = 1; next } /^# ild-forwards end$/ { skip = 0; next } !skip' "$f" > "$tmp" || exit 1
+        tmp=$(/usr/bin/mktemp) || exit 1
+        trap '/usr/bin/rm -f "$tmp"' EXIT
+        /usr/bin/awk '/^# ild-forwards begin$/ { skip = 1; next } /^# ild-forwards end$/ { skip = 0; next } !skip' "$f" > "$tmp" || exit 1
         if [ "$#" -ge 2 ]; then
             echo "# ild-forwards begin" >> "$tmp"
             while [ "$#" -ge 2 ]; do printf '%s %s\n' "$1" "$2" >> "$tmp"; shift 2; done
             echo "# ild-forwards end" >> "$tmp"
         fi
-        cmp -s "$tmp" "$f" && exit 0
-        cat "$tmp" > "$f" || exit 3
+        /usr/bin/cmp -s "$tmp" "$f" && exit 0
+        /usr/bin/cat "$tmp" > "$f" || exit 3
         """;
 
     /// <summary>
@@ -450,7 +451,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     protected async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
     {
         if (Probe is { } probe) _ = probe.ProbeAsync((host, port, token) => ConnectDirectlyAsync(owner, host, port, token));
-        var home = await RunScriptAsync(owner, HomeScript, [RunPaths.HomeDirectory(owner)], ct);
+        var home = await ExecAsync(owner, ["/bin/bash", "-c", HomeScript, "bash", RunPaths.HomeDirectory(owner)], null, null, ct);
         if (!home.Success)
             throw new InvalidOperationException($"could not make the run's home in its {Noun}: {home.StdErr.Trim()}");
         if (request.KeepPreviewData)
@@ -667,7 +668,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
         var path = $"{RunPaths.ProcessDirectory}/{name}.env";
         using var content = new MemoryStream(Encoding.UTF8.GetBytes(CommandEnvironment.ShellExports(variables)));
-        var written = await ExecAsync(owner, ["/bin/sh", "-c", WriteEnvironmentFileScript, "sh", path], content, null, ct);
+        var written = await ExecAsync(owner, IldScript("/bin/sh", WriteEnvironmentFileScript, path), content, null, ct);
         if (!written.Success)
             throw new IOException($"could not write the command's environment in the run's {Noun}: {written.StdErr.Trim()}");
         return (null, path);
@@ -813,10 +814,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // -- Bundles -----------------------------------------------------------------
 
     public async Task<RunHostResult> PushBundleAsync(string targetPath, string originUrl, Stream bundle, CancellationToken ct = default)
-        => ToResult(await ExecAsync(OwnerFor(targetPath), ["/bin/sh", "-c", Local.LocalRunHost.CloneScript, "sh", targetPath, originUrl], bundle, null, ct));
+        => ToResult(await ExecAsync(OwnerFor(targetPath), IldScript("/bin/sh", Local.LocalRunHost.CloneScript, targetPath, originUrl), bundle, null, ct));
 
     public async Task<RunHostResult> FetchBundleAsync(string clonePath, Stream bundle, CancellationToken ct = default)
-        => ToResult(await ExecAsync(OwnerFor(clonePath), ["/bin/sh", "-c", Local.LocalRunHost.FetchBundleScript, "sh", clonePath], bundle, null, ct));
+        => ToResult(await ExecAsync(OwnerFor(clonePath), IldScript("/bin/sh", Local.LocalRunHost.FetchBundleScript, clonePath), bundle, null, ct));
 
     public async Task<RunHostResult> PullBundleAsync(string clonePath, string branch, bool incremental, Stream sink, CancellationToken ct = default)
     {
@@ -874,7 +875,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private async Task<MemoryStream?> ReadAllAsync(string path, CancellationToken ct)
     {
         var content = new MemoryStream();
-        var result = await ExecAsync(OwnerFor(path), ["/bin/sh", "-c", "[ -f \"$1\" ] || exit 3; exec cat -- \"$1\"", "sh", path], null, content, ct);
+        var result = await ExecAsync(OwnerFor(path), IldScript("/bin/sh", "[ -f \"$1\" ] || exit 3; exec cat -- \"$1\"", path), null, content, ct);
         if (!result.Success) return null;
         content.Position = 0;
         return content;
@@ -890,7 +891,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         var content = new MemoryStream();
         var result = await ExecAsync(
-            OwnerFor(path), ["/bin/sh", "-c", "[ -f \"$1\" ] || exit 3; tail -c \"+$(( $2 + 1 ))\" -- \"$1\" | head -c \"$3\"", "sh", path, offset.ToString(), count.ToString()],
+            OwnerFor(path), IldScript("/bin/sh", "[ -f \"$1\" ] || exit 3; tail -c \"+$(( $2 + 1 ))\" -- \"$1\" | head -c \"$3\"", path, offset.ToString(), count.ToString()),
             null, content, ct);
         if (!result.Success) return null;
         content.Position = 0;
@@ -922,7 +923,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         var result = await ExecAsync(
             owner,
-            ["/bin/sh", "-c", WriteFileScript, "sh", path, readOnly ? "ro" : "rw"],
+            IldScript("/bin/sh", WriteFileScript, path, readOnly ? "ro" : "rw"),
             content, null, ct);
         if (!result.Success)
             throw new IOException($"could not write {path} in the run's {Noun}: {result.StdErr.Trim()}");
@@ -1018,7 +1019,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         await using (var sink = file.OpenWrite())
             await store.PackAsync(repositoryId, sink, ct);
         await using var archive = file.OpenRead();
-        var filled = await ExecAsync(owner, ["/bin/bash", "-c", "mkdir -p -- \"$1\" && exec tar -x --no-same-owner -C \"$1\"", "bash", folder], archive, null, ct);
+        var filled = await ExecAsync(owner, IldScript("/bin/bash", "mkdir -p -- \"$1\" && exec tar -x --no-same-owner -C \"$1\"", folder), archive, null, ct);
         if (!filled.Success)
             throw new InvalidOperationException($"could not fill the run's copy of its repository's preview data in its {Noun}: {filled.StdErr.Trim()}");
     }
@@ -1043,7 +1044,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             using var file = PrivateTempFile.Create("ild-preview-data-");
             RunHostOutput packed;
             await using (var sink = file.OpenWrite())
-                packed = await ExecAsync(owner, ["/bin/bash", "-c", $"[ -d \"$1\" ] || exit {NoPreviewDataCopy}; exec tar -c -C \"$1\" .", "bash", RunPaths.PreviewData(owner)], null, sink, ct);
+                packed = await ExecAsync(owner, IldScript("/bin/bash", $"[ -d \"$1\" ] || exit {NoPreviewDataCopy}; exec tar -c -C \"$1\" .", RunPaths.PreviewData(owner)), null, sink, ct);
             if (packed.ExitCode == NoPreviewDataCopy) return;
             if (!packed.Success)
             {
@@ -1167,7 +1168,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
     {
         if (!HostsChats) throw new NotSupportedException($"this host does not keep chats in a {Noun}");
-        var home = await RunScriptAsync(new ExecOwner(chatId, Chat: true), HomeScript, [RunPaths.ChatHome(chatId)], ct);
+        var home = await ExecAsync(new ExecOwner(chatId, Chat: true), ["/bin/bash", "-c", HomeScript, "bash", RunPaths.ChatHome(chatId)], null, null, ct);
         if (!home.Success)
             throw new IOException($"could not make the chat's folder in the {Noun}: {home.StdErr.Trim()}");
         return RunPaths.ChatRoot(chatId);
@@ -1355,7 +1356,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     // Reads one regular, non-empty file of at most the import's cap in the home, as base64; nothing else is printed.
     private const string ReadLoginScript = """
-        f="$HOME/$1"
+        f="$3/$1"
         { [ -f "$f" ] && [ ! -L "$f" ]; } || exit 3
         size=$(stat -c %s -- "$f") || exit 3
         { [ "$size" -gt 0 ] && [ "$size" -le "$2" ]; } || exit 3
@@ -1365,7 +1366,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>The text of a login file in a sign-in environment's home, by its path relative to it; null when it is not a regular file of a size worth reading.</summary>
     protected async Task<string?> ReadSignInFileAsync(Guid id, string relativePath, CancellationToken ct)
     {
-        var result = await RunScriptAsync(id, ReadLoginScript, [relativePath, CredentialImport.MaxBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)], ct);
+        var result = await RunScriptAsync(id, ReadLoginScript, [relativePath, CredentialImport.MaxBytes.ToString(System.Globalization.CultureInfo.InvariantCulture), SignInHome], ct);
         if (result.ExitCode == 3) return null;
         if (!result.Success)
             throw new InvalidOperationException($"could not read {relativePath} in the sign-in {Noun}: {result.StdErr.Trim()}");
@@ -1382,8 +1383,18 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private static readonly string[] ScriptFromStdin =
         ["/bin/bash", "-c", "f=$(mktemp) && cat > \"$f\" && exec bash \"$f\" \"$@\"", "bash"];
 
+    /// <summary>The PATH ILD's own scripts run with in a run: the system's directories only, none the agent writes to.</summary>
+    internal const string FixedPath = "/usr/sbin:/usr/bin:/sbin:/bin";
+
+    /// <summary>
+    /// A script of ILD's own as a command: run with an empty environment and <see cref="FixedPath"/>, so nothing the agent put in the
+    /// run's PATH, BASH_ENV or ENV is run by it. The environment is cleared by the command because an exec's Env can only add.
+    /// </summary>
+    internal static string[] IldScript(string shell, string script, params string[] arguments)
+        => ["/usr/bin/env", "-i", "PATH=" + FixedPath, shell, "-c", script, Path.GetFileName(shell), .. arguments];
+
     protected Task<RunHostOutput> RunScriptAsync(ExecOwner owner, string script, IReadOnlyList<string> arguments, CancellationToken ct)
-        => ExecAsync(owner, ["/bin/bash", "-c", script, "bash", .. arguments], null, null, ct);
+        => ExecAsync(owner, IldScript("/bin/bash", script, arguments.ToArray()), null, null, ct);
 
     /// <summary>
     /// A command in the run, to its end. <paramref name="stdin"/> is sent and closed; <paramref name="stdout"/> receives

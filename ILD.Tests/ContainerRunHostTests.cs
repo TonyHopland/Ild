@@ -475,11 +475,34 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         // The name is mapped to that address first, by root, which owns the hosts file.
         var hosts = _api.Execs.Single(e => e.Command.Contains(ExecRunHost.HostsScript));
         Assert.Equal("0", hosts.User);
+        // Root starts with the system's PATH alone: the container's has a directory the agent writes ahead of /usr/bin.
+        Assert.Equal(["PATH=/usr/sbin:/usr/bin:/sbin:/bin"], hosts.Env);
+        Assert.Equal(["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-c"], hosts.Command.Take(5));
         Assert.Equal([address, "postgres"], hosts.Command.TakeLast(2));
         Assert.True(_api.Execs.IndexOf(hosts) < _api.Execs.IndexOf(sync));
         // A host that could carry a socat option is not given a relay.
         Assert.DoesNotContain("bad,host", sync.Command);
         Assert.True(_api.Execs.IndexOf(sync) < _api.Execs.FindIndex(e => e.Command.Contains("make-it")));
+    }
+
+    private static readonly string[] IldScriptPrefix = ["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"];
+
+    [Fact]
+    public async Task ILDs_own_scripts_start_with_a_fixed_environment_and_the_runs_own_command_does_not()
+    {
+        await CreateRunAsync();
+        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
+        var ct = TestContext.Current.CancellationToken;
+
+        using (var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), ct)) await process.WaitForExitAsync(ct);
+        await _host.GetFileLengthAsync($"{WorkingDirectory}/file", ct);
+
+        var own = _api.Execs.Where(e => e.Command.Contains(ExecRunHost.ForwardsScript) || e.Command.Contains(ExecRunHost.HostsScript) || e.Joined.Contains("stat -c %s")).ToList();
+        Assert.Equal(3, own.Count);
+        Assert.All(own, e => Assert.Equal(IldScriptPrefix, e.Command.Take(3)));
+        var run = _api.Execs.Single(e => e.Command.Contains("make-it"));
+        Assert.NotEqual("/usr/bin/env", run.Command[0]);
+        Assert.Contains(run.Env, c => c.StartsWith("HOME=", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -502,8 +525,8 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(2, syncs.Count);
         Assert.Equal("5432", syncs[0].Command[^2]);
         // Only the proxy's host and port: every relay is stopped.
-        Assert.Equal(["/bin/bash", "-c", ExecRunHost.ForwardsScript, "bash"], syncs[1].Command.Take(4));
-        Assert.Equal(6, syncs[1].Command.Count);
+        Assert.Equal(["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-c", ExecRunHost.ForwardsScript, "bash"], syncs[1].Command.Take(7));
+        Assert.Equal(9, syncs[1].Command.Count);
     }
 
     // -- Exec --------------------------------------------------------------------
@@ -840,6 +863,8 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var write = _api.Execs.Single(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal));
         Assert.Equal("0", write.User);
+        Assert.Equal(["PATH=/usr/sbin:/usr/bin:/sbin:/bin"], write.Env);
+        Assert.Equal(["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "/bin/sh", "-c"], write.Command.Take(5));
         // Docker's resolver is in every container on a network of its own.
         Assert.Equal("127.0.0.11", write.Command[^1]);
         Assert.Equal("127.0.0.1", _api.Container(Name(_run))!["HostConfig"]!["Dns"]![0]!.GetValue<string>());
@@ -894,6 +919,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var close = _api.Execs.Last(e => e.Joined.Contains("/etc/resolv.conf", StringComparison.Ordinal));
         Assert.Equal("0", close.User);
+        Assert.Equal(["PATH=/usr/sbin:/usr/bin:/sbin:/bin"], close.Env);
         Assert.Matches(expected, close.Command[^1]);
         Assert.NotEqual("127.0.0.1", close.Command[^1]);
         if (podman) Assert.NotEqual(openGateway, close.Command[^1]);
@@ -920,7 +946,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         // The pid file of a process launched in Off, whose process group is alive.
         _api.OnExec = async e =>
         {
-            if (e.Command.Count > 2 && e.Command[2] == ExecRunHost.OffRunningScript) await e.ExitAsync(1);
+            if (e.Command.Count > 5 && e.Command[5] == ExecRunHost.OffRunningScript) await e.ExitAsync(1);
             else await e.ExitAsync(0);
         };
 
@@ -939,7 +965,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         using var process = await StartAsync(NetworkMode.Monitor);
 
         Assert.DoesNotContain(_host.OpenNetworkName, _api.Networks());
-        Assert.DoesNotContain(_api.Execs.Skip(execs), e => e.Command.Count > 2 && e.Command[2] == ExecRunHost.OffRunningScript);
+        Assert.DoesNotContain(_api.Execs.Skip(execs), e => e.Command.Count > 5 && e.Command[5] == ExecRunHost.OffRunningScript);
     }
 
     [Fact]
@@ -985,7 +1011,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(2, killed);
         var kill = _api.Execs.Last();
         Assert.Equal(Name(_run), kill.Container);
-        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[2]);
+        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[5]);
     }
 
     [Fact]
@@ -1015,7 +1041,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.True(killedOk);
         var kill = _api.Execs.Last();
         Assert.Equal(startedAs, kill.Command[^1]);
-        Assert.Contains("kill -s TERM", kill.Command[2]);
+        Assert.Contains("kill -s TERM", kill.Command[5]);
         hold.SetResult();
     }
 
@@ -2864,7 +2890,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(1, killed);
         var kill = _api.Execs.Last();
         Assert.Equal(ChatContainer, kill.Container);
-        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[2]);
+        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[5]);
         Assert.Equal(chat.ToString("N"), kill.Command[^1]);
     }
 
@@ -3270,9 +3296,9 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.Equal("""{"a":1}""", text);
         var script = _api.Execs.Last().Command;
-        Assert.Contains("! -L", script[2]);
-        Assert.Contains("-le \"$2\"", script[2]);
-        Assert.Equal([".claude/.credentials.json", "262144"], script.TakeLast(2));
+        Assert.Contains("! -L", script[5]);
+        Assert.Contains("-le \"$2\"", script[5]);
+        Assert.Equal([".claude/.credentials.json", "262144", "/tmp/home"], script.TakeLast(3));
     }
 
     [Fact]
