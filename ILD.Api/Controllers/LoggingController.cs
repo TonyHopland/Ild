@@ -1,4 +1,5 @@
 using ILD.Api.Configuration;
+using ILD.Core.Services.Implementations.Network;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Serilog.Core;
@@ -15,9 +16,11 @@ public class LoggingController : ControllerBase
 {
     private readonly LoggingLevelSwitch _levelSwitch;
     private readonly StartupLogLevel _startupLevel;
+    private readonly IProtectedDestinationSource _protected;
 
-    public LoggingController(LoggingLevelSwitch levelSwitch, StartupLogLevel startupLevel)
+    public LoggingController(LoggingLevelSwitch levelSwitch, StartupLogLevel startupLevel, IProtectedDestinationSource protectedSource)
     {
+        _protected = protectedSource;
         _levelSwitch = levelSwitch;
         _startupLevel = startupLevel;
     }
@@ -34,8 +37,16 @@ public class LoggingController : ControllerBase
     }
 
     [HttpPut("level")]
-    public IActionResult SetLevel([FromBody] LogLevelRequest request)
+    public async Task<IActionResult> SetLevel([FromBody] LogLevelRequest request, CancellationToken ct)
     {
+        // Anonymous, so an agent in a run network could set Fatal and silence the warnings that report it. Reading stays open.
+        if (HttpContext?.Connection.RemoteIpAddress is { } caller)
+        {
+            var isolated = await _protected.GetIsolatedRangesAsync(ct);
+            if (isolated.Any(r => r.Contains(caller.IsIPv4MappedToIPv6 ? caller.MapToIPv4() : caller)))
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = "The log level cannot be changed from a run network" });
+        }
+
         if (!Enum.TryParse<LogEventLevel>(request.Level, true, out var level))
         {
             return BadRequest(new { error = "Invalid log level", message = $"Valid values: {string.Join(", ", Enum.GetNames<LogEventLevel>())}" });
