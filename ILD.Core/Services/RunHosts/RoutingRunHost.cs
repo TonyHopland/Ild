@@ -105,7 +105,10 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
         => For(path).IsRunCloneAsync(path, ct);
 
     public Task<RunHostOutput> RunToolAsync(string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default)
-        => ForExecution(runPath).RunToolAsync(runPath, fileName, arguments, streams, ct);
+        => (IsOwnRepository(runPath) ? local : ForExecution(runPath)).RunToolAsync(runPath, fileName, arguments, streams, ct);
+
+    // ILD's own base clone, which no agent writes, is where branches are listed, deleted and pruned for any run; a linked worktree of an old run, which the agent wrote, is not.
+    private bool IsOwnRepository(string path) => !OnIsolated(path) && LocalWorktrees.TrustedRepositoryRoot(path) == Path.GetFullPath(path);
 
     // -- Files -------------------------------------------------------------------
 

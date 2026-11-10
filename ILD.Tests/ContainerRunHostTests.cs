@@ -1412,6 +1412,18 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Git_in_ilds_own_base_clone_still_reaches_the_local_host_but_in_an_old_worktree_it_does_not()
+    {
+        var baseClone = Path.Combine(_scratch, "base");
+        Directory.CreateDirectory(Path.Combine(baseClone, ".git"));
+        var routing = new RoutingRunHost(new FakeRunHost(), _host);
+        var ct = TestContext.Current.CancellationToken;
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => routing.RunToolAsync(baseClone, "git", ["branch", "-D", "x"], null, ct));
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.RunToolAsync(Path.Combine(_scratch, "not-a-repository"), "git", ["status"], null, ct));
+    }
+
+    [Fact]
     public async Task A_title_launch_in_a_chats_folder_under_a_run_id_of_its_own_still_goes_to_the_isolated_host()
     {
         var chat = Guid.NewGuid();

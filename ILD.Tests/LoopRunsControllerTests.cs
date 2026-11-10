@@ -3,6 +3,7 @@ using ILD.Api.Controllers;
 using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
 using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -194,6 +195,43 @@ public class LoopRunsControllerTests
             new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance, host: LocalRunHost.Shared),
             reclaimer.Object, workItems.Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(),
             Mock.Of<ISchedulerSettingsService>(), claudeProjects: TestClaudeProjectFolders.Instance));
+    }
+
+    [Fact]
+    public async Task Resume_resume_steer_and_retry_of_a_run_whose_worktree_is_on_ilds_disk_say_it_predates_containers_and_start_nothing()
+    {
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "wi-1", Status = LoopRunStatus.Failed, WorktreePath = "/worktrees/ild/old-run" };
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetByIdAsync(run.Id)).ReturnsAsync(run);
+        var engine = new Mock<ILoopEngine>(MockBehavior.Strict);
+        using var container = new ContainerRunHost(
+            ContainerRunHostOptions.From(name => name switch
+            {
+                "ILD_API_URL" => "http://ild.example:8080",
+                "ILD_CONTAINER_SOCKET" => "/nonexistent.sock",
+                "ILD_CONTAINER_RUNNER_IMAGE" => "registry.example/ild-runner:1",
+                _ => null,
+            }), new ProcessRunner(), NullLogger<ContainerRunHost>.Instance);
+        var controller = TestActors.SignedIn(new LoopRunsController(engine.Object, new Mock<IEventLogService>().Object, store.Object,
+            new Mock<IAdapterSessionSnapshotStore>().Object,
+            new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance, host: LocalRunHost.Shared),
+            new Mock<IRunReclaimer>().Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object,
+            Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(), Mock.Of<ISchedulerSettingsService>(), claudeProjects: TestClaudeProjectFolders.Instance));
+        controller.HttpContext.RequestServices = new ServiceCollection().AddSingleton<IRunHost>(new RoutingRunHost(Mock.Of<IRunHost>(), container)).BuildServiceProvider();
+        var id = run.Id.ToString();
+
+        foreach (var result in new[]
+        {
+            await controller.Resume(id),
+            await controller.ResumeSteer(id, null),
+            await controller.RetryFromNode(id, Guid.NewGuid().ToString()),
+        })
+        {
+            var bad = Assert.IsType<BadRequestObjectResult>(result);
+            Assert.Contains(PredatesContainersException.Text, bad.Value!.ToString());
+        }
+
+        engine.VerifyNoOtherCalls();
     }
 
     [Fact]
