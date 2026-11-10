@@ -1022,7 +1022,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             }
             catch (DockerApiException ex)
             {
-                Logger?.LogWarning("The engine refused to put ILD back on the network of {Subject} at {Address}, so ILD is connected at another address and the container cannot reach ILD until it is restarted: {Reason}",
+                Logger?.LogWarning("The engine refused to put ILD back on the network of {Subject} at {Address}, so ILD is connected at another address and the container cannot reach ILD until its container is removed and made again: {Reason}",
                     subject, address, ex.Message);
             }
         }

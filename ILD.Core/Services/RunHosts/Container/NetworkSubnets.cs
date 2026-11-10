@@ -12,7 +12,7 @@ internal static class NetworkSubnets
     /// <summary>The prefix length of the subnet each network gets: 16 addresses, which the gateway, ILD and the one container need.</summary>
     public const int NetworkPrefix = 28;
 
-    /// <summary>The widest pool accepted is a /24; anything narrower holds too few networks to be a pool.</summary>
+    /// <summary>The narrowest pool accepted is a /24; anything smaller holds too few networks to be a pool.</summary>
     public const int NarrowestPoolPrefix = 24;
 
     public static bool TryParse(string cidr, out (uint Start, int Prefix) subnet)

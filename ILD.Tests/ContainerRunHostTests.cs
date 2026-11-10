@@ -1690,7 +1690,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal([Name(_run)], _api.NetworksOf("ild-main"));
         Assert.Null(_api.Connects[^1]["EndpointConfig"]);
         Assert.Contains(_log.Warnings, m => m.Contains(Name(_run), StringComparison.Ordinal) || m.Contains($"run {_run:N}", StringComparison.Ordinal));
-        Assert.Contains(_log.Warnings, m => m.Contains("restarted", StringComparison.Ordinal));
+        Assert.Contains(_log.Warnings, m => m.Contains("made again", StringComparison.Ordinal));
     }
 
     [Theory]
