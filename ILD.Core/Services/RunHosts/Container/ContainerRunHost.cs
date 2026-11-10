@@ -1095,8 +1095,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     /// Puts ILD's own container back on the network of every run of this instance, a stopped one included, and of the chat container,
     /// at the address each was given for ILD. A container that is recreated (an upgrade, <c>docker compose up</c>)
     /// starts on none of them, and without this the runs and chats it left could reach neither the model gateway nor
-    /// the MCP endpoint, and their previews could not be reached. A restarted container keeps its networks, and
-    /// nothing is done.
+    /// the MCP endpoint, and their previews could not be reached. A restarted container keeps its networks, but not
+    /// always its address on them: where that changed, ILD leaves the network and joins it again at the address the run has.
     /// </summary>
     internal async Task ReconnectToRunsAsync(CancellationToken ct)
     {
@@ -1117,15 +1117,18 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
             foreach (var (network, subject) in networks)
             {
-                if (AddressIn(self, network) is not null) continue;
-
                 var container = await _api.GetAsync($"/containers/{Escaped(network)}/json", ct, HttpStatusCode.NotFound);
                 var prefix = $"{_options.IldHost}:";
                 var address = container?["HostConfig"]?["ExtraHosts"]?.AsArray()
                     .Select(h => h?.GetValue<string>())
                     .FirstOrDefault(h => h?.StartsWith(prefix, StringComparison.Ordinal) == true)?[prefix.Length..];
+                var current = AddressIn(self, network);
+                if (current is not null && (address is null || current == address)) continue;
                 try
                 {
+                    // Podman gives a restarted container a new address on a network it was connected to without a fixed one.
+                    if (current is not null)
+                        await _api.PostAsync($"/networks/{Escaped(network)}/disconnect", new { Container = ild, Force = true }, ct);
                     await ConnectIldAsync(network, subject, ild, address, ct);
                 }
                 catch (DockerApiException ex)

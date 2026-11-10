@@ -2055,6 +2055,53 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_restarted_ild_container_that_came_back_at_another_address_is_put_back_at_the_address_the_run_has_for_it()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var host = NewHost(Options(ildContainer: "ild-main"));
+        await CreateRunAsync(host);
+        var given = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Single()!.GetValue<string>()["ild.example:".Length..];
+        var moved = given[..(given.LastIndexOf('.') + 1)] + "14";
+        Assert.NotEqual(given, moved);
+
+        _api.Readdress("ild-main", Name(_run), moved);
+        using var restarted = NewHost(Options(ildContainer: "ild-main"));
+        await restarted.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal([Name(_run)], _api.NetworksOf("ild-main"));
+        Assert.Equal(given, _api.AddressOf("ild-main", Name(_run)));
+
+        var connects = _api.Connects.Count;
+        await restarted.CheckAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(connects, _api.Connects.Count);
+    }
+
+    [Fact]
+    public async Task An_engine_that_no_longer_serves_the_version_the_client_was_written_against_is_asked_at_its_oldest()
+    {
+        _api.MinApiVersion = "1.44";
+        using var host = NewHost(Options());
+
+        await CreateRunAsync(host);
+        var output = await host.RunToolAsync(WorkingDirectory, "git", ["status"], null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["1.44"], _api.VersionsAsked);
+        Assert.NotNull(output);
+    }
+
+    [Theory]
+    [InlineData(null, null, "1.41")]
+    [InlineData("1.24", "1.44", "1.41")]
+    [InlineData("1.44", "1.53", "1.44")]
+    [InlineData("1.12", "1.40", "1.40")]
+    public void The_api_version_is_the_oldest_the_engine_serves_from_the_one_the_client_was_written_against(string? oldest, string? newest, string expected)
+    {
+        Assert.Equal(
+            Version.Parse(expected),
+            DockerApiClient.Choose(oldest is null ? null : Version.Parse(oldest), newest is null ? null : Version.Parse(newest)));
+    }
+
+    [Fact]
     public async Task Every_run_chat_and_installer_network_gets_a_small_subnet_of_the_pool()
     {
         await CreateRunAsync();
