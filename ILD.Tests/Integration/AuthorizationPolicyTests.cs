@@ -257,13 +257,11 @@ public class AuthorizationPolicyTests(SharedApiFactory factory) : IClassFixture<
     }
 
     /// <summary>
-    /// An Azure DevOps service hook has only one Authorization header and its own
-    /// verification needs it, so the ILD token travels in the query instead. If
-    /// the handler read the Basic credential as a token, the outer gate would
-    /// reject every such hook before the adapter ever saw it.
+    /// An Azure DevOps service hook proves itself with the Basic credential in its Authorization header,
+    /// which is the webhook secret and never an ILD token: a session in the query does not stand in for it.
     /// </summary>
     [Fact]
-    public async Task An_azure_devops_webhook_authenticates_from_the_query_while_basic_auth_carries_its_own_secret()
+    public async Task An_azure_devops_webhook_is_let_in_by_the_secret_in_its_basic_credential_and_by_nothing_else()
     {
         const string webhookSecret = "azure-hook-secret";
         using (var scope = factory.Services.CreateScope())
@@ -282,28 +280,29 @@ public class AuthorizationPolicyTests(SharedApiFactory factory) : IClassFixture<
 
         var token = await factory.GetAdminTokenAsync();
         var client = factory.CreateClient();
-        var basic = new System.Net.Http.Headers.AuthenticationHeaderValue(
-            "Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"ild:{webhookSecret}")));
+        System.Net.Http.Headers.AuthenticationHeaderValue Basic(string secret)
+            => new("Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"ild:{secret}")));
         var payload = """
             {"eventType":"git.pullrequest.merged","resource":{"pullRequestId":7,"status":"completed",
              "repository":{"id":"repo-guid","webUrl":"https://dev.azure.com/contoso/widgets/_git/app"}}}
             """;
 
-        HttpRequestMessage Hook(string url)
+        HttpRequestMessage Hook(string url, string secret)
         {
             var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = JsonContent.Create(JsonDocument.Parse(payload).RootElement),
             };
-            request.Headers.Authorization = basic;
+            request.Headers.Authorization = Basic(secret);
             return request;
         }
 
-        var withoutToken = await client.SendAsync(Hook("/api/v1/webhooks/azuredevops"), TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Unauthorized, withoutToken.StatusCode);
+        var withSecret = await client.SendAsync(Hook("/api/v1/webhooks/azuredevops", webhookSecret), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, withSecret.StatusCode);
 
-        var withToken = await client.SendAsync(Hook($"/api/v1/webhooks/azuredevops?access_token={token}"), TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.OK, withToken.StatusCode);
+        // An operator's session is no substitute for the secret.
+        var wrongSecret = await client.SendAsync(Hook($"/api/v1/webhooks/azuredevops?access_token={token}", "not-the-secret"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, wrongSecret.StatusCode);
     }
 
     /// <summary>
