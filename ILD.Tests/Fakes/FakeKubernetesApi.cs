@@ -122,7 +122,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         {
             _objects[(ns, kind, name)] = kind switch
             {
-                "secrets" => new V1Secret { Metadata = meta },
+                "configmaps" => new V1ConfigMap { Metadata = meta },
                 "pods" => new V1Pod { Metadata = meta, Status = podPhase is null ? null : new V1PodStatus { Phase = podPhase } },
                 "persistentvolumeclaims" => new V1PersistentVolumeClaim { Metadata = meta },
                 _ => new V1NetworkPolicy { Metadata = meta },
@@ -150,6 +150,33 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         }
     }
 
+    /// <summary>Puts a sign-in pod (or its NetworkPolicy) of an instance in the cluster, as if a host had made it and then crashed.</summary>
+    public void SeedSignIn(string name, string instance, string kind = "pods")
+    {
+        lock (_gate)
+        {
+            var meta = new V1ObjectMeta
+            {
+                Name = name,
+                NamespaceProperty = Namespace,
+                Labels = new Dictionary<string, string>
+                {
+                    ["app.kubernetes.io/managed-by"] = "ild",
+                    ["ild/instance"] = instance,
+                    ["ild/role"] = "signin",
+                },
+            };
+            _objects[(Namespace, kind, name)] = kind == "pods" ? new V1Pod { Metadata = meta } : new V1NetworkPolicy { Metadata = meta };
+        }
+    }
+
+    /// <summary>Puts a NetworkPolicy with the given spec in the namespace, replacing one of the name.</summary>
+    public void SeedPolicy(string name, V1NetworkPolicySpec spec)
+    {
+        lock (_gate)
+            _objects[(Namespace, "networkpolicies", name)] = new V1NetworkPolicy { Metadata = new V1ObjectMeta { Name = name, NamespaceProperty = Namespace }, Spec = spec };
+    }
+
     private void Map(WebApplication app)
     {
         app.Use(async (http, next) =>
@@ -164,7 +191,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         app.UseWebSockets();
         foreach (var (kind, prefix) in new[]
         {
-            ("secrets", "/api/v1"), ("pods", "/api/v1"), ("persistentvolumeclaims", "/api/v1"),
+            ("configmaps", "/api/v1"), ("pods", "/api/v1"), ("persistentvolumeclaims", "/api/v1"),
             ("networkpolicies", "/apis/networking.k8s.io/v1"),
         })
         {
@@ -192,7 +219,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         var body = await reader.ReadToEndAsync();
         object created = kind switch
         {
-            "secrets" => KubernetesJson.Deserialize<V1Secret>(body),
+            "configmaps" => KubernetesJson.Deserialize<V1ConfigMap>(body),
             "pods" => KubernetesJson.Deserialize<V1Pod>(body),
             "persistentvolumeclaims" => KubernetesJson.Deserialize<V1PersistentVolumeClaim>(body),
             _ => KubernetesJson.Deserialize<V1NetworkPolicy>(body),
@@ -248,7 +275,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
                 .ToList();
             return kind switch
             {
-                "secrets" => Json(new V1SecretList { Items = matching.Cast<V1Secret>().ToList() }),
+                "configmaps" => Json(new V1ConfigMapList { Items = matching.Cast<V1ConfigMap>().ToList() }),
                 "pods" => Json(new V1PodList { Items = matching.Cast<V1Pod>().ToList() }),
                 "persistentvolumeclaims" => Json(new V1PersistentVolumeClaimList { Items = matching.Cast<V1PersistentVolumeClaim>().ToList() }),
                 _ => Json(new V1NetworkPolicyList { Items = matching.Cast<V1NetworkPolicy>().ToList() }),

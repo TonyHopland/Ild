@@ -14,11 +14,16 @@ public static class KubernetesRunHostFactory
         Func<CancellationToken, Task<IReadOnlySet<Guid>>>? retainedRuns = null, ILD.Core.Services.Implementations.Network.EgressCredentials? credentials = null)
     {
         var options = KubernetesRunHostOptions.From(setting);
+        // The in-cluster configuration's namespace is ILD's own; a kubeconfig's is only a default, so there ILD must be told.
+        if (options.IldNamespace.Length == 0 && options.Kubeconfig is not null)
+            throw new InvalidOperationException($"{KubernetesRunHostOptions.IldNamespaceSetting} is required with {KubernetesRunHostOptions.KubeconfigSetting}: the run's network policy admits ILD's pods only from the namespace ILD runs in.");
         var configuration = options.Kubeconfig is { } kubeconfig
             ? KubernetesClientConfiguration.BuildConfigFromConfigFile(kubeconfig)
             : KubernetesClientConfiguration.InClusterConfig();
         var namespaceName = options.Namespace ?? configuration.Namespace
             ?? throw new InvalidOperationException($"{KubernetesRunHostOptions.NamespaceSetting} is not set and ILD's own namespace could not be read.");
+        if (options.IldNamespace.Length == 0)
+            options = options with { IldNamespace = configuration.Namespace ?? throw new InvalidOperationException($"{KubernetesRunHostOptions.IldNamespaceSetting} is not set and ILD's own namespace could not be read.") };
         var host = new KubernetesRunHost(new k8s.Kubernetes(configuration), options, namespaceName, runner, loggers.CreateLogger<KubernetesRunHost>())
         {
             ReadLimits = RunReadLimits.FromEnvironment(setting),

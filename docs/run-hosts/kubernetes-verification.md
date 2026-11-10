@@ -33,7 +33,7 @@ The unit and integration tests run against a fake Kubernetes API. They cannot sh
 
 ## 2. A full Develop run
 
-Start a Develop loop on a small work item and watch the objects: `kubectl -n ild-runs get secret,pvc,pod,networkpolicy -l app.kubernetes.io/managed-by=ild -w`.
+Start a Develop loop on a small work item and watch the objects: `kubectl -n ild-runs get configmap,pvc,pod,networkpolicy -l app.kubernetes.io/managed-by=ild -w`.
 
 | Step | Expected |
 | --- | --- |
@@ -62,11 +62,18 @@ And this must work: `curl -m 5 -s -o /dev/null -w '%{http_code}\n' http://<ild s
 This makes ILD fail to delete a run, then lets the sweep clean up.
 
 1. Start a run and wait for its pod to be `Running`.
-2. Take the `delete` verb off the Role: `kubectl -n ild-runs edit role ild-run-host`, and remove `delete` from the `secrets` rule (the pods and claims rule too, for the check below).
-3. Cancel the run and clean its worktree up in the UI. ILD cannot delete the Secret and logs a failure; the objects are still there.
+2. Take the `delete` verb off the Role: `kubectl -n ild-runs edit role ild-run-host`, and remove `delete` from the `configmaps` rule (the pods and claims rule too, for the check below).
+3. Cancel the run and clean its worktree up in the UI. ILD cannot delete the ConfigMap and logs a failure; the objects are still there.
 4. Put the `delete` verb back, then kill ILD without a graceful stop: `kubectl -n ild delete pod <ild pod> --grace-period=0 --force`.
 5. When ILD is back, the startup sweep has removed them: `kubectl -n ild-runs get secret,pvc,pod,networkpolicy -l ild/instance=<instance>` lists nothing for the cancelled run, and ILD's log says `Removed the objects of run <id>, which is finished or gone`.
 6. Objects of a run that is still `Running` or waiting for a human are kept by the same sweep.
+
+## 4b. A pod is never without its NetworkPolicy
+
+1. Apply `docs/kubernetes/default-deny-networkpolicy.yaml`. In **Settings > General** the Kubernetes warning about a missing default deny is gone; delete the policy and it comes back.
+2. Start a run, then in the pod: `kubectl -n ild-runs exec ild-run-<id> -- sh -c 'trap "" TERM; sleep 600' &` (a process that survives TERM), and cancel the run.
+3. While the pod is `Terminating`, `kubectl -n ild-runs get networkpolicy` still lists `ild-run-<id>`; it is deleted only after the pod is gone.
+4. `kubectl get ns ild-runs --show-labels` shows `pod-security.kubernetes.io/enforce=restricted`, and runs still start.
 
 ## 5. Two installs in one namespace
 

@@ -52,6 +52,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         "ILD_K8S_RUNNER_IMAGE" => image,
         "ILD_K8S_INSTANCE" => instance,
         "ILD_K8S_STORAGE_CLASS" => "run-scratch",
+        "ILD_K8S_ILD_NAMESPACE" => "ild-system",
         "ILD_K8S_TOOLS_CLAIM" => toolsClaim,
         "ILD_NETWORK_PROXY_PORT" => "3128",
         "GIT_AUTHOR_NAME" => "Ada",
@@ -114,9 +115,9 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var env = await CreateRunAsync();
 
         Assert.Equal(WorkingDirectory, env.WorkingDirectory);
-        Assert.Equal([$"secrets/{Name(_run)}", $"persistentvolumeclaims/{Name(_run)}", $"networkpolicies/{Name(_run)}", $"pods/{Name(_run)}"], _api.Created);
+        Assert.Equal([$"configmaps/{Name(_run)}", $"persistentvolumeclaims/{Name(_run)}", $"networkpolicies/{Name(_run)}", $"pods/{Name(_run)}"], _api.Created);
 
-        var secret = _api.Get<V1Secret>("secrets", Name(_run))!;
+        var secret = _api.Get<V1ConfigMap>("configmaps", Name(_run))!;
         foreach (var meta in new[]
         {
             secret.Metadata,
@@ -137,7 +138,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         })
         {
             var owner = Assert.Single(meta.OwnerReferences);
-            Assert.Equal("Secret", owner.Kind);
+            Assert.Equal("ConfigMap", owner.Kind);
             Assert.Equal(secret.Metadata.Name, owner.Name);
             Assert.Equal(secret.Metadata.Uid, owner.Uid);
         }
@@ -289,7 +290,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         Assert.Contains("fatal: bad bundle", ex.Message);
         Assert.Empty(_api.Names("pods"));
-        Assert.Empty(_api.Names("secrets"));
+        Assert.Empty(_api.Names("configmaps"));
     }
 
     // -- Shutdown and the chat pod's spec -----------------------------------------
@@ -772,7 +773,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(_run.ToString("N"), policy.Metadata.Labels["ild/run"]);
         Assert.Equal("open", policy.Metadata.Labels["ild/role"]);
         var owner = Assert.Single(policy.Metadata.OwnerReferences);
-        Assert.Equal("Secret", owner.Kind);
+        Assert.Equal("ConfigMap", owner.Kind);
         Assert.Equal(Name(_run), owner.Name);
         Assert.Empty(LaunchProxyVariables());
         // The run's own policy is untouched: the route is another policy on top of it.
@@ -889,6 +890,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             Assert.Contains("Ingress", spec.PolicyTypes);
             var from = Assert.Single(Assert.Single(spec.Ingress).FromProperty);
             Assert.Equal(Options().IldPodSelector, from.PodSelector.MatchLabels);
+            Assert.Equal(new Dictionary<string, string> { ["kubernetes.io/metadata.name"] = "ild-system" }, from.NamespaceSelector.MatchLabels);
             Assert.Null(from.IpBlock);
         }
     }
@@ -1305,16 +1307,197 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     // -- Delete and sweep --------------------------------------------------------
 
     [Fact]
-    public async Task Delete_removes_only_the_owner_and_the_cluster_garbage_collects_the_rest()
+    public async Task Delete_removes_the_pod_first_then_the_owner_and_the_cluster_garbage_collects_the_rest()
     {
         var env = await CreateRunAsync();
+        var violations = GuardPolicies();
 
         await _host.DeleteAsync(env, TestContext.Current.CancellationToken);
 
-        Assert.Equal([$"secrets/{Name(_run)}"], _api.Deleted);
+        Assert.Equal([$"pods/{Name(_run)}", $"configmaps/{Name(_run)}"], _api.Deleted);
         Assert.Empty(_api.Names("pods"));
         Assert.Empty(_api.Names("persistentvolumeclaims"));
         Assert.Empty(_api.Names("networkpolicies"));
+        Assert.Empty(violations);
+    }
+
+    // Records every NetworkPolicy delete that arrives while the pod it protects still exists.
+    private List<string> GuardPolicies()
+    {
+        var violations = new List<string>();
+        _api.BeforeDelete = what =>
+        {
+            if (what.StartsWith("networkpolicies/", StringComparison.Ordinal))
+            {
+                var policy = what["networkpolicies/".Length..];
+                var pod = policy.EndsWith("-open", StringComparison.Ordinal) ? policy[..^"-open".Length] : policy;
+                if (_api.Get<V1Pod>("pods", pod) is not null) violations.Add(what);
+            }
+            return Task.CompletedTask;
+        };
+        return violations;
+    }
+
+    [Fact]
+    public async Task A_pod_stuck_terminating_is_deleted_with_a_grace_period_of_0_and_the_policies_go_only_after_that()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var host = NewHost(Options() with { ReadyTimeout = TimeSpan.FromMilliseconds(300) });
+        var env = await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), ct);
+        _api.Get<V1Pod>("pods", Name(_run))!.Metadata.DeletionTimestamp = DateTime.UtcNow;
+        var violations = GuardPolicies();
+        _api.Deleted.Clear();
+
+        await host.DeleteAsync(env, ct);
+
+        Assert.Equal([$"pods/{Name(_run)}", $"pods/{Name(_run)}", $"configmaps/{Name(_run)}"], _api.Deleted);
+        Assert.Empty(_api.Names("networkpolicies"));
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public async Task The_leftover_sweep_deletes_a_runs_policies_only_after_its_pod_is_gone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var host = NewHost(Options() with { ReadyTimeout = TimeSpan.FromMilliseconds(300) });
+        var dead = Guid.NewGuid();
+        SeedRun(dead, Instance);
+        _api.Seed("networkpolicies", KubernetesNames.OpenName(Name(dead)), Instance, dead);
+        _api.Get<V1Pod>("pods", Name(dead))!.Metadata.DeletionTimestamp = DateTime.UtcNow;
+        var violations = GuardPolicies();
+
+        Assert.True(await host.DeleteLeftoverAsync(new RunLeftover(KubernetesRunHost.RunLeftoverKind, dead.ToString("N")), ct));
+
+        Assert.Empty(_api.Names("pods"));
+        Assert.Empty(_api.Names("networkpolicies"));
+        Assert.Contains($"networkpolicies/{Name(dead)}", _api.Deleted);
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public async Task An_installers_policy_is_deleted_only_after_its_pod_is_gone()
+    {
+        var host = NewHost(Options(toolsClaim: "ild-tools"), [new RunAgent(ManagedAgentCatalog.Pi, "1.5.0")]);
+        var violations = GuardPolicies();
+        AnswerInstallers(AgentNodeLine, PiLine, NodeLine);
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        Assert.Contains(_api.Deleted, d => d.StartsWith("networkpolicies/ild-tools-", StringComparison.Ordinal));
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public async Task A_sign_in_pod_has_an_egress_policy_made_before_it_and_deleted_only_after_it_is_gone()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin && !e.Tty) await e.ReadStdinToEndAsync();
+            if (!e.Tty) await e.ExitAsync(0);
+        };
+        var ct = TestContext.Current.CancellationToken;
+        var violations = GuardPolicies();
+
+        var signIn = await _host.OpenSignInAsync(null, "claude", [], 80, 24, ct);
+        var pod = SignInPod();
+        var policy = _api.Get<V1NetworkPolicy>("networkpolicies", pod)!;
+        Assert.True(_api.Created.IndexOf($"networkpolicies/{pod}") < _api.Created.IndexOf($"pods/{pod}"));
+        Assert.Equal(["Ingress", "Egress"], policy.Spec.PolicyTypes);
+        Assert.Empty(policy.Spec.Ingress);
+        Assert.Empty(Assert.Single(policy.Spec.Egress).To ?? []);
+        Assert.Equal(_api.Get<V1Pod>("pods", pod)!.Metadata.Labels["ild/signin"], policy.Spec.PodSelector.MatchLabels["ild/signin"]);
+
+        await signIn.DisposeAsync();
+
+        Assert.Empty(_api.Names("pods"));
+        Assert.Empty(_api.Names("networkpolicies"));
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public async Task Shutdown_deletes_a_sign_in_pods_policy_after_the_pod()
+    {
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin && !e.Tty) await e.ReadStdinToEndAsync();
+            if (!e.Tty) await e.ExitAsync(0);
+        };
+        var ct = TestContext.Current.CancellationToken;
+        await using var signIn = await _host.OpenSignInAsync(null, "claude", [], 80, 24, ct);
+        var violations = GuardPolicies();
+
+        await _host.ShutdownAsync(ct);
+
+        Assert.Empty(_api.Names("networkpolicies"));
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public async Task A_sign_in_policy_left_without_its_pod_is_a_leftover_and_deleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var name = "ild-signin-" + Guid.NewGuid().ToString("N");
+        _api.SeedSignIn(name, Instance, "networkpolicies");
+
+        var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct));
+
+        Assert.Equal(name, leftover.Location);
+        Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
+        Assert.Empty(_api.Names("networkpolicies"));
+    }
+
+    [Fact]
+    public async Task The_owner_is_a_config_map_and_every_owner_reference_is_of_that_kind()
+    {
+        await CreateRunAsync();
+        using var process = await StartAsync(NetworkMode.Off);
+
+        var owner = _api.Get<V1ConfigMap>("configmaps", Name(_run))!;
+        Assert.Equal(_run.ToString("N"), owner.Data["run"]);
+        foreach (var meta in new[]
+        {
+            _api.Get<V1PersistentVolumeClaim>("persistentvolumeclaims", Name(_run))!.Metadata,
+            _api.Get<V1NetworkPolicy>("networkpolicies", Name(_run))!.Metadata,
+            _api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName)!.Metadata,
+            _api.Get<V1Pod>("pods", Name(_run))!.Metadata,
+        })
+            Assert.Equal("ConfigMap", Assert.Single(meta.OwnerReferences).Kind);
+    }
+
+    [Fact]
+    public async Task The_settings_warning_names_a_missing_default_deny_and_is_silent_when_it_is_there()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Assert.Contains("default-deny", await _host.WarningAsync(ct));
+
+        // Other policies do not count, nor one that allows something.
+        _api.Seed("networkpolicies", "other", Instance, Guid.NewGuid());
+        Assert.NotNull(await _host.WarningAsync(ct));
+
+        _api.SeedPolicy("ild-default-deny", new V1NetworkPolicySpec
+        {
+            PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["app.kubernetes.io/managed-by"] = "ild" } },
+            PolicyTypes = ["Ingress", "Egress"],
+            Egress = [new V1NetworkPolicyEgressRule()],
+        });
+        Assert.NotNull(await _host.WarningAsync(ct));
+
+        _api.SeedPolicy("ild-default-deny", new V1NetworkPolicySpec
+        {
+            PodSelector = new V1LabelSelector { MatchLabels = new Dictionary<string, string> { ["app.kubernetes.io/managed-by"] = "ild" } },
+            PolicyTypes = ["Ingress", "Egress"],
+        });
+        Assert.Null(await _host.WarningAsync(ct));
+    }
+
+    [Fact]
+    public async Task The_settings_warning_says_nothing_when_the_policies_cannot_be_listed()
+    {
+        await _api.DisposeAsync();
+        _api = await FakeKubernetesApi.StartAsync();
+        var host = new KubernetesRunHost(new k8s.Kubernetes(new k8s.KubernetesClientConfiguration { Host = "http://127.0.0.1:1" }), Options(), FakeKubernetesApi.Namespace, new ProcessRunner(), _log);
+
+        Assert.Null(await host.WarningAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -1327,7 +1510,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     private void SeedRun(Guid run, string instance, bool secret = true, string managedBy = "ild")
     {
-        if (secret) _api.Seed("secrets", Name(run), instance, run, managedBy);
+        if (secret) _api.Seed("configmaps", Name(run), instance, run, managedBy);
         _api.Seed("pods", Name(run), instance, run, managedBy);
         _api.Seed("persistentvolumeclaims", Name(run), instance, run, managedBy);
         _api.Seed("networkpolicies", Name(run), instance, run, managedBy);
@@ -1350,7 +1533,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
 
-        foreach (var kind in new[] { "secrets", "pods", "persistentvolumeclaims", "networkpolicies" })
+        foreach (var kind in new[] { "configmaps", "pods", "persistentvolumeclaims", "networkpolicies" })
         {
             var left = _api.Names(kind);
             Assert.Contains(Name(live), left);
@@ -2010,7 +2193,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(WorkingDirectory, env.WorkingDirectory);
         var leftover = Assert.Single(leftovers, l => l.Kind == KubernetesRunHost.RunLeftoverKind);
         Assert.True(await routing.DeleteLeftoverAsync(leftover, TestContext.Current.CancellationToken));
-        Assert.DoesNotContain(Name(Guid.ParseExact(leftover.Location, "N")), _api.Names("secrets"));
+        Assert.DoesNotContain(Name(Guid.ParseExact(leftover.Location, "N")), _api.Names("configmaps"));
     }
 
     private async Task<RunEnvironment> CreateRunThroughAsync(IRunHost host)
@@ -2099,9 +2282,9 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(claimName, fresh.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName);
         Assert.Equal(ended.Metadata.OwnerReferences.Single().Name, fresh.Metadata.OwnerReferences.Single().Name);
         Assert.Equal("Running", fresh.Status?.Phase ?? "Running");
-        Assert.DoesNotContain($"secrets/{Name(_run)}", _api.Deleted);
+        Assert.DoesNotContain($"configmaps/{Name(_run)}", _api.Deleted);
         Assert.DoesNotContain($"persistentvolumeclaims/{Name(_run)}", _api.Deleted);
-        Assert.Single(_api.Names("secrets"));
+        Assert.Single(_api.Names("configmaps"));
         Assert.Single(_api.Names("persistentvolumeclaims"));
     }
 
@@ -2130,7 +2313,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepositoryIn("again"), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
 
         Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
-        Assert.Single(_api.Names("secrets"));
+        Assert.Single(_api.Names("configmaps"));
     }
 
     [Fact]
@@ -2142,7 +2325,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         Assert.Contains($"pods/{Name(_run)}", _api.Deleted);
         Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
-        Assert.DoesNotContain($"secrets/{Name(_run)}", _api.Deleted);
+        Assert.DoesNotContain($"configmaps/{Name(_run)}", _api.Deleted);
         Assert.DoesNotContain($"persistentvolumeclaims/{Name(_run)}", _api.Deleted);
         Assert.Single(_api.Names("persistentvolumeclaims"));
     }
@@ -2157,8 +2340,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepositoryIn("again"), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken));
 
-        Assert.DoesNotContain($"secrets/{Name(_run)}", _api.Deleted);
-        Assert.Single(_api.Names("secrets"));
+        Assert.DoesNotContain($"configmaps/{Name(_run)}", _api.Deleted);
+        Assert.Single(_api.Names("configmaps"));
         Assert.Single(_api.Names("persistentvolumeclaims"));
     }
 
