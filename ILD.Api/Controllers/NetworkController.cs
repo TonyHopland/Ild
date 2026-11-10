@@ -400,5 +400,5 @@ public class NetworkController : ControllerBase
         => new { id = p.Id, name = p.Name, hosts = p.Hosts, addresses = p.Addresses.Select(a => a.ToString()), enabled = p.Enabled };
 
     private static object View(NetworkLogEntry l)
-        => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId, installer = l.Installer, reason = l.Reason };
+        => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId, installer = l.Installer, reason = l.Reason, via = l.Via };
 }

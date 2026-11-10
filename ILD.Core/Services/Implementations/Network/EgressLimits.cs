@@ -22,13 +22,13 @@ public sealed record EgressLimits(
     public int LogRowsPerSecond { get; init; } = 64;
 }
 
-/// <summary>What each source address may still add to the network log: one row a request, refilled over time.</summary>
-internal sealed class LogRowBudget(EgressLimits limits, Func<long>? milliseconds = null)
+/// <summary>What each source (a client address for the proxy, a lease for the model gateway) may still add to the network log: one row a request, refilled over time.</summary>
+public sealed class LogRowBudget<TKey>(EgressLimits limits, Func<long>? milliseconds = null) where TKey : notnull
 {
     private readonly Func<long> _milliseconds = milliseconds ?? (() => Environment.TickCount64);
-    private readonly Dictionary<IPAddress, (double Rows, long At)> _left = new();
+    private readonly Dictionary<TKey, (double Rows, long At)> _left = new();
 
-    public bool TryTake(IPAddress source)
+    public bool TryTake(TKey source)
     {
         var now = _milliseconds();
         lock (_left)

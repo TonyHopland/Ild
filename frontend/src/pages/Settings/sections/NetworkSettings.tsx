@@ -93,7 +93,7 @@ interface LogGroup {
 export function groupConsecutive(entries: NetworkLogEntry[]): LogGroup[] {
   const groups: LogGroup[] = [];
   for (const entry of entries) {
-    const signature = `${entry.host}:${entry.port}:${entry.decision}:${entry.aiProviderId ?? ""}:${entry.installer ?? ""}:${entry.reason ?? ""}`;
+    const signature = `${entry.host}:${entry.port}:${entry.decision}:${entry.aiProviderId ?? ""}:${entry.installer ?? ""}:${entry.reason ?? ""}:${entry.via ?? ""}`;
     const last = groups[groups.length - 1];
     if (last && last.key === signature) {
       last.count += 1;
@@ -713,6 +713,9 @@ export default function NetworkSettings() {
                         : group.entry.aiProviderId
                           ? (providers.find((p) => p.id === group.entry.aiProviderId)?.name ?? "—")
                           : "—"}
+                      {group.entry.via === "gateway" && (
+                        <span className="net-sub"> · via model gateway</span>
+                      )}
                     </td>
                     <td className="net-actions">
                       {group.entry.reason ? (

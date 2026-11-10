@@ -31,6 +31,14 @@ public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<Networ
         => EgressDestinationGuard.Check(resolved, Protected, isForward, Isolated);
 
     /// <summary>
+    /// Judges where the model gateway forwards a run's model call, by the mode and lists with the lease's provider as the scope. Unlike
+    /// <see cref="Decide"/> it does not close the provider's model hosts (the gateway is how the run reaches them), and the address is
+    /// not checked against the protected destinations: the upstream is the operator's own provider configuration, as a declared forward is.
+    /// </summary>
+    public NetworkDecision DecideUpstream(string host, Guid aiProviderId)
+        => EgressRules.Decide(Mode, Entries, host, aiProviderId);
+
+    /// <summary>
     /// While an agent holds a model gateway lease for its provider, that provider's model hosts are closed
     /// to it in every mode: the gateway is the only way to the model (ADR-0031).
     /// </summary>

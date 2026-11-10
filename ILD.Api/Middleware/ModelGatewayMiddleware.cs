@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations.ModelGateway;
+using ILD.Core.Services.Implementations.Network;
+using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Http.Features;
 using Yarp.ReverseProxy.Forwarder;
@@ -20,6 +22,13 @@ public sealed partial class ModelGatewayMiddleware
     public const string TokenHeader = GatewayRoutes.TokenHeader;
     private const string CopilotEndpointPrefix = "_ep/";
     private const string CopilotUserPath = "copilot_internal/user";
+
+    /// <summary>The value of the network log row's <c>Via</c> for a model call the gateway made.</summary>
+    public const string GatewayVia = "gateway";
+
+    // The network log is one queue for every source, so the gateway's rows have a budget of their own, a lease each, apart from the
+    // proxy's per-address one: a run flooding either cannot use up the other's.
+    private static readonly LogRowBudget<Guid> GatewayRows = new(new EgressLimits { LogRowBurst = 256, LogRowsPerSecond = 16 });
 
     private static readonly string[] CredentialHeaders = ["Authorization", "x-api-key", "api-key", TokenHeader];
 
@@ -93,6 +102,25 @@ public sealed partial class ModelGatewayMiddleware
         if (!TryBuildTarget(credential.Upstream, route, rest, context.Request.QueryString, out var target, out var withCredential))
         {
             await RefuseAsync(context, StatusCodes.Status404NotFound, "Unknown gateway route.");
+            return;
+        }
+
+        var decision = (await services.GetRequiredService<IEgressPolicy>().GetAsync(context.RequestAborted)).DecideUpstream(target.Host, provider.Id);
+        if (!GatewayRows.TryTake(grant.OwnerId))
+        {
+            await RefuseAsync(context, StatusCodes.Status429TooManyRequests, "The gateway is logging this run's model calls faster than it allows; wait a moment and try again.");
+            return;
+        }
+        // One row a request: the gateway shares one pooled connection set across every run, so a connection says nothing
+        // about whose call it was, and model calls are few enough (each is seconds long) that a row each stays small.
+        if (!services.GetRequiredService<INetworkLogRecorder>().Record(target.Host, target.Port, decision, provider.Id, via: GatewayVia))
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "ILD could not record this model call in the network log; try again.");
+            return;
+        }
+        if (decision == NetworkDecision.Blocked)
+        {
+            await RefuseAsync(context, StatusCodes.Status403Forbidden, $"ILD's network policy refused {target.Host}.");
             return;
         }
 

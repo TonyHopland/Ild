@@ -1485,6 +1485,10 @@ namespace ILD.Data.Migrations
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Via")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Timestamp");
@@ -1497,6 +1501,9 @@ namespace ILD.Data.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<bool>("AddedForProvider")
+                        .HasColumnType("boolean");
 
                     b.Property<Guid?>("AiProviderId")
                         .HasColumnType("uuid");

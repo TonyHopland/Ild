@@ -973,6 +973,20 @@ names that resolve to the same address. Link-local and cloud metadata addresses
 default and switchable in Settings → Network like the others. The proxy resolves each host once and
 connects to the addresses it resolved.
 
+**The model gateway is under the same policy.** The model calls a run or chat makes go through ILD's
+[model gateway](adr/0031-model-gateway.md), which holds the credential, so they do not pass the proxy; ILD's own call to the
+provider's host is judged by the mode and the lists with the provider as the scope, and logged in the Network Log with the
+note "via model gateway", one line per request. In `whitelist` mode an upstream host that is not listed is refused, in
+`blacklist` mode a listed one is, and the CLI gets an error that names the host and says the network policy refused it. The
+upstream is your own provider configuration, so it is exempt from the protected destinations, like a declared forward: a local
+model on a LAN address keeps working while `private` is on. So that `whitelist` mode does not stop the models, ILD adds a
+whitelist entry scoped to the provider for each host the gateway calls for it (`api.anthropic.com`, `chatgpt.com`,
+`api.github.com` and `.githubcopilot.com`, or the host of an upstream provider's base URL) when the provider is created or its
+base URL or type changes, and the first start after an upgrade adds them for the providers that exist. They are ordinary
+provider-scoped entries in Settings → Network: delete one and that provider's model calls are refused in `whitelist` mode. The
+log covers what left for a run or chat. ILD's own calls that are not on a run's behalf (the Codex login refresh, agent version
+checks, git fetches into the mirror) are not judged by the lists and not logged.
+
 Everything the agent runs is pointed at the proxy (under `dotnet run`, not in
 `off`) through `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` (both spellings), with
 loopback on `NO_PROXY` (`localhost`, `127.0.0.1`, `::1` and `[::1]`, since some

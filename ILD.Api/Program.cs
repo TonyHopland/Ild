@@ -249,6 +249,11 @@ try
             if (installerDefaults > 0)
                 Log.Information("Added {Count} host(s) to the installers' default whitelist", installerDefaults);
 
+            // Providers that predate the gateway being under the network policy (ADR-0031) get their upstream hosts whitelisted once.
+            var gatewayEntries = await new ILD.Core.Services.Implementations.Network.ProviderNetworkEntries(dbContext).SeedAsync();
+            if (gatewayEntries > 0)
+                Log.Information("Whitelisted the model gateway upstream for {Count} provider(s)", gatewayEntries);
+
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also
             // clears dangling paths whose files a redeploy already wiped.
