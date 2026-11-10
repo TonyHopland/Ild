@@ -53,6 +53,17 @@ public interface IProtectedDestinationSource
     ValueTask<IReadOnlyList<IpRange>> GetIsolatedRangesAsync(CancellationToken ct = default) => ValueTask.FromResult<IReadOnlyList<IpRange>>([]);
 }
 
+public static class RunNetworkCallers
+{
+    /// <summary>Whether <paramref name="caller"/> is inside a run network or pod, as a run's agent calling ILD's web port is.</summary>
+    public static async ValueTask<bool> IsInRunNetworkAsync(this IProtectedDestinationSource source, IPAddress? caller, CancellationToken ct = default)
+    {
+        if (caller is null) return false;
+        var address = caller.IsIPv4MappedToIPv6 ? caller.MapToIPv4() : caller;
+        return (await source.GetIsolatedRangesAsync(ct).ConfigureAwait(false)).Any(r => r.Contains(address));
+    }
+}
+
 public sealed class ProtectedDestinationSource : IProtectedDestinationSource
 {
     public static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);

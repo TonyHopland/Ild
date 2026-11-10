@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -12,9 +13,11 @@ public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
     private readonly LoginThrottle _throttle;
+    private readonly IProtectedDestinationSource _protected;
 
-    public AuthController(IAuthService authService, LoginThrottle throttle)
+    public AuthController(IAuthService authService, LoginThrottle throttle, IProtectedDestinationSource protectedSource)
     {
+        _protected = protectedSource;
         _authService = authService;
         _throttle = throttle;
     }
@@ -27,9 +30,11 @@ public class AuthController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        // A run container can reach this port, so guessing is slowed per caller address and per user name.
+        // A run container can reach this port, so guessing is slowed per caller address, and per user name for a caller in a run
+        // network: a user-name wait for everyone would let a run keep the operator out.
         var address = HttpContext.Connection.RemoteIpAddress?.ToString();
-        if (_throttle.RetryAfter(address, request.Username) is { } wait)
+        var fromRun = await _protected.IsInRunNetworkAsync(HttpContext.Connection.RemoteIpAddress, HttpContext.RequestAborted);
+        if (_throttle.TryBegin(address, request.Username, fromRun) is { } wait)
         {
             Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
             return StatusCode(StatusCodes.Status429TooManyRequests, new { error = "Too many failed sign-ins; try again later" });
@@ -48,15 +53,13 @@ public class AuthController : ControllerBase
 
             if (!result.Success || string.IsNullOrEmpty(result.SessionToken))
             {
-                _throttle.RecordFailure(address, request.Username);
                 return Unauthorized(new { error = result.ErrorMessage ?? "Invalid username or password" });
             }
-            _throttle.RecordSuccess(request.Username);
+            _throttle.Succeeded(address, request.Username, fromRun);
             return Ok(new LoginResponse(result.SessionToken, result.Username, result.ExpiresAt));
         }
         catch
         {
-            _throttle.RecordFailure(address, request.Username);
             return Unauthorized(new { error = "Invalid username or password" });
         }
     }

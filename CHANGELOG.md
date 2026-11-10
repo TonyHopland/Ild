@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Repeated failed sign-ins are slowed down**, per caller address and per user name, so a run can no longer guess the admin password at full speed; the wait doubles from 1 s to 5 minutes and never locks the account.
+- **Repeated sign-in attempts are slowed down**, per caller address and, for a run, per user name, so a run can no longer guess the admin password at full speed; the wait doubles from 1 s to 5 minutes, and the operator signing in from outside a run network is never held up by a run.
 - **A run pod is never left without a NetworkPolicy, and Settings warns when the namespace has no default deny.** ILD deletes a pod, waits until it is gone, and only then its policies, instead of deleting them together; `docs/kubernetes` ships a default-deny policy and the `restricted` Pod Security label for the run namespace; an empty or malformed `ILD_K8S_ILD_POD_SELECTOR` stops ILD at startup; the policies admit ILD's pods only from ILD's own namespace (`ILD_K8S_ILD_NAMESPACE`); and a run's owner object is a ConfigMap, so ILD's Role no longer needs Secrets.
 - **A run can no longer exhaust or stop ILD's egress proxy by opening many connections.** The proxy and the forwarders cap open connections per source and in total, close one that sends no request or sits idle, and keep accepting after an accept fails.
 - **ILD stops reading what a run produces at a limit**, so a run can no longer exhaust ILD's memory or disk with a huge file, output, bundle or preview-data copy; the limits are `ILD_MAX_RUN_FILE_MB`, `ILD_MAX_RUN_OUTPUT_MB`, `ILD_MAX_BUNDLE_MB` and `ILD_MAX_PREVIEW_DATA_MB`.

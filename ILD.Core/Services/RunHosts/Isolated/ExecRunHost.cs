@@ -290,14 +290,14 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             ? host + "-api"
             : host;
 
-    /// <summary>
-    /// The addresses of the networks and pods this host made for runs, which the egress proxy, being on every one of them, must never
-    /// dial for a run: another run's dev server or preview is there. Empty for a host that has none.
-    /// </summary>
     /// <summary>The addresses the cluster's API server answers on (the endpoints behind the <c>kubernetes</c> service); none where there is no cluster.</summary>
     public virtual Task<IReadOnlyList<System.Net.IPAddress>> ControlPlaneAddressesAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]);
 
+    /// <summary>
+    /// The addresses of the networks and pods this host made for runs, which the egress proxy, being on every one of them, must never
+    /// dial for a run: another run's dev server or preview is there. Empty for a host that has none.
+    /// </summary>
     public virtual Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>>([]);
 

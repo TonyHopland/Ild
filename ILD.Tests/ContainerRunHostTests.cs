@@ -1039,6 +1039,72 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     private async Task<IRunProcess> ChatLaunchAsync(Guid chat, NetworkMode mode)
         => await _host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "git", "status"), chat, networkMode: mode), TestContext.Current.CancellationToken);
 
+    private (ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe Probe, Func<int> Asked) ChatProbe()
+    {
+        var asked = 0;
+        var probe = new ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe(
+            _ => null, ildReaches: (_, _, _) => { Interlocked.Increment(ref asked); return Task.FromResult(true); });
+        _host.Probe = probe;
+        return (probe, () => Volatile.Read(ref asked));
+    }
+
+    private int DirectConnects() => _api.Execs.Count(e => e.Command.Any(c => c.Contains("/dev/tcp/", StringComparison.Ordinal)));
+
+    [Fact]
+    public async Task The_first_proxied_chat_command_probes_the_chat_container_and_a_second_within_the_interval_does_not()
+    {
+        var (probe, asked) = ChatProbe();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Command.Any(c => c.Contains("/dev/tcp/", StringComparison.Ordinal))) await e.WriteStdoutAsync("1\n");
+            await e.ExitAsync(0);
+        };
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(first, "/unused", TestContext.Current.CancellationToken);
+        await _host.CreateChatFolderAsync(second, "/unused", TestContext.Current.CancellationToken);
+
+        using (var process = await ChatLaunchAsync(first, NetworkMode.Monitor)) await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!probe.Probed(ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope) && DateTime.UtcNow < deadline) await Task.Delay(20, TestContext.Current.CancellationToken);
+
+        Assert.True(probe.Probed(ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope));
+        Assert.False(probe.EscapeObserved);
+        var probed = asked();
+        Assert.Equal(1, DirectConnects());
+
+        using (var process = await ChatLaunchAsync(second, NetworkMode.Monitor)) await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        Assert.Equal(probed, asked());
+        Assert.Equal(1, DirectConnects());
+    }
+
+    [Fact]
+    public async Task A_proxied_chat_command_records_no_verdict_while_a_chat_command_in_off_has_the_direct_route_open()
+    {
+        var (probe, asked) = ChatProbe();
+        var live = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(live, "/unused", TestContext.Current.CancellationToken);
+        await _host.CreateChatFolderAsync(other, "/unused", TestContext.Current.CancellationToken);
+        var release = HoldOffLaunches();
+        using var off = await ChatLaunchAsync(live, NetworkMode.Off);
+
+        using var process = await ChatLaunchAsync(other, NetworkMode.Monitor);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (asked() == 0 && DateTime.UtcNow < deadline) await Task.Delay(20, TestContext.Current.CancellationToken);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        Assert.True(asked() > 0);
+        Assert.Equal(0, DirectConnects());
+        Assert.False(probe.Probed(ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope));
+        Assert.Null(probe.EscapeObserved);
+        release.SetResult();
+    }
+
     [Fact]
     public async Task A_planted_off_file_does_not_keep_the_chat_containers_route_once_no_off_chat_launch_is_live()
     {

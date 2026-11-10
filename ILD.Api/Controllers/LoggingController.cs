@@ -40,12 +40,8 @@ public class LoggingController : ControllerBase
     public async Task<IActionResult> SetLevel([FromBody] LogLevelRequest request, CancellationToken ct)
     {
         // Anonymous, so an agent in a run network could set Fatal and silence the warnings that report it. Reading stays open.
-        if (HttpContext?.Connection.RemoteIpAddress is { } caller)
-        {
-            var isolated = await _protected.GetIsolatedRangesAsync(ct);
-            if (isolated.Any(r => r.Contains(caller.IsIPv4MappedToIPv6 ? caller.MapToIPv4() : caller)))
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = "The log level cannot be changed from a run network" });
-        }
+        if (await _protected.IsInRunNetworkAsync(HttpContext?.Connection.RemoteIpAddress, ct))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "The log level cannot be changed from a run network" });
 
         if (!Enum.TryParse<LogEventLevel>(request.Level, true, out var level))
         {
