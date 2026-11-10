@@ -1696,6 +1696,38 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_base_clone_named_by_a_repository_row_is_cloned_fetched_and_reset_on_ilds_disk_and_any_other_path_there_is_refused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var remote = GitCli.MakeRemote(_scratch, "remote");
+        var seed = Path.Combine(_scratch, "remote-seed");
+        var auth = new GitAuthOptions(remote, "tok", "Forgejo");
+        var baseClone = Path.Combine(_scratch, "repos", "base");
+        var runner = new ProcessRunner();
+        var routing = new RoutingRunHost(new LocalRunHost(runner), _host);
+        var repositories = new RepositoryManager(
+            runner, routing, worktreesRoot: Path.Combine(_scratch, "wt"), mirrorsRoot: Path.Combine(_scratch, "mirrors"),
+            isBaseRepository: (path, _) => ValueTask.FromResult(path == baseClone));
+
+        var (cloned, error) = await repositories.CloneAsync(remote, baseClone, ct, auth);
+        Assert.True(cloned, error);
+
+        File.WriteAllText(Path.Combine(seed, "late.txt"), "late\n");
+        GitCli.Run(seed, "add", "-A");
+        GitCli.Run(seed, "commit", "-m", "late");
+        GitCli.Run(seed, "push", remote, "main");
+        Assert.True(await repositories.FetchAsync(baseClone, ct, auth));
+        Assert.True(await repositories.ResetHardAsync(baseClone, "origin/main", ct));
+        Assert.True(File.Exists(Path.Combine(baseClone, "late.txt")));
+
+        var other = Path.Combine(_scratch, "repos", "other");
+        await Assert.ThrowsAsync<PredatesContainersException>(() => repositories.CloneAsync(remote, other, ct, auth));
+        await Assert.ThrowsAsync<PredatesContainersException>(
+            () => new RepositoryManager(runner, routing, worktreesRoot: Path.Combine(_scratch, "wt"), mirrorsRoot: Path.Combine(_scratch, "mirrors"))
+                .ResetHardAsync(baseClone, "origin/main", ct));
+    }
+
+    [Fact]
     public async Task A_remote_branch_check_in_a_worktree_goes_to_the_run_for_a_run_path_and_is_refused_for_a_path_on_ilds_disk()
     {
         await CreateRunAsync();

@@ -58,7 +58,13 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IRunHost>(),
                 logger,
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot,
-                mirrorsRoot: RepositoryManager.MirrorRoot(config));
+                mirrorsRoot: RepositoryManager.MirrorRoot(config),
+                isBaseRepository: async (path, _) =>
+                {
+                    using var scope = sp.GetRequiredService<IServiceScopeFactory>().CreateScope();
+                    return RepositoryManager.IsBaseClone(
+                        path, config, await scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IProviderStore>().GetAllRepositoriesAsync());
+                });
         });
         services.AddSingleton<IRemoteRetryDelay, RemoteRetryDelay>();
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();

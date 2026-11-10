@@ -38,6 +38,7 @@ public class RepositoryManager : IRepositoryManager
     private readonly string _worktreesRoot;
     private readonly GitMirror _mirrors;
     private readonly Func<string, string?> _readEnvironment;
+    private readonly Func<string, CancellationToken, ValueTask<bool>> _isBaseRepository;
 
     /// <param name="mirrorsRoot">Where the per-remote mirrors live.</param>
     public RepositoryManager(
@@ -46,8 +47,10 @@ public class RepositoryManager : IRepositoryManager
         ILogger<RepositoryManager>? logger = null,
         string? worktreesRoot = null,
         string? mirrorsRoot = null,
-        Func<string, string?>? readEnvironment = null)
+        Func<string, string?>? readEnvironment = null,
+        Func<string, CancellationToken, ValueTask<bool>>? isBaseRepository = null)
     {
+        _isBaseRepository = isBaseRepository ?? ((_, _) => ValueTask.FromResult(false));
         _runner = runner;
         _readEnvironment = readEnvironment ?? Environment.GetEnvironmentVariable;
         _logger = logger;
@@ -71,6 +74,10 @@ public class RepositoryManager : IRepositoryManager
     /// <summary>Where the mirrors live for a deployment configured by <paramref name="config"/>.</summary>
     public static string MirrorRoot(IConfiguration? config) => BaseRepoPath.MirrorRoot(config);
 
+    /// <inheritdoc cref="BaseRepoPath.IsBaseClone"/>
+    public static bool IsBaseClone(string path, IConfiguration? config, IEnumerable<ILD.Data.Entities.Repository> repositories)
+        => BaseRepoPath.IsBaseClone(path, config, repositories);
+
     public async Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
         // git makes the folders above the clone.
@@ -90,7 +97,7 @@ public class RepositoryManager : IRepositoryManager
             if (bundle is null) return (false, bundleError);
             await using (bundle)
             {
-                var r = await _host.PushBundleAsync(target, WithoutUserInfo(cloneUrl), bundle.Bundle ?? Stream.Null, cancellationToken);
+                var r = await (await HostOfAsync(target, cancellationToken)).PushBundleAsync(target, WithoutUserInfo(cloneUrl), bundle.Bundle ?? Stream.Null, cancellationToken);
                 if (!r.Success)
                     _logger?.LogDebug("Cloning {Target} from the bundle exited {Code}: {Err}", target, r.ExitCode, RedactUserInfo(r.StdErr));
                 return r.Success ? (true, null) : (false, RedactUserInfo(r.StdErr));
@@ -285,7 +292,7 @@ public class RepositoryManager : IRepositoryManager
     private async Task ClearSyncRefsAsync(string worktreePath)
     {
         if (!await _host.IsRunCloneAsync(worktreePath)) return;
-        await _host.RunToolAsync(worktreePath, "/bin/sh", ["-c", ClearSyncRefsScript, "sh", Path.GetFullPath(worktreePath)]);
+        await (await HostOfAsync(worktreePath, CancellationToken.None)).RunToolAsync(worktreePath, "/bin/sh", ["-c", ClearSyncRefsScript, "sh", Path.GetFullPath(worktreePath)]);
     }
 
     /// <summary>The mirror bundled for the clone, with the bundle already fetched into it: a narrow one first, then everything.</summary>
@@ -318,7 +325,7 @@ public class RepositoryManager : IRepositoryManager
             return false;
         }
 
-        var r = await _host.FetchBundleAsync(worktreePath, bundle, ct);
+        var r = await (await HostOfAsync(worktreePath, ct)).FetchBundleAsync(worktreePath, bundle, ct);
         if (!r.Success)
             _logger?.LogDebug("Fetching the bundle into {Worktree} exited {Code}: {Err}", worktreePath, r.ExitCode, r.StdErr);
         return r.Success;
@@ -1061,6 +1068,13 @@ public class RepositoryManager : IRepositoryManager
         return (r.ExitCode, r.StdOut, RedactUserInfo(r.StdErr));
     }
 
+    // ILD's own base clone is cloned, fetched and reset on this machine whatever the run host is. Which paths those are is
+    // told by the repository rows, never by what a directory holds: a run's or chat's path, and any other path on this disk, stays with the routing host, which refuses it.
+    private async ValueTask<IRunHost> HostOfAsync(string path, CancellationToken ct)
+        => _host is RoutingRunHost routing && !routing.HoldsPath(path) && await _isBaseRepository(Path.GetFullPath(path), ct)
+            ? routing.OwnDisk
+            : _host;
+
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
         => RunAsync(cwd, args, CancellationToken.None);
 
@@ -1099,7 +1113,7 @@ public class RepositoryManager : IRepositoryManager
     {
         // From "/" and addressing the directory with -C: the orchestrator never enters
         // one the agent owns.
-        var r = await _host.RunToolAsync(runPath, "git", args, new RunToolStreams(stdinFrom, stdoutTo), ct);
+        var r = await (await HostOfAsync(runPath, ct)).RunToolAsync(runPath, "git", args, new RunToolStreams(stdinFrom, stdoutTo), ct);
         if (!r.Success)
             _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args.Select(RedactUserInfo)), r.ExitCode, RedactUserInfo(r.StdErr));
         return (r.ExitCode, r.StdOut, RedactUserInfo(r.StdErr));

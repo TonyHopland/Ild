@@ -17,6 +17,9 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     public ExecRunHost Isolated => isolated;
 
+    // For ILD's own base clones only, which the repository manager finds by the repository's row: no call that names a path reaches this host for execution.
+    public IRunHost OwnDisk => local;
+
     private static bool InRun(string? path) => RunPaths.OwnerOf(path) is not null;
 
     // A chat's folder is in the isolated host only when it keeps chats; a chat from before, or on a host that does not, has a path on this disk.
