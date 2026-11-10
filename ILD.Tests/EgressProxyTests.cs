@@ -988,6 +988,40 @@ public sealed class EgressProxyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_source_past_its_budget_of_log_rows_is_refused_without_a_row_until_the_budget_refills()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits { LogRowBurst = 2, LogRowsPerSecond = 0 });
+
+        for (var i = 0; i < 2; i++)
+        {
+            var (client, status) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+            using (client) Assert.StartsWith("HTTP/1.1 200", status);
+        }
+        var rows = _log.Entries.Count;
+
+        var (refused, refusal) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+        using (refused) Assert.StartsWith("HTTP/1.1 429", refusal);
+        Assert.Equal(rows, _log.Entries.Count);
+    }
+
+    [Fact]
+    public void A_log_row_budget_is_per_source_and_refills_over_time()
+    {
+        long now = 0;
+        var budget = new LogRowBudget(new EgressLimits { LogRowBurst = 2, LogRowsPerSecond = 1 }, () => now);
+        var (a, b) = (IPAddress.Parse("10.0.0.1"), IPAddress.Parse("10.0.0.2"));
+
+        Assert.True(budget.TryTake(a));
+        Assert.True(budget.TryTake(a));
+        Assert.False(budget.TryTake(a));
+        Assert.True(budget.TryTake(b));
+
+        now = 1000;
+        Assert.True(budget.TryTake(a));
+        Assert.False(budget.TryTake(a));
+    }
+
+    [Fact]
     public async Task A_connection_over_the_total_cap_is_refused_whatever_its_source()
     {
         var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), 100, 2));
@@ -1278,8 +1312,8 @@ public sealed class EgressProxyTests : IAsyncLifetime
         Assert.StartsWith("HTTP/1.1 407", response);
         Assert.Contains("Proxy-Authenticate: Basic", response);
         Assert.Equal(0, _dials);
-        var entry = Assert.Single(_log.Entries);
-        Assert.Equal(NetworkDecision.Blocked, entry.Decision);
+        // No launch asked, so the log every run shares gets no row for a host anyone can make up.
+        Assert.Empty(_log.Entries);
     }
 
     [Fact]
@@ -1763,6 +1797,22 @@ public sealed class EgressProxyParseTests
         Assert.StartsWith("GET /v1/things?x=1 HTTP/1.1\r\nHost: api.example.com:8080\r\n", head);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: "));
         Assert.EndsWith("Connection: close\r\n\r\n", head);
+    }
+
+    [Theory]
+    [InlineData("PUT /api/v1/logging/level HTTP/1.1\nHost: ild\nContent-Length: 0\n\nGET / HTTP/1.1\r\nHost: wi-1.preview.ild\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nX-A: b\nHost: other.example\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nX-A: b\rc\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nX-A: b\0c\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1 extra\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/2.0\r\n\r\n")]
+    [InlineData("G=T http://api.example.com/ HTTP/1.1\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nTransfer-Encoding : chunked\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nX-A: b\r\n folded: value\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nno colon here\r\n\r\n")]
+    public void A_head_another_server_could_read_differently_is_refused(string request)
+    {
+        Assert.Null(EgressProxy.ParseRequest(Head(request)));
     }
 
     [Fact]

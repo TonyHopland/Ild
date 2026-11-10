@@ -6,7 +6,8 @@ namespace ILD.Core.Services.Implementations.Network;
 /// The bounds on what one client can hold open on the egress proxy or a forwarder: how long a connection may take to
 /// say where it is going, how long a relay may sit without a byte in either direction, and how many connections
 /// one source address, and all of them together, may have open. Local runs all connect from loopback, so there the
-/// per-source cap is one shared cap.
+/// per-source cap is one shared cap. The network log is one queue for every source, so each source also has a budget of
+/// rows of its own: a burst, refilled per second, past which its requests are refused without a row.
 /// </summary>
 public sealed record EgressLimits(
     TimeSpan HeadTimeout,
@@ -15,6 +16,34 @@ public sealed record EgressLimits(
     int MaxTotal)
 {
     public EgressLimits() : this(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(15), 256, 1024) { }
+
+    public int LogRowBurst { get; init; } = 512;
+
+    public int LogRowsPerSecond { get; init; } = 64;
+}
+
+/// <summary>What each source address may still add to the network log: one row a request, refilled over time.</summary>
+internal sealed class LogRowBudget(EgressLimits limits, Func<long>? milliseconds = null)
+{
+    private readonly Func<long> _milliseconds = milliseconds ?? (() => Environment.TickCount64);
+    private readonly Dictionary<IPAddress, (double Rows, long At)> _left = new();
+
+    public bool TryTake(IPAddress source)
+    {
+        var now = _milliseconds();
+        lock (_left)
+        {
+            var rows = _left.TryGetValue(source, out var last)
+                ? Math.Min(limits.LogRowBurst, last.Rows + (now - last.At) / 1000d * limits.LogRowsPerSecond)
+                : limits.LogRowBurst;
+            if (_left.Count > 4096)
+                foreach (var full in _left.Where(e => e.Value.Rows + (now - e.Value.At) / 1000d * limits.LogRowsPerSecond >= limits.LogRowBurst).Select(e => e.Key).ToList())
+                    _left.Remove(full);
+            var taken = rows >= 1;
+            _left[source] = (taken ? rows - 1 : rows, now);
+            return taken;
+        }
+    }
 }
 
 /// <summary>Counts open connections against an <see cref="EgressLimits"/>; a lease is released by disposing it.</summary>

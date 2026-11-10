@@ -51,6 +51,7 @@ public sealed class EgressProxy : BackgroundService
     private readonly ILogger<EgressProxy> _logger;
     private readonly EgressRelay _relay;
     private readonly ConnectionLimiter _limiter;
+    private readonly LogRowBudget _logRows;
     private readonly Dictionary<IPAddress, DateTime> _refusalLogged = new();
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve;
     private readonly Func<IPAddress[], int, CancellationToken, Task<TcpClient>> _dial;
@@ -68,6 +69,7 @@ public sealed class EgressProxy : BackgroundService
         _logger = logger;
         _relay = new EgressRelay(policy, log, logger, options.Limits.IdleTimeout);
         _limiter = new ConnectionLimiter(options.Limits);
+        _logRows = new LogRowBudget(options.Limits);
     }
 
     /// <summary>The port actually bound, once listening; lets a test ask for port 0.</summary>
@@ -191,10 +193,13 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
 
+                var source = (client.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.None;
+
                 // Only a launch ILD made holds a credential it signed; the scope is read from that and from nothing the client says.
+                // What was asked for without one is no launch's connection, so it gets no row in the network log, which every run shares.
                 if (!_credentials.TryRead(request.Credential, out var scope))
                 {
-                    _log.Record(request.Host, request.Port, NetworkDecision.Blocked, null, "no valid proxy credential");
+                    LogRefusal(source, "it carried no valid proxy credential");
                     if (request.Kind == RequestKind.Tls)
                         await RefuseAsync(stream, request, string.Empty, stoppingToken).ConfigureAwait(false);
                     else
@@ -202,6 +207,16 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
                 request = request with { AiProviderId = scope.Provider, Installer = scope.Installer };
+
+                if (!_logRows.TryTake(source))
+                {
+                    LogRefusal(source, "it asked for more connections than the network log takes from one source");
+                    if (request.Kind == RequestKind.Tls)
+                        await RefuseAsync(stream, request, string.Empty, stoppingToken).ConfigureAwait(false);
+                    else
+                        await WriteResponseAsync(stream, "429 Too Many Requests", "The egress proxy is logging connections from this run faster than it allows; wait a moment and try again.", stoppingToken).ConfigureAwait(false);
+                    return;
+                }
 
                 // A host the agent wrote as a suffix pattern (".example.com", "*.com") names no machine; logged as sent, whitelisting the
                 // row would turn it into a rule covering every subdomain, so it is refused and never reaches a list.
@@ -413,6 +428,26 @@ public sealed class EgressProxy : BackgroundService
         }
     }
 
+    // What the proxy reads as one line, the server behind it must read as one line too: a server that also ends a line at a
+    // bare LF would find a request line and headers of the client's own inside what was judged here as a single value.
+    private static bool IsStrictHead(ReadOnlySpan<byte> head)
+    {
+        for (var i = 0; i < head.Length; i++)
+        {
+            var b = head[i];
+            if (b == (byte)'\r')
+            {
+                if (i + 1 >= head.Length || head[i + 1] != (byte)'\n') return false;
+                i++;
+            }
+            else if (b != (byte)'\t' && (b < 0x20 || b == 0x7F))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     internal static ProxyRequest? ParseRequest(ArraySegment<byte> head, string? hostOverride = null)
     {
         var span = head.AsSpan();
@@ -425,11 +460,13 @@ public sealed class EgressProxy : BackgroundService
         var terminator = span.IndexOf("\r\n\r\n"u8);
         if (terminator < 0) return null;
         var bodyStart = terminator + 4;
+        if (!IsStrictHead(span[..terminator])) return null;
         var lines = Encoding.ASCII.GetString(span[..terminator]).Split("\r\n");
         var requestLine = lines[0].Split(' ', 3);
         if (requestLine.Length != 3) return null;
 
         var (method, target, version) = (requestLine[0], requestLine[1], requestLine[2]);
+        if (method.Length == 0 || !method.All(char.IsAsciiLetter) || target.Length == 0 || version is not ("HTTP/1.1" or "HTTP/1.0")) return null;
         string? credential = null;
         string? hostHeader = null;
         var forwarded = new StringBuilder();
@@ -440,8 +477,8 @@ public sealed class EgressProxy : BackgroundService
         foreach (var line in lines.Skip(1))
         {
             var colon = line.IndexOf(':');
-            if (colon <= 0) continue;
-            var name = line[..colon].Trim();
+            if (colon <= 0 || line.AsSpan(0, colon).IndexOfAny(' ', '\t') >= 0) return null;
+            var name = line[..colon];
             var value = line[(colon + 1)..].Trim();
 
             if (name.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase))
