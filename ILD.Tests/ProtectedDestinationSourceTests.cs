@@ -135,7 +135,20 @@ public sealed class ProtectedDestinationSourceTests : IDisposable
 
         var entries = await source.GetAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal([ProtectedDestination.Ild, ProtectedDestination.LinkLocal], entries.Select(e => e.Id));
+        Assert.Equal([ProtectedDestination.Ild, ProtectedDestination.LinkLocal, ProtectedDestination.Private], entries.Select(e => e.Id));
+    }
+
+    [Theory]
+    [InlineData(RunHostKind.Container, true)]
+    [InlineData(RunHostKind.Kubernetes, true)]
+    [InlineData(RunHostKind.Local, false)]
+    public async Task The_private_ranges_are_protected_on_isolated_run_hosts_only_and_listed_last(RunHostKind kind, bool present)
+    {
+        var entries = await Source(kind, new() { ["ILD_API_URL"] = "http://ild.example:8080" }).GetAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(present, entries.Any(e => e.Id == ProtectedDestination.Private));
+        if (present) Assert.Equal(ProtectedDestination.Private, entries[^1].Id);
+        Assert.All(entries.Where(e => e.Id == ProtectedDestination.Private), e => Assert.True(e.Covers(IPAddress.Parse("::ffff:10.1.2.3").MapToIPv4()) && e.Covers(IPAddress.Parse("fd12::1"))));
     }
 
     [Fact]

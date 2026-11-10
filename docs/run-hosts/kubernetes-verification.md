@@ -53,8 +53,11 @@ From inside a run's pod (`kubectl -n ild-runs exec -it ild-run-<id> -- bash`), e
 - `curl -m 5 http://<another run's pod ip>:<any port>` (another run)
 - `curl -m 5 https://kubernetes.default.svc` (the Kubernetes API)
 - `curl -m 5 http://<postgres service>:5432` (the database)
+- through the proxy (`curl -m 5 -x $HTTP_PROXY https://<postgres pod ip>:5432`, or `CONNECT <postgres pod ip>:5432`), the database pod IP, `CONNECT <any other pod ip>:<port>` (the ingress controller, say) and, with Longhorn, `CONNECT <share-manager pod ip>:2049`: all are refused with `protected: Private and cluster-internal addresses` in the Network log
 - `ls /var/run/secrets/kubernetes.io/serviceaccount` (no token is mounted)
 - `id` prints a non-root uid, and `grep Cap /proc/self/status` shows `CapEff: 0000000000000000`
+
+And with a forward declared to one of those addresses and port, a `CONNECT` and a plain `GET http://<host>:<port>/` through the proxy are allowed.
 
 And this must work: `curl -m 5 -s -o /dev/null -w '%{http_code}\n' http://<ild service>.ild.svc:8080/health`.
 

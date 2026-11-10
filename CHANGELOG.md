@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Runs can no longer reach private and cluster-internal addresses (the LAN, other pods, storage exports) through the egress proxy**; a run that reached a LAN or in-cluster service through the proxy loses that until you declare a forward to it or switch the protection off in Settings → Network.
 - **Runs can no longer reach ILD or the WorkItem Server through the ports the stack publishes on its machine**, unless you switch that protection off in Settings → Network.
 - **Runs start on Docker 29, and survive a restart of ILD on Podman.**
 - **A run can no longer stall other runs' network access by flooding the network log, or exhaust ILD's memory through a coding agent's output**; the output limit is `ILD_MAX_AGENT_OUTPUT_MB`.

@@ -1,0 +1,20 @@
+# Longhorn exports a ReadWriteMany volume from a share-manager pod over NFS, with no client authentication and no squash:
+# any pod that can reach it on port 2049 can read and write the toolchain store every run executes. Admit only the nodes
+# (the NFS client is the node's kernel). Replace the ipBlock with your nodes' CIDR. Needs a CNI that enforces NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: longhorn-share-manager-nodes-only
+  namespace: longhorn-system
+spec:
+  podSelector:
+    matchLabels:
+      longhorn.io/component: share-manager
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 192.0.2.0/24 # your nodes' CIDR
+      ports:
+        - protocol: TCP
+          port: 2049

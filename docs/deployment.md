@@ -271,6 +271,8 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
 
 4. The preview proxy forwards to the pod's address, so ILD must be able to reach pod IPs, as any pod in the cluster can.
 
+A ReadWriteMany backend that exports without client authentication (Longhorn's share-manager, an NFS server) is reachable by every pod that can route to it, and the run pods can route to it: the egress proxy refuses private addresses by default, but a pod with a network path of its own does not need it. Add a NetworkPolicy that admits only the nodes to the export's pods; `docs/kubernetes/longhorn-share-manager-networkpolicy.yaml` is an example for Longhorn.
+
 ### Storage
 
 `ILD_K8S_STORAGE_CLASS` and `ILD_K8S_STORAGE_SIZE` decide the volume of each run; unset, the cluster's default class is used. For run scratch, a class that keeps one copy next to the pod is enough, since a run's code is also on the remote. On Longhorn, [`storageclass-longhorn-example.yaml`](kubernetes/storageclass-longhorn-example.yaml) is such a class (`numberOfReplicas: 1`, `dataLocality: best-effort`). It is an operator's choice; ILD has no Longhorn-specific behaviour.

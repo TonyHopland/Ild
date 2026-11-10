@@ -241,6 +241,15 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_plain_http_request_to_a_declared_forward_is_exempt_from_the_protection_too()
+    {
+        await ForwardAsync("db.internal.example", 5432);
+
+        Assert.StartsWith("HTTP/1.1 200", await GetAsync("db.internal.example", 5432));
+        Assert.Equal(1, DialCount);
+    }
+
+    [Fact]
     public async Task A_declared_forward_not_on_the_whitelist_is_refused_by_the_lists()
     {
         await ForwardAsync("db.internal.example", 5432);
@@ -256,7 +265,7 @@ public sealed class EgressDestinationRulesTests : IAsyncLifetime
         await ForwardAsync("db.internal.example", 5432);
 
         Assert.StartsWith("HTTP/1.1 403", await ConnectAsync("db.internal.example", 5433));
-        Assert.StartsWith("HTTP/1.1 403", await GetAsync("db.internal.example", 5432));
+        Assert.StartsWith("HTTP/1.1 403", await GetAsync("db.internal.example", 5433));
         Assert.Equal(0, DialCount);
     }
 

@@ -189,6 +189,25 @@ describe("Network settings", () => {
     expect(within(row).queryByText("Allow")).toBeNull();
   });
 
+  test("a private-address refusal in the log links to the protections", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([
+      {
+        ...npmLine,
+        host: "10.1.2.3",
+        port: 5432,
+        reason: "protected: Private and cluster-internal addresses",
+      },
+    ]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = (
+      await within(await screen.findByLabelText("Traffic log")).findByText("10.1.2.3")
+    ).closest("tr")!;
+    expect(within(row).getByRole("link", { name: "Protected destinations" })).toBeTruthy();
+    expect(within(row).queryByText("Allow")).toBeNull();
+  });
+
   test("saves the mode and reverts when the save fails", async () => {
     mockServices(enforced, "monitor");
     const put = vi
