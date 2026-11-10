@@ -159,6 +159,7 @@ services:
       # with "crun: open 'memory.max'").
       - ILD_RUN_CPU_LIMIT=${ILD_RUN_CPU_LIMIT:-4}
       - ILD_RUN_MEMORY_LIMIT=${ILD_RUN_MEMORY_LIMIT:-8Gi}
+      - ILD_RUN_PIDS_LIMIT=${ILD_RUN_PIDS_LIMIT:-4096}
     volumes:
       # The engine's socket, as the machine the containers run on sees it.
       # Whoever holds it controls every container on that engine; only ILD's

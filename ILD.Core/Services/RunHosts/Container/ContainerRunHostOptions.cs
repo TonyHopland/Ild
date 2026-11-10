@@ -37,6 +37,9 @@ public sealed record ContainerRunHostOptions
     /// <summary>The memory a run may use in bytes, or null for no limit.</summary>
     public long? MemoryBytes { get; init; } = 8L * 1024 * 1024 * 1024;
 
+    /// <summary>The most processes any container ILD makes may hold, or null for no limit.</summary>
+    public long? PidsLimit { get; init; } = 4096;
+
     /// <summary>The port of ILD's egress proxy; 0 when there is none.</summary>
     public int EgressProxyPort { get; init; }
 
@@ -95,6 +98,7 @@ public sealed record ContainerRunHostOptions
             IldContainer = Value(IldContainerSetting),
             NanoCpus = Value(RunHostOptions.CpuLimitSetting) is { } cpu ? NanoCpusOf(cpu) : defaults.NanoCpus,
             MemoryBytes = Value(RunHostOptions.MemoryLimitSetting) is { } memory ? BytesOf(memory) : defaults.MemoryBytes,
+            PidsLimit = Value(RunHostOptions.PidsLimitSetting) is { } pids ? PidsLimitOf(pids) : defaults.PidsLimit,
             EgressProxyPort = int.TryParse(Value(EgressProxyPortSetting), out var proxyPort) ? proxyPort : 0,
             SweepInterval = TimeSpan.FromMinutes(PositiveInt(Value(SweepIntervalSetting), SweepIntervalSetting) ?? 10),
             ReadyTimeout = TimeSpan.FromSeconds(PositiveInt(Value(ReadyTimeoutSetting), ReadyTimeoutSetting) ?? 120),
@@ -106,6 +110,11 @@ public sealed record ContainerRunHostOptions
             SubnetPool = SubnetPoolOf(Value(SubnetPoolSetting)) ?? defaults.SubnetPool,
         };
     }
+
+    internal static long? PidsLimitOf(string value)
+        => long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var limit)
+            ? limit == 0 ? null : limit
+            : throw new InvalidOperationException($"{RunHostOptions.PidsLimitSetting} is '{value}'; it must be a whole number of processes, or 0 for no limit.");
 
     /// <summary>The CPU limit of a Kubernetes-style quantity (<c>4</c>, <c>1.5</c>, <c>500m</c>) in billionths of a CPU; null for <c>0</c>, which means no limit.</summary>
     internal static long? NanoCpusOf(string quantity)

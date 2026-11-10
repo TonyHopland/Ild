@@ -16,6 +16,9 @@ public static class RunHostOptions
     /// <summary>What a run's pod or container may use, for both hosts that isolate runs; the older <c>ILD_K8S_*</c> names still work for kubernetes.</summary>
     public const string CpuLimitSetting = "ILD_RUN_CPU_LIMIT";
 
+    /// <summary>The most processes a run's container may hold, so a fork bomb stops at it; <c>0</c> means no limit. Containers only: a pod's limit is the kubelet's.</summary>
+    public const string PidsLimitSetting = "ILD_RUN_PIDS_LIMIT";
+
     public const string MemoryLimitSetting = "ILD_RUN_MEMORY_LIMIT";
 
     /// <summary>

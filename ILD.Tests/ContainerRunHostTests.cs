@@ -248,6 +248,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(["no-new-privileges"], host["SecurityOpt"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Equal(512L * 1024 * 1024, host["Memory"]!.GetValue<long>());
         Assert.Equal(2_000_000_000L, host["NanoCpus"]!.GetValue<long>());
+        Assert.Equal(4096L, host["PidsLimit"]!.GetValue<long>());
         Assert.Equal(Name(_run), host["NetworkMode"]!.GetValue<string>());
         Assert.Equal([$"{Name(_run)}:/ild-run:rw"], host["Binds"]!.AsArray().Select(c => c!.GetValue<string>()));
         Assert.Contains("uid=10001", host["Tmpfs"]!["/run/ild"]!.GetValue<string>());
@@ -2134,6 +2135,9 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
                 Assert.Equal(["ild-tools-agents:/opt/ild-tools:rw"], BindsOf(config));
                 Assert.Equal(["ALL"], config["HostConfig"]!["CapDrop"]!.AsArray().Select(c => c!.GetValue<string>()));
                 Assert.Equal(e.Container, config["HostConfig"]!["NetworkMode"]!.GetValue<string>());
+                Assert.Equal(512L * 1024 * 1024, config["HostConfig"]!["Memory"]!.GetValue<long>());
+                Assert.Equal(2_000_000_000L, config["HostConfig"]!["NanoCpus"]!.GetValue<long>());
+                Assert.Equal(4096L, config["HostConfig"]!["PidsLimit"]!.GetValue<long>());
                 Assert.Null(config["Labels"]![RunPaths.RunLabel]);
                 Assert.Contains("MISE_DATA_DIR=/opt/ild-tools/mise", config["Env"]!.AsArray().Select(v => v!.GetValue<string>()));
                 await e.WriteStdoutAsync(ClaudeLine + "\n");
@@ -2569,8 +2573,21 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal("default", options.Instance);
         Assert.Equal(4_000_000_000L, options.NanoCpus);
         Assert.Equal(8L * 1024 * 1024 * 1024, options.MemoryBytes);
+        Assert.Equal(4096L, options.PidsLimit);
         Assert.Null(options.IldContainer);
     }
+
+    [Theory]
+    [InlineData("0", null)]
+    [InlineData("512", 512L)]
+    public void The_pids_limit_is_a_count_and_zero_is_no_limit(string value, long? expected)
+        => Assert.Equal(expected, ContainerRunHostOptions.PidsLimitOf(value));
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("many")]
+    public void A_pids_limit_that_is_not_a_count_names_its_setting(string value)
+        => Assert.Contains("ILD_RUN_PIDS_LIMIT", Assert.Throws<InvalidOperationException>(() => ContainerRunHostOptions.PidsLimitOf(value)).Message);
 
     [Theory]
     [InlineData("4", 4_000_000_000L)]
@@ -2890,6 +2907,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal("no-new-privileges", host["SecurityOpt"]!.AsArray().Single()!.GetValue<string>());
         Assert.Null(host["Memory"]);
         Assert.Null(host["NanoCpus"]);
+        Assert.Equal(4096L, host["PidsLimit"]!.GetValue<long>());
         Assert.True(_api.Network(ChatContainer)!["Internal"]!.GetValue<bool>());
         Assert.Equal("Ada", container["Env"]!.AsArray().Select(e => e!.GetValue<string>()).Single(e => e.StartsWith("GIT_AUTHOR_NAME=", StringComparison.Ordinal))["GIT_AUTHOR_NAME=".Length..]);
     }
