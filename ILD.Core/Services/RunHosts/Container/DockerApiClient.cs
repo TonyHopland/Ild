@@ -13,13 +13,16 @@ internal sealed class DockerApiException(HttpStatusCode status, string message) 
 }
 
 /// <summary>
-/// A client for the part of the Docker Engine API that Docker and Podman's compatibility service both serve (the
-/// <c>v1.41</c> endpoints), over the engine's unix socket. Requests are plain HTTP over that socket; the exec stream is
+/// A client for the part of the Docker Engine API that Docker and Podman's compatibility service both serve, over the
+/// engine's unix socket. It is written against <c>v1.41</c> and asks for the oldest version from there on that the engine
+/// still serves: Docker 29 refuses anything below <c>v1.44</c>. Requests are plain HTTP over that socket; the exec stream is
 /// a hijacked connection, which is why it is opened on a socket of its own.
 /// </summary>
 internal sealed class DockerApiClient : IDisposable
 {
-    private const string ApiVersion = "v1.41";
+    private static readonly Version WrittenAgainst = new(1, 41);
+
+    private string? _apiVersion;
 
     private static readonly TimeSpan HandshakeLimit = TimeSpan.FromSeconds(45);
 
@@ -58,12 +61,40 @@ internal sealed class DockerApiClient : IDisposable
         }
     }
 
+    // -- Version ----------------------------------------------------------------
+
+    /// <summary>The version prefix of every call, asked of the engine once. An engine that does not say gets the version this client was written against, and is asked again next time.</summary>
+    private async ValueTask<string> ApiVersionAsync(CancellationToken ct)
+    {
+        if (_apiVersion is { } known) return known;
+        using var response = await _http.GetAsync("/version", ct);
+        if (!response.IsSuccessStatusCode) return Prefix(WrittenAgainst);
+        JsonNode? answer;
+        try { answer = JsonNode.Parse(await response.Content.ReadAsStringAsync(ct)); }
+        catch (JsonException) { return Prefix(WrittenAgainst); }
+        return _apiVersion = Prefix(Choose(Read(answer, "MinAPIVersion"), Read(answer, "ApiVersion")));
+    }
+
+    internal static Version Choose(Version? oldestServed, Version? newestServed)
+    {
+        var chosen = oldestServed is not null && oldestServed > WrittenAgainst ? oldestServed : WrittenAgainst;
+        return newestServed is not null && newestServed < chosen ? newestServed : chosen;
+    }
+
+    private static Version? Read(JsonNode? answer, string name)
+    {
+        try { return answer?[name]?.GetValue<string>() is { } text && Version.TryParse(text, out var version) ? version : null; }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    private static string Prefix(Version version) => $"v{version.Major}.{version.Minor}";
+
     // -- Requests ----------------------------------------------------------------
 
     /// <summary>The JSON the call answers with (null when it has no body). A status in <paramref name="tolerate"/> is not a failure and answers null.</summary>
     public async Task<JsonNode?> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct, params HttpStatusCode[] tolerate)
     {
-        using var request = new HttpRequestMessage(method, $"/{ApiVersion}{path}");
+        using var request = new HttpRequestMessage(method, $"/{await ApiVersionAsync(ct)}{path}");
         if (body is not null)
             request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         using var response = await _http.SendAsync(request, ct);
@@ -92,7 +123,8 @@ internal sealed class DockerApiClient : IDisposable
     public async Task<(HttpStatusCode Status, JsonNode? Body)> InfoAsync(bool libpod, CancellationToken ct)
     {
         // Podman serves its own API under a version prefix only: an unversioned /libpod/info is a 404.
-        using var request = new HttpRequestMessage(HttpMethod.Get, libpod ? $"/{ApiVersion}/libpod/info" : $"/{ApiVersion}/info");
+        var version = await ApiVersionAsync(ct);
+        using var request = new HttpRequestMessage(HttpMethod.Get, libpod ? $"/{version}/libpod/info" : $"/{version}/info");
         using var response = await _http.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode) return (response.StatusCode, null);
         try { return (response.StatusCode, JsonNode.Parse(await response.Content.ReadAsStringAsync(ct))); }
@@ -137,7 +169,7 @@ internal sealed class DockerApiClient : IDisposable
         {
             var network = new NetworkStream(socket, ownsSocket: false);
             var body = JsonSerializer.Serialize(new { Detach = false, Tty = tty });
-            var head = $"POST /{ApiVersion}/exec/{Uri.EscapeDataString(execId)}/start HTTP/1.1\r\nHost: docker\r\nContent-Type: application/json\r\n"
+            var head = $"POST /{await ApiVersionAsync(handshake.Token)}/exec/{Uri.EscapeDataString(execId)}/start HTTP/1.1\r\nHost: docker\r\nContent-Type: application/json\r\n"
                 + $"Connection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}";
             await network.WriteAsync(Encoding.UTF8.GetBytes(head), handshake.Token);
 

@@ -90,6 +90,12 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     /// <summary>What <c>/version</c> answers; null answers 404.</summary>
     public JsonNode? Version { get; set; }
 
+    /// <summary>The oldest API version the engine serves, as Docker 29's 1.44: an older one is refused, and the unversioned <c>/version</c> names it.</summary>
+    public string? MinApiVersion { get; set; }
+
+    /// <summary>The version prefixes requests came with.</summary>
+    public HashSet<string> VersionsAsked { get; } = [];
+
     /// <summary>A status the container listing answers with instead of the list, and the raw body it answers with when that is 200.</summary>
     public int? ContainerListStatus { get; set; }
 
@@ -143,6 +149,17 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     public void SeedIldContainer(string name)
     {
         lock (_gate) _containers[name] = new FakeContainer(name, new JsonObject(), new Dictionary<string, string>()) { Running = true };
+    }
+
+    /// <summary>Gives a container another address on a network it is on, as Podman does when it restarts one that was connected without a fixed address.</summary>
+    public void Readdress(string container, string network, string address)
+    {
+        lock (_gate) _containers[container].FixedAddresses[network] = address;
+    }
+
+    public string? AddressOf(string container, string network)
+    {
+        lock (_gate) return _containers[container].FixedAddresses.GetValueOrDefault(network);
     }
 
     /// <summary>Stops a container as if the engine or the machine had: it stays, not running.</summary>
@@ -286,7 +303,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
                     await RespondAsync(network, 500, new { message = "the engine is down" });
                     return;
                 }
-                if (request.Method == "POST" && request.Path.StartsWith("/v1.41/exec/", StringComparison.Ordinal) && request.Path.Contains("/start"))
+                if (request.Method == "POST" && request.Path.StartsWith($"/v{MinApiVersion ?? "1.41"}/exec/", StringComparison.Ordinal) && request.Path.Contains("/start"))
                 {
                     await HijackAsync(network, reader, socket, request);
                     return;
@@ -352,6 +369,16 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         lock (_gate)
         {
             var path = request.Path;
+            if (path == "/version" && MinApiVersion is not null)
+                return (200, new JsonObject { ["ApiVersion"] = "1.53", ["MinAPIVersion"] = MinApiVersion }.ToJsonString());
+            if (path.Length > 2 && path[1] == 'v' && path.IndexOf('/', 1) is > 0 and var slash)
+            {
+                var asked = path[2..slash];
+                VersionsAsked.Add(asked);
+                if (MinApiVersion is not null && System.Version.Parse(asked) < System.Version.Parse(MinApiVersion))
+                    return Failure(400, $"client version {asked} is too old. Minimum supported API version is {MinApiVersion}, please upgrade your client to a newer version");
+                path = "/v1.41" + path[slash..];
+            }
             // Like Podman: its own API only under a version prefix.
             if (path == "/v1.41/libpod/info" && LibpodInfoStatus is { } failing)
                 return Failure(failing, "unavailable");
