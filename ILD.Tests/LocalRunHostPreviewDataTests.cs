@@ -123,6 +123,37 @@ public sealed class LocalRunHostPreviewDataTests : IDisposable
     }
 
     [Fact]
+    public async Task A_copy_larger_than_the_limit_is_refused_and_the_stored_copy_is_unchanged()
+    {
+        Store("data/seed", "old");
+        var store = new PreviewDataStore(PreviewVolumes.Root(Configuration)) { MaxArchiveBytes = 1024 };
+
+        var replaced = await store.ReplaceAsync(_repository, new MemoryStream(new byte[2048]), Ct);
+
+        Assert.False(replaced);
+        Assert.Equal("old", File.ReadAllText(Path.Combine(StoredFolder, "data", "seed")));
+        Assert.Equal([_repository.ToString("D")], Directory.GetFileSystemEntries(PreviewVolumes.Root(Configuration)).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public async Task A_generation_file_that_is_a_pipe_does_not_block_the_put_back()
+    {
+        var source = Directory.CreateDirectory(Path.Combine(_root, "source")).FullName;
+        File.WriteAllText(Path.Combine(source, "seed"), "new");
+        var fifo = System.Diagnostics.Process.Start("mkfifo", Path.Combine(source, PreviewDataStore.GenerationFile))!;
+        await fifo.WaitForExitAsync(Ct);
+        Assert.Equal(0, fifo.ExitCode);
+        using var archive = new MemoryStream();
+        await PreviewDataStore.PackFolderAsync(source, archive, Ct);
+        archive.Position = 0;
+        var store = new PreviewDataStore(PreviewVolumes.Root(Configuration));
+
+        Assert.True(await store.ReplaceAsync(_repository, archive, Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct));
+
+        Assert.Equal("new", File.ReadAllText(Path.Combine(StoredFolder, "seed")));
+    }
+
+    [Fact]
     public async Task Links_that_leave_the_data_are_dropped_when_it_is_stored_and_links_inside_are_kept()
     {
         var source = Directory.CreateDirectory(Path.Combine(_root, "source")).FullName;

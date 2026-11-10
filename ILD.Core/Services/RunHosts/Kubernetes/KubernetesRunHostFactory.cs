@@ -21,6 +21,7 @@ public static class KubernetesRunHostFactory
             ?? throw new InvalidOperationException($"{KubernetesRunHostOptions.NamespaceSetting} is not set and ILD's own namespace could not be read.");
         var host = new KubernetesRunHost(new k8s.Kubernetes(configuration), options, namespaceName, runner, loggers.CreateLogger<KubernetesRunHost>())
         {
+            ReadLimits = RunReadLimits.FromEnvironment(setting),
             Credentials = credentials ?? ILD.Core.Services.Implementations.Network.EgressCredentials.Random(),
             RetainedRuns = retainedRuns ?? (_ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>())),
         };

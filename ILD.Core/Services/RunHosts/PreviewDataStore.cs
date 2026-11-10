@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.RunHosts.Local;
 using Microsoft.Extensions.Logging;
 
@@ -19,6 +20,9 @@ public sealed class PreviewDataStore(string root, ILogger? logger = null)
     internal const string GenerationFile = ".ild-generation";
 
     private const int MaxGenerationLength = 64;
+
+    /// <summary>The longest archive <see cref="ReplaceAsync"/> takes: what it is given is a copy the run could have filled without end.</summary>
+    public long MaxArchiveBytes { get; init; } = RunReadLimits.Default.MaxPreviewDataBytes;
 
     public string FolderOf(Guid repositoryId) => Path.Combine(root, repositoryId.ToString("D"));
 
@@ -56,6 +60,12 @@ public sealed class PreviewDataStore(string root, ILogger? logger = null)
     /// </summary>
     public async Task<bool> ReplaceAsync(Guid repositoryId, Stream archive, CancellationToken ct = default)
     {
+        if (archive.CanSeek && archive.Length > MaxArchiveBytes)
+        {
+            logger?.LogWarning("The preview data a run of repository {Repository} kept is larger than the {Limit} MB ILD stores; the stored copy is unchanged", repositoryId, MaxArchiveBytes / RunReadLimits.Megabyte);
+            return false;
+        }
+
         await AgentWritableFiles.CreateDirectoryAsync(root, ct);
         var target = FolderOf(repositoryId);
         var incoming = Path.Combine(root, $".{repositoryId:D}.incoming-{Guid.NewGuid():N}");
@@ -152,8 +162,9 @@ public sealed class PreviewDataStore(string root, ILogger? logger = null)
     /// <summary>The generation in the file, read without following a link; null when there is none.</summary>
     private static string? ReadGeneration(string path)
     {
-        var file = new FileInfo(path);
-        if (!file.Exists || file.LinkTarget is not null || file.Length > MaxGenerationLength) return null;
+        // Only a regular file is opened: the run unpacked this, and a pipe there would hold the read for ever.
+        if (FileStatus.TryGet(path, out var status) != 0 || status.Kind != FileKind.File) return null;
+        if (new FileInfo(path).Length > MaxGenerationLength) return null;
         return File.ReadAllText(path).Trim();
     }
 

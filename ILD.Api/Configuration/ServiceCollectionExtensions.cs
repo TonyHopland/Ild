@@ -80,7 +80,10 @@ public static class ServiceCollectionExtensions
             host.Isolated.Probe = sp.GetRequiredService<NetworkEnforcementProbe>();
             host.Isolated.Refusals = sp.GetRequiredService<InstallerRefusals>();
             // The lasting copy of the preview data repositories keep; each run works on a copy of its own.
-            host.Isolated.PreviewData = new PreviewDataStore(PreviewVolumes.Root(config), sp.GetRequiredService<ILogger<PreviewDataStore>>());
+            host.Isolated.PreviewData = new PreviewDataStore(PreviewVolumes.Root(config), sp.GetRequiredService<ILogger<PreviewDataStore>>())
+            {
+                MaxArchiveBytes = ILD.Core.Services.RunHosts.RunReadLimits.FromEnvironment(name => config[name]).MaxPreviewDataBytes,
+            };
             // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
             host.Isolated.Forwards = async ct =>
             {

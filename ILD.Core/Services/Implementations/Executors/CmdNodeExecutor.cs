@@ -13,6 +13,12 @@ namespace ILD.Core.Services.Implementations.Executors;
 
 public sealed class CmdNodeExecutor : INodeExecutor
 {
+    private readonly RunReadLimits _limits;
+
+    public CmdNodeExecutor() : this(RunReadLimits.FromEnvironment()) { }
+
+    internal CmdNodeExecutor(RunReadLimits limits) => _limits = limits;
+
     public NodeType NodeType => NodeType.Cmd;
 
     public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
@@ -50,7 +56,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         yield return new NodeOutcome.Success(EdgeType.OnSuccess, output);
     }
 
-    private static async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
+    private async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
         IRunHost host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
@@ -110,14 +116,13 @@ public sealed class CmdNodeExecutor : INodeExecutor
         return (true, Combined(), null);
     }
 
-    private static async Task PumpAsync(StreamReader reader, StringBuilder into, Func<string, Task>? progress)
-    {
-        while (await reader.ReadLineAsync() is { } line)
+    private Task PumpAsync(StreamReader reader, StringBuilder into, Func<string, Task>? progress)
+        => BoundedOutput.PumpAsync(reader, _limits.MaxOutputBytes, text =>
         {
-            lock (into) into.AppendLine(line);
-            try { progress?.Invoke(line + "\n"); } catch { }
-        }
-    }
+            lock (into) into.Append(text);
+            try { progress?.Invoke(text); } catch { }
+            return Task.CompletedTask;
+        });
 
     internal static ProcessStartInfo ShellStartInfo(string command, string workingDirectory)
     {

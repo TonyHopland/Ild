@@ -37,6 +37,9 @@ internal sealed class GitMirror
     private readonly OrchestratorGit _git;
     private readonly ILogger? _logger;
 
+    /// <summary>The largest bundle taken from a run: past it the bundle is refused before anything is indexed.</summary>
+    public long MaxBundleBytes { get; init; } = RunHosts.RunReadLimits.Default.MaxBundleBytes;
+
     public GitMirror(string root, OrchestratorGit git, ILogger? logger = null)
     {
         _root = root;
@@ -237,10 +240,14 @@ internal sealed class GitMirror
                         create.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
                     await using (var sink = new FileStream(file, create))
                     {
-                        written = await createBundle(incremental, sink);
+                        written = await createBundle(incremental, new RunHosts.CappedWriteStream(sink, _owner.MaxBundleBytes));
                     }
                     if (!written.Success)
                         return (false, RepositoryManager.RedactUserInfo(written.StdErr), null);
+                }
+                catch (RunHosts.ReadLimitExceededException)
+                {
+                    return (false, $"the bundle is larger than {_owner.MaxBundleBytes / RunHosts.RunReadLimits.Megabyte} MB", null);
                 }
                 catch (IOException ex)
                 {

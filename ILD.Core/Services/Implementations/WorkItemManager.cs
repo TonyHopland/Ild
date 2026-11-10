@@ -1357,8 +1357,8 @@ public class WorkItemManager : IWorkItemManager
 
         // Mirror the PR node's prep: commit only when there is something to
         // commit, then push the branch with the repository's credentials.
-        var diff = await _repoManager.GetDiffAsync(ctx.WorktreePath);
-        if (!string.IsNullOrEmpty(diff) && !await _repoManager.CommitAsync(ctx.WorktreePath, ctx.WorkItem.Title))
+        var dirty = await _repoManager.HasUncommittedChangesAsync(ctx.WorktreePath);
+        if (dirty && !await _repoManager.CommitAsync(ctx.WorktreePath, ctx.WorkItem.Title))
             return (false, null, "Failed to commit uncommitted changes.");
 
         var pushResult = await _repoManager.PushAsync(ctx.WorktreePath, ctx.Branch, default, ctx.Auth);

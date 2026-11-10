@@ -242,7 +242,7 @@ public class RepositoryManagerMirrorTests : IDisposable
 
         var before = runner.Calls.Count;
         Assert.False(await mgr.CommitAsync(wt, "refused"));
-        Assert.Null(await mgr.GetDiffAsync(wt));
+        Assert.False(await mgr.HasUncommittedChangesAsync(wt));
         Assert.Null(await mgr.GetHeadCommitAsync(wt));
         Assert.False(await mgr.ValidateWorktreeHealthAsync(wt));
         Assert.False(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken, auth));

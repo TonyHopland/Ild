@@ -28,6 +28,10 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_SHUTDOWN_DRAIN_SECONDS`                 | Seconds the shutdown drain may spend parking in-flight runs (default `20`; see below)                                      |
 | `ILD_MAX_ATTACHMENT_MB`                      | Largest single work-item attachment, in MB (default `25`; set on both containers — see below)                              |
 | `ILD_MAX_ATTACHMENTS_TOTAL_MB`               | Largest total of attachments one work item may hold, in MB (default `250`; set on both containers)                         |
+| `ILD_MAX_RUN_FILE_MB`                         | Largest file ILD reads out of a run, in MB (default `64`); a larger one fails the read                                     |
+| `ILD_MAX_RUN_OUTPUT_MB`                      | Largest command output ILD keeps from a run, in MB (default `16`); a log keeps the first part and says it was cut, a result ILD parses fails |
+| `ILD_MAX_BUNDLE_MB`                          | Largest git bundle ILD takes from a run, in MB (default `2048`); a larger one is refused                                   |
+| `ILD_MAX_PREVIEW_DATA_MB`                    | Largest copy of a repository's preview data ILD takes back from a run, in MB (default `1024`); a larger one is not kept    |
 | `ILD_AGENT_UPDATE_COOLDOWN_DAYS`             | Days a coding-agent release must have been published before it is installed automatically (default `1`; see below)        |
 | `ILD_NETWORK_PROXY_PORT`                     | Port of the agent egress proxy; ILD's image sets `3128`. Under `dotnet run`, unset means no proxy ([network limits](#agent-network-limits)) |
 | `ILD_GATEWAY_TLS_PORT`                       | Port of the model gateway's HTTPS listener, which the Copilot CLI needs (default `8442`; `0` switches it off, and Copilot runs then fail). Under `dotnet run` it listens on loopback; in a container or pod it listens on all interfaces, with a certificate that names the host of `ILD_API_URL`, since runs reach it there |

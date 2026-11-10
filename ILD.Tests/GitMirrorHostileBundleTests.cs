@@ -38,7 +38,7 @@ public class GitMirrorHostileBundleTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private GitMirror NewMirror()
+    private GitMirror NewMirror(long? maxBundleBytes = null)
     {
         var runner = new ProcessRunner();
         var environment = new Dictionary<string, string?>
@@ -50,7 +50,10 @@ public class GitMirrorHostileBundleTests : IDisposable
         };
         return new GitMirror(
             Path.Combine(_tmp, "mirrors"),
-            (directory, args, _, ct, input) => runner.RunAsync("git", args, directory, ct, environment, new ProcessRunOptions(CleanEnvironment: true, StandardInputFrom: input)));
+            (directory, args, _, ct, input) => runner.RunAsync("git", args, directory, ct, environment, new ProcessRunOptions(CleanEnvironment: true, StandardInputFrom: input)))
+        {
+            MaxBundleBytes = maxBundleBytes ?? ILD.Core.Services.RunHosts.RunReadLimits.Default.MaxBundleBytes,
+        };
     }
 
     /// <summary>A bundle git writes in the agent's clone from <paramref name="args"/>.</summary>
@@ -61,10 +64,10 @@ public class GitMirrorHostileBundleTests : IDisposable
         return File.ReadAllBytes(file);
     }
 
-    private async Task AssertRejectedAsync(byte[] bundle)
+    private async Task AssertRejectedAsync(byte[] bundle, long? maxBundleBytes = null)
     {
         var ct = TestContext.Current.CancellationToken;
-        var (session, openError) = await NewMirror().OpenAsync("https://forge.example.test/team/app.git", ct);
+        var (session, openError) = await NewMirror(maxBundleBytes).OpenAsync("https://forge.example.test/team/app.git", ct);
         Assert.NotNull(session);
         Assert.Null(openError);
         using (session)
@@ -85,6 +88,14 @@ public class GitMirrorHostileBundleTests : IDisposable
             Assert.Equal("", GitCli.Out(session.Path, "for-each-ref", "refs/ild-push", "refs/heads/feature"));
             Assert.Empty(AuditingRunner.BundleFilesUnderPrivateRoot());
         }
+    }
+
+    [Fact]
+    public async Task A_bundle_larger_than_the_limit_is_refused_before_anything_is_indexed()
+    {
+        var bundle = Bundle("feature");
+
+        await AssertRejectedAsync(bundle, maxBundleBytes: bundle.Length - 1);
     }
 
     [Fact]

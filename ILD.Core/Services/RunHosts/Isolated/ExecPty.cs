@@ -51,7 +51,7 @@ internal sealed class ExecPty : IPtyConnection
             {
                 int read;
                 while ((read = await _exec.Stdout.ReadAsync(buffer)) > 0)
-                    _output.Append(buffer.AsSpan(0, read));
+                    await _output.AppendAsync(buffer.AsMemory(0, read));
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or System.Net.WebSockets.WebSocketException)
             {

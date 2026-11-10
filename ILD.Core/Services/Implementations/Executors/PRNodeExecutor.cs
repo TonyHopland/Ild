@@ -110,8 +110,8 @@ public sealed class PRNodeExecutor : INodeExecutor
             var prExisted = !string.IsNullOrEmpty(ctx.Run.PrUrl);
             try
             {
-                var diff = await repoManager.GetDiffAsync(ctx.Run.WorktreePath);
-                if (!string.IsNullOrEmpty(diff)
+                var dirty = await repoManager.HasUncommittedChangesAsync(ctx.Run.WorktreePath);
+                if (dirty
                     && !await repoManager.CommitAsync(ctx.Run.WorktreePath, wi.Title))
                 {
                     prepError = "Failed to commit uncommitted changes";

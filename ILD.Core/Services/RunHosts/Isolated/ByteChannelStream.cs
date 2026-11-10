@@ -2,16 +2,50 @@ using System.Threading.Channels;
 
 namespace ILD.Core.Services.RunHosts.Isolated;
 
-/// <summary>A readable stream fed by another task: what a pod's command printed, handed to the caller as it arrives, ended by <see cref="Complete"/>.</summary>
+/// <summary>
+/// A readable stream fed by another task: what a pod's command printed, handed to the caller as it arrives, ended by
+/// <see cref="Complete"/>. Bounded: a producer that gets ahead of the reader waits in <see cref="AppendAsync"/> until
+/// the reader catches up, so a command that prints without end cannot grow ILD's memory. Disposing the stream releases
+/// a waiting producer and drops what it was holding.
+/// </summary>
 internal sealed class ByteChannelStream : Stream
 {
-    private readonly Channel<byte[]> _chunks = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    /// <summary>Chunks held before a producer has to wait.</summary>
+    public const int Capacity = 64;
+
+    private readonly Channel<byte[]> _chunks = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(Capacity)
+    {
+        SingleReader = true,
+        SingleWriter = false,
+        FullMode = BoundedChannelFullMode.Wait,
+    });
+    private readonly CancellationTokenSource _gone = new();
     private byte[] _current = [];
     private int _offset;
 
-    public void Append(ReadOnlySpan<byte> data) => _chunks.Writer.TryWrite(data.ToArray());
+    public async ValueTask AppendAsync(ReadOnlyMemory<byte> data, CancellationToken ct = default)
+    {
+        if (_gone.IsCancellationRequested) return;
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _gone.Token);
+            await _chunks.Writer.WriteAsync(data.ToArray(), linked.Token);
+        }
+        catch (OperationCanceledException) when (_gone.IsCancellationRequested && !ct.IsCancellationRequested) { }
+        catch (ChannelClosedException) { }
+    }
 
     public void Complete() => _chunks.Writer.TryComplete();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            try { _gone.Cancel(); } catch (ObjectDisposedException) { }
+            _chunks.Writer.TryComplete();
+        }
+        base.Dispose(disposing);
+    }
 
     public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {

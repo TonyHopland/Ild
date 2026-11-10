@@ -956,7 +956,7 @@ public class WorkItemManagerTests
             run.RepositoryId = repoId;
             await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-            repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync("diff --git a b");
+            repoMgr.Setup(r => r.HasUncommittedChangesAsync(worktree)).ReturnsAsync(true);
             repoMgr.Setup(r => r.CommitAsync(worktree, "Keep my work")).ReturnsAsync(true);
             repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
                 .ReturnsAsync((true, (string?)null));
@@ -1003,7 +1003,7 @@ public class WorkItemManagerTests
             Assert.Equal(otherRepo.Id, (await mgr.GetWorkItemAsync(id))!.RepositoryId);
 
             GitAuthOptions? pushedWith = null;
-            repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoMgr.Setup(r => r.HasUncommittedChangesAsync(worktree)).ReturnsAsync(false);
             repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
                 .Callback<string, string, CancellationToken, GitAuthOptions?>((_, _, _, auth) => pushedWith = auth)
                 .ReturnsAsync((true, (string?)null));
@@ -1038,7 +1038,7 @@ public class WorkItemManagerTests
             await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
             // No diff — nothing to commit, but the branch should still be pushed.
-            repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoMgr.Setup(r => r.HasUncommittedChangesAsync(worktree)).ReturnsAsync(false);
             repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
                 .ReturnsAsync((true, (string?)null));
 
@@ -1089,7 +1089,7 @@ public class WorkItemManagerTests
             run.RepositoryId = repoId;
             await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-            repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoMgr.Setup(r => r.HasUncommittedChangesAsync(worktree)).ReturnsAsync(false);
             repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
                 .ReturnsAsync((false, "no upstream"));
 

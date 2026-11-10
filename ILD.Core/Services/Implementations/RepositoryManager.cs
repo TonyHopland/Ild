@@ -56,7 +56,10 @@ public class RepositoryManager : IRepositoryManager
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
-            logger);
+            logger)
+        {
+            MaxBundleBytes = ILD.Core.Services.RunHosts.RunReadLimits.FromEnvironment(_readEnvironment).MaxBundleBytes,
+        };
     }
 
     // Test/back-compat constructor: spins up a local ProcessRunner.
@@ -506,10 +509,11 @@ public class RepositoryManager : IRepositoryManager
         return $"pre-push hook failed: {(output.Length > HookOutputTail ? output[^HookOutputTail..] : output)}";
     }
 
-    public async Task<string?> GetDiffAsync(string worktreePath)
+    // The exit code says it (1 when HEAD differs), so what changed is never read into ILD: a diff is as large as the agent made it.
+    public async Task<bool> HasUncommittedChangesAsync(string worktreePath)
     {
-        var (code, stdout, _) = await RunAsync(worktreePath, "diff", "HEAD");
-        return code == 0 ? stdout : null;
+        var (code, _, _) = await RunAsync(worktreePath, "diff", "--quiet", "HEAD");
+        return code == 1;
     }
 
     public Task<IReadOnlyList<string>> GetUncommittedFilesAsync(string worktreePath)

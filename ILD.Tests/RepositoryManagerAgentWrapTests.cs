@@ -53,7 +53,7 @@ public sealed class RepositoryManagerAgentWrapTests : IDisposable
         await manager.ResetHardAsync(_clone, "origin/main", ct);
         await manager.GetUncommittedFilesAsync(_clone);
         await manager.GetHeadCommitAsync(_clone);
-        await manager.GetDiffAsync(_clone);
+        await manager.HasUncommittedChangesAsync(_clone);
         await manager.LocalBranchExistsAsync(_clone, "feature");
         await manager.PruneWorktreesAsync(_clone);
 

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **ILD stops reading what a run produces at a limit**, so a run can no longer exhaust ILD's memory or disk with a huge file, output, bundle or preview-data copy; the limits are `ILD_MAX_RUN_FILE_MB`, `ILD_MAX_RUN_OUTPUT_MB`, `ILD_MAX_BUNDLE_MB` and `ILD_MAX_PREVIEW_DATA_MB`.
 - **An agent can no longer act as another run or chat, or reach another run's work item.** Each run and chat turn gets its own token, which stops working when it ends.
 - **Chats and runs made before containers can no longer be run again.** A new turn, a resume, a retry or a terminal on one is refused and says to start a new one; reading and deleting them still work.
 - **A preview's health check only reaches the service's own loopback address and never follows a redirect.**
