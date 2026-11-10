@@ -27,8 +27,6 @@ namespace ILD.Tests.Integration;
 /// </summary>
 public class WorkItemHistoryApiTests : IClassFixture<WorkItemHistoryApiTests.Host>
 {
-    private const string RunHeader = "X-ILD-Run-Id";
-    private const string ChatHeader = "X-ILD-Chat-Session-Id";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -69,10 +67,8 @@ public class WorkItemHistoryApiTests : IClassFixture<WorkItemHistoryApiTests.Hos
         public HttpClient Agent(Guid? runId = null, Guid? chatSessionId = null)
         {
             var client = Factory.CreateClient();
-            var token = Factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+            var token = Factory.Services.IssueAgentToken(runId, chatSessionId);
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            if (runId is { } run) client.DefaultRequestHeaders.Add(RunHeader, run.ToString());
-            if (chatSessionId is { } chat) client.DefaultRequestHeaders.Add(ChatHeader, chat.ToString());
             return client;
         }
 

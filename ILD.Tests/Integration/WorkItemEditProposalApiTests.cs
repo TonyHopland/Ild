@@ -22,8 +22,6 @@ namespace ILD.Tests.Integration;
 /// </summary>
 public class WorkItemEditProposalApiTests : IClassFixture<WorkItemEditProposalApiTests.Host>
 {
-    private const string RunHeader = "X-ILD-Run-Id";
-    private const string ChatHeader = "X-ILD-Chat-Session-Id";
 
     public sealed class Host : IAsyncLifetime
     {
@@ -54,10 +52,8 @@ public class WorkItemEditProposalApiTests : IClassFixture<WorkItemEditProposalAp
         public HttpClient Agent(Guid? runId = null, Guid? chatSessionId = null)
         {
             var client = Factory.CreateClient();
-            var token = Factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+            var token = Factory.Services.IssueAgentToken(runId, chatSessionId);
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            if (runId is { } run) client.DefaultRequestHeaders.Add(RunHeader, run.ToString());
-            if (chatSessionId is { } chat) client.DefaultRequestHeaders.Add(ChatHeader, chat.ToString());
             return client;
         }
 
@@ -261,11 +257,11 @@ public class WorkItemEditProposalApiTests : IClassFixture<WorkItemEditProposalAp
     {
         var host = _host;
         var itemId = await CreateHumanItemAsync(host);
-        var agent = host.Agent(
-            runId: header == SessionHeader.UnknownRun ? Guid.NewGuid() : null,
-            chatSessionId: header == SessionHeader.UnknownChat ? Guid.NewGuid() : null);
-        if (header == SessionHeader.Unparseable)
-            agent.DefaultRequestHeaders.Add(RunHeader, "not-a-guid");
+        var agent = header is SessionHeader.None or SessionHeader.Unparseable
+            ? host.Human
+            : host.Agent(
+                runId: header == SessionHeader.UnknownRun ? Guid.NewGuid() : null,
+                chatSessionId: header == SessionHeader.UnknownChat ? Guid.NewGuid() : null);
 
         var resp = await ProposeAsync(agent, itemId, new { title = "Renamed" });
 
@@ -537,26 +533,19 @@ public class WorkItemEditProposalApiTests : IClassFixture<WorkItemEditProposalAp
     private static int? IntOrNull(JsonElement obj, string property)
         => IsNullOrAbsent(obj, property) ? null : obj.GetProperty(property).GetInt32();
 
-    public enum RunStep { OneRunning, NoneRunning, OneRunningAndAChatHeaderToo }
+    public enum RunStep { OneRunning, NoneRunning }
 
     [Theory]
     [InlineData(RunStep.OneRunning)]
     [InlineData(RunStep.NoneRunning)]
-    [InlineData(RunStep.OneRunningAndAChatHeaderToo)]
     public async Task A_loop_proposal_records_the_step_that_was_running_when_it_was_made(RunStep step)
     {
         var host = _host;
         var itemId = await CreateHumanItemAsync(host);
         var (runId, runningNodeId) = await SeedRunWithStepsAsync(host.Factory, running: step != RunStep.NoneRunning);
         await SeedRunWithStepsAsync(host.Factory, running: true);
-        Guid? chatId = null;
-        if (step == RunStep.OneRunningAndAChatHeaderToo)
-        {
-            chatId = await SeedChatSessionAsync(host.Factory);
-            await SeedChatMessagesAsync(host.Factory, chatId.Value, "user", "assistant");
-        }
 
-        var proposalId = await ProposeOkAsync(host.Agent(runId, chatId), itemId, ForgedAnchorBody("Renamed"));
+        var proposalId = await ProposeOkAsync(host.Agent(runId), itemId, ForgedAnchorBody("Renamed"));
 
         var proposal = await ReadProposalAsync(host, itemId, proposalId);
         Assert.Equal(runId, GuidOrNull(proposal, "createdByLoopRunId"));

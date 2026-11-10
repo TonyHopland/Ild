@@ -183,7 +183,7 @@ public class BackupApiTests
             });
             host.User = await host.Factory.CreateAuthenticatedClientAsync();
             host.Agent = host.Factory.CreateClient();
-            var token = host.Factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+            var token = host.Factory.Services.IssueAgentToken();
             host.Agent.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             return host;
         }
@@ -288,25 +288,26 @@ public class BackupApiTests
         using var anonymous = host.Factory.CreateClient();
         var file = new byte[] { 1, 2, 3 };
 
-        Task<HttpResponseMessage>[] Calls(HttpClient c) =>
+        Func<Task<HttpResponseMessage>>[] Calls(HttpClient c) =>
         [
-            c.GetAsync(Url, Ct),
-            c.PostAsJsonAsync($"{Url}/core", new { passphrase = Pass }, Ct),
-            c.PostAsJsonAsync($"{Url}/workitems", new { passphrase = Pass }, Ct),
-            c.GetAsync($"{Url}/core/pre-restore", Ct),
-            c.GetAsync($"{Url}/workitems/pre-restore", Ct),
-            host.RestoreAsync("core", file, Pass, "RESTORE", c),
-            host.RestoreAsync("workitems", file, Pass, "RESTORE", c),
+            () => c.GetAsync(Url, Ct),
+            () => c.PostAsJsonAsync($"{Url}/core", new { passphrase = Pass }, Ct),
+            () => c.PostAsJsonAsync($"{Url}/workitems", new { passphrase = Pass }, Ct),
+            () => c.GetAsync($"{Url}/core/pre-restore", Ct),
+            () => c.GetAsync($"{Url}/workitems/pre-restore", Ct),
+            () => host.RestoreAsync("core", file, Pass, "RESTORE", c),
+            () => host.RestoreAsync("workitems", file, Pass, "RESTORE", c),
         ];
 
         foreach (var (client, expected) in new[] { (anonymous, HttpStatusCode.Unauthorized), (host.Agent, HttpStatusCode.Forbidden) })
         {
-            var tasks = Calls(client);
-            var responses = await Task.WhenAll(tasks);
-            for (var i = 0; i < responses.Length; i++)
+            // One at a time: every call now looks its token up in the database, and the in-memory SQLite connections
+            // of concurrent requests lock each other out while one is being opened.
+            var calls = Calls(client);
+            for (var i = 0; i < calls.Length; i++)
             {
-                Assert.True(responses[i].StatusCode == expected, $"call #{i} as {expected}: got {(int)responses[i].StatusCode}");
-                responses[i].Dispose();
+                using var response = await calls[i]();
+                Assert.True(response.StatusCode == expected, $"call #{i} as {expected}: got {(int)response.StatusCode}");
             }
         }
 

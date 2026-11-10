@@ -268,8 +268,8 @@ public class AgentControllerPreviewTests
             });
         var controller = BuildController(ItemWithWorktree(workItemId), preview, new Mock<IWorkItemNotifier>(), db);
         var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
-        if (runHeader != null) http.Request.Headers["X-ILD-Run-Id"] = runHeader;
-        if (chatHeader != null) http.Request.Headers["X-ILD-Chat-Session-Id"] = chatHeader;
+        if (runHeader != null) http.User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, Guid.Parse(runHeader));
+        else if (chatHeader != null) http.User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Chat, Guid.Parse(chatHeader));
         controller.ControllerContext = new ControllerContext { HttpContext = http };
 
         var ok = Assert.IsType<OkObjectResult>(await controller.GetPreview(workItemId));
@@ -309,15 +309,25 @@ public class AgentControllerPreviewTests
     }
 
     [Fact]
-    public async Task A_run_on_another_work_item_gets_the_public_address_as_agentUrl()
+    public async Task A_run_on_another_work_item_is_refused_its_preview()
     {
         using var db = new TestDb();
         var id = Guid.NewGuid().ToString();
         var runId = SeedRun(db, Guid.NewGuid().ToString());
+        var preview = new Mock<IWorktreePreviewService>();
+        var controller = BuildController(ItemWithWorktree(id), preview, new Mock<IWorkItemNotifier>(), db);
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+            {
+                User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, runId),
+            },
+        };
 
-        var service = await GetAgentService(id, runId.ToString(), null, db);
+        var result = await controller.GetPreview(id);
 
-        Assert.Equal("http://wi-7.ild.localhost:8080", service.AgentUrl);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(result).StatusCode);
+        preview.Verify(p => p.GetStatusAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

@@ -98,7 +98,7 @@ public static class IldMcpServer
     /// current loop-run id. Returned as a loosely-typed dictionary so each adapter
     /// can splice it directly into its CLI config JSON.
     /// </summary>
-    /// <param name="environment">Where the URL and token come from; the process environment by default.</param>
+    /// <param name="environment">Where the URL and token come from; the process environment by default. A launch passes its <see cref="Adapters.RunFacingEnvironment"/>, whose token is the one ILD issued for that launch.</param>
     public static Dictionary<string, object?> BuildEnvironment(
         LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null)
     {

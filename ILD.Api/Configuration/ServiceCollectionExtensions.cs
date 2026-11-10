@@ -33,7 +33,7 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddIldServices(this IServiceCollection services)
     {
-        services.AddSingleton<AgentAuthTokenProvider>();
+        services.AddScoped<IAgentTokenService, AgentTokenService>();
         services.AddSingleton<IModelGatewayRegistry, ModelGatewayRegistry>();
         // One instance for the process: it holds the Codex refresh lock and the "refresh next" flag.
         services.AddHttpClient(nameof(ModelCredentialSource));

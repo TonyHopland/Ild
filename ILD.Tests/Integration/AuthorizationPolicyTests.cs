@@ -143,7 +143,7 @@ public class AuthorizationPolicyTests(SharedApiFactory factory) : IClassFixture<
     [InlineData("/hubs/work-item")]
     public async Task The_agent_token_is_refused_at_every_hub(string path)
     {
-        var agentToken = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        var agentToken = factory.Services.IssueAgentToken();
         var client = factory.CreateClient();
 
         // Authenticated but not a user, so it is a 403 and not a 401: the token is
@@ -169,8 +169,8 @@ public class AuthorizationPolicyTests(SharedApiFactory factory) : IClassFixture<
     /// The other side of the fallback policy: the opt-out on AgentController has
     /// to actually admit the agent, or ILD's MCP server is locked out of every
     /// tool at once. These are the paths behind the read-only tools, requested
-    /// exactly as <c>ILD.McpServer</c>'s <c>IldClient</c> sends them — the agent
-    /// service token as a bearer header, plus the run-id header it always sets.
+    /// exactly as <c>ILD.McpServer</c>'s <c>IldClient</c> sends them — the launch's
+    /// agent token as a bearer header.
     /// </summary>
     [Theory]
     [InlineData("/api/v1/agent/repositories?skip=0&take=100")]
@@ -184,9 +184,9 @@ public class AuthorizationPolicyTests(SharedApiFactory factory) : IClassFixture<
     public async Task The_agent_token_reaches_the_agent_surface(string path)
     {
         var client = factory.CreateClient();
-        var token = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        var token = factory.Services.IssueAgentToken(ILD.Data.Entities.AgentTokenSource.Run, Guid.NewGuid());
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        client.DefaultRequestHeaders.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
+
 
         var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
 
@@ -237,9 +237,11 @@ public class AuthorizationPolicyTests(SharedApiFactory factory) : IClassFixture<
         }
 
         var client = factory.CreateClient();
-        var token = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        var token = sessionHeader == "X-ILD-Run-Id"
+            ? factory.Services.IssueAgentToken(ILD.Data.Entities.AgentTokenSource.Run, runId)
+            : factory.Services.IssueAgentToken(ILD.Data.Entities.AgentTokenSource.Chat, chatSessionId);
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        client.DefaultRequestHeaders.Add(sessionHeader, sessionHeader == "X-ILD-Run-Id" ? runId.ToString() : chatSessionId.ToString());
+
 
         foreach (var path in new[]
         {
@@ -331,7 +333,7 @@ public class AuthorizationPolicyTests(SharedApiFactory factory) : IClassFixture<
         var route = $"/api/v1/chat/{Guid.NewGuid()}/read";
         var agent = factory.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
-            "Bearer", factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
+            "Bearer", factory.Services.IssueAgentToken());
         var user = await factory.CreateAuthenticatedClientAsync();
 
         var asAgent = await agent.PostAsJsonAsync(route, new { sequence = 1 }, TestContext.Current.CancellationToken);

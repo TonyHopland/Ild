@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -19,6 +20,7 @@ using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
 
@@ -26,6 +28,13 @@ namespace ILD.Api.Controllers;
 
 /// <summary>
 /// Read-only / restricted API surface intended for the ILD MCP server.
+///
+/// Who is calling comes from the caller's token, never from anything it sends: ILD issues one token per run and per
+/// chat launch, revokes it when the launch ends, and carries the run or chat id on the principal as a claim. A
+/// <c>X-ILD-Run-Id</c> or <c>X-ILD-Chat-Session-Id</c> header naming another run or chat is refused (403), and a user
+/// has neither. A run's token reaches only its own run's work item and the items that run created for the worktree,
+/// preview, pull request, conversation and attachment routes; a chat's token, driven by the operator, reaches any work
+/// item but is bound to its own chat and cannot act as a run.
 ///
 /// The MCP server lets agents inside loop runs:
 ///  - list work items (with filters, including by originating run),
@@ -51,8 +60,7 @@ namespace ILD.Api.Controllers;
 ///    ADR-0028), and read back what became of the caller's own proposals.
 ///    Only a human saves or rejects one, on the human-only
 ///    <c>LoopTemplateProposalsController</c>,
-///  - read and write per-run loop variables (scoped by the X-ILD-Run-Id
-///    header) so one node can hand off state to a later node — the values
+///  - read and write per-run loop variables (scoped by the run's token) so one node can hand off state to a later node — the values
 ///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>,
 ///  - pull commits pushed to their own run branch, which needs the
 ///    orchestrator's repository token the agent uid cannot reach (ADR-0014).
@@ -69,10 +77,34 @@ namespace ILD.Api.Controllers;
 // The one opt-out from the user-only fallback policy: this is the whole surface
 // the agent service token may reach. The UI calls it too, hence agent *or* user.
 [Authorize(Policy = IldAuthentication.AgentOrUserPolicy)]
-public class AgentController : ControllerBase
+public class AgentController : ControllerBase, IActionFilter
 {
+    // What the MCP server used to send. The caller's run or chat comes from its token; a header that names another is refused.
     private const string RunIdHeader = "X-ILD-Run-Id";
     private const string ChatSessionIdHeader = "X-ILD-Chat-Session-Id";
+
+    /// <summary>
+    /// An agent's token names its run or chat, so a header naming a different one (or a run header from a chat, or the
+    /// reverse) is a forgery attempt and is refused. A header that agrees changes nothing, and a user's are ignored.
+    /// </summary>
+    [NonAction]
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        if (!User.IsInRole(IldAuthentication.AgentRole))
+            return;
+        if (HeaderDisagrees(RunIdHeader, AgentTokenSource.Run) || HeaderDisagrees(ChatSessionIdHeader, AgentTokenSource.Chat))
+            context.Result = StatusCode(403, new { error = "The run or chat id sent does not belong to this agent token." });
+    }
+
+    [NonAction]
+    public void OnActionExecuted(ActionExecutedContext context)
+    {
+    }
+
+    private bool HeaderDisagrees(string header, AgentTokenSource source)
+        => Request.Headers.TryGetValue(header, out var sent)
+           && !string.IsNullOrWhiteSpace(sent.ToString())
+           && !(TrySessionClaim(source, out var own) && Guid.TryParse(sent.ToString(), out var named) && named == own);
 
     // Upper bound on a pushed loop document (~1 MB). A real ild-loop-template/v2 is
     // a few KB; this stops a rogue agent from shoving megabytes over the chat hub.
@@ -277,6 +309,9 @@ public class AgentController : ControllerBase
         [FromQuery] bool includeConversation = false,
         [FromQuery] bool includeHistory = false)
     {
+        if (includeConversation && await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null)
         {
@@ -350,6 +385,9 @@ public class AgentController : ControllerBase
     [HttpGet("workitems/{id}/attachments/{attachmentId:guid}")]
     public async Task<IActionResult> GetWorkItemAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         try
         {
             var attachment = await _workItems.GetAttachmentAsync(id, attachmentId, cancellationToken);
@@ -381,6 +419,9 @@ public class AgentController : ControllerBase
     [HttpPost("workitems/{id}/pull-branch")]
     public async Task<IActionResult> PullBranch(string id, CancellationToken cancellationToken)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         var (_, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
@@ -402,7 +443,7 @@ public class AgentController : ControllerBase
         CancellationToken cancellationToken)
     {
         if (!TryResolveChatSessionId(out var chatSessionId))
-            return BadRequest(new { error = $"A chat-session id is required. Send it in the {ChatSessionIdHeader} header." });
+            return BadRequest(new { error = "A chat-session id is required. Only an agent launched for a chat has one." });
 
         return ChatRepositoryCloneHttpResult.ToActionResult(
             await cloner.CloneAsync(chatSessionId, repositoryId, request?.Branch, cancellationToken));
@@ -451,6 +492,9 @@ public class AgentController : ControllerBase
     [HttpGet("workitems/{id}/preview")]
     public async Task<IActionResult> GetPreview(string id)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
         try
@@ -466,6 +510,9 @@ public class AgentController : ControllerBase
     [HttpPost("workitems/{id}/preview/start")]
     public async Task<IActionResult> StartPreview(string id, [FromBody] WorktreePreviewStartRequest? request)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
         try
@@ -486,6 +533,9 @@ public class AgentController : ControllerBase
     [HttpPost("workitems/{id}/preview/stop")]
     public async Task<IActionResult> StopPreview(string id)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
         try
@@ -503,6 +553,9 @@ public class AgentController : ControllerBase
     [HttpPost("workitems/{id}/preview/services/{service}/start")]
     public async Task<IActionResult> StartPreviewService(string id, string service, [FromBody] WorktreePreviewStartRequest? request)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(service))
             return BadRequest(new { error = "service is required." });
 
@@ -526,6 +579,9 @@ public class AgentController : ControllerBase
     [HttpPost("workitems/{id}/preview/services/{service}/stop")]
     public async Task<IActionResult> StopPreviewService(string id, string service)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(service))
             return BadRequest(new { error = "service is required." });
 
@@ -546,6 +602,9 @@ public class AgentController : ControllerBase
     [HttpGet("workitems/{id}/preview/services/{service}/config")]
     public async Task<IActionResult> GetPreviewServiceConfig(string id, string service)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(service))
             return BadRequest(new { error = "service is required." });
 
@@ -567,6 +626,9 @@ public class AgentController : ControllerBase
     [HttpPut("workitems/{id}/preview/services/{service}/config")]
     public async Task<IActionResult> UpdatePreviewServiceConfig(string id, string service, [FromBody] WorktreePreviewServiceConfigUpdateRequest? request)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(service))
             return BadRequest(new { error = "service is required." });
         if (request == null || string.IsNullOrWhiteSpace(request.Config))
@@ -589,6 +651,9 @@ public class AgentController : ControllerBase
     [HttpGet("workitems/{id}/preview/logs")]
     public async Task<IActionResult> GetPreviewLog(string id, [FromQuery] string service)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(service))
             return BadRequest(new { error = "service is required." });
 
@@ -620,6 +685,9 @@ public class AgentController : ControllerBase
         [FromQuery] int tailLines = PrCiLogService.DefaultTailLines,
         [FromQuery] int offset = 0)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(checkId))
             return BadRequest(new { error = "checkId is required." });
 
@@ -655,6 +723,9 @@ public class AgentController : ControllerBase
         [FromServices] IPrReviewService reviews,
         [FromQuery] string? sinceCommit = null)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         var workItem = await _workItems.GetWorkItemAsync(id);
         if (workItem == null)
             return NotFound();
@@ -706,6 +777,9 @@ public class AgentController : ControllerBase
         [FromServices] IPrReviewService reviews,
         [FromBody] AgentPrReviewReplyRequest request)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(request?.CommentId) || string.IsNullOrWhiteSpace(request.Body))
             return BadRequest(new { error = "commentId and body are required." });
 
@@ -724,6 +798,9 @@ public class AgentController : ControllerBase
         [FromServices] IPrReviewService reviews,
         [FromBody] AgentPrReviewResolveRequest request)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(request?.ThreadId))
             return BadRequest(new { error = "threadId is required." });
 
@@ -748,6 +825,9 @@ public class AgentController : ControllerBase
         [FromServices] IPrReviewService reviews,
         [FromBody] AgentPrCommentRequest request)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(request?.Body))
             return BadRequest(new { error = "body is required." });
 
@@ -772,6 +852,9 @@ public class AgentController : ControllerBase
         [FromServices] IPrReviewService reviews,
         [FromBody] AgentPrReviewCloseRequest request)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         if (string.IsNullOrWhiteSpace(request?.CommentId))
             return BadRequest(new { error = "commentId is required." });
 
@@ -791,6 +874,9 @@ public class AgentController : ControllerBase
     [HttpGet("workitems/{id}/pr-review/queue")]
     public async Task<IActionResult> ListQueuedPrWrites(string id, [FromServices] IPrReviewService reviews)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         var workItem = await _workItems.GetWorkItemAsync(id);
         if (workItem == null)
             return NotFound();
@@ -822,6 +908,9 @@ public class AgentController : ControllerBase
     public async Task<IActionResult> WithdrawQueuedPrWrite(
         string id, string writeId, [FromServices] IPrReviewService reviews)
     {
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
         var workItem = await _workItems.GetWorkItemAsync(id);
         if (workItem == null)
             return NotFound();
@@ -1174,7 +1263,7 @@ public class AgentController : ControllerBase
     public async Task<IActionResult> ListVariables()
     {
         if (!TryResolveRunId(out var runId))
-            return BadRequest(new { error = $"A loop-run id is required. Send it in the {RunIdHeader} header." });
+            return BadRequest(new { error = "A loop-run id is required. Only an agent launched for a run has one." });
 
         var variables = await _runs.GetVariablesAsync(runId);
         return Ok(variables.Select(v => new
@@ -1192,7 +1281,7 @@ public class AgentController : ControllerBase
             return BadRequest(ModelState);
 
         if (!TryResolveRunId(out var runId))
-            return BadRequest(new { error = $"A loop-run id is required. Send it in the {RunIdHeader} header." });
+            return BadRequest(new { error = "A loop-run id is required. Only an agent launched for a run has one." });
 
         if (!PromptPlaceholderRegistry.IsValidVariableName(name))
             return BadRequest(new { error = "Variable name must start with a letter and contain only letters, digits, and underscores." });
@@ -1208,8 +1297,15 @@ public class AgentController : ControllerBase
     private bool TryResolveRunId(out Guid runId)
     {
         runId = Guid.Empty;
-        return Request.Headers.TryGetValue(RunIdHeader, out var hdr)
-            && Guid.TryParse(hdr.ToString(), out runId);
+        return TrySessionClaim(AgentTokenSource.Run, out runId);
+    }
+
+    private bool TrySessionClaim(AgentTokenSource source, out Guid id)
+    {
+        id = Guid.Empty;
+        return User.IsInRole(IldAuthentication.AgentRole)
+            && User.FindFirstValue(IldAuthentication.SessionSourceClaim) == source.ToString().ToLowerInvariant()
+            && Guid.TryParse(User.FindFirstValue(IldAuthentication.SessionIdClaim), out id);
     }
 
     /// <summary>
@@ -1228,8 +1324,7 @@ public class AgentController : ControllerBase
     private bool TryResolveChatSessionId(out Guid chatSessionId)
     {
         chatSessionId = Guid.Empty;
-        return Request.Headers.TryGetValue(ChatSessionIdHeader, out var hdr)
-            && Guid.TryParse(hdr.ToString(), out chatSessionId);
+        return TrySessionClaim(AgentTokenSource.Chat, out chatSessionId);
     }
 
     /// <summary>Who the changes this call makes are for, from the session headers it sent.</summary>
@@ -1452,7 +1547,7 @@ public class AgentController : ControllerBase
     private async Task<(Guid ChatSessionId, IActionResult? Error)> ResolveChatSessionAsync()
     {
         if (!TryResolveChatSessionId(out var chatSessionId))
-            return (Guid.Empty, BadRequest(new { error = $"A chat-session id is required. Send it in the {ChatSessionIdHeader} header." }));
+            return (Guid.Empty, BadRequest(new { error = "A chat-session id is required. Only an agent launched for a chat has one." }));
 
         var exists = await _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == chatSessionId);
         if (!exists)
@@ -1493,20 +1588,14 @@ public class AgentController : ControllerBase
         // Legacy `loopTemplateId` (if any) is ignored — template is now
         // resolved from tags at run start (PRD §3.7).
 
-        // Resolve originating run id: prefer body, fall back to header.
-        Guid? createdByLoopRunId = null;
-        if (Guid.TryParse(request.CreatedByLoopRunId, out var bodyRun))
-            createdByLoopRunId = bodyRun;
-        else if (Request.Headers.TryGetValue(RunIdHeader, out var hdr) && Guid.TryParse(hdr.ToString(), out var headerRun))
-            createdByLoopRunId = headerRun;
+        // The originating run or chat is the caller's own, from its token. A body that names another run is refused.
+        var createdByLoopRunId = CallerRunId();
+        if (Guid.TryParse(request.CreatedByLoopRunId, out var bodyRun) && bodyRun != createdByLoopRunId)
+            return StatusCode(403, new { error = "createdByLoopRunId is not the calling run." });
 
-        // A standalone Chat Session (ADR-0010) stamps via its own header instead.
-        // It is never both: when a run id is present the chat stamp is ignored.
-        Guid? createdByChatSessionId = null;
-        if (createdByLoopRunId is null
-            && Request.Headers.TryGetValue(ChatSessionIdHeader, out var chatHdr)
-            && Guid.TryParse(chatHdr.ToString(), out var headerChat))
-            createdByChatSessionId = headerChat;
+        // A standalone Chat Session (ADR-0010) stamps through its own token.
+        // It is never both: a token is for a run or a chat.
+        var createdByChatSessionId = CallerChatSessionId();
 
         // Validate dependencies up-front so we don't half-create.
         var dependencyIds = new List<string>();
@@ -2131,7 +2220,7 @@ public class AgentController : ControllerBase
 
         return (null, null, BadRequest(new
         {
-            error = $"A proposal needs the proposing session. Send it in the {RunIdHeader} or {ChatSessionIdHeader} header.",
+            error = "A proposal needs the proposing session. Only an agent launched for a run or a chat has one.",
         }));
     }
 
@@ -2153,6 +2242,25 @@ public class AgentController : ControllerBase
     }
 
     /// <summary>
+    /// Null when the caller may act on the work item's worktree, preview, pull request, conversation or attachments, else
+    /// a 403. A run reaches only its own run's work item and the items that run created; a chat, driven by the
+    /// operator, and a user reach any. An unknown item passes, for the route to answer 404.
+    /// </summary>
+    private async Task<IActionResult?> CallerMayTouchAsync(string workItemId)
+    {
+        if (!TryResolveRunId(out var runId))
+            return null;
+        if (await _workItems.GetWorkItemAsync(workItemId) is not { } workItem)
+            return null;
+        if (workItem.CreatedByLoopRunId == runId)
+            return null;
+        var ownWorkItemId = await _db.LoopRuns.AsNoTracking().Where(r => r.Id == runId).Select(r => r.WorkItemId).FirstOrDefaultAsync();
+        return ownWorkItemId == workItem.Id
+            ? null
+            : StatusCode(403, new { error = "This work item belongs to another run." });
+    }
+
+    /// <summary>
     /// True iff <paramref name="wi"/> was created by the caller's current
     /// session — the loop run identified by the <c>X-ILD-Run-Id</c> header, or
     /// (when no run id is present) the chat session identified by the
@@ -2165,8 +2273,7 @@ public class AgentController : ControllerBase
     {
         if (TryResolveRunId(out var runId))
             return wi.CreatedByLoopRunId == runId;
-        if (Request.Headers.TryGetValue(ChatSessionIdHeader, out var chatHdr)
-            && Guid.TryParse(chatHdr.ToString(), out var chatId))
+        if (TryResolveChatSessionId(out var chatId))
             return wi.CreatedByChatSessionId == chatId;
         return false;
     }

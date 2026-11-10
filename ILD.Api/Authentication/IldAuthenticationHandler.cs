@@ -1,16 +1,15 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using System.Text.Json;
-using ILD.Api.Configuration;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Entities;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 
 namespace ILD.Api.Authentication;
 
 /// <summary>
-/// Turns an ILD bearer token into a <see cref="ClaimsPrincipal"/>: the agent
-/// service token yields the <c>agent</c> role, a live session token yields the
+/// Turns an ILD bearer token into a <see cref="ClaimsPrincipal"/>: a live agent token yields the <c>agent</c> role with its run or chat as claims, a live session token yields the
 /// <c>user</c> role named after its owner. Authorization is then the framework's
 /// job — see <see cref="IldAuthentication"/> for the policies.
 ///
@@ -29,14 +28,14 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
     private const string InvalidSession = "Invalid or expired session";
 
     private readonly IAuthService _authService;
-    private readonly AgentAuthTokenProvider _agentTokens;
+    private readonly IAgentTokenService _agentTokens;
 
     public IldAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
         IAuthService authService,
-        AgentAuthTokenProvider agentTokens)
+        IAgentTokenService agentTokens)
         : base(options, logger, encoder)
     {
         _authService = authService;
@@ -50,10 +49,10 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
         if (string.IsNullOrWhiteSpace(token))
             return AuthenticateResult.NoResult();
 
-        // Agent service token: lets the in-host MCP server (and other ILD-spawned
-        // agents) call /api/v1/agent/... without going through user login.
-        if (_agentTokens.Matches(token))
-            return Ticket(IldAuthentication.AgentRole, name: "agent");
+        // A token ILD issued to one agent launch: it names the run or chat it belongs to, and stops
+        // authenticating the moment that launch ends.
+        if (await _agentTokens.AuthenticateAsync(token, Context.RequestAborted) is { } agent)
+            return Ticket(IldAuthentication.AgentRole, name: "agent", agent);
 
         if (await _authService.AuthenticateSessionAsync(token) is not { } session)
             return AuthenticateResult.Fail(InvalidSession);
@@ -80,11 +79,16 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
         }));
     }
 
-    private AuthenticateResult Ticket(string role, string? name)
+    private AuthenticateResult Ticket(string role, string? name, AgentTokenIdentity? agent = null)
     {
         var claims = new List<Claim> { new(ClaimTypes.Role, role) };
         if (!string.IsNullOrEmpty(name))
             claims.Add(new Claim(ClaimTypes.Name, name));
+        if (agent is not null)
+        {
+            claims.Add(new Claim(IldAuthentication.SessionSourceClaim, agent.Source.ToString().ToLowerInvariant()));
+            claims.Add(new Claim(IldAuthentication.SessionIdClaim, agent.SourceId.ToString()));
+        }
 
         var identity = new ClaimsIdentity(claims, Scheme.Name, ClaimTypes.Name, ClaimTypes.Role);
         return AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name));

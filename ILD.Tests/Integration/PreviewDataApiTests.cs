@@ -167,7 +167,7 @@ public class PreviewDataApiTests(SharedApiFactory factory) : IClassFixture<Share
     {
         var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Bearer", factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
+            "Bearer", factory.Services.IssueAgentToken());
         return client;
     }
 

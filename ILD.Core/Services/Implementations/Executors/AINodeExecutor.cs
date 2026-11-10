@@ -154,6 +154,7 @@ public sealed class AINodeExecutor : INodeExecutor
 
         NodeExecutionResult result;
         var feeds = PackageFeedEnvironment.None;
+        IssuedAgentToken? agentToken = null;
         try
         {
             string? incomingSessionId = null;
@@ -193,6 +194,8 @@ public sealed class AINodeExecutor : INodeExecutor
             feeds = PackageFeedCredentialFiles.Materialize(
                 packageFeeds.Feeds, ctx.Run.Id.ToString("N"), sp.GetService<ILogger<AINodeExecutor>>());
             var runId = ctx.Run.Id;
+            var agentTokens = sp.GetService<IAgentTokenService>();
+            agentToken = agentTokens is null ? null : await agentTokens.IssueAsync(AgentTokenSource.Run, runId, ct: ctx.CancellationToken);
             var agentCtx = new AgentExecutionContext(
                 provider, rendered, runContext, 0, ctx.CancellationToken,
                 ctx.ProgressCallback, cfg.ToolAllowlist,
@@ -202,6 +205,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 ForkFromSessionId: forkFromSessionId,
                 Environment: feeds.Environment,
                 AgentFiles: feeds.FilePath is null ? null : [feeds.FilePath],
+                AgentApiToken: agentToken?.Token,
                 NetworkMode: await sp.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken));
             result = await adapter.ExecuteAsync(agentCtx);
         }
@@ -211,6 +215,8 @@ public sealed class AINodeExecutor : INodeExecutor
         }
         finally
         {
+            if (agentToken is not null)
+                await sp.GetRequiredService<IAgentTokenService>().RevokeAsync(agentToken.TokenId, CancellationToken.None);
             feeds.Dispose();
             concurrency?.Exit(providerId);
         }

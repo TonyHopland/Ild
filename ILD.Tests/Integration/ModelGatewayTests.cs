@@ -90,7 +90,7 @@ public class ModelGatewayTests : IAsyncLifetime
         using var none = await client.SendAsync(Get("/gateway/upstream/models"), TestContext.Current.CancellationToken);
         using var wrong = await client.SendAsync(Get("/gateway/upstream/models", "ildgw_not-a-real-token"), TestContext.Current.CancellationToken);
         using var theAppsOwnToken = await client.SendAsync(
-            Get("/gateway/upstream/models", _factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token),
+            Get("/gateway/upstream/models", _factory.Services.IssueAgentToken()),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, none.StatusCode);

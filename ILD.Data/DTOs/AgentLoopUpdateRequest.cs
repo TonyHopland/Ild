@@ -2,8 +2,8 @@ namespace ILD.Data.DTOs;
 
 /// <summary>
 /// Request body for the agent-scoped update-current-loop endpoint
-/// (<c>PUT /api/v1/agent/current-loop</c>), scoped to the chat session identified
-/// by the <c>X-ILD-Chat-Session-Id</c> header (loop editor context, ADR-0011).
+/// (<c>PUT /api/v1/agent/current-loop</c>), scoped to the chat session named
+/// by the caller's chat token (loop editor context, ADR-0011).
 /// </summary>
 public class AgentLoopUpdateRequest
 {

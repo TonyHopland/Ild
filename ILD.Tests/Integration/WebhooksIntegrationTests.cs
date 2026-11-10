@@ -24,7 +24,7 @@ public class WebhooksIntegrationTests(SharedApiFactory factory) : IClassFixture<
         // leaves the real gate to HMAC. A 403 would mean a working webhook
         // configuration had been broken; the 401 is the signature check refusing.
         var client = factory.CreateClient();
-        var agentToken = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        var agentToken = factory.Services.IssueAgentToken();
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", agentToken);
 
         var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { }, cancellationToken: TestContext.Current.CancellationToken);

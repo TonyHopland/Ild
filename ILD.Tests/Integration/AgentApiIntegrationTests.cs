@@ -49,7 +49,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "stamped", description = "", repositoryId = repoId.ToString() })
         };
-        req.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        req.ActAsRun(factory.Services, runId);
 
         var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
@@ -69,7 +69,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "from chat", description = "", repositoryId = repoId.ToString() })
         };
-        req.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        req.ActAsChat(factory.Services, chatSessionId);
 
         var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
@@ -112,7 +112,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "edited", description = "new body" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        put.ActAsRun(factory.Services, runId);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
@@ -135,7 +135,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "hijacked", description = "" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", otherRun.ToString());
+        put.ActAsRun(factory.Services, otherRun);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
 
@@ -217,7 +217,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "edited", description = "", branchNameOverride = "feature foo" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        put.ActAsRun(factory.Services, runId);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
@@ -274,7 +274,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
 
-        var createResp = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
+        var create = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
         {
             Content = JsonContent.Create(new
             {
@@ -283,8 +283,9 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
                 repositoryId = repoId.ToString(),
                 baseBranchOverride = "  release/1.0  ",
             }),
-            Headers = { { "X-ILD-Run-Id", runId.ToString() } },
-        }, TestContext.Current.CancellationToken);
+        };
+        create.ActAsRun(factory.Services, runId);
+        var createResp = await client.SendAsync(create, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, createResp.StatusCode);
         var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
             .RootElement.GetProperty("id").GetString();
@@ -305,13 +306,13 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         Assert.Equal(JsonValueKind.Null, cleared.GetProperty("baseBranchOverride").ValueKind);
     }
 
-    private static async Task<JsonElement> PutAsync(HttpClient client, string itemId, Guid runId, object body)
+    private async Task<JsonElement> PutAsync(HttpClient client, string itemId, Guid runId, object body)
     {
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
         {
             Content = JsonContent.Create(body),
         };
-        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        put.ActAsRun(factory.Services, runId);
         var resp = await client.SendAsync(put);
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         return JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
@@ -375,7 +376,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "ghost", description = "" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
+        put.ActAsRun(factory.Services, Guid.NewGuid());
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
@@ -390,7 +391,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var itemId = await CreateAsync(client, "disposable", runId, repoId);
 
         var del = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
-        del.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        del.ActAsRun(factory.Services, runId);
         var resp = await client.SendAsync(del, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
 
@@ -409,7 +410,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var itemId = await CreateAsync(client, "protected", ownerRun, repoId);
 
         var del = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
-        del.Headers.Add("X-ILD-Run-Id", otherRun.ToString());
+        del.ActAsRun(factory.Services, otherRun);
         var resp = await client.SendAsync(del, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
 
@@ -430,7 +431,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "from chat", description = "", repositoryId = repoId.ToString() }),
         };
-        create.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        create.ActAsChat(factory.Services, chatSessionId);
         var createResp = await client.SendAsync(create, TestContext.Current.CancellationToken);
         createResp.EnsureSuccessStatusCode();
         var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
@@ -438,12 +439,12 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
 
         // A different chat session may not delete it.
         var forbidden = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
-        forbidden.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
+        forbidden.ActAsChat(factory.Services, Guid.NewGuid());
         Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(forbidden, TestContext.Current.CancellationToken)).StatusCode);
 
         // The creating chat session may.
         var allowed = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
-        allowed.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        allowed.ActAsChat(factory.Services, chatSessionId);
         Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(allowed, TestContext.Current.CancellationToken)).StatusCode);
     }
 
@@ -459,7 +460,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "chat original", description = "", repositoryId = repoId.ToString() }),
         };
-        create.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        create.ActAsChat(factory.Services, chatSessionId);
         var createResp = await client.SendAsync(create, TestContext.Current.CancellationToken);
         createResp.EnsureSuccessStatusCode();
         var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
@@ -470,7 +471,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "hijacked", description = "" }),
         };
-        forbidden.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
+        forbidden.ActAsChat(factory.Services, Guid.NewGuid());
         Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(forbidden, TestContext.Current.CancellationToken)).StatusCode);
 
         // The creating chat session may.
@@ -478,7 +479,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { title = "chat edited", description = "by chat" }),
         };
-        allowed.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        allowed.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(allowed, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
@@ -555,12 +556,12 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { value = "ready for review" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        put.ActAsRun(factory.Services, runId);
         var putResp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, putResp.StatusCode);
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/variables");
-        get.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        get.ActAsRun(factory.Services, runId);
         var getResp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         getResp.EnsureSuccessStatusCode();
 
@@ -584,7 +585,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         await PutVariableAsync(client, runId, "summary", "final");
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/variables");
-        get.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        get.ActAsRun(factory.Services, runId);
         var arr = JsonDocument.Parse(await (await client.SendAsync(get, TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal(1, arr.GetArrayLength());
         Assert.Equal("final", arr[0].GetProperty("value").GetString());
@@ -600,7 +601,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { value = "x" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        put.ActAsRun(factory.Services, runId);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
@@ -618,7 +619,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { value = "x" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        put.ActAsRun(factory.Services, runId);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
@@ -632,7 +633,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { value = "x" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
+        put.ActAsRun(factory.Services, Guid.NewGuid());
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
@@ -741,7 +742,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, document);
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
-        get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        get.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -757,7 +758,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var chatSessionId = await SeedChatSessionAsync(factory);
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
-        get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        get.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -782,14 +783,14 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var unknown = Guid.NewGuid().ToString();
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
-        get.Headers.Add("X-ILD-Chat-Session-Id", unknown);
+        get.ActAsChat(factory.Services, Guid.Parse(unknown));
         Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(get, TestContext.Current.CancellationToken)).StatusCode);
 
         var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/current-loop")
         {
             Content = JsonContent.Create(new { document = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"x\",\"nodes\":[]}" }),
         };
-        put.Headers.Add("X-ILD-Chat-Session-Id", unknown);
+        put.ActAsChat(factory.Services, Guid.Parse(unknown));
         Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(put, TestContext.Current.CancellationToken)).StatusCode);
     }
 
@@ -815,7 +816,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { document = ValidLoopDocument }),
         };
-        put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        put.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -841,7 +842,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
                 document = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Broken\",\"nodes\":[],\"edges\":[]}",
             }),
         };
-        put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        put.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -863,7 +864,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { field = "prompt", oldString = "Review the code.", newString = "Review the code thoroughly." }),
         };
-        post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        post.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(post, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -888,7 +889,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { field = "prompt", oldString = "nowhere in the prompt", newString = "x" }),
         };
-        post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        post.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(post, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -906,7 +907,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop/nodes/ai");
-        get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        get.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -922,7 +923,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var chatSessionId = await SeedChatSessionAsync(factory);
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop/nodes/ai");
-        get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        get.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -941,7 +942,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { oldString = "\"targetNodeId\":\"ai\"", newString = "\"targetNodeId\":\"nowhere\"" }),
         };
-        post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        post.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(post, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -961,7 +962,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { field = "prompt", oldString = "a", newString = "b" }),
         };
-        post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        post.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(post, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
@@ -980,7 +981,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { document = "" }),
         };
-        put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        put.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
@@ -997,7 +998,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         {
             Content = JsonContent.Create(new { document = huge }),
         };
-        put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        put.ActAsChat(factory.Services, chatSessionId);
         var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
@@ -1049,14 +1050,14 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         var client = await ownHost.CreateAuthenticatedClientAsync();
         var repoId = await SeedRepositoryAsync(ownHost, intake: WorkItemStatus.Backlog);
         var runId = Guid.NewGuid();
-        var older = await CreateAsync(client, "older", runId, repoId);
-        var newer = await CreateAsync(client, "newer", runId, repoId);
+        var older = await CreateAsync(client, "older", runId, repoId, services: ownHost.Services);
+        var newer = await CreateAsync(client, "newer", runId, repoId, services: ownHost.Services);
         // Renaming the older item makes it the most recently updated.
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{older}")
         {
             Content = JsonContent.Create(new { title = "older, renamed" }),
         };
-        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        put.ActAsRun(ownHost.Services, runId);
         (await client.SendAsync(put, TestContext.Current.CancellationToken)).EnsureSuccessStatusCode();
 
         var rows = await client.GetFromJsonAsync<JsonElement>("/api/v1/agent/workitems?orderBy=priority", TestContext.Current.CancellationToken);
@@ -1319,13 +1320,13 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         return (run.Id, workItemId);
     }
 
-    private static async Task PutVariableAsync(HttpClient client, Guid runId, string name, string value)
+    private async Task PutVariableAsync(HttpClient client, Guid runId, string name, string value)
     {
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/variables/{name}")
         {
             Content = JsonContent.Create(new { value }),
         };
-        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        put.ActAsRun(factory.Services, runId);
         (await client.SendAsync(put)).EnsureSuccessStatusCode();
     }
 
@@ -1376,15 +1377,15 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         return run.Id;
     }
 
-    private static async Task<string> CreateAsync(
-        HttpClient client, string title, Guid? runId, Guid repositoryId, string? branchNameOverride = null)
+    private async Task<string> CreateAsync(
+        HttpClient client, string title, Guid? runId, Guid repositoryId, string? branchNameOverride = null, IServiceProvider? services = null)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
         {
             Content = JsonContent.Create(new { title, description = "", repositoryId = repositoryId.ToString(), branchNameOverride })
         };
         if (runId.HasValue)
-            req.Headers.Add("X-ILD-Run-Id", runId.Value.ToString());
+            req.ActAsRun(services ?? factory.Services, runId.Value);
         var resp = await client.SendAsync(req);
         resp.EnsureSuccessStatusCode();
         var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());

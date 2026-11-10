@@ -47,7 +47,7 @@ public class WorkItemPageApiTests
         public HttpClient Agent()
         {
             var client = Factory.CreateClient();
-            var token = Factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+            var token = Factory.Services.IssueAgentToken();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             return client;
         }

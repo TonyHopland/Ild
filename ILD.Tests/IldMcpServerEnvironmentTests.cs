@@ -41,6 +41,19 @@ public sealed class IldMcpServerEnvironmentTests : IDisposable
         Assert.Equal(runId.ToString(), env["ILD_LOOP_RUN_ID"]);
     }
 
+    [Fact]
+    public void A_launch_gets_its_own_token_and_never_the_one_in_the_process_environment()
+    {
+        var inner = new TestProcessEnvironment { { "ILD_API_TOKEN", "process-wide" } };
+        var host = new Moq.Mock<ILD.Core.Services.RunHosts.IRunHost>().Object;
+
+        var launch = IldMcpServer.BuildEnvironment(Run(Guid.NewGuid()), environment: new RunFacingEnvironment(inner, host, "/tmp", "launch-token"));
+        var tokenless = IldMcpServer.BuildEnvironment(Run(Guid.NewGuid()), environment: new RunFacingEnvironment(inner, host, "/tmp"));
+
+        Assert.Equal("launch-token", launch["ILD_API_TOKEN"]);
+        Assert.False(tokenless.ContainsKey("ILD_API_TOKEN"));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
