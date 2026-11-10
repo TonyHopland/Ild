@@ -60,7 +60,7 @@ public sealed class ProtectedDestinationSourceTests : IDisposable
 
         var entries = await source.GetAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal([ProtectedDestination.Ild], entries.Select(e => e.Id));
+        Assert.Equal([ProtectedDestination.Ild, ProtectedDestination.LinkLocal], entries.Select(e => e.Id));
     }
 
     [Fact]

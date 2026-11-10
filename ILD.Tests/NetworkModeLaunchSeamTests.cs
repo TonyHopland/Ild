@@ -71,7 +71,9 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     {
         var psi = Prepare(new ProcessStartInfo("claude"), Execution(mode));
 
-        Assert.StartsWith("http://provider:", psi.Environment["HTTPS_PROXY"]);
+        Assert.StartsWith("http://ild:", psi.Environment["HTTPS_PROXY"]);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressCredentials.Current, psi.Environment["HTTPS_PROXY"]!, out var scope));
+        Assert.NotNull(scope.Provider);
         Assert.EndsWith("@127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
         Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
     }
@@ -126,7 +128,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     [InlineData(NetworkMode.Monitor)]
     [InlineData(NetworkMode.Whitelist)]
     public async Task A_Cmd_node_runs_proxied_in_every_other_mode(NetworkMode mode)
-        => Assert.Equal("http://127.0.0.1:3128", (await RunCmdNodeAsync(EgressPolicies.Reporting(mode))).Trim());
+        => AssertUnscopedProxy(await RunCmdNodeAsync(EgressPolicies.Reporting(mode)));
 
     // What an isolated host reads to leave the proxy off (and open the direct route) for a command it runs in the run's own environment.
     [Theory]
@@ -155,7 +157,14 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
 
     [Fact]
     public async Task A_Cmd_node_without_a_policy_runs_proxied_as_Monitor()
-        => Assert.Equal("http://127.0.0.1:3128", (await RunCmdNodeAsync(null)).Trim());
+        => AssertUnscopedProxy(await RunCmdNodeAsync(null));
+
+    private static void AssertUnscopedProxy(string url)
+    {
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressCredentials.Current, url.Trim(), out var scope));
+        Assert.Equal(new LaunchScope(), scope);
+        Assert.EndsWith("@127.0.0.1:3128", url.Trim());
+    }
 
     private async Task<string> RunTerminalAsync(IEgressPolicy? policy)
     {
