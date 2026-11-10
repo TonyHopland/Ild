@@ -148,8 +148,7 @@ public class RepositoryManagerHookIsolationTests : IDisposable
         var ran = entries.Select(e => e.Name).ToHashSet();
         Assert.Contains("pre-commit", ran);
         Assert.Contains("filter", ran);
-        // No textconv: ILD asks only whether the tree differs and never reads the diff, so nothing converts it.
-        Assert.DoesNotContain("textconv", ran);
+        // Whether git runs textconv for `diff --quiet` depends on its version; when it does, it is agent-scoped like the rest (asserted above).
         Assert.Contains("pre-push", ran);
     }
 
