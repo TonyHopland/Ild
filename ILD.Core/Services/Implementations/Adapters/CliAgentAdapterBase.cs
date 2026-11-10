@@ -153,13 +153,18 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// <see cref="AgentExecutionContext.Environment"/> set over <paramref name="environment"/>, and the <see cref="AgentExecutionContext.NetworkMode"/> that
     /// decides whether the child is proxied (ADR-0019).
     /// </param>
-    protected Task<IRunProcess> StartAgentProcessAsync(
+    protected async Task<IRunProcess> StartAgentProcessAsync(
         ProcessStartInfo psi, AgentExecutionContext ctx, IReadOnlyDictionary<string, string?>? environment = null, IEnumerable<string?>? agentFiles = null)
-        => RunHost.StartCommandAsync(
-            RunCommand.Agent(
-                psi, OwnerOf(ctx), ctx.Provider.Id, ctx.NetworkMode, WithExecutionEnvironment(environment, ctx),
-                (ctx.AgentFiles ?? []).Concat(agentFiles ?? []).Where(file => !string.IsNullOrEmpty(file)).Select(file => file!).ToList()) with { RunIn = RunPaths.HolderOf(psi.WorkingDirectory) ?? OwnerOf(ctx) },
-            ctx.Cancel);
+        => new OutputCappedRunProcess(
+            await RunHost.StartCommandAsync(
+                RunCommand.Agent(
+                    psi, OwnerOf(ctx), ctx.Provider.Id, ctx.NetworkMode, WithExecutionEnvironment(environment, ctx),
+                    (ctx.AgentFiles ?? []).Concat(agentFiles ?? []).Where(file => !string.IsNullOrEmpty(file)).Select(file => file!).ToList()) with { RunIn = RunPaths.HolderOf(psi.WorkingDirectory) ?? OwnerOf(ctx) },
+                ctx.Cancel),
+            AgentOutputLimit);
+
+    /// <summary>The most one launch's CLI may write to either of its output streams before it is killed.</summary>
+    internal long AgentOutputLimit { get; init; } = RunReadLimits.FromEnvironment().MaxAgentOutputBytes;
 
     // The execution's environment is set over the adapter's.
     private static Dictionary<string, string?> WithExecutionEnvironment(IReadOnlyDictionary<string, string?>? adapter, AgentExecutionContext ctx)
