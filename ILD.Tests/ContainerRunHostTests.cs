@@ -343,7 +343,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         _api.OnExec = async e =>
         {
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
-            if (e.Command.Any(c => c.Contains("/dev/tcp/", StringComparison.Ordinal))) await e.WriteStdoutAsync("1\n");
+            if (e.Command.Any(c => c.Contains("/dev/tcp/$1/$2", StringComparison.Ordinal))) await e.WriteStdoutAsync("1\n");
             await e.ExitAsync(0);
         };
         await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
@@ -1048,7 +1048,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         return (probe, () => Volatile.Read(ref asked));
     }
 
-    private int DirectConnects() => _api.Execs.Count(e => e.Command.Any(c => c.Contains("/dev/tcp/", StringComparison.Ordinal)));
+    private int DirectConnects() => _api.Execs.Count(e => e.Command.Any(c => c.Contains("/dev/tcp/$1/$2", StringComparison.Ordinal)));
 
     [Fact]
     public async Task The_first_proxied_chat_command_probes_the_chat_container_and_a_second_within_the_interval_does_not()
@@ -1057,7 +1057,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         _api.OnExec = async e =>
         {
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
-            if (e.Command.Any(c => c.Contains("/dev/tcp/", StringComparison.Ordinal))) await e.WriteStdoutAsync("1\n");
+            if (e.Command.Any(c => c.Contains("/dev/tcp/$1/$2", StringComparison.Ordinal))) await e.WriteStdoutAsync("1\n");
             await e.ExitAsync(0);
         };
         var first = Guid.NewGuid();

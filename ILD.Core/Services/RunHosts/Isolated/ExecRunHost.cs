@@ -46,6 +46,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         dir=$1; id=$2; envfile=$3; pathprefix=$4; shift 4
         cd -- "$dir" || { [ -z "$envfile" ] || rm -f -- "$envfile"; exit 126; }
         {{EnvironmentPrologue}}
+        {{EgressRelayScript}}
         mkdir -p -- "{{RunPaths.ProcessDirectory}}/${id%/*}"
         exec setsid -w sh -c 'f={{RunPaths.ProcessDirectory}}/$1; shift; echo $$ > "$f"; "$@"; rc=$?; rm -f -- "$f"; exit $rc' sh "$id" "$@"
         """;
@@ -53,6 +54,48 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private const string EnvironmentPrologue = """
         if [ -n "$envfile" ]; then . "$envfile"; rm -f -- "$envfile"; fi
         if [ -n "$pathprefix" ]; then PATH="$pathprefix:$PATH"; export PATH; fi
+        """;
+
+    /// <summary>
+    /// Puts a relay on the environment's own loopback between a launch and ILD's egress proxy, and points the launch's proxy variables at it.
+    /// The relay adds the launch's proxy credential to each request, so a client that sends none (a browser, a JVM) is still the launch's
+    /// to the proxy. One relay per credential, kept for the next launch that holds the same one. Without socat or bash the variables stay
+    /// as they are, naming the proxy with the credential.
+    /// </summary>
+    internal const string EgressRelayScript = $$"""
+        case "${HTTP_PROXY:-}" in "http://{{ILD.Core.Services.Implementations.Network.EgressCredentials.User}}:"*@*)
+            relay_dir="${ILD_EGRESS_RELAY_DIR:-{{RunPaths.StateDirectory}}/egress}"
+            relay_to="${HTTP_PROXY#http://}"; relay_to="${relay_to%/}"
+            if command -v socat >/dev/null 2>&1 && command -v bash >/dev/null 2>&1 && mkdir -p -- "$relay_dir" 2>/dev/null; then
+                relay_key=$(printf %s "$relay_to" | cksum | cut -d" " -f1)
+                exec 9>"$relay_dir/lock"; flock 9 2>/dev/null
+                relay_pid=$(cat "$relay_dir/$relay_key.pid" 2>/dev/null); relay_port=$(cat "$relay_dir/$relay_key.port" 2>/dev/null)
+                if [ -z "$relay_pid" ] || [ -z "$relay_port" ] || ! grep -qs socat "/proc/$relay_pid/cmdline"; then
+                    [ -f "$relay_dir/relay.sh" ] || printf "%s\n" 'IFS= read -r -t 30 line || exit 0
+        exec 3<>"/dev/tcp/${ILD_RELAY_UPSTREAM%:*}/${ILD_RELAY_UPSTREAM##*:}" || exit 0
+        printf "%s\nProxy-Authorization: Basic %s\r\n" "$line" "$ILD_RELAY_AUTH" >&3
+        exec socat STDIO FD:3' > "$relay_dir/relay.sh"
+                    relay_port=$(( 20000 + relay_key % 10000 )); relay_try=0; relay_up=
+                    while [ -z "$relay_up" ] && [ "$relay_try" -lt 20 ]; do
+                        if ! bash -c "exec 3<>/dev/tcp/127.0.0.1/$relay_port" 2>/dev/null; then
+                            ILD_RELAY_AUTH=$(printf %s "${relay_to%%@*}" | base64 -w0) ILD_RELAY_UPSTREAM="${relay_to#*@}" setsid socat "TCP-LISTEN:$relay_port,bind=127.0.0.1,reuseaddr,fork" "EXEC:bash $relay_dir/relay.sh,nofork" </dev/null >/dev/null 2>&1 9>&- &
+                            relay_pid=$!; relay_wait=0
+                            while kill -0 "$relay_pid" 2>/dev/null && [ "$relay_wait" -lt 40 ]; do
+                                if bash -c "exec 3<>/dev/tcp/127.0.0.1/$relay_port" 2>/dev/null; then relay_up=1; break; fi
+                                sleep 0.05; relay_wait=$((relay_wait+1))
+                            done
+                            [ -n "$relay_up" ] || kill "$relay_pid" 2>/dev/null
+                        fi
+                        [ -n "$relay_up" ] || { relay_port=$((relay_port+1)); relay_try=$((relay_try+1)); }
+                    done
+                    if [ -n "$relay_up" ]; then echo "$relay_pid" > "$relay_dir/$relay_key.pid"; echo "$relay_port" > "$relay_dir/$relay_key.port"; else relay_port=; fi
+                fi
+                exec 9>&-
+                if [ -n "$relay_port" ]; then
+                    for relay_var in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do export "$relay_var=http://127.0.0.1:$relay_port"; done
+                fi
+            fi ;;
+        esac
         """;
 
     /// <summary>
@@ -127,23 +170,25 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <c>&lt;address&gt;:&lt;destination port&gt;</c>, so a client that connects to the forward's real name and port reaches it
     /// and a TLS client checks the certificate against that name. Idempotent: a relay that is running for the same
     /// destination is left alone, one for a changed or deleted forward is stopped. Arguments: the proxy's host and
-    /// port, then local port, host, port and address (<c>-</c> for none) per forward.
+    /// port, then local port, host, port and address (<c>-</c> for none) per forward. Stdin: the proxy credential
+    /// (<c>user:token</c>) the relays present, which is never an argument; nothing for none.
     /// </summary>
     internal const string ForwardsScript = """
         dir="${ILD_FORWARDS_DIR:-/tmp/ild-forwards}"; mkdir -p "$dir"
         proxy_host=$1; proxy_port=$2; shift 2
+        proxy_auth=; IFS= read -r -t 5 proxy_auth || true
         want=" "
         relay() {
             key=$1; bind=$2; listen=$3; spec=$4
             want="$want$key "
             if [ -f "$dir/$key.pid" ] && kill -0 "$(cat "$dir/$key.pid")" 2>/dev/null \
-                && [ "$(cat "$dir/$key.spec" 2>/dev/null)" = "$spec" ]; then
+                && [ "$(cat "$dir/$key.spec" 2>/dev/null)" = "$spec${proxy_auth:+ auth}" ]; then
                 return
             fi
             [ -f "$dir/$key.pid" ] && kill "$(cat "$dir/$key.pid")" 2>/dev/null
             setsid socat "TCP-LISTEN:$listen,bind=$bind,reuseaddr,fork" \
-                "PROXY:$proxy_host:$spec,proxyport=$proxy_port" </dev/null >/dev/null 2>&1 &
-            echo "$!" > "$dir/$key.pid"; echo "$spec" > "$dir/$key.spec"
+                "PROXY:$proxy_host:$spec,proxyport=$proxy_port${proxy_auth:+,proxyauth=$proxy_auth}" </dev/null >/dev/null 2>&1 &
+            echo "$!" > "$dir/$key.pid"; echo "$spec${proxy_auth:+ auth}" > "$dir/$key.spec"
         }
         while [ "$#" -ge 4 ]; do
             local_port=$1; host=$2; port=$3; addr=$4; shift 4
@@ -219,7 +264,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             var addresses = await MapForwardHostsAsync(owner, forwards, ct);
             foreach (var f in forwards)
                 arguments.AddRange([f.LocalPort.ToString(System.Globalization.CultureInfo.InvariantCulture), f.Host, f.Port.ToString(System.Globalization.CultureInfo.InvariantCulture), addresses.GetValueOrDefault(f.Host, "-")]);
-            var result = await RunScriptAsync(owner, ForwardsScript, arguments, ct);
+            var result = await RunForwardsScriptAsync(owner, arguments, ct);
             if (result.ExitCode != 0)
                 Logger?.LogWarning("Could not start the forwards in the {Noun} of {Owner}: {Error}", Noun, owner.Id, result.StdErr.Trim());
             if (forwards.Count > 0) _forwarded[owner] = true; else _forwarded.TryRemove(owner, out _);
@@ -228,6 +273,15 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         {
             Logger?.LogWarning(ex, "Could not start the forwards in the {Noun} of {Owner}", Noun, owner.Id);
         }
+    }
+
+    private async Task<RunHostOutput> RunForwardsScriptAsync(ExecOwner owner, List<string> arguments, CancellationToken ct)
+    {
+        if (EgressProxyPort <= 0) return await RunScriptAsync(owner, ForwardsScript, arguments, ct);
+        var scope = new ILD.Core.Services.Implementations.Network.LaunchScope(
+            owner.Chat ? ILD.Core.Services.Implementations.Network.LaunchKind.Chat : ILD.Core.Services.Implementations.Network.LaunchKind.Run, owner.Id);
+        using var credential = new MemoryStream(Encoding.UTF8.GetBytes($"{ILD.Core.Services.Implementations.Network.EgressCredentials.User}:{Credentials.Mint(scope)}\n"));
+        return await ExecAsync(owner, IldScript("/bin/bash", ForwardsScript, arguments.ToArray()), credential, null, ct);
     }
 
     /// <summary>

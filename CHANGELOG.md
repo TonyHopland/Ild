@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The browser, Java tools and declared forwards in a run or chat reach the network through the egress proxy again.**
 - **Chats and runs whose container network was made by an earlier version reach the network again, and show in the Network Log.**
 - **Copilot runs and chats in containers and pods can reach the model gateway and trust its certificate.**
 - **Network mode `off` gives runs a direct network route again** (any host, port and protocol, with no proxy variables), in containers and pods as ADR-0019 says; Settings → Network shows which runs have one.

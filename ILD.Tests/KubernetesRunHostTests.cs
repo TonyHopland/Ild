@@ -1272,7 +1272,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         {
             // What the API server logs for an exec is its URL: the pod, the container and the command's arguments.
             Assert.DoesNotContain(credential, exec.Joined, StringComparison.Ordinal);
-            Assert.DoesNotContain("HTTPS_PROXY", exec.Joined, StringComparison.Ordinal);
+            Assert.DoesNotContain("HTTPS_PROXY=", exec.Joined, StringComparison.Ordinal);
         }
     }
 

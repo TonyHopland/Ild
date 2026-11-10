@@ -39,11 +39,12 @@ public sealed class ExecRunHostForwardsRealShellTests : IDisposable
 
     private void Bash(string script, params string[] arguments)
     {
-        var psi = new ProcessStartInfo("bash") { RedirectStandardError = true };
+        var psi = new ProcessStartInfo("bash") { RedirectStandardInput = true, RedirectStandardError = true };
         foreach (var a in new[] { "-c", script, "bash" }.Concat(arguments)) psi.ArgumentList.Add(a);
         psi.Environment["ILD_FORWARDS_DIR"] = Path.Combine(_dir, "state");
         psi.Environment["ILD_HOSTS_FILE"] = Path.Combine(_dir, "hosts");
         using var process = Process.Start(psi)!;
+        process.StandardInput.Close();
         var error = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, error.Result);

@@ -101,15 +101,19 @@ public sealed class ExecRunHostForwardsScriptTests : IDisposable
         catch (System.ComponentModel.Win32Exception) { return false; }
     }
 
-    private void Run(params string[] arguments)
+    private void Run(params string[] arguments) => RunAs(null, arguments);
+
+    private void RunAs(string? credential, params string[] arguments)
     {
         Assert.SkipUnless(OperatingSystem.IsLinux() && Has("setsid"), "needs Linux with bash and setsid");
-        var psi = new ProcessStartInfo("bash") { RedirectStandardOutput = true, RedirectStandardError = true };
+        var psi = new ProcessStartInfo("bash") { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in new[] { "-c", ExecRunHost.ForwardsScript, "bash", "ild", "3128" }.Concat(arguments)) psi.ArgumentList.Add(a);
         psi.Environment["PATH"] = $"{Bin}:{Environment.GetEnvironmentVariable("PATH")}";
         psi.Environment["ILD_FORWARDS_DIR"] = State;
         psi.Environment["FAKE_LOG"] = Log;
         using var process = Process.Start(psi)!;
+        if (credential is not null) process.StandardInput.Write(credential + "\n");
+        process.StandardInput.Close();
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
         // The relays write their arguments as they start.
@@ -137,6 +141,22 @@ public sealed class ExecRunHostForwardsScriptTests : IDisposable
     {
         try { return !Process.GetProcessById(pid).HasExited; }
         catch (ArgumentException) { return false; }
+    }
+
+    [Fact]
+    public void A_relay_presents_the_credential_given_on_stdin_and_one_started_without_it_is_replaced()
+    {
+        Run("15432", "postgres", "5432", "-");
+        var without = Pid(15432);
+
+        RunAs("ild:token", "15432", "postgres", "5432", "-");
+
+        Assert.False(Alive(without));
+        for (var i = 0; i < 50 && Started().Length < 2; i++) Thread.Sleep(50);
+        Assert.Equal("TCP-LISTEN:15432,bind=127.0.0.1,reuseaddr,fork PROXY:ild:postgres:5432,proxyport=3128,proxyauth=ild:token", Started()[^1]);
+        var with = Pid(15432);
+        RunAs("ild:token", "15432", "postgres", "5432", "-");
+        Assert.Equal(with, Pid(15432));
     }
 
     [Fact]
