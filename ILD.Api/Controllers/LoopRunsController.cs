@@ -297,12 +297,21 @@ public class LoopRunsController : ControllerBase
         return Ok();
     }
 
+    private async Task<IActionResult?> PredatesContainersAsync(Guid runId)
+    {
+        var run = await _loopRunStore.GetByIdAsync(runId);
+        return run is not null && PredatesContainersException.Applies(HttpContext.RequestServices.GetRunHost(), run.WorktreePath)
+            ? BadRequest(new { error = PredatesContainersException.Text })
+            : null;
+    }
+
     [HttpPost("{id}/resume")]
     public async Task<IActionResult> Resume(string id)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
+        if (await PredatesContainersAsync(guid) is { } refusal) return refusal;
         await _loopEngine.ResumeRunAsync(guid);
         return Ok();
     }
@@ -338,6 +347,7 @@ public class LoopRunsController : ControllerBase
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
+        if (await PredatesContainersAsync(guid) is { } refusal) return refusal;
         await _loopEngine.ResumeFromHaltAsync(guid, request?.Note);
         return Ok();
     }
@@ -410,6 +420,8 @@ public class LoopRunsController : ControllerBase
             return BadRequest(new { error = "Invalid run GUID" });
         if (!Guid.TryParse(runNodeId, out var nodeGuid))
             return BadRequest(new { error = "Invalid run node GUID" });
+
+        if (await PredatesContainersAsync(runGuid) is { } refusal) return refusal;
 
         try
         {
@@ -584,6 +596,8 @@ public class LoopRunsController : ControllerBase
         string? refusal = null;
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             refusal = "The terminal opens once the run stops executing: it is parked, done or failed.";
+        else if (PredatesContainersException.Applies(HttpContext.RequestServices.GetRunHost(), run.WorktreePath))
+            refusal = PredatesContainersException.Text;
         else if (string.IsNullOrWhiteSpace(run.WorktreePath) || !await HttpContext.RequestServices.GetRunHost().DirectoryExistsAsync(run.WorktreePath, HttpContext.RequestAborted))
             refusal = "The run has no worktree any more: it was cleaned up.";
         if (refusal is not null)

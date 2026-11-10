@@ -1338,7 +1338,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_command_with_no_working_directory_goes_to_the_run_it_is_for_and_an_unknown_owner_stays_local()
+    public async Task A_command_with_no_working_directory_goes_to_the_run_it_is_for_and_an_unknown_owner_is_refused()
     {
         await CreateRunAsync();
         var local = new FakeRunHost();
@@ -1350,9 +1350,96 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Empty(local.Started);
         Assert.Equal(Name(_run), _api.Execs.Last().Container);
 
-        using var elsewhere = await routing.StartCommandAsync(
-            RunCommand.Prepared(Command("", "ls"), Guid.NewGuid()), TestContext.Current.CancellationToken);
-        Assert.Single(local.Started);
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(
+            RunCommand.Prepared(Command("", "ls"), Guid.NewGuid()), TestContext.Current.CancellationToken));
+        Assert.Empty(local.Started);
+    }
+
+    // -- Runs and chats from before containers: read and deleted, never run ------
+
+    private static readonly string[] OldPaths = ["/worktrees/ild/old-run/repo", "/data/chat-sessions/11111111111111111111111111111111"];
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task An_agent_launch_for_a_path_on_ilds_disk_starts_nothing_on_ilds_machine(int which)
+    {
+        await CreateRunAsync();
+        var local = new FakeRunHost();
+        var routing = new RoutingRunHost(local, _host);
+        var execs = _api.Execs.Count;
+        var agent = RunCommand.Agent(Command(OldPaths[which], "claude"), _run, null, NetworkMode.Monitor, null) with { RunIn = RunPaths.HolderOf(OldPaths[which]) ?? _run };
+
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(agent, TestContext.Current.CancellationToken));
+
+        Assert.Empty(local.Started);
+        Assert.Equal(execs, _api.Execs.Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task A_command_without_a_run_for_a_path_on_ilds_disk_starts_nothing_on_ilds_machine(int which)
+    {
+        var local = new FakeRunHost();
+        var routing = new RoutingRunHost(local, _host);
+
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(
+            RunCommand.Prepared(Command(OldPaths[which], "git"), Guid.NewGuid()), TestContext.Current.CancellationToken));
+
+        Assert.Empty(local.Started);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task A_terminal_a_tool_and_a_bundle_for_a_path_on_ilds_disk_are_refused_and_reach_no_host(int which)
+    {
+        var local = new FakeRunHost();
+        var routing = new RoutingRunHost(local, _host);
+        var path = OldPaths[which];
+        var ct = TestContext.Current.CancellationToken;
+
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.OpenTerminalAsync(new Porta.Pty.PtyOptions { Cwd = path, App = "sh" }, ct));
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.RunToolAsync(path, "git", ["status"], null, ct));
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.PushBundleAsync(path, "origin", new MemoryStream(), ct));
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.FetchBundleAsync(path, new MemoryStream(), ct));
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.PullBundleAsync(path, "main", false, new MemoryStream(), ct));
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.AddChatToolsAsync(path, "/base", ct));
+        Assert.Throws<PredatesContainersException>(() => routing.HoldChat(path));
+
+        Assert.Empty(local.Started);
+    }
+
+    [Fact]
+    public async Task A_title_launch_in_a_chats_folder_under_a_run_id_of_its_own_still_goes_to_the_isolated_host()
+    {
+        var chat = Guid.NewGuid();
+        var routing = new RoutingRunHost(new FakeRunHost(), _host);
+        await routing.CreateChatFolderAsync(chat, "/unused", TestContext.Current.CancellationToken);
+        var folder = ChatFolder(chat);
+
+        using var process = await routing.StartCommandAsync(
+            RunCommand.Agent(Command(folder, "claude"), Guid.NewGuid(), null, NetworkMode.Monitor, null) with { RunIn = RunPaths.HolderOf(folder) },
+            TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ChatContainer, _api.Execs.Last().Container);
+    }
+
+    [Fact]
+    public async Task Reading_and_deleting_on_ilds_disk_still_reach_the_local_host()
+    {
+        var local = new FakeRunHost();
+        var routing = new RoutingRunHost(local, _host);
+        var ct = TestContext.Current.CancellationToken;
+
+        var notes = OldPaths[0] + "/notes.md";
+        await local.WriteFileAsync(notes, "history", ct);
+
+        Assert.Equal("history", await routing.ReadTextFileAsync(notes, ct));
+        Assert.True(await routing.DeleteAsync([OldPaths[0], notes], ct));
+        Assert.Null(await local.ReadTextFileAsync(notes, ct));
     }
 
     // -- Commands that must run in a run, and where a preview's files are -------

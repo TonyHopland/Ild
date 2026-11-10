@@ -151,6 +151,9 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         if (!await ChatExistsAsync(job.ChatSessionId, ct))
             return ChatDeleted();
 
+        if (PredatesContainersException.Applies(_host, job.ScratchPath))
+            return Refused(ChatRepositoryCloneOutcome.CloneFailed, PredatesContainersException.Text);
+
         string basePath;
         using (await BaseRepoClone.LockAsync(job.Repo.Id, ct))
         {

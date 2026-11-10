@@ -1430,7 +1430,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     private static FakeRunHost FakeLocal() => new();
 
     [Fact]
-    public async Task Chats_and_other_paths_stay_on_the_local_host_and_loop_runs_go_to_the_pod()
+    public async Task Paths_on_ilds_disk_are_read_locally_but_never_run_and_loop_runs_go_to_the_pod()
     {
         await CreateRunAsync();
         _api.Execs.Clear();
@@ -1442,8 +1442,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Empty(_api.Execs);
 
         var chatCommand = RunCommand.Prepared(Command("/data/chat-sessions/c1", "git", "status"), chat);
-        using var chatProcess = await routing.StartCommandAsync(chatCommand, TestContext.Current.CancellationToken);
-        Assert.Same(chatCommand, Assert.Single(local.Started));
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(chatCommand, TestContext.Current.CancellationToken));
+        Assert.Empty(local.Started);
         Assert.Empty(_api.Execs);
 
         await routing.DirectoryExistsAsync(WorkingDirectory, TestContext.Current.CancellationToken);

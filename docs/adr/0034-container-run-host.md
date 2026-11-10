@@ -28,7 +28,7 @@ With `ILD_RUN_HOST=container`, chats do not run in ILD's own container either. O
 - **Made on first use** and again when it is missing or stopped; the volume keeps the chats' folders. It carries no run label, so the sweeper never takes it for a run's. After ILD's own container is recreated, `CheckAsync` puts ILD back on its network at the address the container was given.
 - **Code goes in as a bundle**: ILD bundles the branch from its own base clone under a temporary branch, the container fetches it, and the chat's clone points `origin/<branch>` at it. The marker, fast-forward-only update and refusal rules are the same as for a chat on local disk.
 - **Toolchains per chat**: the repositories a chat clones are detected from ILD's base clones and installed into the store; the chat's commands get `PATH` and variables for them. Which toolchains a chat has is kept on ILD's side, not in the chat's folder, which the chat's agent can write and which would otherwise let it ask the store to install anything. When two repositories want different versions of a tool, the first one cloned wins.
-- **Chats made before the switch keep running on local disk.**
+- **Chats made before the switch are read-only.** They were first meant to keep running on local disk, back when that meant a second uid; ADR-0036 removed it, so a command there would run as ILD in ILD's container. A turn on such a chat, or a resume, retry or terminal of a run whose worktree is on ILD's disk, is refused with a message that it predates containers and has to be started again. Reading its history and deleting it keep working.
 
 ### On Kubernetes
 

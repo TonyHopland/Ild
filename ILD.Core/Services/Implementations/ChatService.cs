@@ -254,6 +254,13 @@ public sealed class ChatService : IChatService
             await _notifier.UnreadChangedAsync(session.UserId, chatSessionId);
         await _notifier.MessageAppendedAsync(chatSessionId, turnId, ToView(userEntry));
 
+        if (PredatesContainersException.Applies(_runHost, session.ScratchPath))
+        {
+            await FinalizeAssistantAsync(session, turnId, nextSeq + 1, $"[chat-error] {PredatesContainersException.Text}", interrupted: false, newSessionId: null, ct);
+            await EndScheduledFiringAsync(session, turnId, PredatesContainersException.Text);
+            return;
+        }
+
         var provider = await _providers.GetAiProviderByIdAsync(session.AiProviderId);
         if (provider is null)
         {
