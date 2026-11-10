@@ -41,7 +41,7 @@ internal sealed class PlainHttpExchange
     /// Client to upstream: the body read along with the head, then the rest of
     /// it, and nothing after it unless the upstream switched protocols.
     /// </summary>
-    public async Task CopyRequestAsync(NetworkStream client, NetworkStream upstream, CancellationToken ct)
+    public async Task CopyRequestAsync(NetworkStream client, NetworkStream upstream, CancellationToken ct, Action touch)
     {
         var buffer = new byte[81920];
         ReadOnlyMemory<byte> pending = _head.AsMemory(_request.BodyStart);
@@ -55,6 +55,7 @@ internal sealed class PlainHttpExchange
 
             var read = await client.ReadAsync(buffer, ct).ConfigureAwait(false);
             if (read == 0) return;
+            touch();
             pending = buffer.AsMemory(0, read);
         }
 
@@ -62,13 +63,13 @@ internal sealed class PlainHttpExchange
         {
             if (!pending.IsEmpty)
                 await upstream.WriteAsync(pending, ct).ConfigureAwait(false);
-            await client.CopyToAsync(upstream, ct).ConfigureAwait(false);
+            await EgressRelay.CopyAsync(client, upstream, ct, touch).ConfigureAwait(false);
             return;
         }
 
         // Read to the client's EOF rather than stop reading: closing a socket with
         // unread data resets it, which can cut off a response not yet read.
-        while (await client.ReadAsync(buffer, ct).ConfigureAwait(false) > 0) { }
+        while (await client.ReadAsync(buffer, ct).ConfigureAwait(false) > 0) touch();
     }
 
     /// <summary>
@@ -76,7 +77,7 @@ internal sealed class PlainHttpExchange
     /// close, then the body as it arrives. An upstream that sends no valid head
     /// gets the client a <c>502</c> and ends the relay.
     /// </summary>
-    public async Task CopyResponseAsync(NetworkStream upstream, NetworkStream client, CancellationToken ct)
+    public async Task CopyResponseAsync(NetworkStream upstream, NetworkStream client, CancellationToken ct, Action touch)
     {
         try
         {
@@ -89,6 +90,7 @@ internal sealed class PlainHttpExchange
                 {
                     var read = filled < buffer.Length ? await upstream.ReadAsync(buffer.AsMemory(filled), ct).ConfigureAwait(false) : 0;
                     if (read == 0) throw await BadGatewayAsync(client, ct).ConfigureAwait(false);
+                    touch();
                     filled += read;
                 }
                 headLength += 4;
@@ -119,7 +121,7 @@ internal sealed class PlainHttpExchange
                         await client.WriteAsync(buffer.AsMemory(headLength, filled - headLength), ct).ConfigureAwait(false);
                     _switched.TrySetResult(false);
                 }
-                await upstream.CopyToAsync(client, ct).ConfigureAwait(false);
+                await EgressRelay.CopyAsync(upstream, client, ct, touch).ConfigureAwait(false);
                 return;
             }
         }

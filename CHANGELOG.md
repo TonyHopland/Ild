@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A run can no longer exhaust or stop ILD's egress proxy by opening many connections.** The proxy and the forwarders cap open connections per source and in total, close one that sends no request or sits idle, and keep accepting after an accept fails.
 - **ILD stops reading what a run produces at a limit**, so a run can no longer exhaust ILD's memory or disk with a huge file, output, bundle or preview-data copy; the limits are `ILD_MAX_RUN_FILE_MB`, `ILD_MAX_RUN_OUTPUT_MB`, `ILD_MAX_BUNDLE_MB` and `ILD_MAX_PREVIEW_DATA_MB`.
 - **An agent can no longer act as another run or chat, or reach another run's work item.** Each run and chat turn gets its own token, which stops working when it ends.
 - **Chats and runs made before containers can no longer be run again.** A new turn, a resume, a retry or a terminal on one is refused and says to start a new one; reading and deleting them still work.
