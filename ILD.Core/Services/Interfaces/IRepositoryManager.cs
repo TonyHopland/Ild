@@ -203,6 +203,11 @@ public interface IRepositoryManager
     Task<bool> RemoteBranchExistsAsync(string repoPath, string branchName);
 
     /// <summary>
+    /// <see cref="RemoteBranchExistsAsync"/> for ILD's own base clone, which runs on ILD's machine whatever the run host is; a run's worktree goes through <see cref="RemoteBranchExistsAsync"/>.
+    /// </summary>
+    Task<bool> RemoteBranchExistsInBaseRepoAsync(string repoPath, string branchName);
+
+    /// <summary>
     /// Run <c>git worktree prune</c> in the repository at <paramref name="repoPath"/>.
     /// Clears stale worktree registrations whose directories no longer exist —
     /// a stale registration pins its branch and blocks <c>git branch -D</c>.

@@ -5,6 +5,7 @@ using System.Text.Json;
 using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -157,7 +158,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         => RunHost.StartCommandAsync(
             RunCommand.Agent(
                 psi, OwnerOf(ctx), ctx.Provider.Id, ctx.NetworkMode, WithExecutionEnvironment(environment, ctx),
-                (ctx.AgentFiles ?? []).Concat(agentFiles ?? []).Where(file => !string.IsNullOrEmpty(file)).Select(file => file!).ToList()),
+                (ctx.AgentFiles ?? []).Concat(agentFiles ?? []).Where(file => !string.IsNullOrEmpty(file)).Select(file => file!).ToList()) with { RunIn = RunPaths.HolderOf(psi.WorkingDirectory) ?? OwnerOf(ctx) },
             ctx.Cancel);
 
     // The execution's environment is set over the adapter's.

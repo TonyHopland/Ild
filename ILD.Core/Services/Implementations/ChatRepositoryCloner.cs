@@ -151,6 +151,9 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         if (!await ChatExistsAsync(job.ChatSessionId, ct))
             return ChatDeleted();
 
+        if (PredatesContainersException.Applies(_host, job.ScratchPath))
+            return Refused(ChatRepositoryCloneOutcome.CloneFailed, PredatesContainersException.Text);
+
         string basePath;
         using (await BaseRepoClone.LockAsync(job.Repo.Id, ct))
         {
@@ -158,7 +161,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
             if (!ok)
                 return Refused(ChatRepositoryCloneOutcome.FetchFailed,
                     $"ILD could not fetch the repository '{job.Repo.Name}' from its remote: {error}");
-            if (!await _git.RemoteBranchExistsAsync(path!, job.Branch))
+            if (!await _git.RemoteBranchExistsInBaseRepoAsync(path!, job.Branch))
                 return Refused(ChatRepositoryCloneOutcome.BranchNotFound,
                     $"The repository '{job.Repo.Name}' has no branch '{job.Branch}' on its remote.");
             basePath = path!;

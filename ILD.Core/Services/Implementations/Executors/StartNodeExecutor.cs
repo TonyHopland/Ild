@@ -189,7 +189,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         // discovered from the remote rather than typed, so only an override is
         // worth the round trip.
         if (run.BaseBranchOverride is not null
-            && !await repoManager.RemoteBranchExistsAsync(basePath, baseBranch))
+            && !await repoManager.RemoteBranchExistsInBaseRepoAsync(basePath, baseBranch))
         {
             return (false, null,
                 $"base branch 'origin/{baseBranch}' does not exist on the remote — "

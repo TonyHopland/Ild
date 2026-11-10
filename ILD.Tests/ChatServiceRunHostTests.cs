@@ -1,9 +1,13 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
 using ILD.Core.Services.RunHosts.Isolated;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.Entities;
 using ILD.Tests.Fakes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace ILD.Tests;
@@ -49,6 +53,39 @@ public sealed class ChatServiceRunHostTests : IDisposable
         var stored = await _db.Context.ChatSessions.AsNoTracking().SingleAsync(c => c.Id == started.Id, Ct);
         Assert.Equal([started.Id], _host.ChatFolders);
         Assert.Equal(RunPaths.ChatRoot(started.Id), stored.ScratchPath);
+    }
+
+    [Fact]
+    public async Task A_turn_on_a_chat_whose_folder_is_on_ilds_disk_is_refused_and_runs_nothing()
+    {
+        var local = new FakeRunHost();
+        using var container = new ContainerRunHost(
+            ContainerRunHostOptions.From(name => name switch
+            {
+                "ILD_API_URL" => "http://ild.example:8080",
+                "ILD_CONTAINER_SOCKET" => "/nonexistent.sock",
+                "ILD_CONTAINER_RUNNER_IMAGE" => "registry.example/ild-runner:1",
+                _ => null,
+            }), new ProcessRunner(), NullLogger<ContainerRunHost>.Instance);
+        var adapter = new Mock<IAgentAdapter>(MockBehavior.Strict);
+        var registry = Mock.Of<IAgentAdapterRegistry>(r =>
+            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter.Object)).WithDeclaredTraits();
+        var service = new ChatService(
+            _db.Context, _db.Providers, registry, Mock.Of<IChatNotifier>(),
+            new ChatOptions { ScratchRoot = "/data/chat-sessions" }, _db.LoopRuns, new ChatLoopScratchpad(),
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance, runHost: new RoutingRunHost(local, container));
+        var chat = new ChatSession
+        {
+            Id = Guid.NewGuid(), UserId = "alice", AiProviderId = await SeedProviderAsync(), ScratchPath = "/data/chat-sessions/old", CreatedAt = DateTime.UtcNow,
+        };
+        _db.Context.ChatSessions.Add(chat);
+        await _db.Context.SaveChangesAsync(Ct);
+
+        await service.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hello", Ct);
+
+        var last = await _db.Context.ChatMessages.AsNoTracking().Where(m => m.ChatSessionId == chat.Id).OrderBy(m => m.Sequence).LastAsync(Ct);
+        Assert.Contains("before ILD ran everything in containers", last.Content);
+        Assert.Empty(local.Started);
     }
 
     [Fact]

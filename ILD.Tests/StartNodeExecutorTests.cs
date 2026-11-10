@@ -224,7 +224,7 @@ public class StartNodeExecutorTests : IDisposable
         var repoManager = new Mock<IRepositoryManager>();
         repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
-        repoManager.Setup(m => m.RemoteBranchExistsAsync(_baseRepo, "release/1.0")).ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(_baseRepo, "release/1.0")).ReturnsAsync(true);
         repoManager.Setup(m => m.ResetHardAsync(_baseRepo, "origin/release/1.0", It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         repoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()))
@@ -257,7 +257,7 @@ public class StartNodeExecutorTests : IDisposable
         var repoManager = new Mock<IRepositoryManager>();
         repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
-        repoManager.Setup(m => m.RemoteBranchExistsAsync(_baseRepo, "no/such/branch")).ReturnsAsync(false);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(_baseRepo, "no/such/branch")).ReturnsAsync(false);
 
         var (mgr, sp, run, node) = BuildContext(repoManager);
         run.BaseBranchOverride = "no/such/branch";
@@ -290,7 +290,7 @@ public class StartNodeExecutorTests : IDisposable
             .ReturnsAsync((true, (string?)null));
         repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
-        repoManager.Setup(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), "release/1.0")).ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(It.IsAny<string>(), "release/1.0")).ReturnsAsync(true);
         repoManager.Setup(m => m.ResetHardAsync(It.IsAny<string>(), "origin/release/1.0", It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         repoManager.Setup(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()))
@@ -321,7 +321,7 @@ public class StartNodeExecutorTests : IDisposable
         var repoManager = new Mock<IRepositoryManager>();
         repoManager.Setup(m => m.CloneAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((true, (string?)null));
-        repoManager.Setup(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), "no/such/branch")).ReturnsAsync(false);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(It.IsAny<string>(), "no/such/branch")).ReturnsAsync(false);
 
         var (mgr, sp, run, node) = BuildContext(repoManager, worktreesPath: string.Empty);
         run.BaseBranchOverride = "no/such/branch";
@@ -389,7 +389,7 @@ public class StartNodeExecutorTests : IDisposable
 
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
         mgr.Verify(m => m.ResetHardAsync(_baseRepo, "origin/main", It.IsAny<CancellationToken>()), Times.Once);
-        mgr.Verify(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        mgr.Verify(m => m.RemoteBranchExistsInBaseRepoAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
     [Fact]

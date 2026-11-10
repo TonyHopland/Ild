@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Chats and runs made before containers can no longer be run again.** A new turn, a resume, a retry or a terminal on one is refused and says to start a new one; reading and deleting them still work.
 - **A preview's health check only reaches the service's own loopback address and never follows a redirect.**
 - **A preview service name can no longer name a file outside the preview's log folder.** Service names are limited to letters, digits, '.', '_' and '-' (starting with a letter or digit), and ILD opens a service or install log without following a link and only inside the log folder. Links in kept preview data that point outside it are dropped when it is stored.
 - **Agents can no longer use the egress proxy without their launch's own credential, or reach other runs through it.** The proxy refuses a connection that does not carry the token ILD signed for its launch and takes the provider or installer scope only from that token, on the container host it serves only the run networks, and it always refuses another run's network and, by default, link-local and cloud metadata addresses.
