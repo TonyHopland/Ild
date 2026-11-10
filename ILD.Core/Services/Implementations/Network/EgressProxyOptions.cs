@@ -59,6 +59,12 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
     /// </summary>
     public int? WebPort { get; init; }
 
+    /// <summary>
+    /// Whether worktree previews are on (<c>ILD_PREVIEW_PROXY_BASE</c> is set and usable). Off, the preview hostname is no route into
+    /// ILD at all: the proxy answers 404, so a run cannot reach ILD's web port through the loopback hand-off (ADR-0036).
+    /// </summary>
+    public bool PreviewsEnabled { get; init; }
+
     public static EgressProxyOptions FromEnvironment()
         => Parse(Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar)) with
         {

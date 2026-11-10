@@ -320,6 +320,9 @@ public class NetworkController : ControllerBase
     {
         var logged = await _store.GetLogEntryAsync(logId, ct);
         if (logged is null) return NotFound();
+        // A host an agent wrote as a pattern is logged as sent; from the log it must stay a single host, never a suffix rule.
+        if (EgressRules.LooksLikePattern(logged.Host.Trim()))
+            return BadRequest(new { error = "This host was sent as a pattern, not a host name, so it cannot be added from the log" });
         if (!EgressRules.TryNormalizePattern(logged.Host, out var host, out var error))
             return BadRequest(new { error });
 

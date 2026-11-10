@@ -220,6 +220,7 @@ public static class ServiceCollectionExtensions
             var kind = RunHostOptions.Detect(name => config[name]);
             return EgressProxyOptions.FromEnvironment() with
             {
+                PreviewsEnabled = sp.GetRequiredService<PreviewProxyBase>().Enabled,
                 BindAddress = EgressProxyOptions.BindAddressFor(kind),
                 AcceptsClient = EgressProxyOptions.ClientFilterFor(kind, name => Environment.GetEnvironmentVariable(name) ?? config[name]),
             };

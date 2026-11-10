@@ -1010,7 +1010,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     /// <summary>A proxy whose web port, ILD's own, is the test's upstream.</summary>
     private async Task<int> StartProxyWithWebPortAsync()
     {
-        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { WebPort = _upstreamPort }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { WebPort = _upstreamPort, PreviewsEnabled = true }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
         _extraProxies.Add(proxy);
         await proxy.StartAsync(CancellationToken.None);
         return await proxy.BoundPort.WaitAsync(Timeout);
@@ -1051,14 +1051,48 @@ public sealed class EgressProxyTests : IAsyncLifetime
     [Fact]
     public async Task A_preview_hostname_with_no_web_port_is_refused_and_never_resolved()
     {
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { PreviewsEnabled = true }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+        _extraProxies.Add(proxy);
+        await proxy.StartAsync(CancellationToken.None);
         using var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
+        await client.ConnectAsync(IPAddress.Loopback, await proxy.BoundPort.WaitAsync(Timeout, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
         var stream = client.GetStream();
         await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed("GET http://wi-12.preview.ild/ HTTP/1.1\r\nHost: wi-12.preview.ild\r\n\r\n")), TestContext.Current.CancellationToken);
         var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
 
         Assert.StartsWith("HTTP/1.1 400", response);
         Assert.Contains("no plain-HTTP port", response);
+    }
+
+    [Theory]
+    [InlineData(".example.com")]
+    [InlineData("*.com")]
+    public async Task A_host_written_as_a_pattern_is_refused_and_logged_as_blocked(string host)
+    {
+        var (client, status) = await ConnectAsync(host);
+        using var _ = client;
+
+        Assert.Contains("400", status);
+        var entry = Assert.Single(_log.Entries, e => e.Host == host);
+        Assert.Equal(NetworkDecision.Blocked, entry.Decision);
+        Assert.Equal("malformed host name", Assert.Single(_log.Reasons));
+    }
+
+    [Fact]
+    public async Task A_preview_hostname_is_a_404_and_reaches_nothing_when_previews_are_off()
+    {
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { WebPort = _upstreamPort }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+        _extraProxies.Add(proxy);
+        await proxy.StartAsync(CancellationToken.None);
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, await proxy.BoundPort.WaitAsync(Timeout, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed("GET http://wi-12.preview.ild/api/v1/auth/me HTTP/1.1\r\nHost: wi-12.preview.ild\r\n\r\n")), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 404", response);
+        Assert.DoesNotContain("X-Saw", response);
     }
 
     /// <summary>
@@ -1679,6 +1713,24 @@ public sealed class EgressProxyParseTests
     {
         Assert.Contains("\r\nHost: api.example.com\r\n", Forwarded("GET http://api.example.com/ HTTP/1.1\r\n\r\n"));
     }
+
+    [Fact]
+    public void A_Host_that_names_another_host_than_the_target_is_replaced_by_the_targets()
+    {
+        var head = Forwarded("GET http://api.example.com:8080/x HTTP/1.1\r\nHost: admin.internal\r\n\r\n");
+
+        Assert.StartsWith("GET /x HTTP/1.1\r\nHost: api.example.com:8080\r\n", head);
+        Assert.DoesNotContain("admin.internal", head);
+    }
+
+    [Theory]
+    [InlineData(".example.com", true)]
+    [InlineData("*.com", true)]
+    [InlineData("*", true)]
+    [InlineData("example.com", false)]
+    [InlineData("a.example.com", false)]
+    public void Only_a_host_written_as_a_pattern_is_a_pattern(string host, bool pattern)
+        => Assert.Equal(pattern, EgressRules.LooksLikePattern(host));
 
     [Fact]
     public void A_client_supplied_Host_is_kept_and_not_doubled()
