@@ -59,7 +59,7 @@ public sealed class CodexAdapterTests : IDisposable
             { AgentIsolation.AgentReadRootEnvVar, _readRoot },
             { "ILD_MCP_SERVER_DLL", _fakeDll },
             { "ILD_API_URL", "http://ild.example:5000" },
-            { "ILD_API_TOKEN", Token },
+            { "ILD_API_TOKEN", "process-wide-token" },
             { "HOME", _home },
         };
     }
@@ -427,6 +427,7 @@ public sealed class CodexAdapterTests : IDisposable
         {
             RunContext = RunContext(ownerId, _worktree),
             ChatSessionId = chat ? ownerId : null,
+            AgentApiToken = Token,
         });
 
         Assert.True(result.Success, result.Error);
@@ -481,7 +482,7 @@ public sealed class CodexAdapterTests : IDisposable
 
         // Secrets stay in the files: never in codex's argv or environment.
         var environ = File.ReadAllText(Path.Combine(_out, "env"));
-        foreach (var secret in new[] { Token, "docs-secret", "docs-mcp" })
+        foreach (var secret in new[] { Token, "process-wide-token", "docs-secret", "docs-mcp" })
         {
             Assert.DoesNotContain(argv, a => a.Contains(secret));
             Assert.DoesNotContain(secret, environ);

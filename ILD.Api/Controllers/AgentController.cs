@@ -1309,7 +1309,7 @@ public class AgentController : ControllerBase, IActionFilter
     }
 
     /// <summary>
-    /// The run this call came from, or null when there is no usable header —
+    /// The run this call came from, or null when its token is not a run's —
     /// a chat agent borrows the agent API without being a loop run, and that
     /// difference decides whether a review read consumes what it returned.
     /// </summary>
@@ -1327,14 +1327,14 @@ public class AgentController : ControllerBase, IActionFilter
         return TrySessionClaim(AgentTokenSource.Chat, out chatSessionId);
     }
 
-    /// <summary>Who the changes this call makes are for, from the session headers it sent.</summary>
+    /// <summary>Who the changes this call makes are for, from the run or chat its token names.</summary>
     private Task<WorkItemActor?> CallerActorAsync() => ActorAsync(CallerRunId(), CallerChatSessionId());
 
     /// <summary>
     /// Who a change is for: a loop run as this instance's user, named by the step
     /// it is running and tied to the work item it works on; else a chat session
     /// as the user it belongs to; else the signed-in person, or this instance for
-    /// the agent token with no session behind it. Null for a signed-in session
+    /// an agent token that names neither (none is issued today). Null for a signed-in session
     /// whose user can no longer be resolved.
     /// </summary>
     private async Task<WorkItemActor?> ActorAsync(Guid? runId, Guid? chatSessionId)
@@ -1359,7 +1359,7 @@ public class AgentController : ControllerBase, IActionFilter
     // The browser stashes the loop currently open in the Loop Editor into a
     // per-session scratchpad on every chat message; the agent reads it here and
     // pushes a full-document replacement back to the open editor. Both are scoped
-    // to the chat session via the X-ILD-Chat-Session-Id header. The agent is never
+    // to the chat session its token names. The agent is never
     // given a persist tool — update_current_loop mutates transient client state
     // only; the sole write to a LoopTemplateVersion stays the editor's human Save.
 
@@ -1539,10 +1539,10 @@ public class AgentController : ControllerBase, IActionFilter
 
     /// <summary>
     /// Resolve the caller's chat session for the loop-editor endpoints: the
-    /// <c>X-ILD-Chat-Session-Id</c> header must be a valid GUID AND name a chat
-    /// session that still exists. This is the loop-tool equivalent of
+    /// caller's token must be a chat's AND name a chat session that still
+    /// exists. This is the loop-tool equivalent of
     /// <see cref="CallerOwns"/> — the MCP server is scoped to one session, so a
-    /// header that resolves to no session is not the caller's to act on (403).
+    /// token naming no session is not the caller's to act on (403).
     /// </summary>
     private async Task<(Guid ChatSessionId, IActionResult? Error)> ResolveChatSessionAsync()
     {
@@ -2262,12 +2262,11 @@ public class AgentController : ControllerBase, IActionFilter
 
     /// <summary>
     /// True iff <paramref name="wi"/> was created by the caller's current
-    /// session — the loop run identified by the <c>X-ILD-Run-Id</c> header, or
-    /// (when no run id is present) the chat session identified by the
-    /// <c>X-ILD-Chat-Session-Id</c> header. This is the gate that limits an
+    /// session — the loop run its token names, or
+    /// the chat session its token names. This is the gate that limits an
     /// agent to editing or deleting only the items it created during its own
-    /// session, never pre-existing items or items from other sessions. The run
-    /// id takes precedence to mirror create-time stamping (never both).
+    /// session, never pre-existing items or items from other sessions. A token
+    /// is for a run or a chat, never both.
     /// </summary>
     private bool CallerOwns(WorkItemView wi)
     {

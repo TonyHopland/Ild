@@ -12,12 +12,10 @@ namespace ILD.Core.Services.Remote;
 /// Reads and answers a work item's pull request review on behalf of an agent.
 /// Scoped (owns a DbContext via the stores).
 ///
-/// <c>callerRunId</c> is the run the call came from (the <c>X-ILD-Run-Id</c>
-/// header), which is not always the work item's own: a chat agent borrows these
+/// <c>callerRunId</c> is the run the call came from (from the caller's agent token), which is not always the work item's own: a chat agent borrows these
 /// same tools. It decides whether a READ consumes what it returned.
 ///
-/// Together with <c>callerChatSessionId</c> (the <c>X-ILD-Chat-Session-Id</c>
-/// header, used only when there is no run) it also names who owns a queued
+/// Together with <c>callerChatSessionId</c> (likewise from its token, used only when there is no run) it also names who owns a queued
 /// write: the caller that queued it, and only that caller, may replace or
 /// withdraw it. It is not what a reply is stamped with — the marker a reply
 /// carries is stamped at drain time from the run the PR node is executing.
