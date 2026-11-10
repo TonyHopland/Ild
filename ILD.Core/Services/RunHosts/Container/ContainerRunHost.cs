@@ -94,7 +94,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             var name = ObjectName(owner);
             var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
             made.Volume = await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
-            made.Network = await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = Labels(owner) }, ct));
+            made.Network = await TolerateConflictAsync(() => CreateInternalNetworkAsync(name, Labels(owner), ct));
             var ild = await IldAddressAsync(name, $"run {owner:N}", ct);
             made.Container = await CreateContainerAsync(owner, ild, tools, request.Dns, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
@@ -158,6 +158,52 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             await DeleteObjectsAsync(owner, CancellationToken.None, made);
         }
         catch (Exception ex) { Logger?.LogWarning(ex, "Could not remove the objects of run {Run} after its container failed to start; the next sweep removes them", owner); }
+    }
+
+    private const int SubnetAttempts = 8;
+
+    /// <summary>
+    /// Makes an internal network on the first free /28 of the subnet pool. A network with a subnet of its own is what lets ILD be put back on it
+    /// at a fixed address, and does not use up the engine's default pools, which hold about 30 networks.
+    /// </summary>
+    private async Task<JsonNode?> CreateInternalNetworkAsync(string name, IDictionary<string, string> labels, CancellationToken ct)
+    {
+        NetworkSubnets.TryParse(_options.SubnetPool, out var pool);
+        var refused = new HashSet<uint>();
+        for (var attempt = 0; attempt < SubnetAttempts; attempt++)
+        {
+            var used = new List<(uint Start, int Prefix)>();
+            foreach (var listed in (await _api.GetAsync("/networks", ct))?.AsArray() ?? [])
+                foreach (var config in listed?["IPAM"]?["Config"]?.AsArray() ?? [])
+                    if (config?["Subnet"]?.GetValue<string>() is { } cidr && NetworkSubnets.TryParse(cidr, out var subnet))
+                        used.Add(subnet);
+
+            var free = NetworkSubnets.Candidates(pool)
+                .Cast<uint?>()
+                .FirstOrDefault(c => !refused.Contains(c!.Value) && !used.Any(u => NetworkSubnets.Overlaps(u, (c.Value, NetworkSubnets.NetworkPrefix))));
+            if (free is not { } start)
+                throw new InvalidOperationException($"No free /{NetworkSubnets.NetworkPrefix} is left in {_options.SubnetPool} for the network {name}; widen {ContainerRunHostOptions.SubnetPoolSetting} or remove networks that are no longer used.");
+
+            try
+            {
+                return await _api.PostAsync("/networks/create", new
+                {
+                    Name = name,
+                    Internal = true,
+                    CheckDuplicate = true,
+                    Labels = labels,
+                    IPAM = new { Config = new[] { new { Subnet = NetworkSubnets.Cidr(start, NetworkSubnets.NetworkPrefix), Gateway = NetworkSubnets.Gateway(start) } } },
+                }, ct);
+            }
+            catch (DockerApiException ex) when (ex.Status is HttpStatusCode.Forbidden or HttpStatusCode.BadRequest)
+            {
+                // Another network took it since the list was read, or the engine knows of an overlap the list does not show (a route of the host).
+                refused.Add(start);
+                Logger?.LogInformation("The engine refused {Subnet} for the network {Name}, so the next one is tried: {Reason}", NetworkSubnets.Cidr(start, NetworkSubnets.NetworkPrefix), name, ex.Message);
+            }
+        }
+
+        throw new InvalidOperationException($"The engine refused {SubnetAttempts} subnets of {_options.SubnetPool} in a row for the network {name}; check {ContainerRunHostOptions.SubnetPoolSetting} against the networks of the host.");
     }
 
     /// <summary>Makes the object; false when it was there already.</summary>
@@ -351,7 +397,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                 $"{toolInstaller.Writable.VolumeName(_options.ToolsVolume)}:{toolInstaller.Writable.MountPath}:rw",
                 .. toolInstaller.ReadOnly is { } shared ? ToolBinds([shared]) : [],
             ];
-            await _api.PostAsync("/networks/create", new { Name = name, Internal = true, CheckDuplicate = true, Labels = labels }, ct);
+            await CreateInternalNetworkAsync(name, labels, ct);
             var ild = await IldAddressAsync(name, "the toolchain installer", ct);
             await PostCreateAsync(
                 name, ContainerBody(toolInstaller.Environment, labels, binds, placement: new Placement(name, ild, Dns: false)), tolerateConflict: false, ct);
@@ -679,7 +725,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             if (_options.Toolchains)
                 foreach (var zone in ChatToolZones)
                     await PrepareToolZoneAsync(zone, ct);
-            await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = ChatName, Internal = true, CheckDuplicate = true, Labels = ChatLabels() }, ct));
+            await TolerateConflictAsync(() => CreateInternalNetworkAsync(ChatName, ChatLabels(), ct));
             // A stopped one is replaced; what it held is in the volume.
             await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(ChatName)}?force=true", null, ct));
             var ild = await IldAddressAsync(ChatName, "the chat container", ct);
@@ -961,6 +1007,31 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     }
 
     /// <summary>
+    /// Puts ILD on a network at the address the run has for it. A network from before networks got subnets has none ILD may choose an address in,
+    /// and the engine refuses; ILD is then connected at an address of the engine's choosing, which the run does not know.
+    /// </summary>
+    private async Task ConnectIldAsync(string network, string subject, string ild, string? address, CancellationToken ct)
+    {
+        if (address is not null)
+        {
+            try
+            {
+                await _api.PostAsync($"/networks/{Escaped(network)}/connect", new { Container = ild, EndpointConfig = new { IPAMConfig = new { IPv4Address = address } } }, ct);
+                Logger?.LogInformation("Reconnected ILD to the network of {Subject} at {Address}", subject, address);
+                return;
+            }
+            catch (DockerApiException ex)
+            {
+                Logger?.LogWarning("The engine refused to put ILD back on the network of {Subject} at {Address}, so ILD is connected at another address and the container cannot reach ILD until it is restarted: {Reason}",
+                    subject, address, ex.Message);
+            }
+        }
+
+        await _api.PostAsync($"/networks/{Escaped(network)}/connect", new { Container = ild }, ct);
+        if (address is null) Logger?.LogInformation("Reconnected ILD to the network of {Subject} at a new address", subject);
+    }
+
+    /// <summary>
     /// Puts ILD's own container back on the network of every run of this instance, a stopped one included, and of the chat container,
     /// at the address each was given for ILD. A container that is recreated (an upgrade, <c>docker compose up</c>)
     /// starts on none of them, and without this the runs and chats it left could reach neither the model gateway nor
@@ -995,10 +1066,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
                     .FirstOrDefault(h => h?.StartsWith(prefix, StringComparison.Ordinal) == true)?[prefix.Length..];
                 try
                 {
-                    await _api.PostAsync($"/networks/{Escaped(network)}/connect", address is null
-                        ? new { Container = ild }
-                        : new { Container = ild, EndpointConfig = new { IPAMConfig = new { IPv4Address = address } } }, ct);
-                    Logger?.LogInformation("Reconnected ILD to the network of {Subject} at {Address}", subject, address ?? "a new address");
+                    await ConnectIldAsync(network, subject, ild, address, ct);
                 }
                 catch (DockerApiException ex)
                 {
