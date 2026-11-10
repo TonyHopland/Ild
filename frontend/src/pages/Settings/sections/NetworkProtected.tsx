@@ -13,6 +13,8 @@ export const PROTECTED_WARNINGS: Record<string, string> = {
   host: "agents can reach every service listening on the machine ILD's container runs on, including the ports ILD's own stack publishes there",
   "link-local":
     "agents can reach link-local and cloud metadata addresses, which can hold the credentials of the machine ILD runs on",
+  private:
+    "agents can reach every private and cluster-internal address: your LAN, other pods, and storage such as an NFS export",
 };
 
 export const PROTECTED_ANCHOR = "network-protected";
@@ -33,9 +35,10 @@ export function ProtectedDestinations({ destinations, onToggle, error }: Props) 
         <h3 className="settings-card-title">Protected destinations</h3>
       </div>
       <p className="settings-card-note">
-        ILD&apos;s own infrastructure. While a protection is on, agents cannot reach these through
-        the proxy in any mode, and a whitelist entry does not override it. Loopback is always
-        refused. A declared forward to one of them is still allowed, judged by the mode and lists.
+        ILD&apos;s own infrastructure and private networks. While a protection is on, agents cannot
+        reach these through the proxy in any mode, and a whitelist entry does not override it.
+        Loopback is always refused. A declared forward to one of them is still allowed, judged by
+        the mode and lists, and is how runs reach a LAN or in-cluster service.
       </p>
       {error && <div className="settings-error">{error}</div>}
       {off.length > 0 && (

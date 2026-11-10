@@ -242,3 +242,11 @@ it was listed a second time, and the modes would no longer say what they do.
   names that resolve to the same address. Link-local and cloud metadata addresses
   (`169.254.169.254`) are refused by default (ADR-0036), and so is every other run's
   network.
+
+**Amendment (work item 633).** This section's decision no longer holds on isolated run hosts. A private block now exists:
+`private` is a protected destination, on by default for containers and Kubernetes, covering `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, `100.64.0.0/10` and `fc00::/7` (ADR-0036). In `monitor` a run could `CONNECT` to the database pod, an
+unrelated pod or a storage export by pod IP, and to the machine's LAN address, none of which a name-based protection can
+cover. The lists keep their plain meaning for everything else. The way for a run to reach a LAN or in-cluster service is now a
+declared forward (ADR-0020), one decision per host and port, which is exempt from the protection (for plain HTTP as well as
+`CONNECT`); the operator can also switch `network.protect.private` off.

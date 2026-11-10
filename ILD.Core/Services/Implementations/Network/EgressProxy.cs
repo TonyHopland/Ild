@@ -276,7 +276,7 @@ public sealed class EgressProxy : BackgroundService
                     return;
                 }
 
-                var isForward = request.Kind == RequestKind.Connect && snapshot.IsForward(request.Host, request.Port);
+                var isForward = request.Kind is RequestKind.Connect or RequestKind.Http && snapshot.IsForward(request.Host, request.Port);
                 if (snapshot.CheckAddresses(addresses, isForward) is { } refusal)
                 {
                     _log.Record(request.Host, request.Port, NetworkDecision.Blocked, request.AiProviderId, refusal.Reason, request.Installer);

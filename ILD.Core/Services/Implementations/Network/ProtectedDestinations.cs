@@ -28,13 +28,20 @@ public sealed record ProtectedDestination(string Id, string Name, IReadOnlyList<
     public const string KubernetesApi = "kubernetes-api";
     public const string LinkLocal = "link-local";
     public const string Host = "host";
+    public const string Private = "private";
 
-    public static readonly IReadOnlyList<string> AllIds = [Ild, Database, WorkItemServer, KubernetesApi, Host, LinkLocal];
+    public static readonly IReadOnlyList<string> AllIds = [Ild, Database, WorkItemServer, KubernetesApi, Host, LinkLocal, Private];
 
     /// <summary>Link-local addresses, where cloud metadata services answer (169.254.169.254, AWS's IPv6 form), with the credentials of the machine ILD runs on.</summary>
     public static readonly ProtectedDestination LinkLocalRanges = new(LinkLocal, "Link-local and cloud metadata addresses", [], [])
     {
         Ranges = [IpRange.Parse("169.254.0.0/16"), IpRange.Parse("fe80::/10"), IpRange.Parse("fd00:ec2::254/128")],
+    };
+
+    /// <summary>Private and cluster-internal addresses (LAN, pod and service networks, storage exports), on isolated run hosts. A declared forward is how a run reaches one.</summary>
+    public static readonly ProtectedDestination PrivateRanges = new(Private, "Private and cluster-internal addresses", [], [])
+    {
+        Ranges = [IpRange.Parse("10.0.0.0/8"), IpRange.Parse("172.16.0.0/12"), IpRange.Parse("192.168.0.0/16"), IpRange.Parse("100.64.0.0/10"), IpRange.Parse("fc00::/7")],
     };
 
     public string RefusalReason => "protected: " + Name;
@@ -193,6 +200,7 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
         if (_kind == RunHostKind.Container && _hostAddresses().Except(own).ToList() is { Count: > 0 } host)
             result.Add(new(ProtectedDestination.Host, "The machine ILD's container runs on", HostNames, host));
         result.Add(ProtectedDestination.LinkLocalRanges);
+        if (_kind is RunHostKind.Container or RunHostKind.Kubernetes) result.Add(ProtectedDestination.PrivateRanges);
         return result;
     }
 

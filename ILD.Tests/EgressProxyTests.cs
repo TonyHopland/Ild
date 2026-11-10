@@ -1494,7 +1494,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     [InlineData("192.168.1.5")]
     [InlineData("169.254.169.254")]
     [InlineData("[fd00::1]")]
-    public async Task A_private_address_literal_is_judged_only_by_the_mode(string literal)
+    public async Task A_private_address_literal_is_judged_only_by_the_mode_without_protected_destinations(string literal)
     {
         var port = await StartProxyAsync(null);
 

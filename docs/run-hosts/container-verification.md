@@ -45,8 +45,11 @@ From inside a run's container (`podman exec -it ild-run-<run> bash`), each of th
 - `curl -m 5 https://example.com` (the internet)
 - `curl -m 5 http://<another run's container ip>:<any port>` (another run; start a second run to get one)
 - `curl -m 5 http://<host's LAN address>:22` or any other service of the host except ILD
+- through the proxy (the run's `HTTP_PROXY`), `CONNECT <machine LAN IP>:<a port the stack publishes>` (ILD's own or the WorkItem Server's) and `CONNECT <any other private address>:<port>`: both are refused with `protected: Private and cluster-internal addresses` in the Network log
 - `id` prints uid 10001, and `grep Cap /proc/self/status` shows `CapEff: 0000000000000000`
 - `ls /var/run/*.sock` finds no engine socket
+
+And with a forward declared to one of those addresses and port, a `CONNECT` and a plain `GET http://<host>:<port>/` through the proxy are allowed.
 
 And these must work: `curl -m 5 -s -o /dev/null -w '%{http_code}\n' $ILD_API_URL/api/v1/health` prints `200`, and a command that uses the proxy variables the agent is given (`env | grep -i proxy`) reaches an allowed host through ILD's egress proxy.
 
