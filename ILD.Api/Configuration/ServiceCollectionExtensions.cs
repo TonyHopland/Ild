@@ -42,6 +42,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ILogger<ModelCredentialSource>>()));
 
         services.AddScoped<IAuthService, AuthService>();
+        services.AddSingleton<LoginThrottle>();
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
         services.AddScoped<IHumanInputProposalService, HumanInputProposalService>();
