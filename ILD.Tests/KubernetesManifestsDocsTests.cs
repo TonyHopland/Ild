@@ -48,6 +48,18 @@ public sealed class KubernetesManifestsDocsTests
         Assert.DoesNotContain("secrets", resources);
     }
 
+    [Fact]
+    public void The_optional_endpoints_reader_can_read_only_the_kubernetes_service_endpoints()
+    {
+        var role = Assert.Single(KubernetesYaml.LoadAllFromString(Docs("kubernetes-endpoints-reader-optional.yaml")).OfType<V1Role>());
+        var rule = Assert.Single(role.Rules);
+
+        Assert.Equal("default", role.Metadata.NamespaceProperty);
+        Assert.Equal(["endpoints"], rule.Resources);
+        Assert.Equal(["kubernetes"], rule.ResourceNames);
+        Assert.Equal(["get"], rule.Verbs);
+    }
+
     private static KubernetesRunHostOptions From(string? selector = null, string? ildNamespace = null) => KubernetesRunHostOptions.From(name => name switch
     {
         "ILD_API_URL" => "http://ild.example:8080",
