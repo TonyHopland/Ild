@@ -1412,15 +1412,22 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Git_in_ilds_own_base_clone_still_reaches_the_local_host_but_in_an_old_worktree_it_does_not()
+    public async Task Git_in_a_path_on_ilds_disk_is_refused_whatever_its_dot_git_looks_like_and_branch_cleanup_in_a_base_clone_still_works()
     {
-        var baseClone = Path.Combine(_scratch, "base");
-        Directory.CreateDirectory(Path.Combine(baseClone, ".git"));
+        var forged = Path.Combine(_scratch, "worktrees", "old-run");
+        Directory.CreateDirectory(Path.Combine(forged, ".git"));
         var routing = new RoutingRunHost(new FakeRunHost(), _host);
-        var ct = TestContext.Current.CancellationToken;
+        await Assert.ThrowsAsync<PredatesContainersException>(
+            () => routing.RunToolAsync(forged, "git", ["status"], null, TestContext.Current.CancellationToken));
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => routing.RunToolAsync(baseClone, "git", ["branch", "-D", "x"], null, ct));
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.RunToolAsync(Path.Combine(_scratch, "not-a-repository"), "git", ["status"], null, ct));
+        var baseClone = Path.Combine(_scratch, "base");
+        Directory.CreateDirectory(baseClone);
+        using (var init = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", ["init", "-q", baseClone])))
+            await init!.WaitForExitAsync(TestContext.Current.CancellationToken);
+        var repositories = new RepositoryManager(new ProcessRunner(), routing, worktreesRoot: Path.Combine(_scratch, "wt"));
+
+        Assert.False(await repositories.LocalBranchExistsAsync(baseClone, "ild/none"));
+        Assert.False(await repositories.DeleteLocalBranchAsync(baseClone, "ild/none"));
     }
 
     [Fact]

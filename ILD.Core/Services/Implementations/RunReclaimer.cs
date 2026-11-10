@@ -65,8 +65,12 @@ public sealed class RunReclaimer : IRunReclaimer
         // and deleting what is not there is a no-op for every host.
         if (!string.IsNullOrEmpty(run.WorktreePath))
         {
-            try { baseRepoPath = await _repo.ResolveBaseRepoPathAsync(run.WorktreePath); }
-            catch (Exception ex) { _log?.LogDebug(ex, "Could not resolve base repo for run {RunId}", run.Id); }
+            // A pointer in the run's own files names the base clone only on the local host; elsewhere the repository's row does, as the agent wrote these files.
+            if (_host.Kind == RunHostKind.Local)
+            {
+                try { baseRepoPath = await _repo.ResolveBaseRepoPathAsync(run.WorktreePath); }
+                catch (Exception ex) { _log?.LogDebug(ex, "Could not resolve base repo for run {RunId}", run.Id); }
+            }
 
             // The preview's ${STATE_DIR}, per-run volumes and npm cache included, belongs to the
             // worktree and goes before it, while a run that is running can still be reached.

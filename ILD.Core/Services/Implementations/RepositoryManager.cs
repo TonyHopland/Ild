@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
+using ILD.Data.Enums;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
 
@@ -146,7 +147,7 @@ public class RepositoryManager : IRepositoryManager
             // cleared like a stray directory, and its registration, if it has one,
             // is left for the next prune.
             repoPath = LocalWorktrees.TrustedRepositoryRoot(worktreePath);
-            if (repoPath is not null)
+            if (repoPath is not null && _host.Kind == RunHostKind.Local)
                 await RunAsync(repoPath, "worktree", "remove", "--force", worktreePath);
         }
 
@@ -172,7 +173,7 @@ public class RepositoryManager : IRepositoryManager
             // Removing the directory ourselves leaves the worktree registration
             // behind in the base repo; prune it so the branch isn't pinned as
             // "checked out" by a ghost worktree (that would block `git branch -D`).
-            if (repoPath is not null && repoPath != worktreePath)
+            if (repoPath is not null && repoPath != worktreePath && _host.Kind == RunHostKind.Local)
                 await RunAsync(repoPath, "worktree", "prune");
         }
     }
@@ -1016,29 +1017,39 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<bool> DeleteLocalBranchAsync(string repoPath, string branchName)
     {
-        var (code, _, _) = await RunAsync(repoPath, "branch", "-D", branchName);
+        var (code, _, _) = await RunInBaseRepoAsync(repoPath, "branch", "-D", branchName);
         return code == 0;
     }
 
     public async Task<bool> LocalBranchExistsAsync(string repoPath, string branchName)
     {
-        var (code, _, _) = await RunAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/heads/{branchName}");
+        var (code, _, _) = await RunInBaseRepoAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/heads/{branchName}");
         return code == 0;
     }
 
     public async Task<bool> RemoteBranchExistsAsync(string repoPath, string branchName)
     {
-        var (code, _, _) = await RunAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}");
+        var (code, _, _) = await RunInBaseRepoAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}");
         return code == 0;
     }
 
     public async Task PruneWorktreesAsync(string repoPath)
     {
-        await RunAsync(repoPath, "worktree", "prune");
+        await RunInBaseRepoAsync(repoPath, "worktree", "prune");
     }
 
     public Task<string?> ResolveBaseRepoPathAsync(string worktreePath)
         => Task.FromResult(LocalWorktrees.TrustedRepositoryRoot(worktreePath));
+
+    // ILD's own base clone, which no agent writes, is found by the repository's row and never by where a run's own files point; git there runs on this machine
+    // whatever the run host is, where a path that the routing host sends to a run or chat is refused. The path is never decided by what is inside it.
+    private async Task<(int ExitCode, string StdOut, string StdErr)> RunInBaseRepoAsync(string repoPath, params string[] args)
+    {
+        if (LocalWorktrees.TrustedRepositoryRoot(repoPath) is null)
+            return (RefusedExitCode, string.Empty, $"{repoPath} is not a git clone or worktree created by ILD");
+        var r = await _runner.RunAsync("git", ["-C", Path.GetFullPath(repoPath), .. args], "/", CancellationToken.None, null, new ProcessRunOptions(AgentScoped: true));
+        return (r.ExitCode, r.StdOut, RedactUserInfo(r.StdErr));
+    }
 
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
         => RunAsync(cwd, args, CancellationToken.None);
