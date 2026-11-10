@@ -56,7 +56,10 @@ public class RepositoryManager : IRepositoryManager
         _mirrors = new GitMirror(
             mirrorsRoot ?? Path.Combine(Path.GetTempPath(), "ild-git-mirrors"),
             (cwd, args, auth, ct, standardInput) => OrchestratorGitAsync(cwd, args, auth, ct, standardInput: standardInput),
-            logger);
+            logger)
+        {
+            MaxBundleBytes = ILD.Core.Services.RunHosts.RunReadLimits.FromEnvironment(_readEnvironment).MaxBundleBytes,
+        };
     }
 
     // Test/back-compat constructor: spins up a local ProcessRunner.
