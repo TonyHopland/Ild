@@ -178,11 +178,16 @@ public class WorktreePreviewServiceLogTests : IDisposable
     [InlineData("a/b")]
     public async Task Editing_a_service_to_a_name_that_is_not_a_bare_file_name_is_refused(string name)
     {
-        WriteConfig(FindFreePort());
+        WriteConfig(FindFreePort(), name);
+        var configPath = Path.Combine(_worktree, "ild.config.json");
+        var before = File.ReadAllText(configPath);
         var service = BuildService();
         var json = $$"""{"name":"{{name}}","command":"true","port":"web","healthUrl":"http://127.0.0.1:${PORT}/"}""";
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateServiceConfigAsync(_worktree, name, json, cancellationToken: CancellationToken.None));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateServiceConfigAsync(_worktree, name, json, cancellationToken: CancellationToken.None));
+
+        Assert.Contains("Preview service name", error.Message);
+        Assert.Equal(before, File.ReadAllText(configPath));
     }
 
     [Theory]

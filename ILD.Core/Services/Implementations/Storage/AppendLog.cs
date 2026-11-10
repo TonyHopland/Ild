@@ -19,8 +19,9 @@ internal static class AppendLog
     {
         if (OperatingSystem.IsMacOS())
             return O_WRONLY | 0x200 /*CREAT*/ | 0x8 /*APPEND*/ | 0x100 /*NOFOLLOW*/ | 0x1000000 /*CLOEXEC*/ | 0x4 /*NONBLOCK*/;
-        // O_NOFOLLOW differs by architecture: x86 has 0x20000, arm and the generic table 0x8000.
-        var noFollow = RuntimeInformation.ProcessArchitecture is Architecture.X64 or Architecture.X86 ? 0x20000 : 0x8000;
+        // O_NOFOLLOW differs by architecture: arm, arm64 and ppc have 0x8000; the generic table (x86, riscv64,
+        // loongarch64, s390x) has 0x20000, where 0x8000 is O_LARGEFILE.
+        var noFollow = RuntimeInformation.ProcessArchitecture is Architecture.Arm or Architecture.Arm64 or Architecture.Armv6 or Architecture.Ppc64le ? 0x8000 : 0x20000;
         return O_WRONLY | 0x40 /*CREAT*/ | 0x400 /*APPEND*/ | noFollow | 0x80000 /*CLOEXEC*/ | 0x800 /*NONBLOCK*/;
     }
 
