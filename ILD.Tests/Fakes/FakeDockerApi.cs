@@ -207,6 +207,22 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         lock (_gate) _networks[name] = new FakeNetwork(name, NextSubnet(), labels, new JsonObject());
     }
 
+    /// <summary>Puts a network of the open role in the engine as an older ILD made it, with a container attached when one is named.</summary>
+    public void SeedOpenNetwork(string name, string instance, string? attached = null)
+    {
+        var labels = new Dictionary<string, string>
+        {
+            ["app.kubernetes.io/managed-by"] = "ild",
+            ["ild/instance"] = instance,
+            ["ild/role"] = "open",
+        };
+        lock (_gate)
+        {
+            _networks[name] = new FakeNetwork(name, NextSubnet(), labels, new JsonObject());
+            if (attached is not null) _containers[attached].Networks.Add(name);
+        }
+    }
+
     private int NextSubnet() => _nextNetwork++;
 
     // A network nobody gave a subnet takes 10.89.N.0/24 from the engine's pool, as a network does on Docker and Podman.
