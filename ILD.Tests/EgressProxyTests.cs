@@ -153,7 +153,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, _proxyPort);
         var stream = client.GetStream();
-        var auth = $"Proxy-Authorization: {Header(new LaunchScope(provider, installer))}\r\n";
+        var auth = $"Proxy-Authorization: {Header(new LaunchScope(Provider: provider, Installer: installer))}\r\n";
         var request = $"CONNECT {host}:{_upstreamPort} HTTP/1.1\r\nHost: {host}:{_upstreamPort}\r\n{auth}\r\n";
         await stream.WriteAsync(Encoding.ASCII.GetBytes(request));
         var status = await ReadLineAsync(stream);
@@ -806,7 +806,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     private static string PostHead(int port, string framing, Guid? provider = null)
     {
         return $"POST http://localhost:{port}/v1/chat/completions HTTP/1.1\r\nHost: localhost:{port}\r\n"
-            + $"Proxy-Authorization: {Header(new LaunchScope(provider ?? Guid.NewGuid()))}\r\nContent-Type: application/json\r\n"
+            + $"Proxy-Authorization: {Header(new LaunchScope(Provider: provider ?? Guid.NewGuid()))}\r\nContent-Type: application/json\r\n"
             + (framing.Length > 0 ? framing + "\r\n" : string.Empty) + "\r\n";
     }
 

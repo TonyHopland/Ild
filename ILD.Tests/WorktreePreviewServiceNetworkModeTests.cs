@@ -19,7 +19,6 @@ namespace ILD.Tests;
 [Collection(ProcessGlobalStateCollection.Name)]
 public class WorktreePreviewServiceNetworkModeTests : IDisposable
 {
-    private const string Proxy = "http://127.0.0.1:3128";
     private const string Record = "printf %s \\\"$HTTPS_PROXY\\\" > ";
 
     private readonly string _worktree = Path.Combine(Path.GetTempPath(), "ild-preview-mode-" + Guid.NewGuid().ToString("N"));
@@ -55,7 +54,7 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         _service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            egressProxy: Proxy, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: policy, host: LocalRunHost.Shared);
+            egressProxy: new EgressProxyOptions(true, 3128), credentials: EgressProxyTests.Creds, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: policy, host: LocalRunHost.Shared);
         return _service;
     }
 
@@ -85,44 +84,53 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
         """);
     }
 
+    // What a preview command saw as its HTTPS_PROXY: nothing, or a proxy URL signed for a preview, which only the proxy's key reads.
+    private static void AssertProxy(bool proxied, string written)
+    {
+        if (!proxied) { Assert.Equal(string.Empty, written); return; }
+        Assert.EndsWith("@127.0.0.1:3128", written);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, written, out var scope));
+        Assert.Equal(LaunchKind.Preview, scope.Kind);
+    }
+
     private string Written(string name) => File.ReadAllText(Path.Combine(_worktree, name));
 
     [Theory]
-    [InlineData(NetworkMode.Off, "")]
-    [InlineData(NetworkMode.Monitor, Proxy)]
-    [InlineData(NetworkMode.Whitelist, Proxy)]
-    public async Task An_install_launches_in_the_mode_the_policy_reports(NetworkMode mode, string expected)
+    [InlineData(NetworkMode.Off, false)]
+    [InlineData(NetworkMode.Monitor, true)]
+    [InlineData(NetworkMode.Whitelist, true)]
+    public async Task An_install_launches_in_the_mode_the_policy_reports(NetworkMode mode, bool proxied)
     {
         WriteConfig();
 
         await BuildService(EgressPolicies.Reporting(mode)).InstallAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(expected, Written("install.out"));
+        AssertProxy(proxied, Written("install.out"));
     }
 
     [Theory]
-    [InlineData(NetworkMode.Off, "")]
-    [InlineData(NetworkMode.Blacklist, Proxy)]
-    public async Task A_preview_start_launches_its_install_step_and_service_in_the_mode_the_policy_reports(NetworkMode mode, string expected)
+    [InlineData(NetworkMode.Off, false)]
+    [InlineData(NetworkMode.Blacklist, true)]
+    public async Task A_preview_start_launches_its_install_step_and_service_in_the_mode_the_policy_reports(NetworkMode mode, bool proxied)
     {
         WriteConfig();
 
         await BuildService(EgressPolicies.Reporting(mode)).StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(expected, Written("install.out"));
-        Assert.Equal(expected, Written("web.out"));
+        AssertProxy(proxied, Written("install.out"));
+        AssertProxy(proxied, Written("web.out"));
     }
 
     [Theory]
-    [InlineData(NetworkMode.Off, "")]
-    [InlineData(NetworkMode.Monitor, Proxy)]
-    public async Task A_single_service_start_launches_in_the_mode_the_policy_reports(NetworkMode mode, string expected)
+    [InlineData(NetworkMode.Off, false)]
+    [InlineData(NetworkMode.Monitor, true)]
+    public async Task A_single_service_start_launches_in_the_mode_the_policy_reports(NetworkMode mode, bool proxied)
     {
         WriteConfig();
 
         await BuildService(EgressPolicies.Reporting(mode)).StartServiceAsync(_worktree, "web", cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(expected, Written("web.out"));
+        AssertProxy(proxied, Written("web.out"));
     }
 
     [Theory]
@@ -137,7 +145,7 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
         var factory = new Mock<IHttpClientFactory>();
         using var service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            egressProxy: Proxy, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: EgressPolicies.Reporting(mode), host: host);
+            egressProxy: new EgressProxyOptions(true, 3128), credentials: EgressProxyTests.Creds, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: EgressPolicies.Reporting(mode), host: host);
 
         await service.InstallAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -152,8 +160,8 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
 
         await BuildService(policy: null).StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(Proxy, Written("install.out"));
-        Assert.Equal(Proxy, Written("web.out"));
+        AssertProxy(true, Written("install.out"));
+        AssertProxy(true, Written("web.out"));
     }
 
     private static int FindFreePort()

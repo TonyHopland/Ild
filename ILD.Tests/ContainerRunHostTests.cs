@@ -68,6 +68,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         => new(options, new ProcessRunner(), _log)
         {
             Time = time ?? TimeProvider.System,
+            Credentials = EgressProxyTests.Creds,
             ReadyPollInterval = TimeSpan.FromMilliseconds(10),
             ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
             Agents = () => agents ?? [],
@@ -125,6 +126,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     {
         var host = new ContainerRunHost(Options(), new ProcessRunner(), _log)
         {
+            Credentials = EgressProxyTests.Creds,
             ReadyPollInterval = TimeSpan.FromMilliseconds(10),
             ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
             Agents = () => [],
@@ -788,7 +790,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains(_api.Execs.Last().Env, e => e.StartsWith("HTTPS_PROXY=http://ild:", StringComparison.Ordinal) && e.EndsWith("@ild.example:3128", StringComparison.Ordinal));
-        Assert.Equal(new LaunchScope(Provider: providerId), AgentIsolationEgressTests.ScopeInEnvironment(_api.Execs.Last().Env));
+        Assert.Equal(new LaunchScope(LaunchKind.Run, _run, providerId), AgentIsolationEgressTests.ScopeInEnvironment(_api.Execs.Last().Env, EgressProxyTests.Creds));
     }
 
     // -- The direct route (network mode Off) -------------------------------------
@@ -1864,8 +1866,8 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var proxy = EnvOf(config, "HTTPS_PROXY");
         Assert.EndsWith("@ild.example:3128", proxy);
-        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressCredentials.Current, proxy, out var scope));
-        Assert.Equal(new LaunchScope(Installer: "agents"), scope);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, proxy, out var scope));
+        Assert.Equal(new LaunchScope(LaunchKind.Installer, Installer: "agents"), scope);
         foreach (var name in new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" })
             Assert.Equal(proxy, EnvOf(config, name));
         Assert.Equal("1", EnvOf(config, "NODE_USE_ENV_PROXY"));

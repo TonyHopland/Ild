@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -26,6 +27,7 @@ public sealed class LocalRunHost : IRunHost
     private readonly IServiceProvider? _services;
     private readonly IRepositoryManager? _repositories;
     private readonly IConfiguration? _configuration;
+    private readonly EgressCredentials _credentials;
     private readonly ProcessRunOptions _agentOptions;
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<LocalRunProcess, byte>> _running = new();
     // The runs this process made and has not deleted: after a crash or a restart of ILD a run is not among them.
@@ -35,9 +37,11 @@ public sealed class LocalRunHost : IRunHost
     /// <param name="services">Where <see cref="CreateAsync"/> and <see cref="DeleteAsync"/> find the repository manager, which uses this host.</param>
     /// <param name="repositories">The repository manager to make worktrees with, when it is not to be found through <paramref name="services"/>.</param>
     /// <param name="configuration">Where the preview data repositories keep is found, when it is not to be found through <paramref name="services"/>.</param>
-    public LocalRunHost(IProcessRunner? runner = null, IServiceProvider? services = null, IRepositoryManager? repositories = null, IConfiguration? configuration = null)
+    /// <param name="credentials">What signs the egress proxy credential of each launch; a key of its own when none is given, which no proxy verifies.</param>
+    public LocalRunHost(IProcessRunner? runner = null, IServiceProvider? services = null, IRepositoryManager? repositories = null, IConfiguration? configuration = null, EgressCredentials? credentials = null)
     {
         _configuration = configuration;
+        _credentials = credentials ?? EgressCredentials.Random();
         _runner = runner;
         _services = services;
         _repositories = repositories;
@@ -77,7 +81,7 @@ public sealed class LocalRunHost : IRunHost
 
     public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
-        var process = await StartAsync(Launch(command), ct);
+        var process = await StartAsync(Launch(command, _credentials), ct);
         var tracked = new LocalRunProcess(process, Forget(command.OwnerId));
         if (command.OwnerId != Guid.Empty)
             _running.GetOrAdd(command.OwnerId, _ => new()).TryAdd(tracked, 0);
@@ -108,8 +112,8 @@ public sealed class LocalRunHost : IRunHost
 
     /// <summary>The launch of an agent CLI: <paramref name="psi"/> with the execution's environment and its network mode's proxy.</summary>
     internal static ProcessStartInfo PrepareAgentLaunch(
-        ProcessStartInfo psi, Guid? providerId, ILD.Data.Enums.NetworkMode mode, IReadOnlyDictionary<string, string?>? environment)
-        => Launch(RunCommand.Agent(psi, Guid.Empty, providerId, mode, environment));
+        ProcessStartInfo psi, EgressCredentials credentials, Guid? providerId, ILD.Data.Enums.NetworkMode mode, IReadOnlyDictionary<string, string?>? environment)
+        => Launch(RunCommand.Agent(psi, Guid.Empty, providerId, mode, environment), credentials);
 
     /// <summary>
     /// <paramref name="command"/>'s start info with the environment the command runs in, merged by <see cref="CommandEnvironment"/>.
@@ -118,7 +122,7 @@ public sealed class LocalRunHost : IRunHost
     /// Node install, and its bin first on <c>PATH</c>, so what was installed there is found (what a run container gives every
     /// command when it is made, <see cref="Tools.RunToolEnvironment.For"/>). The host owns the home, the npm prefix and the proxy.
     /// </summary>
-    internal static ProcessStartInfo Launch(RunCommand command)
+    internal static ProcessStartInfo Launch(RunCommand command, EgressCredentials credentials)
     {
         var psi = command.Start;
         var inherited = new ProcessStartInfo();
@@ -142,7 +146,9 @@ public sealed class LocalRunHost : IRunHost
         defaults["PATH"] = string.Join(Path.PathSeparator, rest.Prepend(bin));
 
         var hostOwned = new Dictionary<string, string?> { ["HOME"] = home, ["NPM_CONFIG_PREFIX"] = local };
-        var proxy = command.AsAgent ? AgentIsolation.LaunchProxy(command.NetworkMode, command.ProviderId) : command.EgressProxy;
+        var proxy = command.AsAgent
+            ? AgentIsolation.LaunchProxy(credentials, command.NetworkMode, new LaunchScope(LaunchKind.Run, command.OwnerId == Guid.Empty ? null : command.OwnerId, command.ProviderId))
+            : command.EgressProxy;
         if (!string.IsNullOrWhiteSpace(proxy))
             foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
                 hostOwned[name] = value;
@@ -187,7 +193,7 @@ public sealed class LocalRunHost : IRunHost
         => PtyProvider.SpawnAsync(options, ct);
 
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)
-        => AgentIsolation.TerminalCommand(fileName, arguments, providerId, mode);
+        => AgentIsolation.TerminalCommand(fileName, arguments, _credentials, providerId, mode);
 
     // -- Bundles -----------------------------------------------------------------
 

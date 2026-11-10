@@ -61,7 +61,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         NetworkMode: mode);
 
     private static ProcessStartInfo Prepare(ProcessStartInfo psi, AgentExecutionContext ctx)
-        => LocalRunHost.PrepareAgentLaunch(psi, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment is null ? null : CommandEnvironment.Of(ctx.Environment));
+        => LocalRunHost.PrepareAgentLaunch(psi, EgressProxyTests.Creds, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment is null ? null : CommandEnvironment.Of(ctx.Environment));
 
     [Theory]
     [InlineData(NetworkMode.Monitor)]
@@ -72,7 +72,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         var psi = Prepare(new ProcessStartInfo("claude"), Execution(mode));
 
         Assert.StartsWith("http://ild:", psi.Environment["HTTPS_PROXY"]);
-        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressCredentials.Current, psi.Environment["HTTPS_PROXY"]!, out var scope));
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, psi.Environment["HTTPS_PROXY"]!, out var scope));
         Assert.NotNull(scope.Provider);
         Assert.EndsWith("@127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
         Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
@@ -102,6 +102,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton(new Mock<IWorkItemManager>().Object);
         services.AddSingleton(NoPackageFeeds.Resolver);
+        services.AddSingleton(EgressProxyTests.Creds);
         if (policy is not null) services.AddSingleton(policy);
         var ctx = new NodeExecutionContext(
             new LoopRun { Id = Guid.NewGuid(), WorktreePath = _worktree },
@@ -161,15 +162,17 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
 
     private static void AssertUnscopedProxy(string url)
     {
-        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressCredentials.Current, url.Trim(), out var scope));
-        Assert.Equal(new LaunchScope(), scope);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, url.Trim(), out var scope));
+        Assert.Equal(LaunchKind.Run, scope.Kind);
+        Assert.Null(scope.Provider);
+        Assert.Null(scope.Installer);
         Assert.EndsWith("@127.0.0.1:3128", url.Trim());
     }
 
     private async Task<string> RunTerminalAsync(IEgressPolicy? policy)
     {
         var (server, client) = WebSocketPair.Create();
-        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance, policy);
+        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance, policy, host: new LocalRunHost(credentials: EgressProxyTests.Creds));
         var provider = new AiProvider
         {
             Id = Guid.NewGuid(),

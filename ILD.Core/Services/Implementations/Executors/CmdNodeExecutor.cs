@@ -72,7 +72,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         {
             p = await host.StartCommandAsync(
                 RunCommand.Prepared(psi, ctx.Run.Id, CommandEnvironment.Of(feeds.Environment), feeds.FilePath is null ? null : [feeds.FilePath], mode)
-                    with { RunIn = ctx.Run.Id, EgressProxy = AgentIsolation.LaunchProxy(mode, aiProviderId: null) },
+                    with { RunIn = ctx.Run.Id, EgressProxy = ctx.Services.GetService<EgressCredentials>() is { } credentials ? AgentIsolation.LaunchProxy(credentials, mode, new LaunchScope(LaunchKind.Run, ctx.Run.Id)) : null },
                 ctx.CancellationToken);
         }
         catch (Exception ex)

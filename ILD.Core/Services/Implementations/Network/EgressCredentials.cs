@@ -3,8 +3,15 @@ using System.Text;
 
 namespace ILD.Core.Services.Implementations.Network;
 
-/// <summary>What a launch's proxy credential grants: the provider whose scoped entries apply, or the installer zone, or neither.</summary>
-public readonly record struct LaunchScope(Guid? Provider = null, string? Installer = null);
+/// <summary>What a launch is, which is also what its proxy credential grants.</summary>
+public enum LaunchKind { Run, Chat, Installer, SignIn, Preview }
+
+/// <summary>
+/// Whose launch a proxy credential is and what it grants: the <paramref name="Kind"/> of launch, the <paramref name="Owner"/> (the run or
+/// chat it was made for, where it has one) and the <paramref name="Provider"/> whose scoped entries apply, or the installer
+/// <paramref name="Installer"/> zone. Two launches of different owners never hold the same token.
+/// </summary>
+public readonly record struct LaunchScope(LaunchKind Kind = LaunchKind.Run, Guid? Owner = null, Guid? Provider = null, string? Installer = null);
 
 /// <summary>
 /// The credentials the egress proxy hands to its launches (<c>docs/adr/0019</c>). A credential is a token ILD signs with a key of its
@@ -31,19 +38,13 @@ public sealed class EgressCredentials
         _key = key;
     }
 
-    private static EgressCredentials _current = new(RandomNumberGenerator.GetBytes(KeyBytes));
-
-    /// <summary>
-    /// The credentials launches are minted with. The launch helpers are static, as they are about the process environment, so the
-    /// one ILD runs with is set once at start (<see cref="Use"/>); until then a key of this process's own, which verifies nowhere else.
-    /// </summary>
-    public static EgressCredentials Current => Volatile.Read(ref _current);
-
-    public static void Use(EgressCredentials credentials) => Volatile.Write(ref _current, credentials);
+    /// <summary>Credentials under a key of their own, which no other instance verifies. For a host or a test that has no key file.</summary>
+    public static EgressCredentials Random() => new(RandomNumberGenerator.GetBytes(KeyBytes));
 
     /// <summary>The key kept in <paramref name="path"/>, made there (readable by ILD alone) when it is not.</summary>
     public static EgressCredentials Load(string path)
     {
+        // A key file shorter than a key (truncated by a crash) is replaced, not trusted.
         if (File.Exists(path) && File.ReadAllBytes(path) is { Length: >= KeyBytes } existing)
             return new EgressCredentials(existing);
 
@@ -57,7 +58,7 @@ public sealed class EgressCredentials
             using (var stream = new FileStream(temp, options))
                 stream.Write(key);
             // Published whole, so a second ILD starting at once reads a complete key; whichever lands first is the key.
-            if (!File.Exists(path)) File.Move(temp, path);
+            if (!File.Exists(path) || new FileInfo(path).Length < KeyBytes) File.Move(temp, path, overwrite: true);
         }
         finally
         {
@@ -70,7 +71,7 @@ public sealed class EgressCredentials
     public string Mint(LaunchScope scope)
     {
         if (scope.Installer?.Contains('|') == true) throw new ArgumentException("A zone has no '|'.", nameof(scope));
-        var payload = Encoding.UTF8.GetBytes($"v1|{scope.Provider:D}|{scope.Installer}");
+        var payload = Encoding.UTF8.GetBytes($"v2|{(int)scope.Kind}|{scope.Owner:D}|{scope.Provider:D}|{scope.Installer}");
         return Base64Url(payload) + "." + Base64Url(HMACSHA256.HashData(_key, payload));
     }
 
@@ -100,14 +101,18 @@ public sealed class EgressCredentials
         if (!CryptographicOperations.FixedTimeEquals(HMACSHA256.HashData(_key, payload), signature)) return false;
 
         var fields = Encoding.UTF8.GetString(payload).Split('|');
-        if (fields.Length != 3 || fields[0] != "v1") return false;
-        Guid? provider = null;
-        if (fields[1].Length > 0)
-        {
-            if (!Guid.TryParse(fields[1], out var id)) return false;
-            provider = id;
-        }
-        scope = new LaunchScope(provider, fields[2].Length > 0 ? fields[2] : null);
+        if (fields.Length != 5 || fields[0] != "v2" || !int.TryParse(fields[1], out var kind) || !Enum.IsDefined((LaunchKind)kind)
+            || !TryGuid(fields[2], out var owner) || !TryGuid(fields[3], out var provider)) return false;
+        scope = new LaunchScope((LaunchKind)kind, owner, provider, fields[4].Length > 0 ? fields[4] : null);
+        return true;
+    }
+
+    private static bool TryGuid(string value, out Guid? guid)
+    {
+        guid = null;
+        if (value.Length == 0) return true;
+        if (!Guid.TryParse(value, out var parsed)) return false;
+        guid = parsed;
         return true;
     }
 

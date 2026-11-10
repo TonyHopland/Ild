@@ -38,11 +38,12 @@ public class AgentIsolationEgressTests
     [Fact]
     public void No_proxy_url_without_a_configured_port()
     {
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(null, null));
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl("", Guid.NewGuid()));
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl("not-a-port", null));
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl("0", null));
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl("70000", null));
+        var c = EgressProxyTests.Creds;
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, null, new LaunchScope()));
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, "", new LaunchScope(Provider: Guid.NewGuid())));
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, "not-a-port", new LaunchScope()));
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, "0", new LaunchScope()));
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, "70000", new LaunchScope()));
     }
 
     /// <summary>The scope the proxy would read from the <c>Proxy-Authorization</c> a client sends for <paramref name="proxyUrl"/>, exactly as it does with the URL's user info.</summary>
@@ -50,10 +51,10 @@ public class AgentIsolationEgressTests
         => credentials.TryRead("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(new Uri(proxyUrl).UserInfo)), out scope);
 
     /// <summary>The scope in the proxy URL a run host put in <paramref name="environment"/> (<c>NAME=value</c> lines), read with the key launches are minted with.</summary>
-    internal static LaunchScope ScopeInEnvironment(IEnumerable<string> environment)
+    internal static LaunchScope ScopeInEnvironment(IEnumerable<string> environment, EgressCredentials credentials)
     {
         var url = environment.Single(e => e.StartsWith("HTTPS_PROXY=", StringComparison.Ordinal))["HTTPS_PROXY=".Length..];
-        Assert.True(TryReadUrl(EgressCredentials.Current, url, out var scope));
+        Assert.True(TryReadUrl(credentials, url, out var scope));
         return scope;
     }
 
@@ -61,21 +62,41 @@ public class AgentIsolationEgressTests
     public void Every_proxy_url_carries_a_credential_that_names_its_scope()
     {
         var id = Guid.Parse("7f2b9c1e-3a4d-4e5f-8a6b-1c2d3e4f5a6b");
-        var credentials = EgressCredentials.Current;
+        var credentials = EgressProxyTests.Creds;
+        var run = Guid.NewGuid();
 
-        var unscoped = AgentIsolation.ResolveEgressProxyUrl("3128", null)!;
-        var provider = AgentIsolation.ResolveEgressProxyUrl("3128", id)!;
-        var installer = new EgressProxyOptions(true, 3128).InstallerUrl("repo-0123abcd")!;
+        var unscoped = AgentIsolation.ResolveEgressProxyUrl(credentials, "3128", new LaunchScope(LaunchKind.Run, run))!;
+        var provider = AgentIsolation.ResolveEgressProxyUrl(credentials, "3128", new LaunchScope(LaunchKind.Chat, run, id))!;
+        var installer = new EgressProxyOptions(true, 3128).InstallerUrl(credentials, "repo-0123abcd")!;
 
         Assert.StartsWith("http://ild:", unscoped);
         Assert.EndsWith("@127.0.0.1:3128", unscoped);
         Assert.True(TryReadUrl(credentials, unscoped, out var none));
-        Assert.Equal(new LaunchScope(), none);
+        Assert.Equal(new LaunchScope(LaunchKind.Run, run), none);
         Assert.True(TryReadUrl(credentials, provider, out var scoped));
-        Assert.Equal(new LaunchScope(Provider: id), scoped);
+        Assert.Equal(new LaunchScope(LaunchKind.Chat, run, id), scoped);
         Assert.True(TryReadUrl(credentials, installer, out var zoned));
-        Assert.Equal(new LaunchScope(Installer: "repo-0123abcd"), zoned);
-        Assert.Null(new EgressProxyOptions(false, 0).InstallerUrl("agents"));
+        Assert.Equal(new LaunchScope(LaunchKind.Installer, Installer: "repo-0123abcd"), zoned);
+        Assert.Null(new EgressProxyOptions(false, 0).InstallerUrl(credentials, "agents"));
+    }
+
+    [Fact]
+    public void Two_launches_never_hold_the_same_token()
+    {
+        var credentials = EgressProxyTests.Creds;
+        var (runA, runB, provider) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var tokens = new[]
+        {
+            credentials.Mint(new LaunchScope(LaunchKind.Run, runA)),
+            credentials.Mint(new LaunchScope(LaunchKind.Run, runB)),
+            credentials.Mint(new LaunchScope(LaunchKind.Run, runA, provider)),
+            credentials.Mint(new LaunchScope(LaunchKind.Run, runB, provider)),
+            credentials.Mint(new LaunchScope(LaunchKind.Chat, runA)),
+        };
+
+        Assert.Equal(tokens.Length, tokens.Distinct().Count());
+        Assert.True(credentials.TryRead("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("ild:" + tokens[1])), out var scope));
+        Assert.Equal(new LaunchScope(LaunchKind.Run, runB), scope);
     }
 
     [Fact]
@@ -164,11 +185,11 @@ public class AgentIsolationEgressTests
     [InlineData(NetworkMode.Off, false)]
     public void Every_mode_but_Off_points_a_local_launch_at_the_proxy(NetworkMode mode, bool proxied)
     {
-        var url = AgentIsolation.ResolveLaunchProxy(mode, "3128", null);
+        var url = AgentIsolation.ResolveLaunchProxy(EgressProxyTests.Creds, mode, "3128", new LaunchScope());
         Assert.Equal(proxied, url is not null);
         if (url is not null)
             Assert.EndsWith("@127.0.0.1:3128", url);
-        Assert.Null(AgentIsolation.ResolveLaunchProxy(mode, null, null));
+        Assert.Null(AgentIsolation.ResolveLaunchProxy(EgressProxyTests.Creds, mode, null, new LaunchScope()));
     }
 
     [Fact]

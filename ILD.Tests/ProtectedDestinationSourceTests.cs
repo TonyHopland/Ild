@@ -33,6 +33,41 @@ public sealed class ProtectedDestinationSourceTests : IDisposable
             () => [IPAddress.Parse("10.0.0.99")]);
 
     [Fact]
+    public async Task A_failing_pod_list_keeps_the_last_ranges_and_is_not_retried_by_every_connection()
+    {
+        var clock = new ILD.Tests.Fakes.ManualTimeProvider();
+        var calls = 0;
+        var fail = false;
+        var source = new ProtectedDestinationSource(
+            _services.GetRequiredService<IServiceScopeFactory>(), name => name == "ILD_API_URL" ? "http://ild.example:8080" : null, RunHostKind.Kubernetes, clock,
+            (_, _) => Task.FromResult(new[] { IPAddress.Parse("10.0.0.7") }), () => [],
+            isolatedRanges: _ =>
+            {
+                calls++;
+                return fail ? throw new InvalidOperationException("the API is throttling") : Task.FromResult<IReadOnlyList<IpRange>>([IpRange.Single(IPAddress.Parse("10.244.1.5"))]);
+            });
+        var ct = TestContext.Current.CancellationToken;
+
+        Assert.Equal([IpRange.Single(IPAddress.Parse("10.244.1.5"))], await source.GetIsolatedRangesAsync(ct));
+
+        // The cluster fails when the cache has expired: the destinations still load and the last ranges stay in force.
+        fail = true;
+        clock.Advance(ProtectedDestinationSource.CacheTtl + TimeSpan.FromSeconds(1));
+        Assert.Equal([IpRange.Single(IPAddress.Parse("10.244.1.5"))], await source.GetIsolatedRangesAsync(ct));
+        Assert.NotEmpty(await source.GetAsync(ct));
+
+        // The failure is cached for the TTL, so more connections do not ask the cluster again.
+        var before = calls;
+        for (var i = 0; i < 5; i++) await source.GetIsolatedRangesAsync(ct);
+        Assert.Equal(before, calls);
+
+        // Once it answers again, the new ranges are used.
+        fail = false;
+        clock.Advance(ProtectedDestinationSource.CacheTtl + TimeSpan.FromSeconds(1));
+        Assert.Single(await source.GetIsolatedRangesAsync(ct));
+    }
+
+    [Fact]
     public async Task Each_entry_is_derived_from_the_configuration_ILD_already_has()
     {
         await _db.Settings.UpsertAsync(AppSettingKeys.WorkItemServerUrl, "http://workitems.example:5000/", TestContext.Current.CancellationToken);

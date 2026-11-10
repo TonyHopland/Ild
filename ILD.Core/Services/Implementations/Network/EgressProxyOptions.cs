@@ -91,16 +91,12 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
 
     /// <summary>
     /// The URL a launch's <c>HTTP_PROXY</c> is set to, or <c>null</c> when the proxy is disabled. It always carries a credential
-    /// (<see cref="EgressCredentials"/>), which the proxy requires: with an <paramref name="aiProviderId"/> it also scopes the launch to
-    /// that provider's list entries. The scope is in the signed token, so the launch cannot change it.
+    /// <paramref name="credentials"/> signed for <paramref name="scope"/>, which the proxy requires and takes the launch's scope from.
     /// </summary>
-    public string? ClientUrl(Guid? aiProviderId)
-        => Enabled ? UrlFor(new LaunchScope(Provider: aiProviderId)) : null;
+    public string? ClientUrl(EgressCredentials credentials, LaunchScope scope)
+        => Enabled ? $"http://{EgressCredentials.User}:{credentials.Mint(scope)}@{ListenAddress}:{Port}" : null;
 
     /// <summary>The URL a toolchain installer for <paramref name="zone"/> (<c>agents</c>, <c>toolchains</c>, <c>repo-&lt;id&gt;</c>) is pointed at, or null when the proxy is disabled.</summary>
-    public string? InstallerUrl(string zone)
-        => Enabled ? UrlFor(new LaunchScope(Installer: zone)) : null;
-
-    private string UrlFor(LaunchScope scope)
-        => $"http://{EgressCredentials.User}:{EgressCredentials.Current.Mint(scope)}@{ListenAddress}:{Port}";
+    public string? InstallerUrl(EgressCredentials credentials, string zone)
+        => ClientUrl(credentials, new LaunchScope(LaunchKind.Installer, Installer: zone));
 }

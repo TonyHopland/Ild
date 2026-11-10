@@ -5,6 +5,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.Network;
 
@@ -64,12 +65,15 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
     private readonly Func<IReadOnlyList<IPAddress>> _ownAddresses;
     private readonly SemaphoreSlim _reload = new(1, 1);
     private readonly Func<CancellationToken, Task<IReadOnlyList<IpRange>>> _isolated;
+    private readonly ILogger? _logger;
+    private IReadOnlyList<IpRange> _lastIsolated = [];
     private (IReadOnlyList<ProtectedDestination> Value, IReadOnlyList<IpRange> Isolated, long At)? _cached;
 
     public ProtectedDestinationSource(IServiceScopeFactory scopes, Func<string, string?> environment, RunHostKind kind, TimeProvider clock,
         Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null, Func<IReadOnlyList<IPAddress>>? ownAddresses = null,
-        Func<CancellationToken, Task<IReadOnlyList<IpRange>>>? isolatedRanges = null)
+        Func<CancellationToken, Task<IReadOnlyList<IpRange>>>? isolatedRanges = null, ILogger? logger = null)
     {
+        _logger = logger;
         _isolated = isolatedRanges ?? (_ => Task.FromResult<IReadOnlyList<IpRange>>([]));
         _scopes = scopes;
         _environment = environment;
@@ -92,13 +96,29 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
         try
         {
             if (Fresh() is { } raced) return raced;
-            var loaded = (await BuildAsync(ct).ConfigureAwait(false), await _isolated(ct).ConfigureAwait(false), _clock.GetTimestamp());
+            var loaded = (await BuildAsync(ct).ConfigureAwait(false), await IsolatedAsync(ct).ConfigureAwait(false), _clock.GetTimestamp());
             _cached = loaded;
             return loaded;
         }
         finally
         {
             _reload.Release();
+        }
+    }
+
+    // Asking the cluster for its pods can fail (an API blip, throttling). That must not stop all egress, so the ranges that last loaded
+    // stay in force, and the failure is cached with them for the TTL rather than retried by every connection.
+    private async Task<IReadOnlyList<IpRange>> IsolatedAsync(CancellationToken ct)
+    {
+        try
+        {
+            return _lastIsolated = await _isolated(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _logger?.LogWarning(ex, "Could not list the run networks the egress proxy keeps agents off; keeping the {Count} ranges that last loaded for {Seconds} s",
+                _lastIsolated.Count, CacheTtl.TotalSeconds);
+            return _lastIsolated;
         }
     }
 

@@ -69,13 +69,14 @@ public static class ServiceCollectionExtensions
             var config = sp.GetRequiredService<IConfiguration>();
             var kind = RunHostOptions.Detect(name => config[name]);
             var runner = sp.GetRequiredService<IProcessRunner>();
-            var local = new LocalRunHost(runner, sp);
+            var credentials = sp.GetRequiredService<EgressCredentials>();
+            var local = new LocalRunHost(runner, sp, credentials: credentials);
             if (kind == RunHostKind.Local) return local;
 
             var loggers = sp.GetRequiredService<ILoggerFactory>();
             var host = kind == RunHostKind.Kubernetes
-                ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp))
-                : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp));
+                ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials)
+                : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials);
             host.Isolated.Probe = sp.GetRequiredService<NetworkEnforcementProbe>();
             host.Isolated.Refusals = sp.GetRequiredService<InstallerRefusals>();
             // The lasting copy of the preview data repositories keep; each run works on a copy of its own.
@@ -202,9 +203,13 @@ public static class ServiceCollectionExtensions
         // saw, and the enforcement status the entrypoint reported. All keyed off
         // ILD_NETWORK_PROXY_PORT; unset, nothing listens and launches are untouched.
         // A run's pod or container reaches the egress proxy over the network, not on ILD's loopback.
-        // Each launch is given a token ILD signs, which the proxy requires and takes the launch's scope from. The key is loaded once,
-        // in Program, before anything builds a launch's environment.
-        services.AddSingleton(_ => EgressCredentials.Current);
+        // Each launch is given a token ILD signs, which the proxy requires and takes the launch's scope from. The key is kept in the data path.
+        services.AddSingleton(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var dataRoot = config["App:DataPath"] ?? Environment.GetEnvironmentVariable("ILD_DATA_PATH") ?? config["Storage:DataRoot"] ?? "data";
+            return EgressCredentials.Load(Path.Combine(dataRoot, "egress", "proxy.key"));
+        });
         services.AddSingleton(sp =>
         {
             var config = sp.GetRequiredService<IConfiguration>();
@@ -222,7 +227,8 @@ public static class ServiceCollectionExtensions
             var config = sp.GetRequiredService<IConfiguration>();
             string? Read(string name) => Environment.GetEnvironmentVariable(name) ?? config[name];
             return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>(),
-                isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]));
+                isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]),
+                logger: sp.GetRequiredService<ILogger<ProtectedDestinationSource>>());
         });
         services.AddSingleton<IEgressPolicy, EgressPolicy>();
         services.AddSingleton<INetworkNotifier, SignalRNetworkNotifier>();

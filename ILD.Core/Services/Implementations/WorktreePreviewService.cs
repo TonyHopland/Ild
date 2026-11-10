@@ -41,7 +41,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly IConfiguration _configuration;
     private readonly PreviewProxyBase _proxyBase;
     private readonly ILogger<WorktreePreviewService> _logger;
-    private readonly string? _egressProxy;
+    private readonly EgressProxyOptions? _egressProxy;
+    private readonly EgressCredentials? _credentials;
     private readonly IEgressPolicy? _egressPolicy;
     private readonly IProcessEnvironment _environment;
     private readonly Func<int, bool> _isPortAvailable;
@@ -78,9 +79,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewDataClaims claims,
         IRunHost host,
         IEgressPolicy? egressPolicy = null,
-        IWorkItemNotifier? notifier = null)
+        IWorkItemNotifier? notifier = null,
+        EgressCredentials? credentials = null)
         : this(httpClientFactory, configuration, proxyBase, logger, host,
-            AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims,
+            EgressProxyOptions.FromEnvironment(), credentials, ProcessEnvironment.Current, claims: claims,
             egressPolicy: egressPolicy, notifier: notifier)
     {
     }
@@ -94,8 +96,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <paramref name="claims"/> records which previews hold each repository's preview
     /// data: the host's, which its reset consults too, or a private one.
     /// <paramref name="egressPolicy"/> decides whether a launch is proxied: not in network mode Off
-    /// (<see cref="AgentIsolation.ResolveLaunchProxy(NetworkMode, string?)"/>); with no policy every launch
-    /// is proxied, as <paramref name="egressProxy"/> says.
+    /// ; with no policy every launch
+    /// is proxied, as <paramref name="egressProxy"/> says, under a credential <paramref name="credentials"/> signs for the preview.
     /// </summary>
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
@@ -103,7 +105,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
         IRunHost host,
-        string? egressProxy = null,
+        EgressProxyOptions? egressProxy = null,
+        EgressCredentials? credentials = null,
         IProcessEnvironment? environment = null,
         Func<int, bool>? isPortAvailable = null,
         PreviewDataClaims? claims = null,
@@ -115,7 +118,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _configuration = configuration;
         _proxyBase = proxyBase;
         _logger = logger;
-        _egressProxy = NonEmpty(egressProxy);
+        _egressProxy = egressProxy;
+        _credentials = credentials;
         _egressPolicy = egressPolicy;
         _environment = environment ?? ProcessEnvironment.Current;
         _isPortAvailable = isPortAvailable ?? IsPortAvailable;
@@ -123,7 +127,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _notifier = notifier;
     }
 
-    private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     public async Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default)
     {
@@ -2248,7 +2251,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     // command in a run of its own keeps the variables and copies the file in. It runs in the worktree's run, or nowhere.
     internal RunCommand PreparedCommand(ResolvedStep resolved)
         => RunCommand.Prepared(BuildPreviewProcess(resolved), environment: CommandEnvironment.Of(resolved.Environment), files: resolved.Files, networkMode: resolved.NetworkMode)
-            with { RunIn = resolved.RunIn, EgressProxy = AgentIsolation.ResolveLaunchProxy(resolved.NetworkMode, _egressProxy) };
+            with { RunIn = resolved.RunIn, EgressProxy = ProxyFor(resolved) };
+
+    // The proxy a preview command is pointed at, signed for the run it runs in: none in network mode Off, or where no proxy runs.
+    private string? ProxyFor(ResolvedStep resolved)
+        => resolved.NetworkMode == NetworkMode.Off || _credentials is null ? null : _egressProxy?.ClientUrl(_credentials, new LaunchScope(LaunchKind.Preview, resolved.RunIn));
 
     // The run id leads the name, which is how the run's files are found and what a host checks before it copies one in.
     internal static string FeedFilePrefix(string worktreePath, string kind)

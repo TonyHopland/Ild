@@ -11,7 +11,7 @@ public static class KubernetesRunHostFactory
     /// Reaches the cluster with ILD's own service account, or with the kubeconfig the settings name.
     /// </summary>
     public static RoutingRunHost Create(IRunHost local, Func<string, string?> setting, IProcessRunner runner, ILoggerFactory loggers,
-        Func<CancellationToken, Task<IReadOnlySet<Guid>>>? retainedRuns = null)
+        Func<CancellationToken, Task<IReadOnlySet<Guid>>>? retainedRuns = null, ILD.Core.Services.Implementations.Network.EgressCredentials? credentials = null)
     {
         var options = KubernetesRunHostOptions.From(setting);
         var configuration = options.Kubeconfig is { } kubeconfig
@@ -21,6 +21,7 @@ public static class KubernetesRunHostFactory
             ?? throw new InvalidOperationException($"{KubernetesRunHostOptions.NamespaceSetting} is not set and ILD's own namespace could not be read.");
         var host = new KubernetesRunHost(new k8s.Kubernetes(configuration), options, namespaceName, runner, loggers.CreateLogger<KubernetesRunHost>())
         {
+            Credentials = credentials ?? ILD.Core.Services.Implementations.Network.EgressCredentials.Random(),
             RetainedRuns = retainedRuns ?? (_ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>())),
         };
         return new RoutingRunHost(local, host);

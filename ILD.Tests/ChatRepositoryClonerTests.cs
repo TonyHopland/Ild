@@ -40,7 +40,7 @@ public sealed class ChatRepositoryClonerStartInfoTests
             Assert.Equal("git", Path.GetFileName(psi.FileName));
             Assert.Contains("/scratch/chat/repos/widgets", psi.ArgumentList);
             Assert.Equal("/", psi.WorkingDirectory);
-            var launched = LocalRunHost.Launch(RunCommand.Prepared(psi, environment: ChatRepositoryCloner.GitEnvironment("/scratch/chat")));
+            var launched = LocalRunHost.Launch(RunCommand.Prepared(psi, environment: ChatRepositoryCloner.GitEnvironment("/scratch/chat")), EgressProxyTests.Creds);
             foreach (var name in Inherited)
                 Assert.False(launched.Environment.ContainsKey(name), $"{name} reaches git in the agent's clone");
             Assert.Equal("0", launched.Environment["GIT_TERMINAL_PROMPT"]);
