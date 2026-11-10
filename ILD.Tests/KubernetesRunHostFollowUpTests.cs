@@ -80,9 +80,9 @@ public sealed class KubernetesRunHostFollowUpTests
         Assert.StartsWith(run.ToString("N") + "/", ownedId);
         Assert.StartsWith("unowned/", previewId);
         var kill = api.Execs.Last();
-        Assert.Equal(KubernetesRunHost.KillAllScript, kill.Command[2]);
+        Assert.Equal(KubernetesRunHost.KillAllScript, kill.Command[5]);
         Assert.Equal(run.ToString("N"), kill.Command[^1]);
-        Assert.Contains("\"/run/ild/procs/$1\"/*", kill.Command[2]);
+        Assert.Contains("\"/run/ild/procs/$1\"/*", kill.Command[5]);
     }
 
     [Fact]
