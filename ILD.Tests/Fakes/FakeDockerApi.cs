@@ -38,6 +38,9 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     /// <summary>The bodies of the network connect calls, in order.</summary>
     public List<JsonNode> Connects { get; } = [];
 
+    /// <summary>How many networks without a user-given subnet the engine can address from its default pools (Docker's is about 31); null for no limit.</summary>
+    public int? DefaultPoolNetworkLimit { get; set; }
+
     /// <summary>Every delete a client asked for, as <c>kind/name</c>, in order.</summary>
     public List<string> Deleted { get; } = [];
 
@@ -116,6 +119,26 @@ internal sealed class FakeDockerApi : IAsyncDisposable
 
     public JsonObject? Network(string name) { lock (_gate) return _networks.GetValueOrDefault(name)?.Config; }
 
+    /// <summary>The subnet the engine addresses a network from, whether it was given one or took one from its pool; null when there is no such network.</summary>
+    public string? SubnetOf(string name) { lock (_gate) return _networks.GetValueOrDefault(name) is { } n ? SubnetOf(n) : null; }
+
+    /// <summary>Makes a network look as one made before ILD gave networks subnets: the engine addressed it from its pool.</summary>
+    public void ForgetUserSubnet(string name)
+    {
+        lock (_gate) _networks[name].Config.Remove("IPAM");
+    }
+
+    /// <summary>Puts a network in the engine that someone else made, on the given subnet.</summary>
+    public void SeedForeignNetwork(string name, string subnet)
+    {
+        lock (_gate)
+            _networks[name] = new FakeNetwork(name, NextSubnet(), [], new JsonObject
+            {
+                ["Name"] = name,
+                ["IPAM"] = new JsonObject { ["Config"] = new JsonArray(new JsonObject { ["Subnet"] = subnet }) },
+            });
+    }
+
     /// <summary>ILD's own container, which the host connects to the network of each run.</summary>
     public void SeedIldContainer(string name)
     {
@@ -185,6 +208,35 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     }
 
     private int NextSubnet() => _nextNetwork++;
+
+    // A network nobody gave a subnet takes 10.89.N.0/24 from the engine's pool, as a network does on Docker and Podman.
+    private static string? UserSubnetOf(FakeNetwork network)
+        => network.Config["IPAM"]?["Config"]?.AsArray().Select(c => c?["Subnet"]?.GetValue<string>()).FirstOrDefault(s => !string.IsNullOrEmpty(s));
+
+    private static string SubnetOf(FakeNetwork network) => UserSubnetOf(network) ?? $"10.89.{network.Index}.0/24";
+
+    private static string AddressAt(string subnet, int offset)
+    {
+        var value = Range(subnet).Start + (uint)offset;
+        return $"{value >> 24}.{(value >> 16) & 255}.{(value >> 8) & 255}.{value & 255}";
+    }
+
+    private static (uint Start, uint End) Range(string subnet)
+    {
+        var parts = subnet.Split('/');
+        var bytes = System.Net.IPAddress.Parse(parts[0]).GetAddressBytes();
+        var address = ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | bytes[3];
+        var size = 1UL << (32 - int.Parse(parts[1]));
+        var start = (uint)(address & ~(size - 1));
+        return (start, (uint)(start + size - 1));
+    }
+
+    private static bool Overlap(string a, string b)
+    {
+        var (a0, a1) = Range(a);
+        var (b0, b1) = Range(b);
+        return a0 <= b1 && b0 <= a1;
+    }
 
     // -- Server ------------------------------------------------------------------
 
@@ -304,7 +356,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
                 ("DELETE", ["volumes", var name]) => DeleteVolume(name),
 
                 ("POST", ["networks", "create"]) => CreateNetwork(request),
-                ("GET", ["networks"]) => (200, _networks.Values.Where(n => Matches(request, n.Labels)).Select(n => new { n.Name, n.Labels }).ToList()),
+                ("GET", ["networks"]) => (200, _networks.Values.Where(n => Matches(request, n.Labels)).Select(n => new { n.Name, n.Labels, IPAM = new { Config = new[] { new { Subnet = SubnetOf(n) } } } }).ToList()),
                 ("GET", ["networks", var name]) => InspectNetwork(name),
                 ("DELETE", ["networks", var name]) => DeleteNetwork(name),
                 ("POST", ["networks", var name, "connect"]) => Connect(name, request, connect: true),
@@ -368,7 +420,14 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         var body = JsonNode.Parse(request.Body)!.AsObject();
         var name = body["Name"]!.GetValue<string>();
         if (_networks.ContainsKey(name)) return Failure(409, $"network with name {name} already exists");
-        _networks[name] = new FakeNetwork(name, NextSubnet(), LabelsOf(body["Labels"]), body);
+        var network = new FakeNetwork(name, NextSubnet(), LabelsOf(body["Labels"]), body);
+        if (UserSubnetOf(network) is { } given)
+        {
+            if (_networks.Values.Any(n => Overlap(SubnetOf(n), given))) return Failure(403, "Pool overlaps with other one on this address space");
+        }
+        else if (DefaultPoolNetworkLimit is { } limit && _networks.Values.Count(n => UserSubnetOf(n) is null) >= limit)
+            return Failure(500, "could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network");
+        _networks[name] = network;
         Created.Add($"networks/{name}");
         return (201, new { Id = name });
     }
@@ -383,7 +442,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
             Internal = network.Config["Internal"]?.GetValue<bool>() ?? false,
             Labels = network.Labels,
             Containers = attached,
-            IPAM = new { Config = new[] { new { Subnet = $"10.89.{network.Index}.0/24", Gateway = $"10.89.{network.Index}.1" } } },
+            IPAM = new { Config = new[] { new { Subnet = SubnetOf(network), Gateway = AddressAt(SubnetOf(network), 1) } } },
         });
     }
 
@@ -398,12 +457,22 @@ internal sealed class FakeDockerApi : IAsyncDisposable
 
     private (int, object?) Connect(string network, Request request, bool connect)
     {
-        var container = JsonNode.Parse(request.Body)!["Container"]!.GetValue<string>();
-        if (!_networks.ContainsKey(network)) return Failure(404, $"network {network} not found");
+        var body = JsonNode.Parse(request.Body)!;
+        var container = body["Container"]!.GetValue<string>();
+        if (!_networks.TryGetValue(network, out var target)) return Failure(404, $"network {network} not found");
         if (!_containers.TryGetValue(container, out var found)) return Failure(404, $"no such container: {container}");
         if (connect && found.Networks.Contains(network)) return Failure(403, $"endpoint with name {container} already exists in network {network}");
-        if (connect) { found.Networks.Add(network); Connects.Add(JsonNode.Parse(request.Body)!); }
-        else found.Networks.Remove(network);
+        var fixedIp = body["EndpointConfig"]?["IPAMConfig"]?["IPv4Address"]?.GetValue<string>();
+        if (connect && fixedIp is not null)
+        {
+            // Docker accepts a fixed address only on a network whose subnet the user chose.
+            if (UserSubnetOf(target) is not { } subnet)
+                return Failure(400, "user specified IP address is supported only when connecting to networks with user configured subnets");
+            if (!Overlap(subnet, fixedIp + "/32")) return Failure(400, $"no configured subnet or ip-range contain the IP address {fixedIp}");
+            found.FixedAddresses[network] = fixedIp;
+        }
+        if (connect) { found.Networks.Add(network); Connects.Add(body); }
+        else { found.Networks.Remove(network); found.FixedAddresses.Remove(network); }
         // Podman answers both with a plain-text "OK", not an empty body.
         return (200, new PlainText("OK"));
     }
@@ -457,7 +526,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
             container.Running = true;
         var networks = container.Networks.ToDictionary(
             n => n,
-            n => new { IPAddress = container.Config.Count == 0 ? $"10.89.{_networks[n].Index}.5" : $"10.89.{_networks[n].Index}.2" });
+            n => new { IPAddress = container.FixedAddresses.GetValueOrDefault(n) ?? AddressAt(SubnetOf(_networks[n]), container.Config.Count == 0 ? 5 : 2) });
         return (200, new
         {
             Name = "/" + name,
@@ -564,6 +633,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
         public JsonObject Config { get; } = config;
         public Dictionary<string, string> Labels { get; } = labels;
         public HashSet<string> Networks { get; } = [];
+        public Dictionary<string, string> FixedAddresses { get; } = [];
         public bool Started { get; set; }
         public bool Running { get; set; }
         public bool Stopped { get; set; }

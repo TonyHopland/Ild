@@ -357,7 +357,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await CreateRunAsync();
 
         var hosts = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Select(c => c!.GetValue<string>());
-        Assert.Single(hosts, h => h.StartsWith("ild.example:10.89.", StringComparison.Ordinal) && h.EndsWith(".1", StringComparison.Ordinal));
+        Assert.Single(hosts, h => h == $"ild.example:{_api.SubnetOf(Name(_run))![..^"0/28".Length]}1");
     }
 
     [Fact]
@@ -370,7 +370,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.Equal([Name(_run)], _api.NetworksOf("ild-main"));
         var hosts = _api.Container(Name(_run))!["HostConfig"]!["ExtraHosts"]!.AsArray().Select(c => c!.GetValue<string>());
-        Assert.Single(hosts, h => h.StartsWith("ild.example:10.89.", StringComparison.Ordinal) && h.EndsWith(".5", StringComparison.Ordinal));
+        Assert.Single(hosts, h => h == $"ild.example:{_api.SubnetOf(Name(_run))![..^"0/28".Length]}5");
     }
 
     [Fact]
@@ -874,7 +874,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
     [Theory]
     [InlineData(false, "127.0.0.11")]
-    [InlineData(true, @"^10\.89\.\d+\.1$")]
+    [InlineData(true, @"^10\.213\.\d+\.1$")]
     public async Task A_run_with_its_own_dns_gets_the_engines_nameserver_back_when_the_route_closes(bool podman, string expected)
     {
         if (podman) _api.LibpodInfo = new JsonObject();
@@ -1191,7 +1191,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var target = await _host.PreviewTargetAsync(WorkingDirectory, 5173, TestContext.Current.CancellationToken);
 
-        Assert.Matches(@"^http://10\.89\.\d+\.2:5173/$", target.ToString());
+        Assert.Matches(@"^http://10\.213\.\d+\.2:5173/$", target.ToString());
     }
 
     [Fact]
@@ -1202,7 +1202,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var target = await restarted.PreviewTargetAsync(WorkingDirectory, 3000, TestContext.Current.CancellationToken);
 
-        Assert.Matches(@"^http://10\.89\.\d+\.2:3000/$", target.ToString());
+        Assert.Matches(@"^http://10\.213\.\d+\.2:3000/$", target.ToString());
     }
 
     [Fact]
@@ -1632,6 +1632,94 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(connects, _api.Connects.Count);
     }
 
+    [Fact]
+    public async Task Every_run_chat_and_installer_network_gets_a_small_subnet_of_the_pool()
+    {
+        await CreateRunAsync();
+        await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
+
+        foreach (var network in new[] { Name(_run), ChatContainer })
+        {
+            var subnet = _api.SubnetOf(network)!;
+            Assert.StartsWith("10.213.", subnet, StringComparison.Ordinal);
+            Assert.EndsWith("/28", subnet, StringComparison.Ordinal);
+        }
+        Assert.NotEqual(_api.SubnetOf(Name(_run)), _api.SubnetOf(ChatContainer));
+    }
+
+    [Fact]
+    public async Task More_runs_than_the_engines_default_pool_has_room_for_all_get_a_network()
+    {
+        _api.DefaultPoolNetworkLimit = 3;
+        var runs = Enumerable.Range(0, 8).Select(_ => Guid.NewGuid()).ToList();
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+
+        var baseRepository = MakeBaseRepository();
+        foreach (var run in runs) await CreateRunAsync(_host, run, baseRepository);
+
+        Assert.All(runs, run => Assert.Contains(Name(run), _api.Networks()));
+        Assert.Equal(runs.Count, runs.Select(r => _api.SubnetOf(Name(r))).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task A_subnet_a_foreign_network_holds_is_skipped()
+    {
+        _api.SeedForeignNetwork("lan", "10.213.0.0/24");
+
+        await CreateRunAsync();
+
+        Assert.Equal("10.213.1.0/28", _api.SubnetOf(Name(_run)));
+    }
+
+    [Fact]
+    public async Task A_run_network_made_without_a_subnet_gets_a_plain_connect_and_a_warning_when_ild_comes_back()
+    {
+        _api.SeedIldContainer("ild-main");
+        using var host = NewHost(Options(ildContainer: "ild-main"));
+        await CreateRunAsync(host);
+        _api.ForgetUserSubnet(Name(_run));
+
+        _api.SeedIldContainer("ild-main");
+        using var restarted = NewHost(Options(ildContainer: "ild-main"));
+        await restarted.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal([Name(_run)], _api.NetworksOf("ild-main"));
+        Assert.Null(_api.Connects[^1]["EndpointConfig"]);
+        Assert.Contains(_log.Warnings, m => m.Contains(Name(_run), StringComparison.Ordinal) || m.Contains($"run {_run:N}", StringComparison.Ordinal));
+        Assert.Contains(_log.Warnings, m => m.Contains("made again", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("10.50.0.0/16")]
+    [InlineData("192.168.0.0/24")]
+    public void The_subnet_pool_is_an_ipv4_network_of_at_least_a_slash_24(string pool)
+        => Assert.Equal(pool, ContainerRunHostOptions.From(PoolSetting(pool)).SubnetPool);
+
+    [Theory]
+    [InlineData("10.50.0.0/28")]
+    [InlineData("10.50.0.0")]
+    [InlineData("fd00::/16")]
+    [InlineData("soon")]
+    public void A_subnet_pool_that_is_not_an_ipv4_network_of_at_least_a_slash_24_is_refused(string pool)
+        => Assert.Contains("ILD_CONTAINER_SUBNET_POOL", Assert.Throws<InvalidOperationException>(() => ContainerRunHostOptions.From(PoolSetting(pool))).Message);
+
+    [Fact]
+    public void The_subnet_pool_defaults_to_a_private_range()
+        => Assert.Equal("10.213.0.0/16", ContainerRunHostOptions.From(PoolSetting(null)).SubnetPool);
+
+    private static Func<string, string?> PoolSetting(string? pool) => name => name switch
+    {
+        "ILD_API_URL" => "http://ild.example:8080",
+        "ILD_CONTAINER_SOCKET" => "/var/run/docker.sock",
+        "ILD_CONTAINER_RUNNER_IMAGE" => "img",
+        "ILD_CONTAINER_SUBNET_POOL" => pool,
+        _ => null,
+    };
+
     // -- Toolchains --------------------------------------------------------------
 
     private static readonly RunAgent Claude = new(ManagedAgentCatalog.ClaudeCode, "2.1.0");
@@ -1769,7 +1857,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains(network!, ildOnIt);
         var hostConfig = config["HostConfig"]!;
         Assert.Equal(network, hostConfig["NetworkMode"]!.GetValue<string>());
-        Assert.Contains(hostConfig["ExtraHosts"]!.AsArray(), h => h!.GetValue<string>().StartsWith("ild.example:10.89.", StringComparison.Ordinal));
+        Assert.Contains(hostConfig["ExtraHosts"]!.AsArray(), h => h!.GetValue<string>().StartsWith("ild.example:10.213.", StringComparison.Ordinal));
         Assert.Equal(["127.0.0.1"], hostConfig["Dns"]!.AsArray().Select(d => d!.GetValue<string>()));
         Assert.Null(hostConfig["Tmpfs"]);
 

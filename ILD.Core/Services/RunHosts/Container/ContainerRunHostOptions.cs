@@ -16,6 +16,7 @@ public sealed record ContainerRunHostOptions
     public const string ReadyTimeoutSetting = "ILD_CONTAINER_READY_TIMEOUT_SECONDS";
     public const string EgressProxyPortSetting = "ILD_NETWORK_PROXY_PORT";
     public const string ToolsVolumeSetting = "ILD_CONTAINER_TOOLS_VOLUME";
+    public const string SubnetPoolSetting = "ILD_CONTAINER_SUBNET_POOL";
 
     private static readonly string[] GitIdentitySettings = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 
@@ -57,6 +58,9 @@ public sealed record ContainerRunHostOptions
     /// <summary>The named volume that holds the toolchain store, shared by every run and ILD on the engine.</summary>
     public string ToolsVolume { get; init; } = "ild-tools";
 
+    /// <summary>The IPv4 range (CIDR) each run, chat and installer network gets a /28 of, so ILD can be put back on a network at a fixed address and the engine's default pools never run out.</summary>
+    public string SubnetPool { get; init; } = "10.213.0.0/16";
+
     /// <summary>The host name in <see cref="IldUrl"/>.</summary>
     public string IldHost => new Uri(IldUrl).Host;
 
@@ -97,6 +101,7 @@ public sealed record ContainerRunHostOptions
             ChatIdleTimeout = RunHostOptions.ChatIdleTimeoutOf(Value(RunHostOptions.ChatIdleTimeoutSetting)),
             Toolchains = RunHostOptions.ToolchainsOn(Value(RunHostOptions.ToolchainsSetting)),
             ToolsVolume = DockerName(Value(ToolsVolumeSetting), ToolsVolumeSetting) ?? defaults.ToolsVolume,
+            SubnetPool = SubnetPoolOf(Value(SubnetPoolSetting)) ?? defaults.SubnetPool,
         };
     }
 
@@ -126,6 +131,11 @@ public sealed record ContainerRunHostOptions
         var bytes = (long)(value * (suffix is null ? 1 : factor));
         return bytes == 0 ? null : bytes;
     }
+
+    private static string? SubnetPoolOf(string? value)
+        => value is null || (NetworkSubnets.TryParse(value, out var pool) && pool.Prefix <= NetworkSubnets.NarrowestPoolPrefix)
+            ? value
+            : throw new InvalidOperationException($"{SubnetPoolSetting} is '{value}'; it must be an IPv4 range in CIDR form that is a /{NetworkSubnets.NarrowestPoolPrefix} or larger, such as 10.213.0.0/16.");
 
     // Both name engine objects and sit in label filters, so they must be a name the engine accepts. The 50-character cap is ILD's own,
     // to leave room for the prefixes and suffixes of the names made from them.
