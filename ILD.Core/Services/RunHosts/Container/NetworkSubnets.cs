@@ -41,6 +41,9 @@ internal static class NetworkSubnets
         return a.Start <= bEnd && b.Start <= aEnd;
     }
 
+    public static bool Contains((uint Start, int Prefix) pool, (uint Start, int Prefix) subnet)
+        => subnet.Start >= pool.Start && End(subnet) <= End(pool);
+
     /// <summary>The subnets of <see cref="NetworkPrefix"/> in the pool, in order.</summary>
     public static IEnumerable<uint> Candidates((uint Start, int Prefix) pool)
     {

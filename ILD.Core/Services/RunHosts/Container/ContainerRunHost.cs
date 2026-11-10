@@ -84,7 +84,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     {
         var owner = request.OwnerId;
         var workingDirectory = RunPaths.WorkingDirectory(owner);
-        if (await IsHealthyAsync(owner, ct))
+        if (await IsHealthyAsync(owner, ct) && InPool(_addresses.GetValueOrDefault(owner)))
             return new RunEnvironment(owner, workingDirectory);
 
         // Only what this call made is removed when it fails: an environment a retry reached keeps its run's checkout.
@@ -92,6 +92,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         try
         {
             var name = ObjectName(owner);
+            await RemoveNetworkOutsidePoolAsync(name, $"run {owner:N}", ct);
             var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
             made.Volume = await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
             made.Network = await TolerateConflictAsync(() => CreateInternalNetworkAsync(name, Labels(owner), ct));
@@ -164,6 +165,26 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     public override Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>>(
             ILD.Core.Services.Implementations.Network.IpRange.TryParse(_options.SubnetPool, out var pool) ? [pool] : []);
+
+    private bool InPool(string? address)
+        => ILD.Core.Services.Implementations.Network.IpRange.TryParse(_options.SubnetPool, out var pool) && IPAddress.TryParse(address, out var parsed) && pool.Contains(parsed);
+
+    /// <summary>
+    /// Removes a network that is not a subnet of the pool, with the container on it: one made before networks were cut from the pool, or
+    /// under another pool. The egress proxy serves only the pool, so nothing on such a network has a way out. The volume keeps what the container held.
+    /// </summary>
+    private async Task RemoveNetworkOutsidePoolAsync(string name, string subject, CancellationToken ct)
+    {
+        var network = await _api.GetAsync($"/networks/{Escaped(name)}", ct, HttpStatusCode.NotFound);
+        var subnets = (network?["IPAM"]?["Config"] as JsonArray ?? []).Select(c => c?["Subnet"]?.GetValue<string>()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+        if (subnets.Count == 0 || !NetworkSubnets.TryParse(_options.SubnetPool, out var pool)) return;
+        if (subnets.All(s => NetworkSubnets.TryParse(s!, out var subnet) && NetworkSubnets.Contains(pool, subnet))) return;
+
+        Logger?.LogInformation("Replacing the network of {Subject}, and its container: its subnet {Subnet} is not in {Pool}, which is all the egress proxy serves",
+            subject, string.Join(", ", subnets), _options.SubnetPool);
+        await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true", null, ct));
+        await RemoveNetworkAsync(Escaped(name), ct);
+    }
 
     private const int SubnetAttempts = 8;
 
@@ -759,6 +780,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             if (_options.Toolchains)
                 foreach (var zone in ChatToolZones)
                     await PrepareToolZoneAsync(zone, ct);
+            await RemoveNetworkOutsidePoolAsync(ChatName, "the chat container", ct);
             await TolerateConflictAsync(() => CreateInternalNetworkAsync(ChatName, ChatLabels(), ct));
             // A stopped one is replaced; what it held is in the volume.
             await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(ChatName)}?force=true", null, ct));
@@ -778,7 +800,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     private async Task<bool> ChatContainerRunningAsync(CancellationToken ct)
     {
         var container = await _api.GetAsync($"/containers/{Escaped(ChatName)}/json", ct, HttpStatusCode.NotFound);
-        return container?["State"]?["Running"]?.GetValue<bool>() == true && AddressIn(container, ChatName) is not null
+        return container?["State"]?["Running"]?.GetValue<bool>() == true && InPool(AddressIn(container, ChatName))
             && container["Config"]?["Labels"]?[SpecLabel]?.GetValue<string>() == await ChatSpecAsync(ct);
     }
 
@@ -811,8 +833,10 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     internal async Task RetireStaleChatContainerAsync(CancellationToken ct)
     {
         var container = await _api.GetAsync($"/containers/{Escaped(ChatName)}/json", ct, HttpStatusCode.NotFound);
-        if (container is null || container["Config"]?["Labels"]?[SpecLabel]?.GetValue<string>() == await ChatSpecAsync(ct)) return;
-        Logger?.LogInformation("Replacing the chat container: the runner image or ILD's settings changed since it was made");
+        if (container is null) return;
+        var address = AddressIn(container, ChatName);
+        if (container["Config"]?["Labels"]?[SpecLabel]?.GetValue<string>() == await ChatSpecAsync(ct) && (address is null || InPool(address))) return;
+        Logger?.LogInformation("Replacing the chat container: the runner image, ILD's settings or the subnet pool changed since it was made");
         await RemoveContainerAsync(ChatName, "the chat container", ct);
     }
 

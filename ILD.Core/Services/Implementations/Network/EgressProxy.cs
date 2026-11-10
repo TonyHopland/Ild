@@ -132,15 +132,16 @@ public sealed class EgressProxy : BackgroundService
                     catch (OperationCanceledException) { break; }
                     continue;
                 }
-                if (_options.AcceptsClient is { } accepts && !(client.Client.RemoteEndPoint is IPEndPoint peer && accepts(peer.Address)))
+                var source = (client.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.None;
+                if (_options.AcceptsClient is { } accepts && !accepts(source))
                 {
+                    LogRefusal(source, "it is not an address of a run or chat");
                     client.Dispose();
                     continue;
                 }
-                var source = (client.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.None;
                 if (_limiter.TryAcquire(source) is not { } lease)
                 {
-                    LogRefusal(source);
+                    LogRefusal(source, "too many connections open");
                     client.Dispose();
                     continue;
                 }
@@ -157,7 +158,7 @@ public sealed class EgressProxy : BackgroundService
 
     private void OnPolicyChanged() => _ = _relay.ResetNewlyBlockedAsync();
 
-    private void LogRefusal(IPAddress source)
+    private void LogRefusal(IPAddress source, string reason)
     {
         lock (_refusalLogged)
         {
@@ -168,7 +169,7 @@ public sealed class EgressProxy : BackgroundService
                 foreach (var stale in _refusalLogged.Where(e => now - e.Value >= TimeSpan.FromMinutes(1)).Select(e => e.Key).ToList())
                     _refusalLogged.Remove(stale);
         }
-        _logger.LogWarning("Egress proxy refused a connection from {Source}: too many connections open", source);
+        _logger.LogWarning("Egress proxy refused a connection from {Source}: {Reason}", source, reason);
     }
 
     private async Task HandleConnectionAsync(TcpClient client, IDisposable lease, CancellationToken stoppingToken)

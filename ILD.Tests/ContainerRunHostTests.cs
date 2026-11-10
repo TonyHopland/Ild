@@ -3030,6 +3030,38 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_running_chat_container_on_a_network_outside_the_subnet_pool_is_made_again_with_its_network_and_the_volume_keeps_the_chats()
+    {
+        var chat = Guid.NewGuid();
+        await _host.CreateChatFolderAsync(chat, "/unused", TestContext.Current.CancellationToken);
+        _api.ForgetUserSubnet(ChatContainer);
+        Assert.StartsWith("10.89.", _api.SubnetOf(ChatContainer), StringComparison.Ordinal);
+
+        Assert.True(await _host.DirectoryExistsAsync(ChatFolder(chat), TestContext.Current.CancellationToken));
+
+        Assert.StartsWith("10.213.", _api.SubnetOf(ChatContainer), StringComparison.Ordinal);
+        Assert.Equal(2, _api.Created.Count(c => c == $"networks/{ChatContainer}"));
+        Assert.Equal(2, _api.Created.Count(c => c == $"containers/{ChatContainer}"));
+        Assert.Equal(1, _api.Created.Count(c => c == $"volumes/{ChatContainer}"));
+        Assert.DoesNotContain($"volumes/{ChatContainer}", _api.Deleted);
+    }
+
+    [Fact]
+    public async Task A_run_whose_network_is_outside_the_subnet_pool_gets_a_new_network_and_container_and_keeps_its_volume()
+    {
+        var baseRepository = MakeBaseRepository();
+        await CreateRunAsync(_host, _run, baseRepository);
+        _api.ForgetUserSubnet(Name(_run));
+
+        await CreateRunAsync(_host, _run, baseRepository);
+
+        Assert.StartsWith("10.213.", _api.SubnetOf(Name(_run)), StringComparison.Ordinal);
+        Assert.Equal(2, _api.Created.Count(c => c == $"containers/{Name(_run)}"));
+        Assert.Equal(1, _api.Created.Count(c => c == $"volumes/{Name(_run)}"));
+        Assert.DoesNotContain($"volumes/{Name(_run)}", _api.Deleted);
+    }
+
+    [Fact]
     public async Task A_chat_command_runs_in_the_chat_container_as_that_chat_with_its_home_and_the_agents_on_the_path()
     {
         using var host = NewHost(Options(), [Claude]);
