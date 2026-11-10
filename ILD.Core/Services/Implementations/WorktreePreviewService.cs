@@ -17,6 +17,7 @@ using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
@@ -1061,6 +1062,31 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// </summary>
     internal static bool IsSafeServiceName(string? name) => name != null && SafeServiceNameRegex.IsMatch(name);
 
+    /// <summary>
+    /// True for an absolute http(s) URL whose host, as parsed, is the service's own loopback. The health probe is
+    /// made from ILD's network position, so it may only ever name the run's own address, never a host the agent chose.
+    /// </summary>
+    internal static bool IsOwnLoopbackHealthUrl(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+           && uri.Scheme is "http" or "https"
+           && uri.Host is "127.0.0.1" or "localhost" or "[::1]" or "0.0.0.0";
+
+    private static string HealthUrlNotLoopbackMessage(string serviceName)
+        => $"Preview service '{serviceName}' healthUrl must name the service's own loopback (127.0.0.1, localhost, [::1] or 0.0.0.0).";
+
+    /// <summary>Replaces template tokens with values of the right shape, to check a URL's host before the launch resolves it.</summary>
+    private static string StandInTokens(string value)
+        => TemplateTokenRegex.Replace(value, match =>
+        {
+            var token = match.Groups[1].Value;
+            if (string.Equals(token, "HOST", StringComparison.OrdinalIgnoreCase))
+                return "0.0.0.0";
+            if (string.Equals(token, "PORT", StringComparison.OrdinalIgnoreCase)
+                || token.StartsWith("PORT:", StringComparison.OrdinalIgnoreCase))
+                return "1";
+            return "x";
+        });
+
     private static void ValidateService(string profileName, PreviewServiceConfig service)
     {
         if (string.IsNullOrWhiteSpace(service.Name))
@@ -1073,6 +1099,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException($"Preview service '{service.Name}' has no port alias.");
         if (string.IsNullOrWhiteSpace(service.HealthUrl))
             throw new InvalidOperationException($"Preview service '{service.Name}' must define healthUrl.");
+        if (!IsOwnLoopbackHealthUrl(StandInTokens(service.HealthUrl)))
+            throw new InvalidOperationException(HealthUrlNotLoopbackMessage(service.Name));
         if (service.SuggestedPort is <= 0)
             throw new InvalidOperationException($"Preview service '{service.Name}' has invalid suggestedPort '{service.SuggestedPort}'.");
     }
@@ -1885,7 +1913,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private async Task WaitForHealthAsync(
         string serviceName, string healthUrl, string worktreePath, CancellationToken cancellationToken, ManagedPreviewProcess? watched = null)
     {
-        using var client = _httpClientFactory.CreateClient();
+        using var client = _httpClientFactory.CreateClient(HealthProbeClientName);
         var probed = await ReachableHealthUrlAsync(_host, healthUrl, worktreePath, cancellationToken);
         for (var attempt = 0; attempt < 60; attempt++)
         {
@@ -1914,16 +1942,28 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
+    /// The client the health probe uses. It never follows a redirect, so a service cannot send ILD on to another host;
+    /// a 3xx is not healthy and the probe tries the original URL again.
+    /// </summary>
+    public const string HealthProbeClientName = "preview-health-probe";
+
+    /// <summary>Makes the named client the health probe uses: no redirects followed, a short timeout per request.</summary>
+    public static IHttpClientBuilder ConfigureHealthProbeClient(IHttpClientBuilder builder)
+        => builder
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+
+    /// <summary>
     /// Where ILD reaches <paramref name="healthUrl"/>. A service's health URL names its own machine's loopback
     /// (<c>http://127.0.0.1:${PORT}/health</c>), which is ILD's only when the preview runs on ILD's machine. A preview in a
     /// run's pod or container is reached where the preview proxy reaches it, at the address the run host gives for the
-    /// port; any other host is probed as written.
+    /// port. Any other host is refused: ILD never probes an address the agent chose.
     /// </summary>
     internal static async Task<string> ReachableHealthUrlAsync(IRunHost host, string healthUrl, string worktreePath, CancellationToken cancellationToken)
     {
-        if (!Uri.TryCreate(healthUrl, UriKind.Absolute, out var uri)
-            || !(uri.IsLoopback || uri.Host is "0.0.0.0" or "[::]"))
-            return healthUrl;
+        if (!IsOwnLoopbackHealthUrl(healthUrl))
+            throw new InvalidOperationException("A preview's health URL must name the service's own loopback (127.0.0.1, localhost, [::1] or 0.0.0.0).");
+        var uri = new Uri(healthUrl);
 
         var target = await host.PreviewTargetAsync(worktreePath, uri.Port, cancellationToken);
         return target.Host == uri.Host && target.Port == uri.Port
@@ -2144,7 +2184,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private string ResolveHealthUrl(PreviewServiceConfig service, PreviewRuntime runtime)
     {
-        return ResolveTemplate(service.HealthUrl!, runtime, service.Port);
+        var resolved = ResolveTemplate(service.HealthUrl!, runtime, service.Port);
+        if (!IsOwnLoopbackHealthUrl(resolved))
+            throw new InvalidOperationException(HealthUrlNotLoopbackMessage(service.Name));
+        return resolved;
     }
 
     private async Task<string> ResolveWorkingDirectoryAsync(string? cwd, PreviewRuntime runtime, string? currentPortAlias, CancellationToken cancellationToken)
