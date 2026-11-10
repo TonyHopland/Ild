@@ -109,9 +109,9 @@ public sealed class InteractiveProviderSessionContainerTests : IAsyncLifetime
                 await e.ExitAsync(0);
                 return;
             }
-            if (e.Command.TakeLast(2).First() == ".claude/.credentials.json")
+            if (e.Command.TakeLast(3).First() == ".claude/.credentials.json")
                 await e.WriteStdoutAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes(Login)));
-            await e.ExitAsync(e.Command.TakeLast(2).First() == ".claude/.credentials.json" ? 0 : 3);
+            await e.ExitAsync(e.Command.TakeLast(3).First() == ".claude/.credentials.json" ? 0 : 3);
         };
     }
 

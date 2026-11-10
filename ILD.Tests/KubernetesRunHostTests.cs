@@ -593,6 +593,22 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Single(_log.Warnings, w => w.Contains("hosts file"));
     }
 
+    [Fact]
+    public async Task ILDs_own_scripts_start_with_a_fixed_environment_and_the_runs_own_command_does_not()
+    {
+        await CreateRunAsync();
+        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
+        var ct = TestContext.Current.CancellationToken;
+
+        using (var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), ct)) await process.WaitForExitAsync(ct);
+        await _host.GetFileLengthAsync($"{WorkingDirectory}/file", ct);
+
+        var own = _api.Execs.Where(e => e.Command.Contains(ExecRunHost.ForwardsScript) || e.Command.Contains(ExecRunHost.HostsScript) || e.Joined.Contains("stat -c %s")).ToList();
+        Assert.Equal(3, own.Count);
+        Assert.All(own, e => Assert.Equal(["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"], e.Command.Take(3)));
+        Assert.NotEqual("/usr/bin/env", _api.Execs.Single(e => e.Command.Contains("make-it")).Command[0]);
+    }
+
     // -- Exec --------------------------------------------------------------------
 
     [Fact]
@@ -755,7 +771,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         using (await StartAsync(NetworkMode.Off)) { }
-        _api.OnExec = async e => await e.ExitAsync(e.Command.Count > 2 && e.Command[2] == ExecRunHost.OffRunningScript ? 1 : 0);
+        _api.OnExec = async e => await e.ExitAsync(e.Command.Count > 5 && e.Command[5] == ExecRunHost.OffRunningScript ? 1 : 0);
 
         using var process = await StartAsync(NetworkMode.Monitor);
 
@@ -890,8 +906,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         };
         _api.OnExec = async e =>
         {
-            if (e.WantsStdin && e.Command.Count > 4 && e.Command[3] == "sh" && e.Command[4].StartsWith("/run/ild/agent-read", StringComparison.Ordinal))
-                written[e.Command[4]] = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
+            if (e.WantsStdin && e.Command.Count > 7 && e.Command[6] == "sh" && e.Command[7].StartsWith("/run/ild/agent-read", StringComparison.Ordinal))
+                written[e.Command[7]] = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
             await e.ExitAsync(0);
         };
         return host;
@@ -1137,7 +1153,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(2, killed);
         var kill = _api.Execs.Last();
         Assert.Equal(Name(_run), kill.Pod);
-        Assert.Equal(KubernetesRunHost.KillAllScript, kill.Command[2]);
+        Assert.Equal(KubernetesRunHost.KillAllScript, kill.Command[5]);
     }
 
     [Fact]
@@ -1167,7 +1183,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.True(killedOk);
         var kill = _api.Execs.Last();
         Assert.Equal(startedAs, kill.Command[^1]);
-        Assert.Contains("kill -s TERM", kill.Command[2]);
+        Assert.Contains("kill -s TERM", kill.Command[5]);
         hold.SetResult();
     }
 
@@ -1631,7 +1647,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(1, await _host.KillAllAsync(chat, TestContext.Current.CancellationToken));
         var kill = _api.Execs.Last();
         Assert.Equal(ChatPodName, kill.Pod);
-        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[2]);
+        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[5]);
     }
 
     // -- Idle chat pod -----------------------------------------------------------
