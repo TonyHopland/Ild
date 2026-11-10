@@ -75,8 +75,8 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable, IClassFixt
                 await released.Task.WaitAsync(token);
                 return await real.CloneAsync(url, path, token);
             });
-        git.Setup(g => g.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>()))
-            .Returns((string path, string branch) => real.RemoteBranchExistsAsync(path, branch));
+        git.Setup(g => g.RemoteBranchExistsInBaseRepoAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns((string path, string branch) => real.RemoteBranchExistsInBaseRepoAsync(path, branch));
         var cloner = Cloner(git.Object);
 
         var call = cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);

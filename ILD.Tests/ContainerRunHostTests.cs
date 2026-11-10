@@ -1431,6 +1431,22 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_remote_branch_check_in_a_worktree_goes_to_the_run_for_a_run_path_and_is_refused_for_a_path_on_ilds_disk()
+    {
+        await CreateRunAsync();
+        var routing = new RoutingRunHost(new FakeRunHost(), _host);
+        var repositories = new RepositoryManager(new ProcessRunner(), routing, worktreesRoot: Path.Combine(_scratch, "wt"));
+        var forged = Path.Combine(_scratch, "worktrees", "old-run");
+        Directory.CreateDirectory(Path.Combine(forged, ".git"));
+
+        await Assert.ThrowsAsync<PredatesContainersException>(() => repositories.RemoteBranchExistsAsync(forged, "ild/x"));
+
+        var execs = _api.Execs.Count;
+        await repositories.RemoteBranchExistsAsync(WorkingDirectory, "ild/x");
+        Assert.True(_api.Execs.Count > execs);
+    }
+
+    [Fact]
     public async Task A_title_launch_in_a_chats_folder_under_a_run_id_of_its_own_still_goes_to_the_isolated_host()
     {
         var chat = Guid.NewGuid();

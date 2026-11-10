@@ -161,7 +161,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
             if (!ok)
                 return Refused(ChatRepositoryCloneOutcome.FetchFailed,
                     $"ILD could not fetch the repository '{job.Repo.Name}' from its remote: {error}");
-            if (!await _git.RemoteBranchExistsAsync(path!, job.Branch))
+            if (!await _git.RemoteBranchExistsInBaseRepoAsync(path!, job.Branch))
                 return Refused(ChatRepositoryCloneOutcome.BranchNotFound,
                     $"The repository '{job.Repo.Name}' has no branch '{job.Branch}' on its remote.");
             basePath = path!;

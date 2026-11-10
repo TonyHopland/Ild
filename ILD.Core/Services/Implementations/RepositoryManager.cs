@@ -1029,6 +1029,12 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<bool> RemoteBranchExistsAsync(string repoPath, string branchName)
     {
+        var (code, _, _) = await RunAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}");
+        return code == 0;
+    }
+
+    public async Task<bool> RemoteBranchExistsInBaseRepoAsync(string repoPath, string branchName)
+    {
         var (code, _, _) = await RunInBaseRepoAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}");
         return code == 0;
     }
