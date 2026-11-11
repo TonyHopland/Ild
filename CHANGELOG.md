@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Preview commands and Cmd nodes always run inside the run, never on ILD's own machine**, and preview data kept between runs works with container and Kubernetes runs.
 - **A `{{WorkTree.File:...}}` placeholder reads only files inside the worktree.**
 - **The model gateway forwards only model calls**, so nothing in a run can use your Copilot or ChatGPT login for GitHub's hosted MCP or your Codex cloud tasks.
-- **Forwards answer on their real host name and port inside a run's container**, so TLS host name verification (`Verify-Full`) works; the `127.0.0.1` form stays.
+- **Forwards answer on their real host name and port inside a run's container**, so TLS host name verification (`Verify-Full`) works; the `127.0.0.1` form stays, and is the only form in a Kubernetes pod.
 - **A repository clone URL can no longer carry a credential.** A new or changed URL with one is refused, an existing one shows a warning on the Repositories page, and agents never see it; put the token in the remote provider's API key.
 - **Toolchain installers go through the egress proxy**, under an Installers scope in Settings → Network whose allow list starts with the hosts installs need.
 - **Runs can no longer reach ILD's database, the WorkItem Server or the Kubernetes API**, unless you switch that protection off in Settings → Network or declare a forward to it.
@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **The browser, Java tools and declared forwards in a run or chat reach the network through the egress proxy again.**
+- **A work item's terminal reaches the network the way its run does.**
 - **Chats and runs whose container network was made by an earlier version reach the network again, and show in the Network Log.**
 - **Copilot runs and chats in containers and pods can reach the model gateway and trust its certificate.**
 - **Network mode `off` gives runs a direct network route again** (any host, port and protocol, with no proxy variables), in containers and pods as ADR-0019 says; Settings → Network shows which runs have one.

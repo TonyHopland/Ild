@@ -105,8 +105,8 @@ where it installed the rule, and the topology variables stripped from agent
 processes include it.
 
 Which launches follow the mode: the agent CLIs (runs, chats, chat titles), the
-provider terminal, Codex custom MCP servers, Cmd nodes, and Worktree Preview
-install steps and services (a start resolves the mode once). Git as the agent
+provider terminal, a run's worktree terminal, Codex custom MCP servers, Cmd nodes,
+and Worktree Preview install steps and services (a start resolves the mode once). Git as the agent
 (`ProcessRunner`, `RepositoryManager`), `ChatRepositoryCloner` and
 `AgentWritableFiles` stay on the primary group with no proxy in every mode: they
 only talk to the local mirror. A mode change applies to the _next launch_;
