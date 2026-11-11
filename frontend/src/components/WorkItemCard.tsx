@@ -74,7 +74,8 @@ export default function WorkItemCard({
   }, [isRunning, startedAtMs]);
 
   const elapsed = startedAtMs !== null ? formatDurationMs(now - startedAtMs) : null;
-  const showRunningMeta = isRunning && (Boolean(workItem.currentNodeLabel) || elapsed !== null);
+  const stepLabel = workItem.preparingContainer ? "Preparing container" : workItem.currentNodeLabel;
+  const showRunningMeta = isRunning && (Boolean(stepLabel) || elapsed !== null);
 
   // While parked at a PR node, surface the same CI/review/merge tags the detail
   // dialog's PR view shows so the board gives a fast read on the PR's state.
@@ -109,7 +110,7 @@ export default function WorkItemCard({
       onKeyDown={handleKeyDown}
       role="button"
       tabIndex={0}
-      aria-label={`${workItem.title}, status ${statusLabel}${waiting}. Use left and right arrow keys to move between columns.`}
+      aria-label={`${workItem.title}, status ${statusLabel}${workItem.preparingContainer ? ", preparing container" : ""}${waiting}. Use left and right arrow keys to move between columns.`}
     >
       {workItem.isPreviewRunning && (
         <span className="qa-active-dot" aria-label="QA preview is active" />
@@ -160,10 +161,10 @@ export default function WorkItemCard({
       )}
       {showRunningMeta && (
         <div className="work-item-running-meta">
-          {workItem.currentNodeLabel && (
+          {stepLabel && (
             <span className="work-item-step" title="Current step">
               <span className="work-item-step-dot" aria-hidden="true" />
-              <span className="work-item-step-label">{workItem.currentNodeLabel}</span>
+              <span className="work-item-step-label">{stepLabel}</span>
             </span>
           )}
           {elapsed && (

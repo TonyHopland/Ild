@@ -99,6 +99,8 @@ export interface WorkItem {
   latestLoopRunId?: string | null;
   /** Label of the node the active run is currently executing; null when idle. */
   currentNodeLabel?: string | null;
+  /** True while the run host is making the run's container or pod, before its first command can run. */
+  preparingContainer?: boolean;
   worktreePath?: string | null;
   branchName?: string | null;
   /**

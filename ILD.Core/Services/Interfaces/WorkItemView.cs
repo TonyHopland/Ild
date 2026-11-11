@@ -144,6 +144,13 @@ public sealed class WorkItemView
     /// repository had reached its parallelism limit; null for every other item.
     /// </summary>
     public RepositoryParallelismHold? RepositoryParallelismHold { get; set; }
+
+    /// <summary>
+    /// True while the run host is making the run's container or pod, before the
+    /// first command can run in it. A display state derived on this instance; it
+    /// is not a work item status and never reaches the WorkItem Server.
+    /// </summary>
+    public bool PreparingContainer { get; set; }
 }
 
 /// <summary>

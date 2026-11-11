@@ -25,7 +25,7 @@ describe("ChatBubble while the chat's container is being prepared", () => {
     await openResumedChat(chatSession({ preparing: true }));
     await settle();
 
-    expect(screen.getByText(/Preparing the chat/)).toBeTruthy();
+    expect(screen.getByText(/Preparing container/)).toBeTruthy();
     const input = screen.getByLabelText("Chat message") as HTMLTextAreaElement;
     expect(input.disabled).toBe(false);
 
@@ -36,7 +36,7 @@ describe("ChatBubble while the chat's container is being prepared", () => {
     expect(chatService.sendMessage).toHaveBeenCalledTimes(1);
 
     act(() => emit("ChatPrepared", { chatSessionId: "s1" }));
-    expect(screen.queryByText(/Preparing the chat/)).toBeNull();
+    expect(screen.queryByText(/Preparing container/)).toBeNull();
   });
 
   test("a failed preparation shows the error and puts the sent message back in the box", async () => {
@@ -54,6 +54,6 @@ describe("ChatBubble while the chat's container is being prepared", () => {
 
     expect(screen.getByRole("alert").textContent).toContain("no room");
     expect((screen.getByLabelText("Chat message") as HTMLTextAreaElement).value).toBe("hello");
-    expect(screen.queryByText(/Preparing the chat/)).toBeNull();
+    expect(screen.queryByText(/Preparing container/)).toBeNull();
   });
 });

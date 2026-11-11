@@ -74,8 +74,12 @@ internal sealed class FakeRunHost : IRunHost
         lock (_gate) return _files.TryGetValue(path, out var bytes) ? Encoding.UTF8.GetString(bytes) : null;
     }
 
+    /// <summary>Runs as <c>CreateAsync</c> is entered, for a test that looks at the world while the environment is being made, or makes it fail.</summary>
+    public Func<Task>? OnCreate { get; set; }
+
     public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
     {
+        if (OnCreate is not null) await OnCreate();
         var path = _repositories is null ? WorkingDirectoryFor(request) : await _repositories.CreateWorktreeAsync(request.BasePath, request.BranchName);
         lock (_gate)
         {

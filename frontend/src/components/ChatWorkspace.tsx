@@ -96,7 +96,7 @@ function ChatConversation({
             is clear the agent is still working rather than done. */}
         {preparing && (
           <div className="chat-muted chat-typing" role="status">
-            Preparing the chat…
+            Preparing container…
             <span className="chat-typing-dots" aria-hidden="true" />
           </div>
         )}
