@@ -1,5 +1,7 @@
 # ADR-0007: AI execution is delegated wholesale to pluggable CLI-backed adapters
 
+> **Amendment.** Five adapter types are registered now — `opencode`, `pi`, `claude-code`, `copilot` and `codex` — and the CLI runs in the run's container or pod, not on ILD's machine ([ADR-0036](./0036-runs-always-in-containers.md)).
+
 An AI node does not orchestrate the model itself. It resolves an `IAgentAdapter` from `AiProvider.Type` and hands off the entire execution lifecycle — multi-turn loops, tool use, session state — to that adapter. The currently registered types (`opencode`, `pi`, `claude-code`) are all CLI-backed: the adapter spawns the provider's CLI inside the worktree and reads its structured output. We gave adapters this autonomy because each agent CLI already owns a sophisticated turn/tool loop; re-implementing that inside the engine would duplicate it badly and lag behind each tool's own capabilities.
 
 ## Consequences

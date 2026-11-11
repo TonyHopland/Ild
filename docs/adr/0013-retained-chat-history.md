@@ -1,6 +1,8 @@
 # ADR-0013: Retained chat history — many chats per user, deleted only on demand
 
-The chat bubble ([ADR-0010](./0010-standalone-chat-session.md)) was one ephemeral chat per user: starting a second chat threw, "End chat" hard-deleted the session, and a `ChatSessionRetentionSweeper` reclaimed anything idle past a retention window. We replace that with **retained history**: a user keeps many chats indefinitely, browses them in the bubble, resumes any with its full transcript and continued agent session, and a chat is deleted **only** by an explicit per-chat delete or "delete all" — never automatically.
+> **Amendment.** The single-_active_-chat assumption below no longer holds. `ChatHub` has a group per chat (`SubscribeToChat` / `UnsubscribeFromChat`) and a per-user inbox group (`SubscribeToChatInbox`), and the chat bubble follows several chats at once, with unread counts per chat. The ADR-0010 this once linked never existed.
+
+The chat bubble was one ephemeral chat per user: starting a second chat threw, "End chat" hard-deleted the session, and a `ChatSessionRetentionSweeper` reclaimed anything idle past a retention window. We replace that with **retained history**: a user keeps many chats indefinitely, browses them in the bubble, resumes any with its full transcript and continued agent session, and a chat is deleted **only** by an explicit per-chat delete or "delete all" — never automatically.
 
 Two parts of this shift were deliberate trade-offs.
 

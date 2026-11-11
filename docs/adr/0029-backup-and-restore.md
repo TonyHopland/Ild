@@ -1,5 +1,7 @@
 # ADR-0029: Backup and restore are two encrypted app-level exports
 
+> **Amendment.** Where the body says "nowhere the agent uid reads", read: nowhere a run's container or pod mounts. There is no agent uid any more ([ADR-0036](./0036-runs-always-in-containers.md)); the spool is on ILD's own disk, which no run can reach.
+
 A logged-in user can take a backup of ILD's data and restore it on the same or a new
 instance, from Settings > Storage. The first use is the PostgreSQL 17 to 18 upgrade:
 back up on 17, start a fresh 18 volume, restore. A hand-run `pg_dumpall` or
@@ -18,24 +20,24 @@ Each has its own file, its own passphrase and its own controls. An external trac
 
 Investigated in the entities and migrations, not assumed.
 
-| Where | What | Protection at rest |
-| --- | --- | --- |
-| `RemoteProviders` | `ApiKey`, `WebhookSecret` | `enc.v1` with `ILD_SECRET_KEY`, if set |
-| `AiProviders` | `ApiKey` | `enc.v1` with `ILD_SECRET_KEY`, if set |
-| `AiProviders` | `Config` (JSON, adapter settings) | **plaintext** |
-| `Repositories` | `PreviewEnv` (a custom `.env`) | `enc.v1` with `ILD_SECRET_KEY`, if set |
-| `PackageFeeds` | `Pat` (#217) | `enc.v1` with `ILD_SECRET_KEY`, if set |
-| `Users` | `PasswordHash` | hashed: PBKDF2-SHA256, 100,000 iterations, salt per user |
-| `UserSessions` | `TokenHash` | hashed: HMAC-SHA256 keyed on `ILD_SESSION_TOKEN_PEPPER`, bare SHA-256 without it |
-| `UserSessions` | `UserAgent`, `CreatedFromIp` | **plaintext**, personal data |
-| `AppSettings` | all settings, including `workItemServer.apiKey` | **plaintext** |
-| `Repositories`, `RemoteProviders` | URLs, names, branch settings | **plaintext** |
-| `ChatMessages`, `ChatSchedules` | conversations and prompts | **plaintext** |
-| `EventLogs`, `LoopRunNodes`, `LoopRunVariables` | run logs, prompts, outputs | **plaintext**; can hold anything an agent printed (the risk accepted in #217) |
-| `AdapterSessionSnapshotChunks` | agent transcripts | **plaintext** (compressed) |
-| `LoopTemplates*`, `GlobalVariables`, `UserPreferences`, `Network*` | templates, variables, preferences, egress log | **plaintext** |
-| `WorkItems`, `WorkItemEditProposals`, `WorkItemHistoryEntries` (workitems) | titles, descriptions, history | **plaintext** |
-| `WorkItemAttachments` (workitems) | file content (`bytea`) | **plaintext** |
+| Where                                                                      | What                                            | Protection at rest                                                               |
+| -------------------------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------- |
+| `RemoteProviders`                                                          | `ApiKey`, `WebhookSecret`                       | `enc.v1` with `ILD_SECRET_KEY`, if set                                           |
+| `AiProviders`                                                              | `ApiKey`                                        | `enc.v1` with `ILD_SECRET_KEY`, if set                                           |
+| `AiProviders`                                                              | `Config` (JSON, adapter settings)               | **plaintext**                                                                    |
+| `Repositories`                                                             | `PreviewEnv` (a custom `.env`)                  | `enc.v1` with `ILD_SECRET_KEY`, if set                                           |
+| `PackageFeeds`                                                             | `Pat` (#217)                                    | `enc.v1` with `ILD_SECRET_KEY`, if set                                           |
+| `Users`                                                                    | `PasswordHash`                                  | hashed: PBKDF2-SHA256, 100,000 iterations, salt per user                         |
+| `UserSessions`                                                             | `TokenHash`                                     | hashed: HMAC-SHA256 keyed on `ILD_SESSION_TOKEN_PEPPER`, bare SHA-256 without it |
+| `UserSessions`                                                             | `UserAgent`, `CreatedFromIp`                    | **plaintext**, personal data                                                     |
+| `AppSettings`                                                              | all settings, including `workItemServer.apiKey` | **plaintext**                                                                    |
+| `Repositories`, `RemoteProviders`                                          | URLs, names, branch settings                    | **plaintext**                                                                    |
+| `ChatMessages`, `ChatSchedules`                                            | conversations and prompts                       | **plaintext**                                                                    |
+| `EventLogs`, `LoopRunNodes`, `LoopRunVariables`                            | run logs, prompts, outputs                      | **plaintext**; can hold anything an agent printed (the risk accepted in #217)    |
+| `AdapterSessionSnapshotChunks`                                             | agent transcripts                               | **plaintext** (compressed)                                                       |
+| `LoopTemplates*`, `GlobalVariables`, `UserPreferences`, `Network*`         | templates, variables, preferences, egress log   | **plaintext**                                                                    |
+| `WorkItems`, `WorkItemEditProposals`, `WorkItemHistoryEntries` (workitems) | titles, descriptions, history                   | **plaintext**                                                                    |
+| `WorkItemAttachments` (workitems)                                          | file content (`bytea`)                          | **plaintext**                                                                    |
 
 The WorkItem Server's database holds no secret store. Its API key lives in `.env`
 (`WORKITEM_API_KEYS`) and, on the ILD side, in `AppSettings`.
@@ -65,7 +67,7 @@ acknowledges it before the backup can start. That acknowledgement is UI-only.
 **`enc.v1` values are exported and imported as stored ciphertext, never decrypted.** The
 export is PostgreSQL's text `COPY`, which bypasses EF Core's value converters. A restore
 onto an instance with a different `ILD_SECRET_KEY` would leave every stored credential
-unreadable without any error, so the core backup carries a *key check*: a fixed string
+unreadable without any error, so the core backup carries a _key check_: a fixed string
 protected with the key. A core restore whose key check does not open with this instance's
 key (or that has one onto an instance without a key) is refused, naming the mismatch,
 before anything is read for import. A core backup made without a key carries none and
@@ -88,6 +90,7 @@ worktrees, repository clones and preview data. They are rebuilt or re-cloned; th
 of the data that cannot be.
 
 **Restore is guarded.**
+
 - The user types `RESTORE`, enforced by the API.
 - The whole file is decrypted and checked before anything is touched. A backup of the
   other database, from a newer ILD (a migration this build does not know, or a higher

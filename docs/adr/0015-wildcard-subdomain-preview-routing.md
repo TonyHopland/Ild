@@ -1,4 +1,6 @@
-# Worktree previews are routed by wildcard subdomain, not by path prefix
+# ADR-0015: Worktree previews are routed by wildcard subdomain, not by path prefix
+
+> **Amendment.** Previews no longer bind in ILD's container: each runs beside its agent in the run's container or pod, and ILD's proxy reaches it there ([ADR-0036](./0036-runs-always-in-containers.md)). The routing by wildcard subdomain is unchanged.
 
 A Worktree Preview binds each of its services to a port allocated at runtime
 inside the ILD container. Once ILD runs behind an ingress — or simply inside a

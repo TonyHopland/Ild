@@ -1,4 +1,4 @@
-# The runaway-graph safety net counts AI steps between human interactions, globally
+# ADR-0018: The runaway-graph safety net counts AI steps between human interactions, globally
 
 The loop engine bounds a runaway graph with **one** number per run: how many AI
 nodes it has executed since a human last touched it, capped by the

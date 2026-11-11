@@ -1,6 +1,8 @@
 # ADR-0033: A loop run is a pod, owned by one object and swept by label
 
 > **Status: amended by [ADR-0036](./0036-runs-always-in-containers.md).** The run host is no longer a setting: ILD's image always uses containers, or pods in Kubernetes, and `local` exists only under `dotnet run`.
+>
+> It also said that scheduled jobs and the provider sign-in terminal stay local, and that pods get DNS egress. None of that holds: the sign-in terminal runs in a container or pod of its own, scheduled jobs are chats ([ADR-0026](./0026-scheduled-jobs-are-chats-that-only-check.md)) and run in the chat container or pod, and a run's or chat's pod has no DNS unless network mode `off` adds its `-open` policy (names are resolved by the egress proxy).
 
 [ADR-0032](./0032-run-host-interface.md) put where a run lives behind `IRunHost`. `ILD_RUN_HOST=kubernetes` is the second host: each loop run gets a pod of its own, so runs are isolated from ILD and from each other and the scheduler spreads them across nodes.
 

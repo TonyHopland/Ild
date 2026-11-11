@@ -18,17 +18,17 @@
 
 Loop templates are directed graphs built from these node types:
 
-| Node      | Role                                                                              |
-| --------- | --------------------------------------------------------------------------------- |
-| `Start`   | Entry point; optionally creates a worktree and branch from a clean `origin` base  |
-| `Cmd`     | Runs a shell command in the worktree, where the agent runs                        |
-| `AI`      | Delegates to an `IAgentAdapter` resolved by `AiProvider.Type`                     |
-| `Human`   | Pauses for human input, which becomes `{{Node.Input}}` downstream                 |
-| `Prompt`  | Renders a templated prompt and emits it as output (composes prompts for AI nodes) |
-| `Condition` | Routes on its cases by comparing templated values; each case names an output |
-| `SetVariable` | Writes loop variables from templated values and passes its input on unchanged |
-| `PR`      | Creates or reuses a pull request and waits for merge/rejection webhooks           |
-| `Cleanup` | Terminal sink node; ends the run, and its worktree and session data are removed  |
+| Node          | Role                                                                              |
+| ------------- | --------------------------------------------------------------------------------- |
+| `Start`       | Entry point; optionally creates a worktree and branch from a clean `origin` base  |
+| `Cmd`         | Runs a shell command in the worktree, where the agent runs                        |
+| `AI`          | Delegates to an `IAgentAdapter` resolved by `AiProvider.Type`                     |
+| `Human`       | Pauses for human input, which becomes `{{Node.Input}}` downstream                 |
+| `Prompt`      | Renders a templated prompt and emits it as output (composes prompts for AI nodes) |
+| `Condition`   | Routes on its cases by comparing templated values; each case names an output      |
+| `SetVariable` | Writes loop variables from templated values and passes its input on unchanged     |
+| `PR`          | Creates or reuses a pull request and waits for merge/rejection webhooks           |
+| `Cleanup`     | Terminal sink node; ends the run, and its worktree and session data are removed   |
 
 ## AI execution model
 

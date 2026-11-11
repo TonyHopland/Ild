@@ -6,4 +6,4 @@ The Start node fetches and hard-resets the base repository to `origin/<defaultBr
 
 - Local-only changes in the base repo are discarded on every run by design — the base repo is treated as a disposable mirror of origin, not a working copy.
 - A run cannot proceed on a stale or diverged base; the node fails loudly rather than silently building on old state.
-- `git fetch` itself is best-effort (a transient fetch failure is swallowed), but the subsequent reset is not — see the Start node entry in [CONTEXT.md](../../CONTEXT.md).
+- Fetch failure fails the node too, as reset and rebase do: a swallowed fetch would reset against a stale local `origin/<base>` and silently start the run on outdated code. See the Start node entry in [CONTEXT.md](../../CONTEXT.md).

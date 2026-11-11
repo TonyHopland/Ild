@@ -1,4 +1,4 @@
-# A shutdown halts the in-flight AI node rather than letting it finish
+# ADR-0017: A shutdown halts the in-flight AI node rather than letting it finish
 
 When the host is asked to stop, ILD parks every run it is driving at its current
 AI node — the same `WaitingHuman` + `IsHalted` park the Halt button produces,

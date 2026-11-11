@@ -39,15 +39,15 @@ The unit and integration tests run against a fake Kubernetes API. They cannot sh
 
 Start a Develop loop on a small work item. Below, `<id>` is the run's id **without dashes**, as the objects' names have it. Watch the objects: `kubectl -n ild-runs get configmap,pvc,pod,networkpolicy -l app.kubernetes.io/managed-by=ild -w`.
 
-| Step | Expected |
-| --- | --- |
+| Step                       | Expected                                                                                                                                                                                                                                                                                                    |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Run reaches its Start node | One ConfigMap, PVC, NetworkPolicy and Pod, all named `ild-run-<run id>` and labelled `ild/instance` and `ild/run`. The PVC, NetworkPolicy and Pod have an owner reference to the ConfigMap: `kubectl -n ild-runs get pod ild-run-<id> -o jsonpath='{.metadata.ownerReferences[0].kind}'` prints `ConfigMap` |
-| Pod comes up | `Running` and Ready within the pull time; `kubectl -n ild-runs get pod -o wide` shows pods of different runs on different nodes when more than one runs |
-| Agent turns | The agent node completes; the run's event log shows the agent's output as it streams. `kubectl -n ild-runs exec ild-run-<id> -- ls /ild-run/<id>/repo` shows the checkout |
-| Human reply | The run waits at the Human node; the pod stays `Running`. Answer in the UI and the next node runs in the same pod |
-| Preview | Start the preview from the work item's Preview tab; the preview URL loads through the wildcard proxy |
-| PR push | The PR node pushes the branch and opens the PR. The pod never held the forge credential: `kubectl -n ild-runs exec ild-run-<id> -- env` shows no token, and `git -C <repo dir> remote -v` shows the remote URL without credentials |
-| Cleanup | When the work item's worktree is cleaned up, `kubectl -n ild-runs get configmap,pvc,pod,networkpolicy -l ild/run=<id>` prints nothing within a minute, and the Longhorn volume is gone |
+| Pod comes up               | `Running` and Ready within the pull time; `kubectl -n ild-runs get pod -o wide` shows pods of different runs on different nodes when more than one runs                                                                                                                                                     |
+| Agent turns                | The agent node completes; the run's event log shows the agent's output as it streams. `kubectl -n ild-runs exec ild-run-<id> -- ls /ild-run/<id>/repo` shows the checkout                                                                                                                                   |
+| Human reply                | The run waits at the Human node; the pod stays `Running`. Answer in the UI and the next node runs in the same pod                                                                                                                                                                                           |
+| Preview                    | Start the preview from the work item's Preview tab; the preview URL loads through the wildcard proxy                                                                                                                                                                                                        |
+| PR push                    | The PR node pushes the branch and opens the PR. The pod never held the forge credential: `kubectl -n ild-runs exec ild-run-<id> -- env` shows no token, and `git -C <repo dir> remote -v` shows the remote URL without credentials                                                                          |
+| Cleanup                    | When the work item's worktree is cleaned up, `kubectl -n ild-runs get configmap,pvc,pod,networkpolicy -l ild/run=<id>` prints nothing within a minute, and the Longhorn volume is gone                                                                                                                      |
 
 ## 3. Isolation
 

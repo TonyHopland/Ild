@@ -1,5 +1,7 @@
 # ADR-0024: Pi gets ILD tools from its own MCP client, registered by a generated extension
 
+> **Amendment.** The generated `ild.ts` is written into the run's container or pod through the run host, where the agent runs as the same user ([ADR-0036](./0036-runs-always-in-containers.md)); there is no separate agent uid, "agent-readable" is moot, and `ild-pi-ext` is no longer handled in ILD's image or entrypoint.
+
 Before Pi 1.0, Pi had no MCP client, so ILD shipped one: a generated `ild.ts` extension loaded with `-e` imported an embedded `ild-mcp-bridge.js` that started the ILD MCP server, listed its tools and registered each as `ild_<name>`. Pi 1.0 has its own MCP client. We decided to keep the generated, per-run `ild.ts` (per chat session for a chat turn) in the agent read root, but reduce it to a single `pi.registerMcpServer("ild", …)` call carrying the server's command, args and env with `exposure: "direct"` and `timeout: 120`, and to delete the bridge. Pi now starts the server itself and exposes its tools as `mcp__ild__<name>`; the node's allowlist still reaches Pi as explicit names in `--tools`, read from the server DLL, so a node gets exactly the ILD tools it was given.
 
 The file still carries the ILD API token, so it is written, owned and removed exactly as before (ADR-0014): orchestrator-owned, agent-readable, not agent-writable, deleted by run reclaim, chat delete and the startup sweep. The `ild-pi-ext` handling in the image, the entrypoint, `RunReclaimer` and `AgentIsolation` therefore stays.

@@ -1,6 +1,8 @@
 # ADR-0011: Context-aware chat — fixed scratch cwd, worktree by add-dir, client-applied loop edits
 
-The per-user chat ([ADR-0010](./0010-standalone-chat-session.md)) is made aware of what the user has open in the UI via an **ambient, per-turn Chat Context** (the open work item, and the open Loop Editor's loop) attached to each message, rather than by binding context onto the session. Two parts of this are non-obvious and were the result of real trade-offs.
+> **Amendment.** A finished run's worktree is no longer kept on disk ([ADR-0008](./0008-worktree-and-branch-per-run.md) was amended), so only an active run's worktree is ever reachable. The opencode and pi adapters already have the equivalent of Claude's `--add-dir` grant. The ADR-0010 this once linked never existed; chats were introduced by this record.
+
+The per-user chat is made aware of what the user has open in the UI via an **ambient, per-turn Chat Context** (the open work item, and the open Loop Editor's loop) attached to each message, rather than by binding context onto the session. Two parts of this are non-obvious and were the result of real trade-offs.
 
 **The chat keeps its scratch directory as cwd for the session's whole life; the open work item's worktree is reached by absolute path, not by becoming the cwd.** A weaker model is less confused when its cwd _is_ the repo worktree, so the obvious design is to run the chat in that worktree — but Claude Code keys its resumable session JSONL to the _encoded cwd_ (`ClaudeCodeAdapter.cs`), so switching cwd mid-session breaks session resume and the chat loses multi-turn memory. We rejected "roam the cwd per turn" (and the per-working-directory session map it would have required) in favour of a stable scratch cwd plus a per-turn `--add-dir <worktreePath>` for the open work item's **active (non-terminal) run** only. Worktree access is therefore gated by both the session's `read`/`write`/`execute` grant and the presence of an active run.
 

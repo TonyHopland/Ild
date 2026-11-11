@@ -2,6 +2,8 @@
 
 > **Amended by [ADR-0036](./0036-runs-always-in-containers.md).** In a run's or chat's container or pod, a forward's loopback port is answered by a `socat` relay ILD starts there before each command, tunnelling through the egress proxy with `CONNECT`; the proxy judges and logs the connection as it does every other.
 
+> The per-run-uid follow-up the body mentions never happened and never will: the residual it names is closed by each run having its own container or pod.
+
 A Worktree Preview cannot reach a database, or anything else outside the
 container. Previews run as the agent uid ([ADR-0016](./0016-preview-runs-as-the-agent.md)),
 whose nftables rules accept loopback and DNS and drop everything else

@@ -1,5 +1,7 @@
 # ADR-0031: The agent holds a placeholder; the ILD model gateway adds the real credential
 
+> **Status: amended by [ADR-0036](./0036-runs-always-in-containers.md).** There is no uid split any more and the provider sign-in terminal runs in a container or pod of its own, not as the agent. The gateway and the placeholder credential stand; the agent's container holds no credential of the provider's.
+
 An agent CLI used to run with the provider's login on disk where the agent uid could read and rewrite it ([ADR-0014](./0014-agent-uid-isolation.md) shared the credential store between the two uids), and with the model hosts open to it ([ADR-0019](./0019-agent-egress-through-in-container-proxy.md)). A prompt-injected agent could therefore copy an operator's Claude OAuth token, or plant a poisoned login for the next run. This ADR keeps provider credentials where only the orchestrator can read them.
 
 ## Decision
@@ -13,13 +15,13 @@ An agent CLI used to run with the provider's login on disk where the agent uid c
 
 ## Per provider
 
-| Provider | Credential ILD adds | How the CLI is pointed at the gateway |
-|---|---|---|
-| Claude Code | The long-lived token `claude setup-token` prints, saved encrypted on the provider (or an API key). Until one is saved, the stored login's access token while it is valid. | `ANTHROPIC_BASE_URL`, a placeholder `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
-| Codex (ChatGPT) | The stored login's access token and account. ILD refreshes it itself (see below). | A provider of its own with `supports_websockets=false`, so Codex uses streamed HTTP; a placeholder `auth.json` in a per-run `CODEX_HOME` |
-| Copilot | The GitHub token of the stored login | `GH_HOST` set to the gateway's HTTPS listener at the host runs reach ILD on, a `gho_`-shaped placeholder, `NODE_EXTRA_CA_CERTS` pointing at a per-launch copy of the certificate staged into the run, `--no-auto-update` |
-| OpenCode, Pi (base URL and key) | The provider's key | The gateway URL as `baseURL`, a placeholder key |
-| Pi (built-in providers and its own `/login`) | Not covered, so a **read-only copy** | A per-run agent directory holding a `0400` copy of Pi's `auth.json` |
+| Provider                                     | Credential ILD adds                                                                                                                                                       | How the CLI is pointed at the gateway                                                                                                                                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude Code                                  | The long-lived token `claude setup-token` prints, saved encrypted on the provider (or an API key). Until one is saved, the stored login's access token while it is valid. | `ANTHROPIC_BASE_URL`, a placeholder `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`                                                                                       |
+| Codex (ChatGPT)                              | The stored login's access token and account. ILD refreshes it itself (see below).                                                                                         | A provider of its own with `supports_websockets=false`, so Codex uses streamed HTTP; a placeholder `auth.json` in a per-run `CODEX_HOME`                                                                                 |
+| Copilot                                      | The GitHub token of the stored login                                                                                                                                      | `GH_HOST` set to the gateway's HTTPS listener at the host runs reach ILD on, a `gho_`-shaped placeholder, `NODE_EXTRA_CA_CERTS` pointing at a per-launch copy of the certificate staged into the run, `--no-auto-update` |
+| OpenCode, Pi (base URL and key)              | The provider's key                                                                                                                                                        | The gateway URL as `baseURL`, a placeholder key                                                                                                                                                                          |
+| Pi (built-in providers and its own `/login`) | Not covered, so a **read-only copy**                                                                                                                                      | A per-run agent directory holding a `0400` copy of Pi's `auth.json`                                                                                                                                                      |
 
 The matrix behind these rows, with what was run live, is `docs/run-hosts/provider-gateway-matrix.md`.
 

@@ -228,14 +228,14 @@ and add the preview wildcard to their own allowed-hosts list.
 
 ILD's image always runs agents apart from ILD: every loop run, chat and provider sign-in in a container on the engine whose socket it is given, or in pods when the image runs in a Kubernetes cluster. This is not a setting ([ADR-0036](adr/0036-runs-always-in-containers.md)). ILD started with `dotnet run` runs agents as its own processes, which is for development only ([Configuration](configuration.md#where-runs-execute)).
 
-|                               | Containers                                                                                                                        | Kubernetes                                                                                   |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| A run is                      | A container, a volume and a network on the engine, through the Docker-compatible API ([ADR-0034](adr/0034-container-run-host.md)) | A pod and a volume claim, spread across nodes ([ADR-0033](adr/0033-kubernetes-run-host.md))  |
-| Needs                         | A Docker or Podman socket (rootless Podman preferred) and the runner image                                                        | A cluster, RBAC, a CNI that enforces NetworkPolicy, and a ReadWriteMany claim for toolchains |
+|                               | Containers                                                                                                                            | Kubernetes                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| A run is                      | A container, a volume and a network on the engine, through the Docker-compatible API ([ADR-0034](adr/0034-container-run-host.md))     | A pod and a volume claim, spread across nodes ([ADR-0033](adr/0033-kubernetes-run-host.md))  |
+| Needs                         | A Docker or Podman socket (rootless Podman preferred) and the runner image                                                            | A cluster, RBAC, a CNI that enforces NetworkPolicy, and a ReadWriteMany claim for toolchains |
 | Isolates the agent from ILD   | By container: its own filesystem, process and network namespaces, no capabilities, no route but to ILD (except in network mode `off`) | The same, by pod and network policy                                                          |
-| Isolates runs from each other | Yes: a volume, a container and a network each                                                                                     | Yes                                                                                          |
-| Spreads load                  | No: one machine                                                                                                                   | Yes                                                                                          |
-| Trust you hand over           | Whoever holds the socket controls every container on the engine                                                                   | The service account's Role in the run namespace                                              |
+| Isolates runs from each other | Yes: a volume, a container and a network each                                                                                         | Yes                                                                                          |
+| Spreads load                  | No: one machine                                                                                                                       | Yes                                                                                          |
+| Trust you hand over           | Whoever holds the socket controls every container on the engine                                                                       | The service account's Role in the run namespace                                              |
 
 ## Kubernetes run host
 
@@ -352,7 +352,7 @@ On a Podman machine, compose talks to whichever of the two engines the machine f
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `postgres-data` | PostgreSQL data for both ILD and the WorkItem Server. The role passwords are baked in when it is first created — see [Upgrading an existing stack](#upgrading-an-existing-stack) |
 | `ild-data`      | ILD runtime files under `/data`                                                                                                                                                  |
-| `ild-worktrees` | `/worktrees` (`ILD_WORKTREES_PATH`): preview volumes and any clone a repository's own `WorktreesPath` points at. A run's files are in its own volume, not here                                                                                                                                                          |
+| `ild-worktrees` | `/worktrees` (`ILD_WORKTREES_PATH`): preview volumes and any clone a repository's own `WorktreesPath` points at. A run's files are in its own volume, not here                   |
 | `ild-config`    | The provider logins, ILD's alone                                                                                                                                                 |
 | `workitem-data` | Additional WorkItem Server runtime files under `/data`                                                                                                                           |
 
