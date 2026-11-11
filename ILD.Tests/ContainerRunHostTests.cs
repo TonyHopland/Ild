@@ -1300,7 +1300,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var exited = new TaskCompletionSource<int>();
 
         using var pty = await _host.OpenTerminalAsync(
-            new PtyOptions { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 120, Rows = 30, Name = "t" }, TestContext.Current.CancellationToken);
+            new PtyOptions { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 120, Rows = 30, Name = "t" }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
         pty.ProcessExited += (_, args) => exited.TrySetResult(args.ExitCode);
         await pty.WriterStream.WriteAsync("x"u8.ToArray(), TestContext.Current.CancellationToken);
         var read = await new StreamReader(pty.ReaderStream).ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -1337,6 +1337,35 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.DoesNotContain(_api.Execs, e => e.StdinSoFar().Contains(GatewayToken, StringComparison.Ordinal));
     }
 
+    private PtyOptions Terminal() => new() { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 80, Rows = 24, Name = "t" };
+
+    [Theory]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
+    public async Task A_terminal_in_a_proxied_mode_reaches_the_network_through_the_runs_relay_as_a_launch_does(NetworkMode mode)
+    {
+        await CreateRunAsync();
+
+        using var pty = await _host.OpenTerminalAsync(Terminal(), mode, TestContext.Current.CancellationToken);
+
+        var terminal = _api.Execs.Last();
+        Assert.True(terminal.Tty);
+        Assert.Contains(terminal.Command, c => c.Contains(ExecRunHost.EgressRelayScript, StringComparison.Ordinal));
+        Assert.Contains(terminal.Env, e => e.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal));
+        Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
+    }
+
+    [Fact]
+    public async Task A_terminal_in_off_has_the_direct_route_and_no_proxy_variables()
+    {
+        await CreateRunAsync();
+
+        using var pty = await _host.OpenTerminalAsync(Terminal(), NetworkMode.Off, TestContext.Current.CancellationToken);
+
+        Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
+        Assert.DoesNotContain(_api.Execs.Last(e => e.Tty).Env, e => ProxyVariables.Any(v => e.StartsWith(v + "=", StringComparison.Ordinal)));
+    }
+
     [Fact]
     public async Task No_secret_of_a_terminals_environment_is_in_the_exec_command_or_typed_into_the_terminal()
     {
@@ -1347,7 +1376,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             {
                 Cwd = WorkingDirectory, App = "/bin/bash", Cols = 80, Rows = 24, Name = "t",
                 Environment = new Dictionary<string, string> { ["ILD_API_TOKEN"] = ApiToken },
-            }, TestContext.Current.CancellationToken);
+            }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
 
         var exec = _api.Execs.Last();
         Assert.True(exec.Tty);
@@ -1665,7 +1694,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var path = OldPaths[which];
         var ct = TestContext.Current.CancellationToken;
 
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.OpenTerminalAsync(new Porta.Pty.PtyOptions { Cwd = path, App = "sh" }, ct));
+        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.OpenTerminalAsync(new Porta.Pty.PtyOptions { Cwd = path, App = "sh" }, NetworkMode.Monitor, ct));
         await Assert.ThrowsAsync<PredatesContainersException>(() => routing.RunToolAsync(path, "git", ["status"], null, ct));
         await Assert.ThrowsAsync<PredatesContainersException>(() => routing.PushBundleAsync(path, "origin", new MemoryStream(), ct));
         await Assert.ThrowsAsync<PredatesContainersException>(() => routing.FetchBundleAsync(path, new MemoryStream(), ct));

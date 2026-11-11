@@ -83,8 +83,8 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     // -- Terminal ----------------------------------------------------------------
 
-    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default)
-        => ForExecution(options.Cwd).OpenTerminalAsync(options, ct);
+    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default)
+        => ForExecution(options.Cwd).OpenTerminalAsync(options, mode, ct);
 
     // Only builds a command; the sign-in terminal that runs it goes through ISignInTerminalHost, and a run's terminal is refused in OpenTerminalAsync.
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, NetworkMode mode)

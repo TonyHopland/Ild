@@ -56,8 +56,11 @@ public interface IRunHost
 
     // -- Terminal ----------------------------------------------------------------
 
-    /// <summary>Open an interactive terminal (a PTY) running <paramref name="options"/>.</summary>
-    Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default);
+    /// <summary>
+    /// Open an interactive terminal (a PTY) running <paramref name="options"/>. In a run's container or pod it reaches the network as a
+    /// command of the run launched under <paramref name="mode"/> does; on ILD's own machine the caller routes the command itself.
+    /// </summary>
+    Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default);
 
     /// <summary>The command line that runs <paramref name="fileName"/> as an agent launch would, for a terminal to start (the provider sign-in terminal), with the egress rules of <paramref name="providerId"/> under <paramref name="mode"/>.</summary>
     AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, NetworkMode mode);

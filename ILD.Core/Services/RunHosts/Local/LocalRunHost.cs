@@ -189,7 +189,7 @@ public sealed class LocalRunHost : IRunHost
 
     // -- Terminal ----------------------------------------------------------------
 
-    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default)
+    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, ILD.Data.Enums.NetworkMode mode, CancellationToken ct = default)
         => PtyProvider.SpawnAsync(options, ct);
 
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)

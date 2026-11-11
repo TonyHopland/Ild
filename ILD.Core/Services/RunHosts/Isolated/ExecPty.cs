@@ -9,11 +9,13 @@ internal sealed class ExecPty : IPtyConnection
     private readonly ByteChannelStream _output = new();
     private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly OutputStream _input;
+    private readonly Action? _onExit;
     private int _exitRaised;
 
-    public ExecPty(IExecStream exec)
+    public ExecPty(IExecStream exec, Action? onExit = null)
     {
         _exec = exec;
+        _onExit = onExit;
         _input = new OutputStream(exec);
         _ = Task.Run(PumpAsync);
     }
@@ -70,7 +72,10 @@ internal sealed class ExecPty : IPtyConnection
             _exited.TrySetResult(code);
             _output.Complete();
             if (Interlocked.Exchange(ref _exitRaised, 1) == 0)
+            {
+                _onExit?.Invoke();
                 ProcessExited?.Invoke(this, ExitedWith(code));
+            }
         }
     }
 

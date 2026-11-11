@@ -112,6 +112,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         cd -- "$1" || { [ -z "$2" ] || rm -f -- "$2"; exit 126; }
         envfile=$2; pathprefix=$3; shift 3
         {{EnvironmentPrologue}}
+        {{EgressRelayScript}}
         exec "$@"
         """;
 
@@ -702,13 +703,18 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             foreach (var line in await ChatEnvironmentAsync(owner.Id, ct))
                 defaults[line[..line.IndexOf('=')]] = line[(line.IndexOf('=') + 1)..];
 
-        var hostOwned = new Dictionary<string, string?>(StringComparer.Ordinal) { ["HOME"] = owner.Home, ["NPM_CONFIG_PREFIX"] = owner.Chat ? $"{owner.Home}/.local" : null };
-        if (command.NetworkMode != ILD.Data.Enums.NetworkMode.Off && AgentIsolation.EgressProxyUrl(Credentials, new ILD.Core.Services.Implementations.Network.LaunchScope(owner.Chat ? ILD.Core.Services.Implementations.Network.LaunchKind.Chat : ILD.Core.Services.Implementations.Network.LaunchKind.Run, owner.Id, command.ProviderId)) is { } proxy)
-            foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
-                hostOwned[name] = value;
-
+        var hostOwned = HostOwnedEnvironment(owner, command.NetworkMode, command.ProviderId);
         var merged = CommandEnvironment.Merge(defaults, command.Environment, hostOwned);
         return merged with { Variables = ThroughIld(merged.Variables, hostOwned.Keys) };
+    }
+
+    private Dictionary<string, string?> HostOwnedEnvironment(ExecOwner owner, ILD.Data.Enums.NetworkMode mode, Guid? providerId)
+    {
+        var hostOwned = new Dictionary<string, string?>(StringComparer.Ordinal) { ["HOME"] = owner.Home, ["NPM_CONFIG_PREFIX"] = owner.Chat ? $"{owner.Home}/.local" : null };
+        if (mode != ILD.Data.Enums.NetworkMode.Off && AgentIsolation.EgressProxyUrl(Credentials, new ILD.Core.Services.Implementations.Network.LaunchScope(owner.Chat ? ILD.Core.Services.Implementations.Network.LaunchKind.Chat : ILD.Core.Services.Implementations.Network.LaunchKind.Run, owner.Id, providerId)) is { } proxy)
+            foreach (var (name, value) in AgentIsolation.EgressProxyEnvironment(proxy))
+                hostOwned[name] = value;
+        return hostOwned;
     }
 
     // ILD is on the run's own network: its address is the one the run reaches it at, and the gateway and the MCP endpoint go direct, not through the proxy.
@@ -854,24 +860,47 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     // -- Terminal ----------------------------------------------------------------
 
-    public async Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default)
+    public async Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, ILD.Data.Enums.NetworkMode mode, CancellationToken ct = default)
     {
-        var owner = RunPaths.OwnerOf(options.Cwd)
+        ExecOwner owner = RunPaths.OwnerOf(options.Cwd)
             ?? throw new InvalidOperationException($"a terminal for a {Noun} needs a working directory in it");
-        var caller = CommandEnvironment.Of(options.Environment);
-        caller.TryAdd("TERM", "xterm-256color");
-        var merged = CommandEnvironment.Merge(null, caller, new Dictionary<string, string?> { ["HOME"] = RunPaths.HomeDirectory(owner), ["NPM_CONFIG_PREFIX"] = null });
-        await SyncForwardsAsync(owner, ct);
 
-        // The terminal is the exec's stdin, so its environment never goes through it: the wrapper sources a file, which prints nothing.
-        var (execEnvironment, envFile) = await DeliverEnvironmentAsync(owner, $"{owner:N}/terminal-{Guid.NewGuid():N}", merged.Variables, ct);
-        var command = new List<string> { "/bin/sh", "-c", TerminalWrapper, "sh", options.Cwd, envFile, merged.PathPrefix, options.App };
-        command.AddRange(options.CommandLine ?? []);
+        // The route as StartCommandAsync takes it: the terminal is a process of the run, and one opened in mode Off keeps the direct route until it ends.
+        var direct = mode == ILD.Data.Enums.NetworkMode.Off;
+        if (direct)
+            _liveOff.AddOrUpdate(owner, 1, (_, n) => n + 1);
+        else
+            await CloseDirectRouteIfUnusedAsync(owner, ct);
+        try
+        {
+            if (direct)
+            {
+                using (await RouteGateAsync(owner, ct))
+                    await OpenDirectRouteAsync(owner, ct);
+            }
 
-        var exec = await OpenExecOrRemoveFileAsync(owner, command, execEnvironment, envFile, stdin: true, tty: true, ct);
-        var pty = new ExecPty(exec);
-        pty.Resize(options.Cols, options.Rows);
-        return pty;
+            var caller = CommandEnvironment.Of(options.Environment);
+            caller.TryAdd("TERM", "xterm-256color");
+            var hostOwned = HostOwnedEnvironment(owner, mode, providerId: null);
+            var merged = CommandEnvironment.Merge(null, caller, hostOwned);
+            var variables = ThroughIld(merged.Variables, hostOwned.Keys);
+            await SyncForwardsAsync(owner, ct);
+
+            // The terminal is the exec's stdin, so its environment never goes through it: the wrapper sources a file, which prints nothing.
+            var (execEnvironment, envFile) = await DeliverEnvironmentAsync(owner, $"{owner.Id:N}/terminal-{Guid.NewGuid():N}", variables, ct);
+            var command = new List<string> { "/bin/sh", "-c", TerminalWrapper, "sh", options.Cwd, envFile, merged.PathPrefix, options.App };
+            command.AddRange(options.CommandLine ?? []);
+
+            var exec = await OpenExecOrRemoveFileAsync(owner, command, execEnvironment, envFile, stdin: true, tty: true, ct);
+            var pty = new ExecPty(exec, direct ? () => EndOff(owner) : null);
+            pty.Resize(options.Cols, options.Rows);
+            return pty;
+        }
+        catch
+        {
+            if (direct) EndOff(owner);
+            throw;
+        }
     }
 
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)

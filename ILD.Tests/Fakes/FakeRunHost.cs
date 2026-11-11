@@ -125,7 +125,7 @@ internal sealed class FakeRunHost : IRunHost
         return mine.Count;
     }
 
-    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default)
+    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, ILD.Data.Enums.NetworkMode mode, CancellationToken ct = default)
         => throw new NotSupportedException("the fake run host has no terminal");
 
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)
