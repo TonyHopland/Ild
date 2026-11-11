@@ -294,12 +294,13 @@ Event log payloads are stored inline in the `EventLog.Data` column regardless of
 
 ### SignalR realtime channel
 
-Two hubs are mapped:
+Three hubs are mapped:
 
 - `/hubs/loop-run` — broadcasts run-level events
-- `/hubs/work-item` — broadcasts work-item-level events
+- `/hubs/work-item` — broadcasts work-item-level events, and the instance-wide settings and log events
+- `/hubs/chat` — broadcasts chat events to a group per chat (`SubscribeToChat`) and to a per-user inbox group (`SubscribeToChatInbox`) for events that concern all of a user's chats
 
-Both emit messages of shape `{ type: string; payload: T; timestamp: string }`. As of issue #035 the payload `T` is statically typed in the frontend by `frontend/src/types/signalr.ts`'s `SignalREventPayloads` map. The known event names are:
+All emit messages of shape `{ type: string; payload: T; timestamp: string }`. As of issue #035 the payload `T` is statically typed in the frontend by `frontend/src/types/signalr.ts`'s `SignalREventPayloads` map. The list below is partial; `frontend/src/types/signalr.ts` is the complete catalogue. Known event names include:
 
 - `NodeStateChanged`
 - `LoopRunStateChanged`
