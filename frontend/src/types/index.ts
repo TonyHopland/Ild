@@ -135,11 +135,7 @@ export interface WorkItem {
    * Set on a Ready item the latest scheduler pass held back because its
    * repository had reached its parallelism limit; null otherwise.
    */
-  repositoryParallelismHold?: RepositoryParallelismHold |  activeTurnId: string | null;
-  /** The chat's container is still being prepared; messages sent now wait for it. */
-  preparing?: boolean;
-  /** Why preparing the container failed, or null/absent when it has not. */
-  preparationError?: string | null;
+  repositoryParallelismHold?: RepositoryParallelismHold | null;
 }
 
 /** A repository's slot count and limit as of the scheduler pass that held an item back. */
@@ -1445,6 +1441,10 @@ export interface ChatSession {
   messages: ChatMessage[];
   /** The turn the server has in flight for this chat, or null when it is idle. */
   activeTurnId: string | null;
+  /** The chat's container is still being prepared; messages sent now wait for it. */
+  preparing?: boolean;
+  /** Why preparing the container failed, or null/absent when it has not. */
+  preparationError?: string | null;
 }
 
 /**

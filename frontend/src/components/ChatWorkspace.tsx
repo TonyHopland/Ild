@@ -67,7 +67,6 @@ function ChatConversation({
   preparing: boolean;
   preparationError: string | null;
   scrollRef: React.RefObject<HTMLDivElement | null>;
-  onSend| null>;
   onSend: (content: string) => void;
   onStop: () => void;
 }) {
@@ -400,7 +399,7 @@ export default function ChatWorkspace({
       epochRef.current += 1;
       setTurnValue(next);
     },
-    [setTurnValue, setPreparation],
+    [setTurnValue],
   );
 
   // The streamed text belongs to the turn that wrote it. A delta from a different
@@ -431,7 +430,9 @@ export default function ChatWorkspace({
 
   const setPreparation = useCallback((id: string, preparing: boolean, error: string | null) => {
     setSession((prev) =>
-      prev?.id === id && (prev.preparing ?? false) === preparing && (prev.preparationError ?? null) === error
+      prev?.id === id &&
+      (prev.preparing ?? false) === preparing &&
+      (prev.preparationError ?? null) === error
         ? prev
         : prev?.id === id
           ? { ...prev, preparing, preparationError: error }
@@ -488,7 +489,7 @@ export default function ChatWorkspace({
       clearStreamUnlessFrom(active);
       setTurnValue(active);
     },
-    [setTurnValue],
+    [setTurnValue, setPreparation],
   );
 
   // Join the active chat's group whenever we are connected, and leave it on
