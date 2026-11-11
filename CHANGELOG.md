@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Settings → Network lists the address ranges each protected destination covers.**
 - **Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` before you upgrade.
 - **On Kubernetes, ILD runs every loop run and chat in a pod.** Set up the RBAC and the shared tools claim from the deployment guide before you upgrade.
 - **The ILD image is smaller.**

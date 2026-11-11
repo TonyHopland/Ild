@@ -54,7 +54,7 @@ export function ProtectedDestinations({ destinations, onToggle, error }: Props) 
           <thead>
             <tr>
               <th>Destination</th>
-              <th>Resolves to</th>
+              <th>Addresses</th>
               <th>Protected</th>
             </tr>
           </thead>
@@ -65,7 +65,7 @@ export function ProtectedDestinations({ destinations, onToggle, error }: Props) 
                   <strong>{d.name}</strong>
                   <span className="net-sub"> {d.hosts.join(", ")}</span>
                 </td>
-                <td className="net-sub">{d.addresses.length > 0 ? d.addresses.join(", ") : "—"}</td>
+                <td className="net-sub">{[...d.addresses, ...d.ranges].join(", ") || "—"}</td>
                 <td>
                   <Switch
                     checked={d.enabled}
