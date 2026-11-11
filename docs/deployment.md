@@ -61,7 +61,7 @@ is expected and costs a re-login.
 
 A stack from before agents always ran in containers needs `ILD_CONTAINER_SOCKET_HOST`
 in `.env` (and `ILD_CONTAINER_SOCKET_GRANT=1` for a socket of the host's `root` group),
-and is started with `docker-compose.yml`. On its first start ILD's entrypoint gives ILD
+and is started with the repository's `docker-compose.yml` as it is (the separate container-runs overlay file no longer exists: ILD always runs agents in containers, [ADR-0036](./adr/0036-runs-always-in-containers.md)). On its first start ILD's entrypoint gives ILD
 back the files the old agent user left in `/data` and `/worktrees`, which can take a
 while on a large volume.
 
@@ -153,7 +153,7 @@ the apex `ild.localhost` is not one of them.
 An agent does not get the address above. In a chat's or run's container (or pod) `*.localhost` is that container, not ILD, and a `*.kube`-style name may not resolve there. `get_preview` gives an agent:
 
 - **In the work item's own run:** the service's own address, `http://127.0.0.1:<port>`, since the preview runs beside it.
-- **Anywhere else** (a chat, another work item's run): `http://wi-<workItemId>.preview.ild/`. Every agent is launched with ILD's egress proxy in `HTTP_PROXY`, and the proxy hands any `*.preview.ild` request to ILD's own web port, where it is served as the preview it names. It needs no DNS where the agent runs and works the same with every run host. The network policy does not apply to it, since it never leaves ILD; it is served only when `ILD_PREVIEW_PROXY_BASE` is set, and only over plain `http://`.
+- **Anywhere else** (a chat, another work item's run): `http://wi-<workItemId>.preview.ild/`. Every agent launched in a proxied network mode has ILD's egress proxy in `HTTP_PROXY`, and the proxy hands any `*.preview.ild` request to ILD's own web port, where it is served as the preview it names. It needs no DNS where the agent runs and works the same with every run host. The network policy does not apply to it, since it never leaves ILD; it is served only when `ILD_PREVIEW_PROXY_BASE` is set, and only over plain `http://`. In network mode `off` no proxy variables are set, so an agent launched in `off` cannot use `*.preview.ild`.
 
 It works for clients that leave the name to the proxy: browsers (the chrome-devtools MCP server's Chrome included), curl, git, Python. Node's built-in `fetch` with `NODE_USE_ENV_PROXY` looks the name up itself first and fails on it, as on any name that does not resolve where it runs; use the Chrome tools, curl, or Node with an explicit proxy agent there. The egress proxy needs to know ILD's web port: the first `http://` address in `ASPNETCORE_URLS`, else `ASPNETCORE_HTTP_PORTS`.
 
@@ -203,11 +203,7 @@ Until both are in place, preview hostnames will not resolve in a browser and
 nothing about the proxy will appear to work. Note again that this is about
 usability, not access control — see [Security](#security).
 
-The Kubernetes manifests on `feature/flux-example-setup` also still need updating:
-a wildcard host on the Ingress, `ILD_PREVIEW_PROXY_BASE` in the Deployment,
-`ILD_ALLOWED_ORIGINS` extended to cover preview origins, and removal of the
-per-preview `containerPort`/`servicePort` entries that this feature makes
-unnecessary.
+The manifests in [`docs/kubernetes`](kubernetes/) do not include an Ingress or a Deployment: in yours, add a wildcard host on the Ingress, `ILD_PREVIEW_PROXY_BASE` in the Deployment, and extend `ILD_ALLOWED_ORIGINS` to cover the preview origins. No per-preview `containerPort`/`servicePort` entries are needed.
 
 ### Hot module reload
 
@@ -236,7 +232,7 @@ ILD's image always runs agents apart from ILD: every loop run, chat and provider
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | A run is                      | A container, a volume and a network on the engine, through the Docker-compatible API ([ADR-0034](adr/0034-container-run-host.md)) | A pod and a volume claim, spread across nodes ([ADR-0033](adr/0033-kubernetes-run-host.md))  |
 | Needs                         | A Docker or Podman socket (rootless Podman preferred) and the runner image                                                        | A cluster, RBAC, a CNI that enforces NetworkPolicy, and a ReadWriteMany claim for toolchains |
-| Isolates the agent from ILD   | By container: its own filesystem, process and network namespaces, no capabilities, no route but to ILD                            | The same, by pod and network policy                                                          |
+| Isolates the agent from ILD   | By container: its own filesystem, process and network namespaces, no capabilities, no route but to ILD (except in network mode `off`) | The same, by pod and network policy                                                          |
 | Isolates runs from each other | Yes: a volume, a container and a network each                                                                                     | Yes                                                                                          |
 | Spreads load                  | No: one machine                                                                                                                   | Yes                                                                                          |
 | Trust you hand over           | Whoever holds the socket controls every container on the engine                                                                   | The service account's Role in the run namespace                                              |
@@ -254,7 +250,7 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
 ### Setup
 
 1. Pick a namespace for the run objects. The examples use `ild-runs`, and ILD in `ild`.
-2. Apply the manifests in [`docs/kubernetes`](kubernetes/): the ServiceAccount, the Role with its RoleBinding (pods, pods/exec, volume claims, ConfigMaps and network policies in the run namespace, and nothing else), the run namespace's `pod-security.kubernetes.io/enforce: restricted` label (in `role.yaml`), the [default-deny policy](#default-deny-in-the-run-namespace), and optionally the ClusterRole that lets ILD read StorageClasses for the reclaim-policy warning.
+2. Apply the manifests in [`docs/kubernetes`](kubernetes/): the ServiceAccount, the Role with its RoleBinding (pods, pods/exec, volume claims, ConfigMaps and network policies in the run namespace, and nothing else), the run namespace's `pod-security.kubernetes.io/enforce: restricted` label (in `role.yaml`), the [default-deny policy](#default-deny-in-the-run-namespace), optionally the ClusterRole that lets ILD read StorageClasses for the reclaim-policy warning, and optionally [`kubernetes-endpoints-reader-optional.yaml`](kubernetes/kubernetes-endpoints-reader-optional.yaml), which lets ILD read the API server's real addresses so the proxy protects them too (without it ILD logs a warning and protects the service's ClusterIP alone).
 3. Set `serviceAccountName: ild` on the ILD Deployment, and:
 
    ```yaml
@@ -306,7 +302,7 @@ Whoever holds the socket controls every container on the host: it can start a pr
 ### What a run gets
 
 - A named volume for its files, an `internal` network of its own, and a container from the runner image started with `sleep infinity` as uid 10001, all capabilities dropped, `no-new-privileges`, the engine's default seccomp profile, and the CPU and memory limits of `ILD_RUN_CPU_LIMIT` / `ILD_RUN_MEMORY_LIMIT` and the process limit of `ILD_RUN_PIDS_LIMIT`. The three are made at Start and deleted at Cleanup; the container stays up while a Human node waits, so previews keep working.
-- The network is `internal`, so the container cannot reach the internet or the host's other networks. ILD connects its own container (`ILD_CONTAINER_ILD_CONTAINER`) to the network, so the run reaches ILD and nothing else: the model gateway, the MCP endpoint and the egress proxy. Anything else the agent connects to goes through the egress proxy and its [limits](configuration.md#agent-network-limits).
+- The network is `internal`, so the container cannot reach the internet or the host's other networks. ILD connects its own container (`ILD_CONTAINER_ILD_CONTAINER`) to the network, so the run reaches ILD and nothing else (network mode `off` is the exception: the container is then on a separate `ild-open-*` network that is not `internal`, with a direct route out and no proxy): the model gateway, the MCP endpoint and the egress proxy. Anything else the agent connects to goes through the egress proxy and its [limits](configuration.md#agent-network-limits).
 - The container is given the host name in `ILD_API_URL` as ILD's address on its own network. The code goes in and out as bundles over exec, so the container never holds the git credential or the mirror.
 - The toolchains its repository needs and the agents ILD has installed, from the [toolchain store](configuration.md#run-toolchains): the `ild-tools-agents`, `ild-tools-toolchains` and, for a repository's own tools, `ild-tools-repo-<repository id>` volumes, mounted read-only. The first run that needs a version installs it, in a short-lived `ild-tools-…` container of the runner image on a network of its own that reaches only ILD's egress proxy, mounting only the volume it writes; later runs reuse it. The first two are shared by every run, a repository's only by its own runs, and none is pruned.
 - When ILD stops, the container is stopped, and started again when the run next needs it ([What happens to the containers and pods ILD made](#what-happens-to-the-containers-and-pods-ild-made)).
@@ -328,7 +324,7 @@ Once ILD is up, its log says `Container engine socket /run/container.sock: ild c
 
 **User-namespace remap (`userns-remap`).** If the socket's group has no mapping in the container's user namespace it shows as the overflow gid (65534, `nogroup`), and no group ILD joins can open it. The entrypoint warns of it in ILD's log; run the container with `--userns=host` or use another socket.
 
-Keep ILD's port the same outside its container as inside (`8080:8080` and the default `ILD_PREVIEW_PROXY_BASE=http://ild.localhost:8080`). A preview URL is used by your browser outside the container and by a chat's browser inside it, where `*.localhost` is ILD's container itself; mapped to another port outside (`8090:8080`), one of the two cannot load it. To move ILD to another port, move it inside too: `ASPNETCORE_URLS=http://+:8090`, `ILD_API_URL=http://ild:8090`, `8090:8090` and the proxy base on `8090`.
+Keep ILD's port the same outside its container as inside (`8080:8080` and the default `ILD_PREVIEW_PROXY_BASE=http://ild.localhost:8080`). A preview URL is used by your browser outside the container, and ILD builds it from the port it listens on; mapped to another port outside (`8090:8080`), the URL your browser gets does not load. (An agent in its own container never uses this URL: see [Previews for agents](#previews-for-agents).) To move ILD to another port, move it inside too: `ASPNETCORE_URLS=http://+:8090`, `ILD_API_URL=http://ild:8090`, `8090:8090` and the proxy base on `8090`.
 
 The first run of a repository installs its toolchains and ILD's agents into the store's volumes before it starts, which takes from seconds to a few minutes; later runs reuse them. With a local model (LM Studio, Ollama) behind the provider, the agent nodes take as long as the model does.
 
@@ -356,19 +352,23 @@ On a Podman machine, compose talks to whichever of the two engines the machine f
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `postgres-data` | PostgreSQL data for both ILD and the WorkItem Server. The role passwords are baked in when it is first created — see [Upgrading an existing stack](#upgrading-an-existing-stack) |
 | `ild-data`      | ILD runtime files under `/data`                                                                                                                                                  |
-| `ild-worktrees` | Per-run git worktrees                                                                                                                                                            |
+| `ild-worktrees` | `/worktrees` (`ILD_WORKTREES_PATH`): preview volumes and any clone a repository's own `WorktreesPath` points at. A run's files are in its own volume, not here                                                                                                                                                          |
 | `ild-config`    | The provider logins, ILD's alone                                                                                                                                                 |
 | `workitem-data` | Additional WorkItem Server runtime files under `/data`                                                                                                                           |
 
-Your host `~/.gitconfig` is mounted read-only into the ILD container, so agent commits inherit your local name and email by default. Point `GIT_CONFIG` at a different file, or override just the identity with `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (and the matching `GIT_COMMITTER_*` vars) in your `.env` — git reads those natively and they take precedence over the mounted file.
+Your host `~/.gitconfig` is mounted read-only into the ILD container as ILD's own git configuration; it is not given to runs, which have no `.gitconfig`. Agent commits get their author and committer from `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` and `GIT_COMMITTER_NAME`/`GIT_COMMITTER_EMAIL` in your `.env`, which compose passes on and ILD sets on every run and chat container or pod. Point `GIT_CONFIG` at a different file to change ILD's.
 
 For host bind mounts instead of named volumes:
 
 ```yaml
-volumes:
-  - ./.local/ild-data:/data
-  - ./.local/ild-worktrees:/worktrees
-  - ./.local/workitem-data:/data
+services:
+  ild:
+    volumes:
+      - ./.local/ild-data:/data
+      - ./.local/ild-worktrees:/worktrees
+  workitem-server:
+    volumes:
+      - ./.local/workitem-data:/data
 ```
 
 ## Backup and restore
@@ -494,6 +494,6 @@ On first successful ILD startup:
 
 1. EF Core migrations are applied when a database connection string is configured.
 2. The bootstrap user is created on first login from `ILD_USERNAME` (default `admin`) and `ILD_PASSWORD`.
-3. Seed loop templates are created: `Simple Code Change`, `AI-Assisted Feature`, and `Plan`.
+3. Seed loop templates are created from `example-loops/` when no template exists yet: `Develop`, `Prototype` and `Q&A`.
 4. The global WorkItem Server connection is auto-seeded when `ILD_WORKITEM_SERVER_URL` and `ILD_WORKITEM_SERVER_API_KEY` are present and no URL is configured yet.
 5. Recoverable runs are inspected and recovery is attempted according to each run's policy. Two shapes count as recoverable: a run left `Running` by a crash, which is re-driven from its current node, and a run the shutdown drain parked on the way out, which is resumed against the agent session it was parked on rather than re-run cold (see [Shutdown and run draining](#shutdown-and-run-draining)). A halt a **human** pressed is neither, and is left exactly where they left it.

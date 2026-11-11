@@ -25,26 +25,29 @@ The unit and integration tests run against a fake Kubernetes API. They cannot sh
    ILD_K8S_NAMESPACE=ild-runs
    ILD_K8S_RUNNER_IMAGE=<the ild-runner image of the version ILD runs>
    ILD_K8S_STORAGE_CLASS=ild-run-scratch
+   ILD_K8S_TOOLS_CLAIM=ild-tools
    ILD_NETWORK_PROXY_PORT=3128
    ```
 
-   If the `ild` namespace denies ingress by default, allow pods labelled `app.kubernetes.io/managed-by=ild` from `ild-runs` to reach ports 8080 and 3128 of ILD's pods.
+   `ild-tools` is the ReadWriteMany claim you create in `ild-runs` for the toolchain store ([deployment](../deployment.md#kubernetes-run-host)); without it runs get no agent CLI.
+
+   If the `ild` namespace denies ingress by default, allow pods labelled `app.kubernetes.io/managed-by=ild` from `ild-runs` to reach ports 8080 and 3128 of ILD's pods, and 8442 (the model gateway's TLS listener, which the Copilot CLI needs).
 
 4. Restart ILD and read its log. Expected: no startup failure; a warning only if the storage class's `reclaimPolicy` is not `Delete`. Check the class: `kubectl get storageclass ild-run-scratch -o jsonpath='{.reclaimPolicy}'` prints `Delete`.
 
 ## 2. A full Develop run
 
-Start a Develop loop on a small work item and watch the objects: `kubectl -n ild-runs get configmap,pvc,pod,networkpolicy -l app.kubernetes.io/managed-by=ild -w`.
+Start a Develop loop on a small work item. Below, `<id>` is the run's id **without dashes**, as the objects' names have it. Watch the objects: `kubectl -n ild-runs get configmap,pvc,pod,networkpolicy -l app.kubernetes.io/managed-by=ild -w`.
 
 | Step | Expected |
 | --- | --- |
-| Run reaches its Start node | One Secret, PVC, NetworkPolicy and Pod, all named `ild-run-<run id>` and labelled `ild/instance` and `ild/run`. The PVC, NetworkPolicy and Pod have an owner reference to the Secret: `kubectl -n ild-runs get pod ild-run-<id> -o jsonpath='{.metadata.ownerReferences[0].kind}'` prints `Secret` |
+| Run reaches its Start node | One ConfigMap, PVC, NetworkPolicy and Pod, all named `ild-run-<run id>` and labelled `ild/instance` and `ild/run`. The PVC, NetworkPolicy and Pod have an owner reference to the ConfigMap: `kubectl -n ild-runs get pod ild-run-<id> -o jsonpath='{.metadata.ownerReferences[0].kind}'` prints `ConfigMap` |
 | Pod comes up | `Running` and Ready within the pull time; `kubectl -n ild-runs get pod -o wide` shows pods of different runs on different nodes when more than one runs |
-| Agent turns | The agent node completes; the run's event log shows the agent's output as it streams. `kubectl -n ild-runs exec ild-run-<id> -- ls /ild-run/<id without dashes>/repo` shows the checkout |
+| Agent turns | The agent node completes; the run's event log shows the agent's output as it streams. `kubectl -n ild-runs exec ild-run-<id> -- ls /ild-run/<id>/repo` shows the checkout |
 | Human reply | The run waits at the Human node; the pod stays `Running`. Answer in the UI and the next node runs in the same pod |
 | Preview | Start the preview from the work item's Preview tab; the preview URL loads through the wildcard proxy |
 | PR push | The PR node pushes the branch and opens the PR. The pod never held the forge credential: `kubectl -n ild-runs exec ild-run-<id> -- env` shows no token, and `git -C <repo dir> remote -v` shows the remote URL without credentials |
-| Cleanup | When the work item's worktree is cleaned up, `kubectl -n ild-runs get secret,pvc,pod,networkpolicy -l ild/run=<run id without dashes>` prints nothing within a minute, and the Longhorn volume is gone |
+| Cleanup | When the work item's worktree is cleaned up, `kubectl -n ild-runs get configmap,pvc,pod,networkpolicy -l ild/run=<id>` prints nothing within a minute, and the Longhorn volume is gone |
 
 ## 3. Isolation
 
@@ -59,7 +62,7 @@ From inside a run's pod (`kubectl -n ild-runs exec -it ild-run-<id> -- bash`), e
 
 And with a forward declared to one of those addresses and port, a `CONNECT` and a plain `GET http://<host>:<port>/` through the proxy are allowed.
 
-And this must work: `curl -m 5 -s -o /dev/null -w '%{http_code}\n' http://<ild service>.ild.svc:8080/health`.
+And this must work: `curl -m 5 -s -o /dev/null -w '%{http_code}\n' http://<ild service>.ild.svc:8080/api/v1/health`.
 
 ## 4. A killed ILD leaves nothing behind
 
@@ -69,7 +72,7 @@ This makes ILD fail to delete a run, then lets the sweep clean up.
 2. Take the `delete` verb off the Role: `kubectl -n ild-runs edit role ild-run-host`, and remove `delete` from the `configmaps` rule (the pods and claims rule too, for the check below).
 3. Cancel the run and clean its worktree up in the UI. ILD cannot delete the ConfigMap and logs a failure; the objects are still there.
 4. Put the `delete` verb back, then kill ILD without a graceful stop: `kubectl -n ild delete pod <ild pod> --grace-period=0 --force`.
-5. When ILD is back, the startup sweep has removed them: `kubectl -n ild-runs get secret,pvc,pod,networkpolicy -l ild/instance=<instance>` lists nothing for the cancelled run, and ILD's log says `Removed the objects of run <id>, which is finished or gone`.
+5. When ILD is back, the startup sweep has removed them: `kubectl -n ild-runs get configmap,pvc,pod,networkpolicy -l ild/instance=<instance>` lists nothing for the cancelled run, and ILD's log says `Removed the leftover <id>, which is finished or gone`.
 6. Objects of a run that is still `Running` or waiting for a human are kept by the same sweep.
 
 ## 4b. A pod is never without its NetworkPolicy

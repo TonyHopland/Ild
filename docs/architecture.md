@@ -4,7 +4,7 @@ ILD is split into a **local ILD instance** that owns loop execution, repository 
 
 ```text
 Browser (React 19 + Vite+)
-  -> ILD.Api (/api/v1, /hubs/loop-run, /hubs/work-item)
+  -> ILD.Api (/api/v1, /hubs/loop-run, /hubs/work-item, /hubs/chat)
        -> ILD.Core services
             - LoopEngine
             - WorkItemManager (remote-backed)
@@ -14,7 +14,7 @@ Browser (React 19 + Vite+)
             - Adapter registry + AI node executors
        -> ILD.Data (EF Core stores)
        -> PostgreSQL in the supported compose stack
-       -> worktrees and local runtime files under /worktrees and /data
+       -> runs in containers or pods, each with a volume of its own; ILD's runtime files under /data, and preview volumes and repository clones under /worktrees
 
 ILD.Api <-> ILD.WorkItemServer (HTTP + API key)
 ILD.WorkItemServer -> PostgreSQL in the supported compose stack
@@ -32,12 +32,13 @@ ILD.McpServer -> local ILD API for agent-facing work-item tools
 
 ## Realtime channel
 
-Two SignalR hubs are mapped:
+Three SignalR hubs are mapped:
 
 - `/hubs/loop-run` — run-level events
-- `/hubs/work-item` — work-item-level events
+- `/hubs/work-item` — work-item-level events, and the instance-wide settings and log events
+- `/hubs/chat` — chat events. A client subscribes to each chat it shows (`SubscribeToChat`) and to a per-user inbox (`SubscribeToChatInbox`) for the events that concern all of a user's chats, such as unread counts, so it can follow several chats at once
 
-Both emit messages of shape `{ type, payload, timestamp }`. Event payload types are statically modelled in `frontend/src/types/signalr.ts`. Known events include `NodeStateChanged`, `LoopRunStateChanged`, `WorkItemStateChanged`, `HumanFeedbackRequired`, `EventLogged` (sent for every event stored on a run, with the event's id and timestamp, so the Action tab reads the run's conversation on from the last event it has), `RunPaused`, `RunResumed`, `DependencyResolved`, and `NodeProgress` (real-time progress lines consumed by the live-stream view); the work-item hub also carries the instance-wide settings events `SchedulerStateChanged`, `NetworkPolicyChanged`, `NetworkLogAppended` and `NetworkLogCleared`.
+All emit messages of shape `{ type, payload, timestamp }`. Event payload types are statically modelled in `frontend/src/types/signalr.ts`, which is the complete catalogue; the list below is a partial one. Known events include `NodeStateChanged`, `LoopRunStateChanged`, `WorkItemStateChanged`, `HumanFeedbackRequired`, `EventLogged` (sent for every event stored on a run, with the event's id and timestamp, so the Action tab reads the run's conversation on from the last event it has), `RunPaused`, `RunResumed`, `DependencyResolved`, and `NodeProgress` (real-time progress lines consumed by the live-stream view); the work-item hub also carries the instance-wide settings events `SchedulerStateChanged`, `NetworkPolicyChanged`, `NetworkLogAppended` and `NetworkLogCleared`. Further events cover run halts (`RunHalted`), pull requests (`PrSnapshotChanged`, `PrQueueChanged`), previews (`PreviewStateChanged`), the board (`WorkItemRunProgressed`, `WorkItemPrStatusChanged`, `WorkItemBoardReordered`, `WorkItemDeleted`), the log (`LogEntryAppended`), the agents' proposals (`…ProposalsChanged`) and, on the chat hub, `ChatMessageAppended`, `ChatTurnStarted`, `ChatTurnProgress`, `ChatTurnCompleted`, `ChatLoopUpdate`, `ChatTitleChanged`, `ChatActivityChanged`, `ChatUnreadChanged` and `ChatSchedulesChanged`.
 
 ## Why it's shaped this way
 
@@ -45,4 +46,4 @@ The decisions behind this architecture — the WorkItem Server split, manual API
 
 ## Deeper internals
 
-For the full engineering reference — node execution semantics, recovery policies, edge-traversal limits, storage layout, and the auth/webhook enforcement model — see [CONTEXT.md](../CONTEXT.md). For the API design and conventions, see [api.md](./api.md). For product scope and requirements, see [PRD.md](./PRD.md).
+For the full engineering reference — node execution semantics, recovery policies, the AI traversal cap ([ADR-0018](./adr/0018-global-ai-traversal-cap.md)), storage layout, and the auth/webhook enforcement model — see [CONTEXT.md](../CONTEXT.md). For the API design and conventions, see [api.md](./api.md). For product scope and requirements, see [PRD.md](./PRD.md).

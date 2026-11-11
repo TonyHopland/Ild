@@ -2,7 +2,7 @@
 
 ## Purpose
 
-ILD is a local execution system for AI-assisted development loops that coordinates work through a shared WorkItem Server. The product goal is to let one or more developers run their own ILD instances while keeping work-item ownership, execution state, repository worktrees, review steps, and AI activity visible and controllable.
+ILD is a local execution system for AI-assisted development loops that coordinates work through a shared WorkItem Server. The product goal is to let each developer run their own ILD instance while keeping work-item ownership, execution state, repository worktrees, review steps, and AI activity visible and controllable.
 
 This PRD is aligned to the current implementation rather than the earlier single-container and SQLite-only concept. Where the product still has gaps relative to its desired end state, those gaps are called out explicitly.
 
@@ -20,7 +20,7 @@ ILD is composed of:
 The product should let a developer:
 
 1. Create, categorize, and prioritize work items in a shared queue.
-2. Resolve those work items through reusable loop templates made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `PR`, and `Cleanup` nodes.
+2. Resolve those work items through reusable loop templates made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `SetVariable`, `Condition`, `PR`, and `Cleanup` nodes.
 3. Run work either manually from the UI or automatically through background polling.
 4. Use different AI execution backends through adapters instead of a single hard-coded LLM path.
 5. Pause for review, feed back context, inspect run history, and recover safely after restarts.
@@ -78,7 +78,7 @@ The product should let a developer:
 
 ### Auth and Security
 
-- User auth remains single-user username/password with PBKDF2 hashing and a persisted session token.
+- User auth remains single-user username/password with PBKDF2 hashing and persisted session tokens, one per signed-in device.
 - Frontend sessions persist across reloads through stored auth state.
 - WorkItem Server auth remains bearer API-key based.
 - Secrets must not be committed in source-controlled config.
@@ -87,7 +87,7 @@ The product should let a developer:
 
 - The supported deployment is the repo's compose stack with PostgreSQL, ILD, and the WorkItem Server.
 - ILD and the WorkItem Server both run EF Core migrations when connection strings are configured.
-- The ILD runtime image may optionally include OpenCode, Pi, Node.js, the .NET SDK, Chrome, and custom CA certificates.
+- ILD's image is slim: every run and chat executes in a container or pod of the runner image, which gets its repository's toolchains and ILD's agent CLIs from a shared store ([ADR-0035](./adr/0035-run-toolchains.md), [ADR-0036](./adr/0036-runs-always-in-containers.md)). The ILD image may include custom CA certificates.
 
 ## Implementation Decisions
 
@@ -101,7 +101,7 @@ The product should let a developer:
 | Recovery                  | Per-run policy with startup reconciliation                    |
 | AI architecture           | Adapter-driven, resolved by provider type                     |
 | Tool execution            | Provider-owned: each CLI adapter maps the per-node allowlist  |
-| Realtime                  | SignalR hubs for loop-run and work-item streams               |
+| Realtime                  | SignalR hubs for loop-run, work-item and chat streams         |
 | Auth                      | Session-token auth in ILD; bearer API keys in WorkItem Server |
 
 ## Module Boundaries
@@ -133,7 +133,6 @@ The following items are still desired but not fully delivered in the current cod
 - Multi-tenant product behavior
 - OAuth or enterprise identity providers
 - Mobile-native clients
-- Automatic merge approval
 - Plugin marketplaces for custom node types
 - General-purpose collaboration editing in the browser
 
@@ -145,8 +144,8 @@ The following items are still desired but not fully delivered in the current cod
 
 ## Further Notes
 
-- The system is designed for a single developer running it in a container for personal AI-assisted development
-- Forgejo is the primary git provider target, but the `IRemoteProvider` interface enables GitHub and GitLab support
+- The system is designed for one operator's own instance (single user, in containers) for personal AI-assisted development
+- Forgejo, GitHub and Azure DevOps are the supported git providers, behind the remote-provider adapter interface
 - The event log is the source of truth for AI context — keeping it clean and well-structured is important
 - Template versioning is critical: started workitems must not break if the template changes
 - Recovery is a first-class concern: the system must survive container restarts gracefully

@@ -31,7 +31,12 @@ instance. Understanding the trust boundaries matters when deploying it:
   write the database without also holding the key. Without it, running from source, the
   hash is an unkeyed SHA-256 and anyone who can write the sessions table can mint a
   sign-in; startup warns when this is the case. All API and SignalR endpoints require
-  authentication except health, metrics, login, and the runtime log-level endpoint.
+  authentication except health, metrics, login, the runtime log-level endpoint, the
+  webhook routes (each is let in by its provider's webhook secret alone) and the static
+  files and single-page-app fallback that serve the UI. **A running proxied preview is
+  also unauthenticated**: it is a foreign application that cannot present a token, so
+  anyone who can reach ILD's port can use it (see
+  [docs/deployment.md](docs/deployment.md#security)).
 - **The application executes commands and external agent CLIs by design.** `Cmd` nodes
   and preview commands in loop templates run shell commands inside per-item git worktrees,
   in the run's container or pod. Anyone who can author loop templates (i.e. the
@@ -48,7 +53,10 @@ instance. Understanding the trust boundaries matters when deploying it:
 - **Agents run apart from ILD.** ILD's image runs every loop run, chat and provider
   sign-in in a container of its own, or a pod on Kubernetes
   ([ADR-0036](docs/adr/0036-runs-always-in-containers.md)), on a network that reaches
-  only ILD: not PostgreSQL, the WorkItem Server or another run. The connection strings,
+  only ILD: not PostgreSQL, the WorkItem Server or another run. The exception is network
+  mode `off`, which gives a run or chat a direct route to the internet and your LAN for
+  as long as a process launched in `off` is running
+  ([docs/configuration.md](docs/configuration.md#agent-network-limits)). The connection strings,
   `ILD_SECRET_KEY` and `ILD_SESSION_TOKEN_PEPPER` never reach an agent's environment, and
   the database passwords are per deployment rather than constants shipped in this
   repository. Add any new orchestrator secret to `ILD_AGENT_ENV_DENYLIST` or the built-in

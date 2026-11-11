@@ -81,4 +81,4 @@ dotnet ef database update --project <project-with-dbcontext>
 
 ## QA preview
 
-If a repository defines `preview.profiles` in `ild.config.json`, ILD can start and manage long-running QA services inside a worktree. The work-item modal exposes preview controls, and the same API surface is available to AI tools. `POST /api/v1/workitems/{id}/preview/start` accepts optional `profileName`, `skipInstall`, `publicHost`, `portOverrides`, and `timeoutSeconds` values.
+If a repository defines `preview.profiles` in `ild.config.json`, ILD can start and manage long-running QA services inside a worktree. The work-item modal exposes preview controls, and the same API surface is available to AI tools. `POST /api/v1/workitems/{id}/preview/start` accepts optional `profileName`, `skipInstall`, `publicHost`, `portOverrides` and `wait` values (`wait` defaults to `true`: a full start answers once every service has settled; `false` answers at once and continues in the background).

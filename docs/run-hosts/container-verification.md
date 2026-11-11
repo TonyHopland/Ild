@@ -32,7 +32,7 @@ watch -n1 'podman ps -a --filter label=app.kubernetes.io/managed-by=ild; podman 
 | Run reaches its Start node | One container, one volume and one network, all named `ild-run-<run>`, labelled `ild/instance=<instance>` and `ild/run=<run>`. `podman network inspect ild-run-<run>` shows `"internal": true` |
 | Container comes up | `Up` within a few seconds. `podman inspect ild-run-<run> --format '{{.Config.User}} {{.HostConfig.CapDrop}} {{.HostConfig.SecurityOpt}}'` prints `10001:10001 [ALL] [no-new-privileges]` (rootless Podman may also list its seccomp setting) |
 | Agent turns | The agent node completes and the event log shows the output as it streams. `podman exec ild-run-<run> ls /ild-run/<run>/repo` shows the checkout, and `ls -ld /ild-run` inside is owned by uid 10001 |
-| Limits | `podman inspect ild-run-<run> --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}'` prints `8589934592 4000000000`. **If the container fails to start on a rootless engine with `crun: open 'memory.max'` (the cgroup controllers are not delegated, as on a Podman machine), set `ILD_RUN_CPU_LIMIT=0` and `ILD_RUN_MEMORY_LIMIT=0`** and report it |
+| Limits | `podman inspect ild-run-<run> --format '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}'` prints `8589934592 4000000000`. **If the container fails to start on a rootless engine with `crun: open 'memory.max'` (the cgroup controllers are not delegated, as on a Podman machine), set `ILD_RUN_CPU_LIMIT=0`, `ILD_RUN_MEMORY_LIMIT=0` and `ILD_RUN_PIDS_LIMIT=0`** and report it |
 | Human reply | The run waits at the Human node; the container stays `Up`. Answer in the UI and the next node runs in the same container |
 | Preview | Start the preview from the work item's Preview tab; the preview URL loads |
 | PR push | The PR node pushes the branch and opens the PR. `podman exec ild-run-<run> env` shows no token, and `git -C /ild-run/<run>/repo remote -v` shows the remote URL without credentials |
@@ -42,7 +42,7 @@ watch -n1 'podman ps -a --filter label=app.kubernetes.io/managed-by=ild; podman 
 
 From inside a run's container (`podman exec -it ild-run-<run> bash`), each of these must fail or time out:
 
-- `curl -m 5 https://example.com` (the internet)
+- `curl -m 5 https://example.com` (the internet; skip this one while the network mode is `off`, which gives the run a direct route on purpose)
 - `curl -m 5 http://<another run's container ip>:<any port>` (another run; start a second run to get one)
 - `curl -m 5 http://<host's LAN address>:22` or any other service of the host except ILD
 - through the proxy (the run's `HTTP_PROXY`), `CONNECT <machine LAN IP>:<a port the stack publishes>` (ILD's own or the WorkItem Server's) and `CONNECT <any other private address>:<port>`: both are refused with `protected: Private and cluster-internal addresses` in the Network log
@@ -73,7 +73,7 @@ Use a work item on a repository with a `package.json` and an `.nvmrc` (say `20`)
 
 1. With a run at a Human node, kill ILD hard: `kill -9 <ild pid>` (or `podman kill ild`).
 2. The objects remain: the `podman ps -a`, `volume ls` and `network ls` listings still show the run's three objects.
-3. Restart ILD **with that run finished or removed** (cancel the run first, or delete its row), or with a different run set. Expected within the first sweep (startup, or `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`): the run's container, volume and network are gone, and ILD's log says `Removed the objects of run <run>`. `podman inspect ild --format '{{json .NetworkSettings.Networks}}'` no longer lists `ild-run-<run>`.
+3. Restart ILD **with that run finished or removed** (cancel the run first, or delete its row), or with a different run set. Expected within the first sweep (startup, or `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`): the run's container, volume and network are gone, and ILD's log says `Removed the leftover <run>, which is finished or gone`. `podman inspect ild --format '{{json .NetworkSettings.Networks}}'` no longer lists `ild-run-<run>`.
 4. A run that is still unfinished (including a failed one that can be retried) keeps its objects across the restart. This is intended.
 5. Objects of another instance survive: `podman run -d --label app.kubernetes.io/managed-by=ild --label ild/instance=other --label ild/run=00000000000000000000000000000001 --name other-probe alpine sleep 600`, restart ILD, and the probe is still there. Remove it afterwards.
 

@@ -14,36 +14,15 @@ The WorkItem Server reclaims stale running items when heartbeats stop arriving. 
 
 **Webhook updates are not reaching ILD**
 
-The webhook route is not an anonymous bypass. Configure the expected bearer auth and HMAC settings together; a missing or mismatched secret causes rejection.
+A webhook route takes no bearer token: the provider's webhook secret is the only thing that lets a request in, so a missing or mismatched secret causes rejection. Check that the secret in the git host's webhook settings is the one on the provider in ILD, and remove any `?access_token=` from the URL. See [the API reference](api.md).
 
 **Preview URLs are not reachable from the host**
 
-Only ports published by compose are reachable from the host browser. An internal preview may still be valid for AI-driven checks even when it is not externally reachable.
+A preview runs inside its run's container, so no port of it is published. The browser reaches it on a wildcard subdomain through ILD's own port (`http://wi-<id>.ild.localhost:8080` by default), built from `ILD_PREVIEW_PROXY_BASE`. If the URL does not load, check that `ILD_PREVIEW_PROXY_BASE` is set to a name your browser resolves, with the port ILD is published on (the same outside as inside the container), and that the name has a wildcard record or is under `.localhost`. See [Worktree preview proxy](deployment.md#worktree-preview-proxy).
 
 **A preview service starts, but the app behaves as if it has no configuration**
 
 A preview gets an environment ILD constructs, not one it inherits, so a service that used to come up on values nobody wrote down was reading ILD's own — and no longer does. Put what your app needs in the repository's preview `.env` (Repositories page, or a work item's **Preview** tab) or the service's `env` block; see [Configuration](configuration.md#giving-a-preview-its-own-configuration). A database connection string is the usual one.
-
-**A preview build fails with `MSB3021` or `MSB3374`**
-
-```
-error MSB3021: Unable to copy file ".../obj/Debug/net10.0/apphost" to "bin/Debug/net10.0/YourApp".
-Access to the path '.../YourApp/bin/Debug/net10.0/YourApp' is denied.
-
-error MSB3374: The last access/last write time on file
-"obj/Debug/net10.0/YourApp.AssemblyInfo.cache" cannot be set.
-Access to the path '...' is denied.
-```
-
-Two different users have built in the same worktree. A file created `0755` by one of them is read-only for the other (`MSB3021`), and setting an explicit mtime through `utimensat` requires being the file's **owner** — group write is irrelevant and no mode or ACL scheme can grant it (`MSB3374`). Other toolchains that rewrite an existing output tree can hit the same wall; .NET just names it precisely.
-
-Previews and Cmd nodes run in the run's container as the same user the coding agent builds under, so this cannot arise on a run started since. A worktree built by two users on an older build still holds mixed-ownership output and needs clearing **once**:
-
-```sh
-find /worktrees/<worktree> -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +
-```
-
-Adjust the directory names for your toolchain (`target`, `build`, `node_modules/.cache`, …), then start the preview or rerun the Cmd node. If it recurs on a fresh worktree, something else is building as another user, and that is what to look at, not the file modes.
 
 **No run or chat can start: ILD cannot open the container engine's socket**
 

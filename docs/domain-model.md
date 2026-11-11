@@ -25,6 +25,7 @@ Loop templates are directed graphs built from these node types:
 | `AI`      | Delegates to an `IAgentAdapter` resolved by `AiProvider.Type`                     |
 | `Human`   | Pauses for human input, which becomes `{{Node.Input}}` downstream                 |
 | `Prompt`  | Renders a templated prompt and emits it as output (composes prompts for AI nodes) |
+| `Condition` | Routes on its cases by comparing templated values; each case names an output |
 | `SetVariable` | Writes loop variables from templated values and passes its input on unchanged |
 | `PR`      | Creates or reuses a pull request and waits for merge/rejection webhooks           |
 | `Cleanup` | Terminal sink node; ends the run, and its worktree and session data are removed  |
