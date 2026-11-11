@@ -641,6 +641,22 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     };
   }, [workItem?.id, wiConnectionState, wiOn, wiOff, readPreview]);
 
+  // The run host reports when it starts and finishes making the run's container;
+  // the "Preparing container" state is derived on the server, so re-read it.
+  useEffect(() => {
+    if (!workItem?.id || wiConnectionState !== "connected") return;
+
+    const onRunProgressed = (message: TypedSignalRMessage<"WorkItemRunProgressed">) => {
+      if (message.payload.workItemId !== workItem.id) return;
+      void refetchWorkItem();
+    };
+
+    wiOn("WorkItemRunProgressed", onRunProgressed);
+    return () => {
+      wiOff("WorkItemRunProgressed", onRunProgressed);
+    };
+  }, [workItem?.id, wiConnectionState, wiOn, wiOff, refetchWorkItem]);
+
   // Backlog→live handoff state. `seeded` flips true once the replayed backlog
   // has been written; until then live chunks are queued. `seededSeq` is the
   // last sequence number already reflected in `progressText`, so a chunk is

@@ -41,7 +41,10 @@ public class StartNodeExecutorTests : IDisposable
         string? previewEnv = null,
         string? worktreesPath = null,
         Repository? itemRepointedTo = null,
-        bool keepPreviewData = false)
+        bool keepPreviewData = false,
+        Fakes.FakeRunHost? host = null,
+        RunPreparations? preparations = null,
+        IWorkItemNotifier? notifier = null)
     {
         var repoId = Guid.NewGuid();
         var workItem = itemRepointedTo is null
@@ -72,7 +75,9 @@ public class StartNodeExecutorTests : IDisposable
         services.AddSingleton(workItems.Object);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(repoManager.Object);
-        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(new Fakes.FakeRunHost(repoManager.Object));
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(host ?? new Fakes.FakeRunHost(repoManager.Object));
+        if (preparations is not null) services.AddSingleton(preparations);
+        if (notifier is not null) services.AddSingleton(notifier);
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataPath })
             .Build());
@@ -198,6 +203,65 @@ public class StartNodeExecutorTests : IDisposable
             [($"fetch {_baseRepo}", true), ("reset", true), ("add worktree", true), ("fetch /tmp/worktree", true), ("rebase", false)],
             steps);
         Assert.False(BaseRepoClone.IsTracked(repoId));
+    }
+
+    private static async Task<List<NodeOutcome>> RunAsync(IServiceProvider sp, LoopRun run, LoopNode node)
+    {
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new StartNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+        return outcomes;
+    }
+
+    [Fact]
+    public async Task A_container_host_marks_the_item_preparing_only_while_it_makes_the_environment()
+    {
+        var repoManager = HappyRepoManager();
+        var preparations = new RunPreparations();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var seen = new List<bool>();
+        var host = new Fakes.FakeRunHost(repoManager.Object) { Kind = ILD.Core.Services.RunHosts.RunHostKind.Container };
+        host.OnCreate = () => { seen.Add(preparations.IsPreparing("WI-1")); return Task.CompletedTask; };
+        var (_, sp, run, node) = BuildContext(repoManager, host: host, preparations: preparations, notifier: notifier.Object);
+
+        var outcomes = await RunAsync(sp, run, node);
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.Success);
+        Assert.Equal([true], seen);
+        Assert.False(preparations.IsPreparing("WI-1"));
+        // Once when it starts and once when it ends, so the board and the page re-read it.
+        notifier.Verify(n => n.RunProgressedAsync("WI-1"), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task A_failed_environment_clears_the_preparing_mark_and_fails_the_node()
+    {
+        var repoManager = HappyRepoManager();
+        var preparations = new RunPreparations();
+        var host = new Fakes.FakeRunHost(repoManager.Object) { Kind = ILD.Core.Services.RunHosts.RunHostKind.Kubernetes };
+        host.OnCreate = () => throw new IOException("image pull failed");
+        var (_, sp, run, node) = BuildContext(repoManager, host: host, preparations: preparations);
+
+        var outcomes = new List<NodeOutcome>();
+        try { outcomes = await RunAsync(sp, run, node); }
+        catch (IOException ex) { Assert.Equal("image pull failed", ex.Message); }
+
+        Assert.False(preparations.IsPreparing("WI-1"));
+    }
+
+    [Fact]
+    public async Task The_local_host_never_marks_the_item_preparing()
+    {
+        var repoManager = HappyRepoManager();
+        var preparations = new RunPreparations();
+        var seen = new List<bool>();
+        var host = new Fakes.FakeRunHost(repoManager.Object);
+        host.OnCreate = () => { seen.Add(preparations.IsPreparing("WI-1")); return Task.CompletedTask; };
+        var (_, sp, run, node) = BuildContext(repoManager, host: host, preparations: preparations);
+
+        await RunAsync(sp, run, node);
+
+        Assert.Equal([false], seen);
     }
 
     /// <summary>A repo manager that prepares a worktree at <c>/tmp/worktree</c> on the happy path.</summary>

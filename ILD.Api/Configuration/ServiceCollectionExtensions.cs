@@ -186,6 +186,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IChatService, ChatService>();
         services.AddSingleton<IChatTurnRunner, ChatTurnRunner>();
         services.AddSingleton<ChatPreparations>();
+        services.AddSingleton<RunPreparations>();
         services.AddScoped<ChatTitleGenerator>();
         services.AddSingleton<IChatTitleScheduler, ChatTitleScheduler>();
         services.AddSingleton<SignalRChatNotifier>();

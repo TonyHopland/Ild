@@ -66,7 +66,7 @@ public class WorkItemManagerTests
     private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupWithEngine(out Mock<ILoopEngine> engine)
         => SetupCore(out engine);
 
-    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupCore(out Mock<ILoopEngine> engine, Mock<IRemoteProvider>? remoteProvider = null, FakeWorkItemServerHarness? server = null)
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupCore(out Mock<ILoopEngine> engine, Mock<IRemoteProvider>? remoteProvider = null, FakeWorkItemServerHarness? server = null, RunPreparations? runPreparations = null)
     {
         var db = new TestDb(server);
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
@@ -80,7 +80,7 @@ public class WorkItemManagerTests
             .ReturnsAsync(1L);
         engine = new Mock<ILoopEngine>();
         return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, LocalRunHost.Shared,
-            engine: engine.Object, remoteProvider: remoteProvider?.Object), db, repo.Id, repoMgr, eventLog);
+            engine: engine.Object, remoteProvider: remoteProvider?.Object, runPreparations: runPreparations), db, repo.Id, repoMgr, eventLog);
     }
 
     // Park a work item at a PR node awaiting merge: a run waiting on a person,
@@ -139,6 +139,26 @@ public class WorkItemManagerTests
         db.Context.SaveChanges();
         mgr.TransitionToHumanFeedbackAsync(TestActors.Human, id, HumanFeedbackReasons.PrAwaitingMerge).GetAwaiter().GetResult();
         return (id, runId, runNodeId);
+    }
+
+    [Fact]
+    public async Task PreparingContainer_shows_only_while_the_item_is_running_and_its_container_is_being_made()
+    {
+        var preparations = new RunPreparations();
+        var (mgr, db, repoId, _, _) = SetupCore(out _, runPreparations: preparations);
+        using var dbScope = db;
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
+        await mgr.TransitionToReadyAsync(TestActors.Human, id);
+        SeedLoopRun(db, id);
+
+        preparations.Begin(id);
+        Assert.False((await mgr.GetWorkItemAsync(id))!.PreparingContainer, "a Ready item is not preparing");
+
+        await mgr.TransitionToRunningAsync(TestActors.Human, id);
+        Assert.True((await mgr.GetWorkItemAsync(id))!.PreparingContainer);
+
+        preparations.End(id);
+        Assert.False((await mgr.GetWorkItemAsync(id))!.PreparingContainer);
     }
 
     [Fact]

@@ -38,6 +38,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IRemoteProvider? _remoteProvider;
     private readonly ILogger<WorkItemManager> _logger;
     private readonly RepositoryParallelismHolds _repositoryHolds;
+    private readonly RunPreparations? _runPreparations;
     private readonly IFinishedRunCleaner? _finishedRunCleaner;
     private readonly IHumanInputProposalStore? _humanInputProposals;
 
@@ -59,8 +60,10 @@ public class WorkItemManager : IWorkItemManager
         ILogger<WorkItemManager>? logger = null,
         RepositoryParallelismHolds? repositoryHolds = null,
         IFinishedRunCleaner? finishedRunCleaner = null,
-        IHumanInputProposalStore? humanInputProposals = null)
+        IHumanInputProposalStore? humanInputProposals = null,
+        RunPreparations? runPreparations = null)
     {
+        _runPreparations = runPreparations;
         _runHost = runHost;
         _humanInputProposals = humanInputProposals;
         _repoManager = repoManager;
@@ -536,6 +539,8 @@ public class WorkItemManager : IWorkItemManager
             PendingEditProposalCount = remote.PendingEditProposalCount,
             // The latest pass's hold is only meaningful while the item is still Ready.
             RepositoryParallelismHold = remote.Status == RemoteWorkItemStatus.Ready ? _repositoryHolds.Get(remote.Id) : null,
+            // Only a running item can be waiting on its container.
+            PreparingContainer = remote.Status == RemoteWorkItemStatus.Running && _runPreparations?.IsPreparing(remote.Id) == true,
         };
     }
 

@@ -1097,8 +1097,9 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   // engine is currently on. Both come from the current run's detail.
   const { currentRun } = detail;
   const loopName = detail.templates.find((t) => t.id === currentRun?.loopTemplateId)?.name ?? null;
-  const currentNodeLabel =
-    currentRun?.nodes.find((n) => n.nodeId === currentRun.currentNodeId)?.nodeLabel ?? null;
+  const currentNodeLabel = workItem.preparingContainer
+    ? "Preparing container"
+    : (currentRun?.nodes.find((n) => n.nodeId === currentRun.currentNodeId)?.nodeLabel ?? null);
   const isRunning = workItem.status === WorkItemStatus.Running;
 
   return (

@@ -537,6 +537,7 @@ describe("WorkItemModalV2", () => {
   const LOOP_ROW_CASES: Array<{
     name: string;
     run: Partial<LoopRun>;
+    preparingContainer?: boolean;
     status: WorkItemStatus;
     loopRow: { contains: string[]; lacks: string[] } | null;
   }> = [
@@ -546,6 +547,13 @@ describe("WorkItemModalV2", () => {
       status: WorkItemStatus.Running,
       // The current node label is shown beside the loop name.
       loopRow: { contains: ["build-loop", "Implement"], lacks: [] },
+    },
+    {
+      name: "overview shows Preparing container in place of the node while the container is made",
+      run: { status: LoopRunStatus.Running, completedAt: null, currentNodeId: "n-1" },
+      status: WorkItemStatus.Running,
+      preparingContainer: true,
+      loopRow: { contains: ["build-loop", "Preparing container"], lacks: ["Implement"] },
     },
     {
       name: "overview shows the loop name without a node when the run has no current node",
@@ -561,12 +569,12 @@ describe("WorkItemModalV2", () => {
     },
   ];
 
-  test.each(LOOP_ROW_CASES)("$name", async ({ run, status, loopRow }) => {
+  test.each(LOOP_ROW_CASES)("$name", async ({ run, status, loopRow, preparingContainer }) => {
     mockServices([makeRun(run)]);
     vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
       makeTemplate({ id: "tmpl-1", name: "build-loop" }),
     ]);
-    await renderDialog(makeWorkItem({ status, currentLoopRunId: "run-1" }));
+    await renderDialog(makeWorkItem({ status, currentLoopRunId: "run-1", preparingContainer }));
 
     if (loopRow) {
       const row = (await screen.findByText("Loop")).parentElement;
