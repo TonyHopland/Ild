@@ -69,6 +69,10 @@ public record ChatTurnStartedPayload(Guid ChatSessionId, Guid TurnId);
 
 public record ChatTurnCompletedPayload(Guid ChatSessionId, Guid TurnId, bool Interrupted);
 
+public record ChatPreparedPayload(Guid ChatSessionId);
+
+public record ChatPreparationFailedPayload(Guid ChatSessionId, string Error);
+
 public record ChatLoopUpdatePayload(Guid ChatSessionId, string Document);
 
 public record ChatEditProposalsChangedPayload(Guid ChatSessionId);

@@ -45,7 +45,7 @@ public class ChatControllerTests
                 ClaimTypes.Role));
         }
 
-        return new ChatController(_chat.Object, _runner.Object)
+        return new ChatController(_chat.Object, _runner.Object, new ChatPreparations(Mock.Of<IChatNotifier>()))
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -358,7 +358,7 @@ public class ChatControllerTests
             {
                 User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "tony")], "ILD", ClaimTypes.Name, ClaimTypes.Role)),
             };
-            var controller = new ChatController(chat, runner) { ControllerContext = new ControllerContext { HttpContext = http } };
+            var controller = new ChatController(chat, runner, new ChatPreparations(Mock.Of<IChatNotifier>())) { ControllerContext = new ControllerContext { HttpContext = http } };
 
             var result = await controller.DeleteMany(
                 new DeleteChatsRequest { Ids = [listed[0], listed[1], listed[0], others, Guid.NewGuid()] },

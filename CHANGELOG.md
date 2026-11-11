@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A new chat opens at once and takes messages while its container is still starting.**
 - **The shared chat container or pod is removed after 30 idle minutes** (`ILD_CHAT_IDLE_TIMEOUT_MINUTES`, `0` to keep it), so leftover dev servers do not pile up. The next chat makes it again.
 - **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets. Settings warns when the container socket is not rootless or cannot be reached.
 - **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart.

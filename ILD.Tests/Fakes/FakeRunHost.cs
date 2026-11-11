@@ -219,15 +219,24 @@ internal sealed class FakeRunHost : IRunHost
 
     public List<(string ChatPath, string BasePath)> ChatTools { get; } = [];
 
-    public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
+    public string ChatFolderPath(Guid chatId, string localRoot)
+        => ChatFolderFor?.Invoke(chatId, localRoot) ?? Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+
+    public Task? ChatFolderGate { get; set; }
+
+    public Exception? ChatFolderFailure { get; set; }
+
+    public async Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
     {
-        var path = ChatFolderFor?.Invoke(chatId, localRoot) ?? Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+        if (ChatFolderGate is { } gate) await gate.WaitAsync(ct);
+        if (ChatFolderFailure is { } failure) throw failure;
+        var path = ChatFolderPath(chatId, localRoot);
         lock (_gate)
         {
             ChatFolders.Add(chatId);
             _directories.Add(path);
         }
-        return Task.FromResult(path);
+        return path;
     }
 
     public Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
