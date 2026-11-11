@@ -1637,6 +1637,8 @@ export interface NetworkProtectedDestination {
   name: string;
   hosts: string[];
   addresses: string[];
+  /** The address ranges it covers, as the server lists them. */
+  ranges: string[];
   enabled: boolean;
 }
 
