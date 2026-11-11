@@ -34,7 +34,7 @@ public class ChatTitleNulTests
         {
             User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "tony")], "ILD")),
         };
-        return new ChatController(_chat.Object, Mock.Of<IChatTurnRunner>())
+        return new ChatController(_chat.Object, Mock.Of<IChatTurnRunner>(), new ChatPreparations(Mock.Of<IChatNotifier>()))
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

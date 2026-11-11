@@ -1441,6 +1441,10 @@ export interface ChatSession {
   messages: ChatMessage[];
   /** The turn the server has in flight for this chat, or null when it is idle. */
   activeTurnId: string | null;
+  /** The chat's container is still being prepared; messages sent now wait for it. */
+  preparing?: boolean;
+  /** Why preparing the container failed, or null/absent when it has not. */
+  preparationError?: string | null;
 }
 
 /**
@@ -1545,6 +1549,15 @@ export interface ChatTurnProgressPayload {
 export interface ChatTurnStartedPayload {
   chatSessionId: string;
   turnId: string;
+}
+
+export interface ChatPreparedPayload {
+  chatSessionId: string;
+}
+
+export interface ChatPreparationFailedPayload {
+  chatSessionId: string;
+  error: string;
 }
 
 export interface ChatTurnCompletedPayload {

@@ -34,6 +34,12 @@ public class SignalRChatNotifier : IChatNotifier, IChatScheduleNotifier
     public Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted)
         => SendAsync(chatSessionId, "ChatTurnCompleted", new ChatTurnCompletedPayload(chatSessionId, turnId, interrupted));
 
+    public Task ChatPreparedAsync(Guid chatSessionId)
+        => SendAsync(chatSessionId, "ChatPrepared", new ChatPreparedPayload(chatSessionId));
+
+    public Task ChatPreparationFailedAsync(Guid chatSessionId, string error)
+        => SendAsync(chatSessionId, "ChatPreparationFailed", new ChatPreparationFailedPayload(chatSessionId, error));
+
     public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document)
         => SendAsync(chatSessionId, "ChatLoopUpdate", new ChatLoopUpdatePayload(chatSessionId, document));
 

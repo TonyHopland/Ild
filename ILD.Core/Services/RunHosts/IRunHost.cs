@@ -132,6 +132,9 @@ public interface IRunHost
     /// <summary>Delete each path, whatever it is. Returns whether every one is gone; one in a run that is not running counts as gone with that run, which is never started again for it.</summary>
     Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default);
 
+    /// <summary>The path <see cref="CreateChatFolderAsync"/> returns for the chat, without making anything.</summary>
+    string ChatFolderPath(Guid chatId, string localRoot);
+
     /// <summary>Make the folder a chat works in and return its path: below <paramref name="localRoot"/> on this machine, or a folder of its own in the chat container when the host keeps chats there. Fine when it is already there.</summary>
     Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default);
 
