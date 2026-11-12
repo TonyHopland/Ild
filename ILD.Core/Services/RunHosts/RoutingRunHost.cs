@@ -153,6 +153,9 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     // Deleting an old worktree or chat folder is the way to be rid of it, so it still goes to this disk.
     // A chat's folder goes where chats are kept: the isolated host when it keeps them, this disk otherwise.
+    public string ChatFolderPath(Guid chatId, string localRoot)
+        => (isolated.HostsChats ? isolated : local).ChatFolderPath(chatId, localRoot);
+
     public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
         => (isolated.HostsChats ? isolated : local).CreateChatFolderAsync(chatId, localRoot, ct);
 

@@ -319,9 +319,12 @@ public sealed class LocalRunHost : IRunHost
     public Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default)
         => AgentWritableFiles.DeleteAsync(paths, ct);
 
+    public string ChatFolderPath(Guid chatId, string localRoot)
+        => Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+
     public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
     {
-        var path = Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+        var path = ChatFolderPath(chatId, localRoot);
         Directory.CreateDirectory(path);
         return Task.FromResult(path);
     }

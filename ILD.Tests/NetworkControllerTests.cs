@@ -69,23 +69,28 @@ public sealed class NetworkControllerTests : IDisposable
         _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
     }
 
-    private sealed record ProtectedView(string Id, string Name, string[] Hosts, string[] Addresses, bool Enabled);
+    private sealed record ProtectedView(string Id, string Name, string[] Hosts, string[] Addresses, string[] Ranges, bool Enabled);
 
     [Fact]
     public async Task The_protected_destinations_are_listed_and_a_toggle_is_stored_and_takes_effect_on_the_next_connection()
     {
         _snapshot = EgressPolicySnapshot.Monitor with
         {
-            Protected = [new ProtectedDestination(ProtectedDestination.Database, "ILD database", ["db.example"], [System.Net.IPAddress.Parse("10.0.0.7")])],
+            Protected = [new ProtectedDestination(ProtectedDestination.Database, "ILD database", ["db.example"], [System.Net.IPAddress.Parse("10.0.0.7")]),
+                ProtectedDestination.LinkLocalRanges, ProtectedDestination.PrivateRanges],
         };
         var controller = Build();
 
         var listed = Body<ProtectedView[]>(await controller.GetProtected(TestContext.Current.CancellationToken));
         var set = Body<ProtectedView>(await controller.SetProtected(ProtectedDestination.Database, new NetworkController.SetProtectedRequest { Enabled = false }, TestContext.Current.CancellationToken));
 
-        var view = Assert.Single(listed);
+        Assert.Equal(3, listed.Length);
+        var view = listed[0];
         Assert.Equal(("database", "ILD database", true), (view.Id, view.Name, view.Enabled));
         Assert.Equal(["10.0.0.7"], view.Addresses);
+        Assert.Empty(view.Ranges);
+        Assert.Equal(["169.254.0.0/16", "fe80::/10", "fd00:ec2::254"], listed[1].Ranges);
+        Assert.Equal(["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"], listed[2].Ranges);
         Assert.False(set.Enabled);
         Assert.Equal("false", (await _db.Settings.GetByKeyAsync("network.protect.database", TestContext.Current.CancellationToken))!.Value);
         _policy.Verify(p => p.Invalidate(), Times.Once);

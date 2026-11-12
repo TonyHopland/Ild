@@ -1279,6 +1279,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
 
+    public string ChatFolderPath(Guid chatId, string localRoot)
+        => HostsChats ? RunPaths.ChatRoot(chatId) : throw new NotSupportedException($"this host does not keep chats in a {Noun}");
+
     public async Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
     {
         if (!HostsChats) throw new NotSupportedException($"this host does not keep chats in a {Noun}");

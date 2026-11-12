@@ -85,6 +85,10 @@ public readonly record struct IpRange(IPAddress Network, int Prefix)
         return true;
     }
 
+    /// <summary>The CIDR text, or the bare address for a range of one address.</summary>
+    public override string ToString()
+        => Prefix == (Network.AddressFamily == AddressFamily.InterNetwork ? 32 : 128) ? Network.ToString() : $"{Network}/{Prefix}";
+
     public static IpRange Parse(string cidr) => TryParse(cidr, out var range) ? range : throw new FormatException($"'{cidr}' is not a CIDR range.");
 
     public bool Contains(IPAddress address)

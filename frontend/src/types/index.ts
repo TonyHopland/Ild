@@ -99,6 +99,8 @@ export interface WorkItem {
   latestLoopRunId?: string | null;
   /** Label of the node the active run is currently executing; null when idle. */
   currentNodeLabel?: string | null;
+  /** True while the run host is making the run's container or pod, before its first command can run. */
+  preparingContainer?: boolean;
   worktreePath?: string | null;
   branchName?: string | null;
   /**
@@ -1441,6 +1443,10 @@ export interface ChatSession {
   messages: ChatMessage[];
   /** The turn the server has in flight for this chat, or null when it is idle. */
   activeTurnId: string | null;
+  /** The chat's container is still being prepared; messages sent now wait for it. */
+  preparing?: boolean;
+  /** Why preparing the container failed, or null/absent when it has not. */
+  preparationError?: string | null;
 }
 
 /**
@@ -1547,6 +1553,15 @@ export interface ChatTurnStartedPayload {
   turnId: string;
 }
 
+export interface ChatPreparedPayload {
+  chatSessionId: string;
+}
+
+export interface ChatPreparationFailedPayload {
+  chatSessionId: string;
+  error: string;
+}
+
 export interface ChatTurnCompletedPayload {
   chatSessionId: string;
   turnId: string;
@@ -1622,6 +1637,8 @@ export interface NetworkProtectedDestination {
   name: string;
   hosts: string[];
   addresses: string[];
+  /** The address ranges it covers, as the server lists them. */
+  ranges: string[];
   enabled: boolean;
 }
 
