@@ -56,8 +56,11 @@ public interface IRunHost
 
     // -- Terminal ----------------------------------------------------------------
 
-    /// <summary>Open an interactive terminal (a PTY) running <paramref name="options"/>.</summary>
-    Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default);
+    /// <summary>
+    /// Open an interactive terminal (a PTY) running <paramref name="options"/>. In a run's container or pod it reaches the network as a
+    /// command of the run launched under <paramref name="mode"/> does; on ILD's own machine the caller routes the command itself.
+    /// </summary>
+    Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default);
 
     /// <summary>The command line that runs <paramref name="fileName"/> as an agent launch would, for a terminal to start (the provider sign-in terminal), with the egress rules of <paramref name="providerId"/> under <paramref name="mode"/>.</summary>
     AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, NetworkMode mode);
@@ -131,6 +134,9 @@ public interface IRunHost
 
     /// <summary>Delete each path, whatever it is. Returns whether every one is gone; one in a run that is not running counts as gone with that run, which is never started again for it.</summary>
     Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default);
+
+    /// <summary>The path <see cref="CreateChatFolderAsync"/> returns for the chat, without making anything.</summary>
+    string ChatFolderPath(Guid chatId, string localRoot);
 
     /// <summary>Make the folder a chat works in and return its path: below <paramref name="localRoot"/> on this machine, or a folder of its own in the chat container when the host keeps chats there. Fine when it is already there.</summary>
     Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default);

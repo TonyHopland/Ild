@@ -10,6 +10,8 @@ import type {
   ChatTurnProgressPayload,
   ChatTurnStartedPayload,
   ChatTurnCompletedPayload,
+  ChatPreparedPayload,
+  ChatPreparationFailedPayload,
 } from "../types";
 import type { RenameChat } from "./ChatRename";
 import { useChatInbox } from "./ChatInbox";
@@ -49,6 +51,8 @@ function ChatConversation({
   revealGlobalProposalId,
   busy,
   stopping,
+  preparing,
+  preparationError,
   scrollRef,
   onSend,
   onStop,
@@ -60,11 +64,23 @@ function ChatConversation({
   revealGlobalProposalId: string | null;
   busy: boolean;
   stopping: boolean;
+  preparing: boolean;
+  preparationError: string | null;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   onSend: (content: string) => void;
   onStop: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  const lastSent = useRef<string | null>(null);
+
+  // A message the failed preparation could not carry goes back into an empty box to be sent again.
+  useEffect(() => {
+    if (preparationError === null || lastSent.current === null) return;
+    const message = lastSent.current;
+    lastSent.current = null;
+    setDraft((current) => (current === "" ? message : current));
+  }, [preparationError]);
+
   if (covered) return null;
 
   return (
@@ -78,6 +94,17 @@ function ChatConversation({
         />
         {/* Visible for the whole turn — including while text streams — so it
             is clear the agent is still working rather than done. */}
+        {preparing && (
+          <div className="chat-muted chat-typing" role="status">
+            Preparing container…
+            <span className="chat-typing-dots" aria-hidden="true" />
+          </div>
+        )}
+        {preparationError !== null && (
+          <div className="chat-error" role="alert">
+            The chat's container could not be prepared: {preparationError}
+          </div>
+        )}
         {busy && (
           <div className="chat-muted chat-typing" role="status">
             {streaming ? "Responding" : "Thinking"}
@@ -96,6 +123,7 @@ function ChatConversation({
           // The box grew with the message; sent, it goes back to one line.
           const box = e.currentTarget.querySelector<HTMLTextAreaElement>("textarea.chat-input");
           if (box) box.style.height = "";
+          lastSent.current = content;
           onSend(content);
         }}
       >
@@ -400,6 +428,18 @@ export default function ChatWorkspace({
     [clearStream],
   );
 
+  const setPreparation = useCallback((id: string, preparing: boolean, error: string | null) => {
+    setSession((prev) =>
+      prev?.id === id &&
+      (prev.preparing ?? false) === preparing &&
+      (prev.preparationError ?? null) === error
+        ? prev
+        : prev?.id === id
+          ? { ...prev, preparing, preparationError: error }
+          : prev,
+    );
+  }, []);
+
   // Re-read the chat whenever the client may be holding a belief the server has
   // already contradicted: on every join of its live stream, after a stop the
   // server accepted, and after a send that failed. Nothing else can tell a view
@@ -439,6 +479,7 @@ export default function ChatWorkspace({
         return missing.length === 0 ? prev : [...prev, ...missing].sort(byTranscriptOrder);
       });
 
+      setPreparation(id, view.preparing ?? false, view.preparationError ?? null);
       const named = view.activeTurnId ?? null;
       const active =
         named !== null && replacedTurnsRef.current.has(named) ? turnRef.current : named;
@@ -448,7 +489,7 @@ export default function ChatWorkspace({
       clearStreamUnlessFrom(active);
       setTurnValue(active);
     },
-    [setTurnValue],
+    [setTurnValue, setPreparation],
   );
 
   // Join the active chat's group whenever we are connected, and leave it on
@@ -536,17 +577,30 @@ export default function ChatWorkspace({
       applyTurn(null);
     };
 
+    const onPrepared = (msg: { payload: ChatPreparedPayload }) => {
+      if (msg.payload.chatSessionId !== sessionIdRef.current) return;
+      setPreparation(msg.payload.chatSessionId, false, null);
+    };
+    const onPreparationFailed = (msg: { payload: ChatPreparationFailedPayload }) => {
+      if (msg.payload.chatSessionId !== sessionIdRef.current) return;
+      setPreparation(msg.payload.chatSessionId, false, msg.payload.error);
+    };
+
     on("ChatMessageAppended", onAppended);
     on("ChatTurnProgress", onProgress);
     on("ChatTurnStarted", onStarted);
     on("ChatTurnCompleted", onCompleted);
+    on("ChatPrepared", onPrepared);
+    on("ChatPreparationFailed", onPreparationFailed);
     return () => {
       off("ChatMessageAppended", onAppended);
       off("ChatTurnProgress", onProgress);
       off("ChatTurnStarted", onStarted);
       off("ChatTurnCompleted", onCompleted);
+      off("ChatPrepared", onPrepared);
+      off("ChatPreparationFailed", onPreparationFailed);
     };
-  }, [on, off, upsertMessage, applyTurn, isCurrentTurn]);
+  }, [on, off, upsertMessage, applyTurn, isCurrentTurn, setPreparation]);
 
   // Keep the transcript scrolled to the newest content, including whenever it comes
   // on screen: from behind the chat list, in a panel opened again, or once the
@@ -628,6 +682,7 @@ export default function ChatWorkspace({
     // whichever turn the server ends up naming. The turn being displaced is kept:
     // a send that never reaches the server displaces nothing, and only the turn
     // value from before it can say so.
+    if (session.preparationError) setPreparation(session.id, true, null);
     const displaced = turnRef.current;
     const visit = visitRef.current;
     applyTurn(PENDING_TURN);
@@ -910,6 +965,8 @@ export default function ChatWorkspace({
       revealGlobalProposalId={revealGlobalProposalId}
       busy={busy}
       stopping={stopping}
+      preparing={session.preparing ?? false}
+      preparationError={session.preparationError ?? null}
       scrollRef={scrollRef}
       onSend={(content) => void send(content)}
       onStop={() => void stop()}

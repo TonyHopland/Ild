@@ -397,7 +397,7 @@ public class NetworkController : ControllerBase
         };
 
     private static object View(ProtectedDestination p)
-        => new { id = p.Id, name = p.Name, hosts = p.Hosts, addresses = p.Addresses.Select(a => a.ToString()), enabled = p.Enabled };
+        => new { id = p.Id, name = p.Name, hosts = p.Hosts, addresses = p.Addresses.Select(a => a.ToString()), ranges = p.Ranges.Select(r => r.ToString()), enabled = p.Enabled };
 
     private static object View(NetworkLogEntry l)
         => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId, installer = l.Installer, reason = l.Reason, via = l.Via };

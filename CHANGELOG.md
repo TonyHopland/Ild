@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Preview commands and Cmd nodes always run inside the run, never on ILD's own machine**, and preview data kept between runs works with container and Kubernetes runs.
 - **A `{{WorkTree.File:...}}` placeholder reads only files inside the worktree.**
 - **The model gateway forwards only model calls**, so nothing in a run can use your Copilot or ChatGPT login for GitHub's hosted MCP or your Codex cloud tasks.
-- **Forwards answer on their real host name and port inside a run's container**, so TLS host name verification (`Verify-Full`) works; the `127.0.0.1` form stays.
+- **Forwards answer on their real host name and port inside a run's container**, so TLS host name verification (`Verify-Full`) works; the `127.0.0.1` form stays, and is the only form in a Kubernetes pod.
 - **A repository clone URL can no longer carry a credential.** A new or changed URL with one is refused, an existing one shows a warning on the Repositories page, and agents never see it; put the token in the remote provider's API key.
 - **Toolchain installers go through the egress proxy**, under an Installers scope in Settings → Network whose allow list starts with the hosts installs need.
 - **Runs can no longer reach ILD's database, the WorkItem Server or the Kubernetes API**, unless you switch that protection off in Settings → Network or declare a forward to it.
@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A work item and a chat show "Preparing container" while their container or pod is being made.**
+- **A new chat opens at once and takes messages while its container is still starting.**
 - **The shared chat container or pod is removed after 30 idle minutes** (`ILD_CHAT_IDLE_TIMEOUT_MINUTES`, `0` to keep it), so leftover dev servers do not pile up. The next chat makes it again.
 - **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets. Settings warns when the container socket is not rootless or cannot be reached.
 - **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart.
@@ -47,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Settings → Network lists the address ranges each protected destination covers.**
 - **Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` before you upgrade.
 - **On Kubernetes, ILD runs every loop run and chat in a pod.** Set up the RBAC and the shared tools claim from the deployment guide before you upgrade.
 - **The ILD image is smaller.**
@@ -57,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **The browser, Java tools and declared forwards in a run or chat reach the network through the egress proxy again.**
+- **A work item's terminal reaches the network the way its run does.**
 - **Chats and runs whose container network was made by an earlier version reach the network again, and show in the Network Log.**
 - **Copilot runs and chats in containers and pods can reach the model gateway and trust its certificate.**
 - **Network mode `off` gives runs a direct network route again** (any host, port and protocol, with no proxy variables), in containers and pods as ADR-0019 says; Settings → Network shows which runs have one.

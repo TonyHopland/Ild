@@ -57,6 +57,7 @@ public sealed class ChatService : IChatService
 
     private readonly IRunHost _runHost;
     private readonly IAgentTokenService? _agentTokens;
+    private readonly ChatPreparations _preparations;
 
     public ChatService(
         AppDbContext db,
@@ -74,8 +75,10 @@ public sealed class ChatService : IChatService
         IChatScheduleNotifier? schedules = null,
         ClaudeProjectFolders? claudeProjects = null,
         IEgressPolicy? egressPolicy = null,
-        IAgentTokenService? agentTokens = null)
+        IAgentTokenService? agentTokens = null,
+        ChatPreparations? preparations = null)
     {
+        _preparations = preparations ?? new ChatPreparations(notifier);
         _runHost = runHost;
         _agentTokens = agentTokens;
         _db = db;
@@ -194,7 +197,7 @@ public sealed class ChatService : IChatService
         var normalizedTools = AiToolCatalog.NormalizeSelectedToolKeys(_registry.GetTraits(provider.Type), tools);
 
         var id = Guid.NewGuid();
-        var scratchPath = await _runHost.CreateChatFolderAsync(id, _options.ScratchRoot, ct);
+        var scratchPath = _runHost.ChatFolderPath(id, _options.ScratchRoot);
 
         var session = new ChatSession
         {
@@ -207,6 +210,8 @@ public sealed class ChatService : IChatService
         };
         _db.ChatSessions.Add(session);
         await _db.SaveChangesAsync(ct);
+
+        _preparations.Begin(id, token => _runHost.CreateChatFolderAsync(id, _options.ScratchRoot, token));
 
         return ToView(session, Array.Empty<ChatMessage>());
     }
@@ -256,6 +261,23 @@ public sealed class ChatService : IChatService
         if (await RaiseReadMarkerAsync(session.UserId, chatSessionId, userEntry.Sequence, ct))
             await _notifier.UnreadChangedAsync(session.UserId, chatSessionId);
         await _notifier.MessageAppendedAsync(chatSessionId, turnId, ToView(userEntry));
+
+        try
+        {
+            await _preparations.WaitAsync(chatSessionId, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await FinalizeAssistantAsync(session, turnId, nextSeq + 1, string.Empty, interrupted: true, newSessionId: null, ct);
+            return;
+        }
+        catch (IOException ex)
+        {
+            var reason = $"The chat's container could not be prepared: {ex.Message}";
+            await FinalizeAssistantAsync(session, turnId, nextSeq + 1, $"[chat-error] {reason}", interrupted: false, newSessionId: null, ct);
+            await EndScheduledFiringAsync(session, turnId, reason);
+            return;
+        }
 
         if (PredatesContainersException.Applies(_runHost, session.ScratchPath))
         {
@@ -791,6 +813,7 @@ public sealed class ChatService : IChatService
         // row is gone, so it goes first: a failure throws and keeps the chat, and
         // deleting it again retries. What the agent left in its own pi directories
         // is cleared too, but never holds the delete up.
+        await _preparations.SettleAsync(session.Id);
         await AgentRunFiles.DeleteAsync(session.Id, ct);
         if (_agentTokens is not null)
             await _agentTokens.RevokeAllForAsync(AgentTokenSource.Chat, session.Id, ct);

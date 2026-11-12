@@ -35,6 +35,7 @@ public static class PtyWebSocketBridge
     /// <param name="timeProvider">Clock for the bounded teardown waits; <see cref="TimeProvider.System"/> when null.</param>
     /// <param name="spawn">Starts the child; <paramref name="host"/>'s terminal when null.</param>
     /// <param name="host">Where the terminal opens; the local run host when null.</param>
+    /// <param name="networkMode">The network mode <paramref name="host"/>'s terminal is opened under.</param>
     public static async Task RunAsync(
         WebSocket socket,
         PtyOptions options,
@@ -44,7 +45,8 @@ public static class PtyWebSocketBridge
         TimeProvider? timeProvider = null,
         Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? spawn = null,
         Action<ReadOnlySpan<byte>>? onOutput = null,
-        IRunHost? host = null)
+        IRunHost? host = null,
+        ILD.Data.Enums.NetworkMode networkMode = ILD.Data.Enums.NetworkMode.Monitor)
     {
         var clock = timeProvider ?? TimeProvider.System;
         IPtyConnection? pty = null;
@@ -52,7 +54,9 @@ public static class PtyWebSocketBridge
         {
             try
             {
-                pty = await (spawn ?? (host ?? LocalRunHost.Shared).OpenTerminalAsync)(options, cancellationToken);
+                pty = spawn is not null
+                    ? await spawn(options, cancellationToken)
+                    : await (host ?? LocalRunHost.Shared).OpenTerminalAsync(options, networkMode, cancellationToken);
             }
             catch (Exception ex)
             {

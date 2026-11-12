@@ -74,8 +74,12 @@ internal sealed class FakeRunHost : IRunHost
         lock (_gate) return _files.TryGetValue(path, out var bytes) ? Encoding.UTF8.GetString(bytes) : null;
     }
 
+    /// <summary>Runs as <c>CreateAsync</c> is entered, for a test that looks at the world while the environment is being made, or makes it fail.</summary>
+    public Func<Task>? OnCreate { get; set; }
+
     public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
     {
+        if (OnCreate is not null) await OnCreate();
         var path = _repositories is null ? WorkingDirectoryFor(request) : await _repositories.CreateWorktreeAsync(request.BasePath, request.BranchName);
         lock (_gate)
         {
@@ -125,7 +129,7 @@ internal sealed class FakeRunHost : IRunHost
         return mine.Count;
     }
 
-    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default)
+    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, ILD.Data.Enums.NetworkMode mode, CancellationToken ct = default)
         => throw new NotSupportedException("the fake run host has no terminal");
 
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)
@@ -219,15 +223,24 @@ internal sealed class FakeRunHost : IRunHost
 
     public List<(string ChatPath, string BasePath)> ChatTools { get; } = [];
 
-    public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
+    public string ChatFolderPath(Guid chatId, string localRoot)
+        => ChatFolderFor?.Invoke(chatId, localRoot) ?? Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+
+    public Task? ChatFolderGate { get; set; }
+
+    public Exception? ChatFolderFailure { get; set; }
+
+    public async Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
     {
-        var path = ChatFolderFor?.Invoke(chatId, localRoot) ?? Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+        if (ChatFolderGate is { } gate) await gate.WaitAsync(ct);
+        if (ChatFolderFailure is { } failure) throw failure;
+        var path = ChatFolderPath(chatId, localRoot);
         lock (_gate)
         {
             ChatFolders.Add(chatId);
             _directories.Add(path);
         }
-        return Task.FromResult(path);
+        return path;
     }
 
     public Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)

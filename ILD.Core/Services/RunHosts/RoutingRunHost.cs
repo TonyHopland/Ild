@@ -83,8 +83,8 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     // -- Terminal ----------------------------------------------------------------
 
-    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default)
-        => ForExecution(options.Cwd).OpenTerminalAsync(options, ct);
+    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default)
+        => ForExecution(options.Cwd).OpenTerminalAsync(options, mode, ct);
 
     // Only builds a command; the sign-in terminal that runs it goes through ISignInTerminalHost, and a run's terminal is refused in OpenTerminalAsync.
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, NetworkMode mode)
@@ -153,6 +153,9 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     // Deleting an old worktree or chat folder is the way to be rid of it, so it still goes to this disk.
     // A chat's folder goes where chats are kept: the isolated host when it keeps them, this disk otherwise.
+    public string ChatFolderPath(Guid chatId, string localRoot)
+        => (isolated.HostsChats ? isolated : local).ChatFolderPath(chatId, localRoot);
+
     public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
         => (isolated.HostsChats ? isolated : local).CreateChatFolderAsync(chatId, localRoot, ct);
 

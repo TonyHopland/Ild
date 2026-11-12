@@ -1623,7 +1623,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var exited = new TaskCompletionSource<int>();
 
         using var pty = await _host.OpenTerminalAsync(
-            new PtyOptions { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 120, Rows = 30, Name = "t" }, TestContext.Current.CancellationToken);
+            new PtyOptions { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 120, Rows = 30, Name = "t" }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
         pty.ProcessExited += (_, args) => exited.TrySetResult(args.ExitCode);
         await pty.WriterStream.WriteAsync("x"u8.ToArray(), TestContext.Current.CancellationToken);
         var read = await new StreamReader(pty.ReaderStream).ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -1633,6 +1633,64 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var exec = _api.Execs.Last();
         Assert.True(exec.Tty);
         Assert.Contains(exec.Resizes, r => r.Contains("120") && r.Contains("30"));
+    }
+
+    private PtyOptions Terminal() => new() { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 80, Rows = 24, Name = "t" };
+
+    // A terminal's environment is in the file its wrapper sources, written just before it.
+    private IReadOnlyList<string> TerminalEnv()
+        => _api.Execs.Last(e => e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript)).StdinSoFar()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line["export ".Length..])
+            .Select(line => line[..line.IndexOf('=')] + "=" + line[(line.IndexOf('=') + 2)..^1])
+            .ToList();
+
+    [Theory]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
+    public async Task A_terminal_in_a_proxied_mode_reaches_the_network_through_the_runs_relay_as_a_launch_does(NetworkMode mode)
+    {
+        await CreateRunAsync();
+
+        using var pty = await _host.OpenTerminalAsync(Terminal(), mode, TestContext.Current.CancellationToken);
+
+        var terminal = _api.Execs.Last();
+        Assert.True(terminal.Tty);
+        Assert.Contains(terminal.Command, c => c.Contains(ExecRunHost.EgressRelayScript, StringComparison.Ordinal));
+        var proxyUrl = Assert.Single(TerminalEnv(), e => e.StartsWith("HTTPS_PROXY=", StringComparison.Ordinal))["HTTPS_PROXY=".Length..];
+        Assert.EndsWith("@ild.example:3128", proxyUrl);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, proxyUrl, out var scope));
+        Assert.Equal(new LaunchScope(LaunchKind.Run, _run), scope);
+        Assert.DoesNotContain(_api.Execs.SelectMany(e => e.Command), c => c.Contains(proxyUrl, StringComparison.Ordinal));
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+    }
+
+    [Fact]
+    public async Task A_terminal_in_off_has_the_direct_route_and_no_proxy_variables_and_keeps_the_route_until_it_ends()
+    {
+        await CreateRunAsync();
+        var end = new TaskCompletionSource();
+        _api.OnExec = async e =>
+        {
+            if (e.Tty) await end.Task;
+            await e.ExitAsync(0);
+        };
+        var exited = new TaskCompletionSource();
+
+        using var pty = await _host.OpenTerminalAsync(Terminal(), NetworkMode.Off, TestContext.Current.CancellationToken);
+        pty.ProcessExited += (_, _) => exited.TrySetResult();
+
+        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+        Assert.Contains(TerminalEnv(), e => e.StartsWith("HOME=", StringComparison.Ordinal));
+        Assert.DoesNotContain(TerminalEnv(), e => ProxyVariables.Any(v => e.StartsWith(v + "=", StringComparison.Ordinal)));
+
+        using (await StartAsync(NetworkMode.Monitor)) { }
+        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
+
+        end.SetResult();
+        await exited.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        using (await StartAsync(NetworkMode.Monitor)) { }
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
     }
 
     private const string GatewayToken = "gateway-token-value-1";
@@ -1677,7 +1735,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             {
                 Cwd = WorkingDirectory, App = "/bin/bash", Cols = 80, Rows = 24, Name = "t",
                 Environment = new Dictionary<string, string> { ["ILD_API_TOKEN"] = ApiToken },
-            }, TestContext.Current.CancellationToken);
+            }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
 
         var terminal = _api.Execs.Last();
         Assert.True(terminal.Tty);

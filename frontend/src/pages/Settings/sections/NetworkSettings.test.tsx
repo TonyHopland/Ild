@@ -59,6 +59,7 @@ const database: NetworkProtectedDestination = {
   name: "ILD database",
   hosts: ["db.example"],
   addresses: ["10.0.0.7"],
+  ranges: [],
   enabled: true,
 };
 
@@ -173,6 +174,27 @@ describe("Network settings", () => {
 
     await waitFor(() => expect(setProtected).toHaveBeenCalledWith("database", false));
     expect((await screen.findByRole("alert")).textContent).toMatch(/ILD.s database/);
+  });
+
+  test("a protected destination with only ranges lists them, and one with nothing shows a dash", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getProtected").mockResolvedValue([
+      {
+        id: "link-local",
+        name: "Link-local and cloud metadata addresses",
+        hosts: [],
+        addresses: [],
+        ranges: ["169.254.0.0/16", "fe80::/10", "fd00:ec2::254"],
+        enabled: true,
+      },
+      { id: "empty", name: "Nothing yet", hosts: [], addresses: [], ranges: [], enabled: true },
+    ]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = (await screen.findByText("Link-local and cloud metadata addresses")).closest("tr")!;
+    expect(within(row).getByText("169.254.0.0/16, fe80::/10, fd00:ec2::254")).toBeTruthy();
+    const empty = screen.getByText("Nothing yet").closest("tr")!;
+    expect(within(empty).getByText("—")).toBeTruthy();
   });
 
   test("a protected refusal in the log links to the protections instead of offering a rule", async () => {

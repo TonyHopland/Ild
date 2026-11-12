@@ -189,7 +189,7 @@ public sealed class LocalRunHost : IRunHost
 
     // -- Terminal ----------------------------------------------------------------
 
-    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, CancellationToken ct = default)
+    public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, ILD.Data.Enums.NetworkMode mode, CancellationToken ct = default)
         => PtyProvider.SpawnAsync(options, ct);
 
     public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)
@@ -319,9 +319,12 @@ public sealed class LocalRunHost : IRunHost
     public Task<bool> DeleteAsync(IEnumerable<string> paths, CancellationToken ct = default)
         => AgentWritableFiles.DeleteAsync(paths, ct);
 
+    public string ChatFolderPath(Guid chatId, string localRoot)
+        => Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+
     public Task<string> CreateChatFolderAsync(Guid chatId, string localRoot, CancellationToken ct = default)
     {
-        var path = Path.GetFullPath(Path.Combine(localRoot, chatId.ToString("N")));
+        var path = ChatFolderPath(chatId, localRoot);
         Directory.CreateDirectory(path);
         return Task.FromResult(path);
     }

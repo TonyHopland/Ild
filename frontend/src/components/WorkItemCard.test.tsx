@@ -35,6 +35,23 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
 }
 
 describe("WorkItemCard", () => {
+  test("a running card shows Preparing container instead of the step while its container is made", () => {
+    render(
+      <WorkItemCard workItem={makeItem({ currentNodeLabel: "Start", preparingContainer: true })} />,
+    );
+
+    expect(screen.getByText("Preparing container")).toBeTruthy();
+    expect(screen.queryByText("Start")).toBeNull();
+    expect(screen.getByRole("button").getAttribute("aria-label")).toContain("preparing container");
+  });
+
+  test("a running card shows its step once the container is ready", () => {
+    render(<WorkItemCard workItem={makeItem({ currentNodeLabel: "Start" })} />);
+
+    expect(screen.getByText("Start")).toBeTruthy();
+    expect(screen.queryByText("Preparing container")).toBeNull();
+  });
+
   test("dragging a card offers it as a move, carrying its id", () => {
     render(<WorkItemCard workItem={makeItem({ id: "42" })} />);
     const dataTransfer = { setData: vi.fn(), effectAllowed: "uninitialized" };

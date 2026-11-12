@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
@@ -20,11 +21,13 @@ public sealed class InteractiveShellSessionService
 {
     private readonly ILogger<InteractiveShellSessionService> _logger;
     private readonly IRunHost _host;
+    private readonly IEgressPolicy? _egressPolicy;
 
-    public InteractiveShellSessionService(ILogger<InteractiveShellSessionService> logger, IRunHost host)
+    public InteractiveShellSessionService(ILogger<InteractiveShellSessionService> logger, IRunHost host, IEgressPolicy? egressPolicy = null)
     {
         _logger = logger;
         _host = host;
+        _egressPolicy = egressPolicy;
     }
 
     /// <param name="sessionLabel">
@@ -64,7 +67,9 @@ public sealed class InteractiveShellSessionService
             Environment = new Dictionary<string, string>(feeds.Environment),
         };
 
-        await PtyWebSocketBridge.RunAsync(socket, options, _logger, cancellationToken, host: _host);
+        await PtyWebSocketBridge.RunAsync(
+            socket, options, _logger, cancellationToken, host: _host,
+            networkMode: await _egressPolicy.LaunchModeAsync(cancellationToken));
     }
 
     private static string ResolveShell()

@@ -11,6 +11,8 @@ import { WorkItemStatus } from "./types";
 import type {
   ChatMessageAppendedPayload,
   ChatTurnCompletedPayload,
+  ChatPreparedPayload,
+  ChatPreparationFailedPayload,
   ChatTurnProgressPayload,
   ChatTurnStartedPayload,
   GlobalVariableProposal,
@@ -89,6 +91,8 @@ export interface ChatHubEvents {
   ChatTurnProgress: ChatTurnProgressPayload;
   ChatMessageAppended: ChatMessageAppendedPayload;
   ChatTurnCompleted: ChatTurnCompletedPayload;
+  ChatPrepared: ChatPreparedPayload;
+  ChatPreparationFailed: ChatPreparationFailedPayload;
 }
 
 /**
