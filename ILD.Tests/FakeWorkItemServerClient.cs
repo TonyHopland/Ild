@@ -61,6 +61,8 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         RepositoryId = dto.RepositoryId,
         BranchNameOverride = dto.BranchNameOverride,
         BaseBranchOverride = dto.BaseBranchOverride,
+        AiProviderOverride = (RemoteAiProviderOverrideMode)(int)dto.AiProviderOverride,
+        AiProviderOverrideId = dto.AiProviderOverrideId,
         PendingEditProposalCount = dto.PendingEditProposalCount,
     };
 
@@ -116,6 +118,8 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             BaseBranchOverride = req.BaseBranchOverride,
             RepositoryId = req.RepositoryId,
             Priority = req.Priority,
+            AiProviderOverride = req.AiProviderOverride is { } mode ? (AiProviderOverrideMode)(int)mode : null,
+            AiProviderOverrideId = req.AiProviderOverrideId,
         }, ct);
         return dto == null ? null : ToRemote(dto);
     }

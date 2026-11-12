@@ -27,6 +27,7 @@ internal sealed class FakeRunHost : IRunHost
     /// <summary>Every process started, in order, whether or not it was ended through <c>KillAllAsync</c>.</summary>
     public IReadOnlyList<FakeRunProcess> Processes { get { lock (_gate) return _running.ToList(); } }
     public List<Guid> KillAllCalls { get; } = [];
+    public List<Guid> KillUnownedCalls { get; } = [];
 
     /// <summary>Runs as <c>KillAllAsync</c> is entered, for a test that checks what had happened by then.</summary>
     public Action<Guid>? OnKillAll { get; set; }
@@ -108,6 +109,12 @@ internal sealed class FakeRunHost : IRunHost
             _running.Add(process);
         }
         return Task.FromResult<IRunProcess>(process);
+    }
+
+    public Task<int> KillUnownedAsync(Guid runIn, CancellationToken ct = default)
+    {
+        lock (_gate) KillUnownedCalls.Add(runIn);
+        return Task.FromResult(0);
     }
 
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)

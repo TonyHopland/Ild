@@ -88,7 +88,7 @@ public class SettingsController : ControllerBase
         var all = await _store.GetAllAsync(ct);
         // Always return the canonical keys (with defaults if missing) so the
         // frontend never has to special-case absence.
-        var map = all.Where(s => s.Key != NetworkModeMonitorMigrator.MarkerKey)
+        var map = all.Where(s => KnownKeys.Contains(s.Key))
             .ToDictionary(s => s.Key, s => s.Value, StringComparer.Ordinal);
         if (!map.ContainsKey(AppSettingKeys.SchedulerMaxConcurrent))
             map[AppSettingKeys.SchedulerMaxConcurrent] = AppSettingKeys.DefaultMaxConcurrent.ToString();

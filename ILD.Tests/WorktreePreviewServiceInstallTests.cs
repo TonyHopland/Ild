@@ -207,7 +207,11 @@ public class WorktreePreviewServiceInstallTests : IDisposable
         var seen = File.ReadAllText(Path.Combine(_worktree, "env.marker")).Split('|');
         Assert.Equal(home, seen[0]);
         Assert.Equal(Path.Combine(home!, ".local"), seen[1]);
-        Assert.Equal(expectedBin, seen[2].Split(Path.PathSeparator)[0]);
+        // The step runs in a login shell, whose profile may put directories of its own in front.
+        var path = seen[2].Split(Path.PathSeparator);
+        Assert.Contains(expectedBin, path);
+        var system = Array.IndexOf(path, "/usr/bin");
+        Assert.True(system < 0 || Array.IndexOf(path, expectedBin) < system);
     }
 
     [Fact]

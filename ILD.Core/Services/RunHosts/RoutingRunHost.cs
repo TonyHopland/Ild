@@ -81,6 +81,9 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
         => await local.KillAllAsync(ownerId, ct) + await isolated.KillAllAsync(ownerId, ct);
 
+    public Task<int> KillUnownedAsync(Guid runIn, CancellationToken ct = default)
+        => isolated.KillUnownedAsync(runIn, ct);
+
     // -- Terminal ----------------------------------------------------------------
 
     public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default)

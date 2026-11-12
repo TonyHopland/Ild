@@ -333,6 +333,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 await RetireRuntimeAsync(existing, cancellationToken);
                 _runtimes.TryRemove(normalized, out _);
             }
+            else
+            {
+                await EndLeftBehindAsync(normalized, cancellationToken);
+            }
 
             var mode = await _egressPolicy.LaunchModeAsync(cancellationToken);
             lease = await ClaimPreviewDataAsync(options.Volumes, normalized, holdsGate: true, cancellationToken);
@@ -502,11 +506,32 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 return BuildStoppedResponse(loaded, runtime.ProfileName, runtime.PublicHost, runtime.StateDirectory, loaded.ConfigPath);
             }
 
+            await EndLeftBehindAsync(normalized, cancellationToken);
             return BuildStoppedResponse(loaded);
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Ends the preview processes an earlier ILD left running in the worktree's run or chat when it ended without
+    /// stopping them: this ILD knows nothing of them, and they hold the ports the next start needs. Skipped while
+    /// another worktree of the same chat has a preview this ILD started, since the two share what is ended.
+    /// </summary>
+    private async Task EndLeftBehindAsync(string normalized, CancellationToken cancellationToken)
+    {
+        if (RunPaths.HolderOf(normalized) is not { } holder) return;
+        if (_runtimes.Keys.Any(other => RunPaths.HolderOf(other) == holder)) return;
+        try
+        {
+            if (await _host.KillUnownedAsync(holder, cancellationToken) is > 0 and var ended)
+                _logger.LogInformation("Ended {Count} preview process(es) left running in {Worktree} by an ILD that did not stop them", ended, normalized);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not end the preview processes left running in {Worktree}", normalized);
         }
     }
 

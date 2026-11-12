@@ -303,5 +303,6 @@ public sealed class ProtectedDestinationSource : IProtectedDestinationSource
         => NetworkInterface.GetAllNetworkInterfaces()
             .SelectMany(i => i.GetIPProperties().UnicastAddresses.Select(a => a.Address))
             .Where(a => !EgressDestinationGuard.IsLoopback(a))
+            .Select(a => a.IsIPv6LinkLocal ? new IPAddress(a.GetAddressBytes()) : a)
             .ToList();
 }

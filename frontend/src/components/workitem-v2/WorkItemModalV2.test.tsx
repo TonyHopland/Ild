@@ -1862,17 +1862,42 @@ describe("WorkItemModalV2", () => {
       }),
     );
 
-    // The cleanups sit behind the footer's ⋯, but Delete is not among them.
+    // The cleanups are buttons in the footer, with nothing to open first; Delete is not among them.
     const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
-    fireEvent.click(within(footer as HTMLElement).getByRole("button", { name: "More actions" }));
     expect(
-      within(footer as HTMLElement).getByRole("menuitem", { name: "Clean up → Done" }),
+      within(footer as HTMLElement).getByRole("button", { name: "Clean up → Done" }),
     ).toBeTruthy();
     expect(
-      within(footer as HTMLElement).getByRole("menuitem", { name: "Clean up → Backlog" }),
+      within(footer as HTMLElement).getByRole("button", { name: "Clean up → Backlog" }),
     ).toBeTruthy();
+    expect(
+      within(footer as HTMLElement).queryByRole("button", { name: "More actions" }),
+    ).toBeNull();
     expect(within(footer as HTMLElement).queryByRole("button", { name: "Delete" })).toBeNull();
-    expect(within(footer as HTMLElement).queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  test("an item left waiting on a run that was cancelled offers the cleanups, and one still waiting does not", async () => {
+    const waiting = {
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+      currentLoopRunId: "run-1",
+    };
+    mockServices([makeRun({ id: "run-1", status: LoopRunStatus.Cancelled })]);
+    await renderDialog(makeWorkItem(waiting));
+
+    const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    expect(
+      await within(footer as HTMLElement).findByRole("button", { name: "Clean up → Backlog" }),
+    ).toBeTruthy();
+
+    cleanup();
+    mockServices([makeRun({ id: "run-1", status: LoopRunStatus.WaitingHuman, completedAt: null })]);
+    await renderDialog(makeWorkItem(waiting));
+
+    const live = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    expect(
+      within(live as HTMLElement).queryByRole("button", { name: "Clean up → Backlog" }),
+    ).toBeNull();
   });
 
   test("an Escape typed in the chat over the dialog is the chat's, and leaves the work item open", async () => {
@@ -2532,11 +2557,9 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     });
   }
 
-  // The cleanup sits behind the footer's ⋯: open the menu if it is shut.
   const footerCleanup = () => {
-    if (!screen.queryByRole("menuitem", { name: "Clean up → Done" }))
-      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
-    return screen.getByRole("menuitem", { name: "Clean up → Done" });
+    const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    return within(footer as HTMLElement).getByRole("button", { name: "Clean up → Done" });
   };
   const deleteRun = () => runAction(/delete run/i);
 

@@ -10,12 +10,17 @@ internal sealed class ExecPty : IPtyConnection
     private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly OutputStream _input;
     private readonly Action? _onExit;
+    private readonly Func<Task>? _end;
     private int _exitRaised;
+    private int _ended;
 
-    public ExecPty(IExecStream exec, Action? onExit = null)
+    /// <param name="onExit">Runs once when the terminal has ended, however it ended.</param>
+    /// <param name="end">Ends what the terminal left running; called when it is closed before its shell exited by itself.</param>
+    public ExecPty(IExecStream exec, Action? onExit = null, Func<Task>? end = null)
     {
         _exec = exec;
         _onExit = onExit;
+        _end = end;
         _input = new OutputStream(exec);
         _ = Task.Run(PumpAsync);
     }
@@ -31,12 +36,20 @@ internal sealed class ExecPty : IPtyConnection
     public bool WaitForExit(int milliseconds)
         => _exited.Task.Wait(milliseconds);
 
-    public void Kill() => _exec.Dispose();
+    public void Kill() => Close();
 
     public void Resize(int cols, int rows)
         => _exec.ResizeAsync(cols, rows).GetAwaiter().GetResult();
 
-    public void Dispose() => _exec.Dispose();
+    public void Dispose() => Close();
+
+    private void Close()
+    {
+        var exitedByItself = _exited.Task.IsCompletedSuccessfully && _exited.Task.Result != ExecRunProcess.ConnectionLostExitCode;
+        _exec.Dispose();
+        if (_end is not null && !exitedByItself && Interlocked.Exchange(ref _ended, 1) == 0)
+            _ = Task.Run(_end);
+    }
 
     // Porta.Pty constructs these itself; its constructor is internal.
     private static PtyExitedEventArgs ExitedWith(int code)

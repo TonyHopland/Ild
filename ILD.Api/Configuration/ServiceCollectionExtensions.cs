@@ -43,6 +43,7 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<IAuthService, AuthService>();
         services.AddSingleton<LoginThrottle>();
+        services.AddSingleton(TrustedProxies.Parse(Environment.GetEnvironmentVariable(TrustedProxies.EnvVar)));
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
         services.AddScoped<IHumanInputProposalService, HumanInputProposalService>();

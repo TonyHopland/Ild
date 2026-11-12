@@ -110,10 +110,30 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     private const string TerminalWrapper = $$"""
         cd -- "$1" || { [ -z "$2" ] || rm -f -- "$2"; exit 126; }
-        envfile=$2; pathprefix=$3; shift 3
+        envfile=$2; pathprefix=$3; session=$4; shift 4
         {{EnvironmentPrologue}}
         {{EgressRelayScript}}
+        if [ "$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')" = "$$" ] && mkdir -p -- "{{RunPaths.ProcessDirectory}}/${session%/*}" 2>/dev/null; then
+            f={{RunPaths.ProcessDirectory}}/$session; echo $$ > "$f"
+            "$@"; rc=$?; rm -f -- "$f"; exit $rc
+        fi
         exec "$@"
+        """;
+
+    /// <summary>
+    /// Ends the terminal whose session the wrapper recorded under <c>$1</c>: the shell and everything it started. Closing the
+    /// exec's stream does not do it on every engine, and a shell left behind keeps running in the run.
+    /// </summary>
+    internal const string EndTerminalScript = $$"""
+        f={{RunPaths.ProcessDirectory}}/$1
+        [ -f "$f" ] || exit 0
+        sid=$(cat -- "$f"); rm -f -- "$f"
+        case "$sid" in ''|*[!0-9]*) exit 0 ;; esac
+        pkill -HUP -s "$sid" 2>/dev/null
+        i=0
+        while pgrep -s "$sid" >/dev/null 2>&1 && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i+1)); done
+        pkill -KILL -s "$sid" 2>/dev/null
+        exit 0
         """;
 
     private const string KillCommandScript = $$"""
@@ -631,7 +651,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var directory = string.IsNullOrEmpty(psi.WorkingDirectory) ? RunPaths.WorkingDirectory(owner.Id) : psi.WorkingDirectory;
         // Only a command started for the run itself is one KillAllAsync ends; a preview service, which has no owner, outlives a retry.
         // A process launched in mode Off is told by its name.
-        var id = $"{(command.OwnerId != Guid.Empty ? command.OwnerId.ToString("N") : "unowned")}/{(direct ? OffPrefix : "")}{Guid.NewGuid():N}";
+        var id = $"{(command.OwnerId != Guid.Empty ? command.OwnerId.ToString("N") : UnownedGroup(command.RunIn))}/{(direct ? OffPrefix : "")}{Guid.NewGuid():N}";
         var (execEnvironment, envFile) = await DeliverEnvironmentAsync(owner, id, environment, ct);
         var wrapped = new List<string> { "/bin/sh", "-c", CommandWrapper, "sh", directory, id, envFile, merged.PathPrefix, fileName };
         wrapped.AddRange(arguments);
@@ -858,6 +878,16 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return result.Success && int.TryParse(result.StdOut.Trim(), out var killed) ? killed : 0;
     }
 
+    /// <summary>The directory, in the run's process directory, of the commands with no owner: one per run or chat they run in, since every chat shares a container.</summary>
+    internal static string UnownedGroup(Guid? runIn) => runIn is { } holder ? $"unowned-{holder:N}" : "unowned";
+
+    public async Task<int> KillUnownedAsync(Guid runIn, CancellationToken ct = default)
+    {
+        if (await HeldOwnerAsync(runIn, ct) is not { } owner) return 0;
+        var result = await RunScriptAsync(owner, KillAllScript, [UnownedGroup(runIn)], ct);
+        return result.Success && int.TryParse(result.StdOut.Trim(), out var killed) ? killed : 0;
+    }
+
     // -- Terminal ----------------------------------------------------------------
 
     public async Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, ILD.Data.Enums.NetworkMode mode, CancellationToken ct = default)
@@ -867,6 +897,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
         // The route as StartCommandAsync takes it: the terminal is a process of the run, and one opened in mode Off keeps the direct route until it ends.
         var direct = mode == ILD.Data.Enums.NetworkMode.Off;
+        var ptyHoldsRoute = false;
         if (direct)
             _liveOff.AddOrUpdate(owner, 1, (_, n) => n + 1);
         else
@@ -881,6 +912,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
             var caller = CommandEnvironment.Of(options.Environment);
             caller.TryAdd("TERM", "xterm-256color");
+            caller.TryAdd("ILD_API_URL", IldUrl);
             var hostOwned = HostOwnedEnvironment(owner, mode, providerId: null);
             var merged = CommandEnvironment.Merge(null, caller, hostOwned);
             var variables = ThroughIld(merged.Variables, hostOwned.Keys);
@@ -888,18 +920,41 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
             // The terminal is the exec's stdin, so its environment never goes through it: the wrapper sources a file, which prints nothing.
             var (execEnvironment, envFile) = await DeliverEnvironmentAsync(owner, $"{owner.Id:N}/terminal-{Guid.NewGuid():N}", variables, ct);
-            var command = new List<string> { "/bin/sh", "-c", TerminalWrapper, "sh", options.Cwd, envFile, merged.PathPrefix, options.App };
+            var session = $"terminals/{Guid.NewGuid():N}";
+            var command = new List<string> { "/bin/sh", "-c", TerminalWrapper, "sh", options.Cwd, envFile, merged.PathPrefix, session, options.App };
             command.AddRange(options.CommandLine ?? []);
 
             var exec = await OpenExecOrRemoveFileAsync(owner, command, execEnvironment, envFile, stdin: true, tty: true, ct);
-            var pty = new ExecPty(exec, direct ? () => EndOff(owner) : null);
-            pty.Resize(options.Cols, options.Rows);
+            var pty = new ExecPty(exec, direct ? () => EndOff(owner) : null, () => EndTerminalAsync(owner, session));
+            ptyHoldsRoute = true;
+            try
+            {
+                pty.Resize(options.Cols, options.Rows);
+            }
+            catch
+            {
+                pty.Dispose();
+                throw;
+            }
             return pty;
         }
         catch
         {
-            if (direct) EndOff(owner);
+            if (direct && !ptyHoldsRoute) EndOff(owner);
             throw;
+        }
+    }
+
+    private async Task EndTerminalAsync(ExecOwner owner, string session)
+    {
+        try
+        {
+            using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await RunScriptAsync(owner, EndTerminalScript, [session], limit.Token);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Logger?.LogDebug(ex, "Could not end the terminal {Session} of {Owner}; it ends with its {Noun}", session, owner.Id, Noun);
         }
     }
 

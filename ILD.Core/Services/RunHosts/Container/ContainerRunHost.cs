@@ -29,7 +29,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     private readonly ContainerRunHostOptions _options;
     private readonly DockerApiClient _api;
     private readonly ConcurrentDictionary<Guid, string> _addresses = new();
-    private string? _warning;
     private bool? _podman;
 
     private readonly SemaphoreSlim _chatGate = new(1, 1);
@@ -1151,7 +1150,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     /// </summary>
     public override async Task<string?> WarningAsync(CancellationToken ct = default)
     {
-        if (_warning is not null) return _warning;
         // A socket that stalls must not hold the settings page for the HTTP client's own five minutes.
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
         limit.CancelAfter(TimeSpan.FromSeconds(5));
@@ -1159,9 +1157,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         {
             var rootless = await IsRootlessAsync(limit.Token);
             if (rootless != false) return null;
-            return _warning = $"The container engine at {_options.Socket} is not rootless, so whoever holds that socket is root on this machine. Use rootless Podman (or rootless Docker) for runs.";
+            return $"The container engine at {_options.Socket} is not rootless, so whoever holds that socket is root on this machine. Use rootless Podman (or rootless Docker) for runs.";
         }
-        // Not kept: the socket may come back, and then the warning goes.
         catch (Exception ex) when (!ct.IsCancellationRequested && (ex is HttpRequestException or IOException or SocketException or OperationCanceledException))
         {
             var reason = ex is OperationCanceledException ? "it did not answer within five seconds" : ReasonOf(ex);

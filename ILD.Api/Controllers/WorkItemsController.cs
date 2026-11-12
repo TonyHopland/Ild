@@ -275,6 +275,14 @@ public class WorkItemsController : ControllerBase
             branchNameOverride: branchNameOverride,
             baseBranchOverride: baseBranchOverride);
 
+        if (Enum.TryParse<RemoteAiProviderOverrideMode>(request.AiProviderOverride, ignoreCase: true, out var overrideMode)
+            && overrideMode != RemoteAiProviderOverrideMode.None)
+        {
+            await _workItemManager.UpdateAsync(
+                user, id, request.Title, request.Description, request.Tags, overrideMode,
+                Guid.TryParse(request.AiProviderOverrideId, out var overrideProviderId) ? overrideProviderId : null);
+        }
+
         // Creation broadcasts over SignalR from WorkItemManager.CreateWorkItemAsync,
         // so connected clients pick up the new item live without a duplicate here.
         var wi = await _workItemManager.GetWorkItemAsync(id);

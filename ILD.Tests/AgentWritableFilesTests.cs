@@ -148,7 +148,8 @@ public sealed class AgentWritableFilesTests : IDisposable
     [Fact]
     public async Task CreateDirectoryAsync_leaves_a_read_only_directory_on_the_way_writable()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        // Root can write a directory whatever its mode, so nothing is made writable for it.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
 
         var parent = Directory.CreateDirectory(Path.Combine(_dir, "ild-pi-agent")).FullName;
         var existing = Directory.CreateDirectory(Path.Combine(parent, "run-1")).FullName;

@@ -54,6 +54,13 @@ public interface IRunHost
     /// </summary>
     Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Kill every command still running in the run or chat <paramref name="runIn"/> that was started with
+    /// <see cref="RunCommand.RunIn"/> and no owner (its preview), and wait for them to end: what an ILD that ended
+    /// without stopping them left behind. Returns how many it killed; a host that runs nothing there kills none.
+    /// </summary>
+    Task<int> KillUnownedAsync(Guid runIn, CancellationToken ct = default) => Task.FromResult(0);
+
     // -- Terminal ----------------------------------------------------------------
 
     /// <summary>

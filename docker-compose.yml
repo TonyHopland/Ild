@@ -95,6 +95,9 @@ services:
       # unset, the hash is the token's public SHA-256 and the row is forgeable.
       - "ILD_SESSION_TOKEN_PEPPER=${ILD_SESSION_TOKEN_PEPPER:?Set ILD_SESSION_TOKEN_PEPPER in your .env (generate one with: openssl rand -hex 32)}"
       - ILD_ALLOWED_ORIGINS=${ILD_ALLOWED_ORIGINS:-}
+      # The reverse proxies whose X-Forwarded-For ILD believes, as addresses or CIDR
+      # ranges; see docs/configuration.md.
+      - ILD_TRUSTED_PROXIES=${ILD_TRUSTED_PROXIES:-}
       # ILD's address as a run's or chat's container reaches it: its container name.
       - ILD_API_URL=${ILD_API_URL:-http://ild:8080}
       # Serves worktree previews on wildcard subdomains of this origin

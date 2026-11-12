@@ -583,8 +583,15 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     && typeProbe.ValueKind == JsonValueKind.String)
                 {
                     sawJsonEvents = true;
+                    // A tool call carries the tool's own input and output under the same
+                    // property names (a written file's `content`), which is not the reply.
+                    if (string.Equals(typeProbe.GetString(), "text", StringComparison.OrdinalIgnoreCase))
+                        ExtractTextFromElement(doc.RootElement, sb);
                 }
-                ExtractTextFromElement(doc.RootElement, sb);
+                else
+                {
+                    ExtractTextFromElement(doc.RootElement, sb);
+                }
                 // opencode's JSON output may carry the session id at the
                 // root (`{"sessionId": "..."}`) or nested under a `session`
                 // object (`{"session":{"id":"..."}}`). Walk the tree so we
