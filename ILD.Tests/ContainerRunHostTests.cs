@@ -2662,6 +2662,20 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_rootful_socket_that_stops_answering_is_warned_about_as_unreachable()
+    {
+        _api.LibpodInfo = JsonNode.Parse("""{"host":{"security":{"rootless":false}}}""");
+        Assert.Contains("not rootless", await _host.WarningAsync(TestContext.Current.CancellationToken));
+
+        var gone = new TaskCompletionSource();
+        _api.BeforeRequest = _ => gone.Task;
+        var warning = await _host.WarningAsync(TestContext.Current.CancellationToken);
+        gone.SetResult();
+
+        Assert.Contains("cannot reach", warning);
+    }
+
+    [Fact]
     public async Task The_startup_check_logs_the_warning_for_a_rootful_socket_and_is_quiet_otherwise()
     {
         await _host.CheckAsync(TestContext.Current.CancellationToken);

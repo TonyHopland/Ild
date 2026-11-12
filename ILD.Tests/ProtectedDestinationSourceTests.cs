@@ -185,4 +185,17 @@ public sealed class ProtectedDestinationSourceTests : IDisposable
         Assert.Equal("protected: ILD database", refusal?.Reason);
         Assert.Null(EgressDestinationGuard.Check([IPAddress.Parse("::ffff:10.0.0.7")], [destination], exemptFromProtections: true));
     }
+
+    [Fact]
+    public void A_refusal_of_ilds_own_address_on_a_run_network_is_named_for_ild_and_stands_whatever_is_switched_off()
+    {
+        var ild = new ProtectedDestination(ProtectedDestination.Ild, "ILD itself", ["ild"], [IPAddress.Parse("10.213.0.18")], Enabled: false);
+        IReadOnlyList<IpRange> runs = [IpRange.Parse("10.213.0.0/16")];
+
+        var own = EgressDestinationGuard.Check([IPAddress.Parse("10.213.0.18")], [ild], exemptFromProtections: true, runs);
+        var other = EgressDestinationGuard.Check([IPAddress.Parse("10.213.0.35")], [ild], exemptFromProtections: true, runs);
+
+        Assert.Equal("protected: ILD itself", own?.Reason);
+        Assert.Equal(EgressDestinationGuard.RunIsolationReason, other?.Reason);
+    }
 }

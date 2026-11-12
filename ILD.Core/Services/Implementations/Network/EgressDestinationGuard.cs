@@ -36,7 +36,11 @@ public static class EgressDestinationGuard
         var addresses = resolved.Select(Normalize).ToList();
         if (addresses.Any(IsLoopback)) return DestinationRefusal.Loopback;
         if (isolated is { Count: > 0 } && addresses.Any(a => isolated.Any(r => r.Contains(a))))
-            return new DestinationRefusal(RunIsolationReason, null);
+        {
+            // ILD has an address on every run's network; a refusal of that one is named for what it is.
+            var own = protectedDestinations.FirstOrDefault(d => d.Id == ProtectedDestination.Ild && addresses.Any(a => d.Covers(a)));
+            return own is null ? new DestinationRefusal(RunIsolationReason, null) : new DestinationRefusal(own.RefusalReason, own.Id);
+        }
         if (exemptFromProtections) return null;
 
         foreach (var destination in protectedDestinations)

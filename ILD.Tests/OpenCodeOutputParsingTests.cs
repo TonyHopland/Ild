@@ -83,6 +83,18 @@ public class OpenCodeOutputParsingTests
     }
 
     [Fact]
+    public void What_a_tool_wrote_is_not_part_of_the_reply()
+    {
+        var (text, _, _, _) = OpenCodeAdapter.ExtractTextAndSessionIdFromJsonEvents(Events(
+            StepStart,
+            "{\"type\":\"tool_use\",\"sessionID\":\"ses_x\",\"part\":{\"type\":\"tool\",\"tool\":\"write\",\"state\":{\"status\":\"completed\",\"input\":{\"filePath\":\"hello.txt\",\"content\":\"hi\"},\"output\":\"Wrote file\"}}}",
+            TextEvent,
+            StepFinish));
+
+        Assert.Equal("final answer", text);
+    }
+
+    [Fact]
     public void Stdout_that_is_not_typed_events_is_not_taken_for_a_json_stream()
     {
         var (_, _, _, sawJsonEvents) = OpenCodeAdapter.ExtractTextAndSessionIdFromJsonEvents(

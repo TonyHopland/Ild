@@ -14,10 +14,12 @@ public class AuthController : ControllerBase
     private readonly IAuthService _authService;
     private readonly LoginThrottle _throttle;
     private readonly IProtectedDestinationSource _protected;
+    private readonly TrustedProxies _proxies;
 
-    public AuthController(IAuthService authService, LoginThrottle throttle, IProtectedDestinationSource protectedSource)
+    public AuthController(IAuthService authService, LoginThrottle throttle, IProtectedDestinationSource protectedSource, TrustedProxies proxies)
     {
         _protected = protectedSource;
+        _proxies = proxies;
         _authService = authService;
         _throttle = throttle;
     }
@@ -32,8 +34,10 @@ public class AuthController : ControllerBase
 
         // A run container can reach this port, so guessing is slowed per caller address, and per user name for a caller in a run
         // network: a user-name wait for everyone would let a run keep the operator out.
-        var address = HttpContext.Connection.RemoteIpAddress?.ToString();
-        var fromRun = await _protected.IsInRunNetworkAsync(HttpContext.Connection.RemoteIpAddress, HttpContext.RequestAborted);
+        // A run is judged by the address it connects from, whatever it writes into a header.
+        var remote = HttpContext.Connection.RemoteIpAddress;
+        var fromRun = await _protected.IsInRunNetworkAsync(remote, HttpContext.RequestAborted);
+        var address = (fromRun ? remote : _proxies.ClientOf(remote, Request.Headers["X-Forwarded-For"]))?.ToString();
         if (_throttle.TryBegin(address, request.Username, fromRun) is { } wait)
         {
             Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);

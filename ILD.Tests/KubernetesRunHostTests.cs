@@ -1693,6 +1693,32 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
     }
 
+    [Fact]
+    public async Task Closing_a_terminal_whose_shell_still_runs_ends_the_session_its_wrapper_was_given()
+    {
+        await CreateRunAsync();
+        var end = new TaskCompletionSource();
+        _api.OnExec = async e =>
+        {
+            if (e.Tty) await end.Task;
+            await e.ExitAsync(0);
+        };
+
+        var pty = await _host.OpenTerminalAsync(Terminal(), NetworkMode.Monitor, TestContext.Current.CancellationToken);
+        var shell = _api.Execs.Last(e => e.Tty);
+        var session = shell.Command[^2];
+        Assert.StartsWith("terminals/", session);
+
+        pty.Dispose();
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!_api.Execs.Any(e => e.Command.Contains(ExecRunHost.EndTerminalScript) && e.Command[^1] == session) && DateTime.UtcNow < deadline)
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        end.SetResult();
+
+        Assert.Contains(_api.Execs, e => e.Command.Contains(ExecRunHost.EndTerminalScript) && e.Command[^1] == session);
+    }
+
     private const string GatewayToken = "gateway-token-value-1";
     private const string ApiToken = "ild-api-token-value-2";
 

@@ -107,6 +107,28 @@ public sealed class WorktreePreviewServiceRunHostTests
         PreviewDataFolder = _ => RunPaths.PreviewData(RunId),
     }.WithDirectory(worktree).WithFile(worktree + "/ild.config.json", InstallConfig(cwd));
 
+    [Fact]
+    public async Task What_an_earlier_ild_left_running_in_the_run_is_ended_before_a_start_and_on_a_stop()
+    {
+        var host = new FakeRunHost
+        {
+            Kind = RunHostKind.Container,
+            StateDirectoryFor = path => $"{RunPaths.RunRoot(RunPaths.OwnerOf(path)!.Value)}/preview-state",
+        }.WithDirectory(RunWorktree).WithFile(RunWorktree + "/ild.config.json", Config("sleep 1000"));
+        using var service = Build(host);
+        var ct = TestContext.Current.CancellationToken;
+
+        await service.StopAsync(RunWorktree, ct);
+        Assert.Equal([RunId], host.KillUnownedCalls);
+
+        await service.StartAsync(RunWorktree, cancellationToken: ct);
+        Assert.Equal([RunId, RunId], host.KillUnownedCalls);
+
+        // The preview this ILD started is stopped as its own, not as something left behind.
+        await service.StopAsync(RunWorktree, ct);
+        Assert.Equal([RunId, RunId], host.KillUnownedCalls);
+    }
+
     [Theory]
     [InlineData("${STATE_DIR}/work", false)]
     [InlineData("${VOLUME:data}", false)]

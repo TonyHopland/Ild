@@ -13,7 +13,6 @@ import PendingEditProposals from "./PendingEditProposals";
 import EditPanel from "./EditPanel";
 import FilesPanel, { workItemKey } from "./FilesPanel";
 import HistoryPanel from "./HistoryPanel";
-import MenuButton, { type MenuItem } from "../MenuButton";
 import Icon from "../Icon";
 import { errorMessage } from "../../utils/errorMessage";
 import {
@@ -361,43 +360,16 @@ export default function WorkItemModalV2({
   ];
   const enabledTabs = tabs.filter((t) => !t.disabledReason);
 
+  // A run that has ended (cancelled, say) answers nothing any more, whatever the
+  // item was waiting for when it ended: cleaning up is all that is left to do.
   const showCleanupButtons =
     workItem.status === WorkItemStatus.HumanFeedback &&
-    workItem.humanFeedbackReason !== "Human Input Needed" &&
-    workItem.humanFeedbackReason !== "PR Awaiting Merge";
+    (currentRunFinished ||
+      (workItem.humanFeedbackReason !== "Human Input Needed" &&
+        workItem.humanFeedbackReason !== "PR Awaiting Merge"));
   // The footer's cleanup acts on the current run, so it waits for any other
   // action on that run, wherever in the dialog that was started.
   const currentRunBlocked = detail.runLock.pendingOf(workItem.currentLoopRunId) !== null;
-  // Secondary actions live behind ⋯ so the footer keeps one obvious button. The
-  // header's × is the only close.
-  const footerMenu: MenuItem[] = showCleanupButtons
-    ? [
-        {
-          id: "cleanup-done",
-          label: "Clean up → Done",
-          title: `End the run and mark the work item Done. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept.`,
-          disabled: currentRunBlocked,
-          onSelect: () =>
-            void detail.runLock.hold(
-              workItem.currentLoopRunId,
-              "abandon",
-              detail.handleCleanupDone,
-            ),
-        },
-        {
-          id: "cleanup-backlog",
-          label: "Clean up → Backlog",
-          title: `End the run and send the work item back to Backlog. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept.`,
-          disabled: currentRunBlocked,
-          onSelect: () =>
-            void detail.runLock.hold(
-              workItem.currentLoopRunId,
-              "abandon",
-              detail.handleCleanupBacklog,
-            ),
-        },
-      ]
-    : [];
 
   // Arrow keys move between the tabs that can be opened, skipping disabled ones.
   const handleTabKeyDown = (e: React.KeyboardEvent, id: TabId) => {
@@ -673,7 +645,40 @@ export default function WorkItemModalV2({
                 <div className="wiv2-content">{renderPanels()}</div>
               </div>
               <div className="wiv2-footer">
-                <MenuButton label="More actions" items={footerMenu} />
+                {showCleanupButtons && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-warning"
+                      title="End the run and mark the work item Done. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept."
+                      disabled={currentRunBlocked}
+                      onClick={() =>
+                        void detail.runLock.hold(
+                          workItem.currentLoopRunId,
+                          "abandon",
+                          detail.handleCleanupDone,
+                        )
+                      }
+                    >
+                      Clean up → Done
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      title="End the run and send the work item back to Backlog. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept."
+                      disabled={currentRunBlocked}
+                      onClick={() =>
+                        void detail.runLock.hold(
+                          workItem.currentLoopRunId,
+                          "abandon",
+                          detail.handleCleanupBacklog,
+                        )
+                      }
+                    >
+                      Clean up → Backlog
+                    </button>
+                  </>
+                )}
                 {moveError && (
                   <span className="wiv2-footer-error" role="alert">
                     {moveError}

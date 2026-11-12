@@ -72,6 +72,28 @@ public class WorkItemsControllerBranchNameTests
         Assert.Equal(legalStored, Stored(field, (await mgr.GetWorkItemAsync(id))!));
     }
 
+    [Fact]
+    public async Task Create_keeps_the_ai_provider_override_it_is_sent()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _db = db;
+        var provider = Guid.NewGuid();
+        db.Context.AiProviders.Add(new AiProvider { Id = provider, Name = "p", Type = "claude-code", Model = "m" });
+        db.Context.SaveChanges();
+
+        var result = await controller.Create(new WorkItemCreateRequest
+        {
+            Title = "t",
+            RepositoryId = repoId.ToString(),
+            AiProviderOverride = "OverrideAll",
+            AiProviderOverrideId = provider.ToString(),
+        });
+
+        var id = Assert.IsType<WorkItemView>(Assert.IsType<CreatedAtActionResult>(result).Value).Id;
+        var stored = (await mgr.GetWorkItemAsync(id))!;
+        Assert.Equal(provider, stored.AiProviderOverrideId);
+    }
+
     [Theory]
     [MemberData(nameof(FieldNames))]
     public async Task Update_rejects_an_illegal_name(string field)

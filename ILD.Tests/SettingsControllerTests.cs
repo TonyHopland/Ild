@@ -242,6 +242,19 @@ public sealed class SettingsControllerTests : IDisposable
         Assert.DoesNotContain("disabled", error);
     }
 
+    [Fact]
+    public async Task The_list_holds_only_the_settings_it_lets_a_caller_read_one_by_one()
+    {
+        await _db.Settings.UpsertAsync(AppSettingKeys.WorkItemServerApiKey, "a-secret-key", TestContext.Current.CancellationToken);
+        await _db.Settings.UpsertAsync(AppSettingKeys.SchedulerMaxConcurrent, "7", TestContext.Current.CancellationToken);
+
+        var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
+
+        Assert.DoesNotContain("a-secret-key", all);
+        Assert.DoesNotContain(AppSettingKeys.WorkItemServerApiKey, all);
+        Assert.Contains("\"7\"", all);
+    }
+
     [Theory]
     [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "3")]
     [InlineData(AppSettingKeys.RunRetentionDays, "14")]

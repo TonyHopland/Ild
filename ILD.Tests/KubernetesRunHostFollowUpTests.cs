@@ -86,6 +86,27 @@ public sealed class KubernetesRunHostFollowUpTests
     }
 
     [Fact]
+    public async Task A_runs_preview_commands_are_a_group_of_their_own_that_is_ended_as_one()
+    {
+        await using var api = await FakeKubernetesApi.StartAsync();
+        var run = Guid.NewGuid();
+        api.Seed("pods", KubernetesNames.ObjectName(run), "main", run);
+        var options = KubernetesRunHostOptions.From(n => n switch { "ILD_API_URL" => "http://ild:8080", "ILD_K8S_RUNNER_IMAGE" => "i", _ => null });
+        var host = new KubernetesRunHost(api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner());
+        api.OnExec = e => e.ExitAsync(0);
+        var ct = TestContext.Current.CancellationToken;
+
+        using var preview = await host.StartCommandAsync(
+            RunCommand.Prepared(new System.Diagnostics.ProcessStartInfo("npm") { WorkingDirectory = RunPaths.WorkingDirectory(run) }) with { RunIn = run }, ct);
+        await host.KillUnownedAsync(run, ct);
+
+        Assert.StartsWith($"unowned-{run:N}/", ((ExecRunProcess)preview).CommandId);
+        var kill = api.Execs.Last();
+        Assert.Equal(KubernetesRunHost.KillAllScript, kill.Command[5]);
+        Assert.Equal($"unowned-{run:N}", kill.Command[^1]);
+    }
+
+    [Fact]
     public void A_run_in_a_pod_keeps_the_claude_session_under_the_pods_home_and_a_local_run_under_ours()
     {
         var run = Guid.NewGuid();
