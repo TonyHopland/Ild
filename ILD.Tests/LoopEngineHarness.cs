@@ -284,6 +284,9 @@ internal sealed class ScriptedExecutor : INodeExecutor
     public Queue<NodeOutcome[]> Scripts { get; } = new();
     public int Invocations { get; private set; }
 
+    /// <summary>What the run carried into each invocation: its live session id and one-shot steering note.</summary>
+    public List<(string? SessionId, string? SteeringNote)> Seen { get; } = new();
+
     public ScriptedExecutor(NodeType type, params NodeOutcome[] outcomes)
     {
         NodeType = type;
@@ -299,6 +302,7 @@ internal sealed class ScriptedExecutor : INodeExecutor
     public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         Invocations++;
+        Seen.Add((ctx.Run.CurrentAiSessionId, ctx.Run.SteeringNote));
         var script = Scripts.Count > 0 ? Scripts.Dequeue() : Array.Empty<NodeOutcome>();
         foreach (var o in script)
         {

@@ -1,5 +1,6 @@
 import {
   LoopRun,
+  LoopRunNode,
   LoopRunNodeStatus,
   LoopRunStatus,
   NodeType,
@@ -61,4 +62,24 @@ export function nodeTakesRetry(
     (status === LoopRunNodeStatus.Failed ||
       (nodeType !== NodeType.Start && nodeType !== NodeType.Cleanup))
   );
+}
+
+/**
+ * Resume continues the agent session of a failed or interrupted AI attempt,
+ * where Retry starts the node over. Offered beside Retry on such an attempt;
+ * the server says whether it can work (a session was recorded and the agent
+ * can resume), and `resumeDisabledReason` is what to show when it cannot.
+ */
+export function nodeOffersResume(node: Pick<LoopRunNode, "status" | "nodeType">): boolean {
+  return (
+    node.nodeType === NodeType.AI &&
+    (node.status === LoopRunNodeStatus.Failed || node.status === LoopRunNodeStatus.Interrupted)
+  );
+}
+
+export function resumeDisabledReason(
+  node: Pick<LoopRunNode, "canResume" | "resumeUnavailableReason">,
+): string | null {
+  if (node.canResume) return null;
+  return node.resumeUnavailableReason ?? "Resume is not available for this attempt";
 }

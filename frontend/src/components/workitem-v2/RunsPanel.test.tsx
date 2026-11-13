@@ -1809,4 +1809,43 @@ describe("RunsPanel retry", () => {
     expect(retries).toHaveLength(1);
     expect(retries[0].classList.contains("btn-primary")).toBe(true);
   });
+
+  test("Resume sits beside Retry on a failed AI attempt, and is disabled with the reason when it cannot work", async () => {
+    renderActionPanel([
+      run({
+        id: RUN_A,
+        status: LoopRunStatus.WaitingHuman,
+        completedAt: null,
+        nodes: [
+          {
+            ...node("d", "Developer", "AI", LoopRunNodeStatus.Failed),
+            canResume: false,
+            resumeUnavailableReason: "no session recorded",
+          },
+        ],
+      }),
+    ]);
+    await screen.findByText("Developer");
+
+    const resume = screen.getByRole("button", { name: "Resume this node's agent session" });
+    expect((resume as HTMLButtonElement).disabled).toBe(true);
+    expect(resume.getAttribute("title")).toBe("no session recorded");
+  });
+
+  test("Resume calls the resume endpoint when the attempt can be resumed", async () => {
+    const resumeFromNode = vi.spyOn(loopRunService, "resumeFromNode").mockResolvedValue(undefined);
+    renderActionPanel([
+      run({
+        id: RUN_A,
+        status: LoopRunStatus.WaitingHuman,
+        completedAt: null,
+        nodes: [{ ...node("d", "Developer", "AI", LoopRunNodeStatus.Failed), canResume: true }],
+      }),
+    ]);
+    await screen.findByText("Developer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume this node's agent session" }));
+
+    await waitFor(() => expect(resumeFromNode).toHaveBeenCalledWith(RUN_A, "d"));
+  });
 });

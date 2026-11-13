@@ -1119,6 +1119,9 @@ namespace ILD.Data.Migrations
                     b.Property<string>("AiProvider")
                         .HasColumnType("text");
 
+                    b.Property<string>("AiSessionId")
+                        .HasColumnType("text");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 

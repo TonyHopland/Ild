@@ -707,7 +707,47 @@ public sealed class LoopEngine : ILoopEngine
         run.Status = LoopRunStatus.Running;
     }
 
-    public async Task RetryFromNodeAsync(Guid runId, Guid runNodeId)
+    public Task RetryFromNodeAsync(Guid runId, Guid runNodeId) => RetryCoreAsync(runId, runNodeId, resumeSession: false);
+
+    public Task ResumeFromNodeAsync(Guid runId, Guid runNodeId) => RetryCoreAsync(runId, runNodeId, resumeSession: true);
+
+    public async Task<string?> GetResumeUnavailableReasonAsync(Guid runId, Guid runNodeId)
+    {
+        using var scope = _sp.CreateScope();
+        return await ResumeUnavailableReasonAsync(scope.ServiceProvider, runId, runNodeId);
+    }
+
+    /// <summary>
+    /// Why <paramref name="runNodeId"/> cannot be resumed from its agent session, or null when it can:
+    /// it is the failed or interrupted AI attempt the run is on, a session id was recorded for it,
+    /// and the agent it ran on can continue a session.
+    /// </summary>
+    private static async Task<string?> ResumeUnavailableReasonAsync(IServiceProvider sp, Guid runId, Guid runNodeId)
+    {
+        var store = sp.GetRequiredService<ILoopRunStore>();
+        var run = await store.GetByIdAsync(runId);
+        var target = await store.GetRunNodeByIdAsync(runNodeId);
+        if (run is null || target is null || target.LoopRunId != runId) return "attempt not found";
+        var nodes = await sp.GetRequiredService<ILoopTemplateStore>().GetNodesForVersionAsync(run.LoopTemplateVersionId);
+        var node = nodes.FirstOrDefault(n => n.Id == target.LoopNodeId);
+        if (node?.NodeType != NodeType.AI) return "not an AI node";
+        if (target.Status is not (LoopRunNodeStatus.Failed or LoopRunNodeStatus.Interrupted))
+            return "only a failed or interrupted attempt can be resumed";
+        if ((await store.GetRunNodesAsync(runId)).LastOrDefault()?.Id != runNodeId)
+            return "not the attempt the run is parked on";
+        if (string.IsNullOrWhiteSpace(target.AiSessionId)) return "no session recorded";
+
+        var wi = await sp.GetRequiredService<IWorkItemManager>().GetWorkItemAsync(run.WorkItemId);
+        if (wi is null) return "work item not found";
+        var cfg = NodeConfig.Parse<NodeConfig.Ai>(node.Config);
+        var (provider, providerError) = await AiNodeProviderResolver.ResolveAsync(
+            sp.GetRequiredService<IProviderStore>(), cfg.AiProviderTag, wi.AiProviderOverride, wi.AiProviderOverrideId);
+        if (provider is null) return providerError;
+        var traits = sp.GetRequiredService<IAgentAdapterRegistry>().GetTraits(provider.Type);
+        return traits.SupportsSessionResume ? null : $"{traits.DisplayName} can't resume sessions";
+    }
+
+    private async Task RetryCoreAsync(Guid runId, Guid runNodeId, bool resumeSession)
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
@@ -736,19 +776,27 @@ public sealed class LoopEngine : ILoopEngine
             prevOutput = prev?.Output;
         }
 
+        (string SessionId, string Note)? resume = null;
+        if (resumeSession)
+        {
+            if (await ResumeUnavailableReasonAsync(scope.ServiceProvider, runId, runNodeId) is { } why)
+                throw new InvalidOperationException($"Cannot resume this attempt: {why}");
+            resume = (target.AiSessionId!, ResumeNote(target.Error));
+        }
+
         await KillStrayCommandsAsync(scope.ServiceProvider, runId);
         if (ended)
-            await ReopenToRetryAsync(run, target, prevOutput, loopRunStore, workItems, eventLog);
+            await ReopenToRetryAsync(run, target, prevOutput, resume, loopRunStore, workItems, eventLog);
         else
         {
-            PrepareRetry(run, target, prevOutput);
+            PrepareRetry(run, target, prevOutput, resume);
             await loopRunStore.UpdateRunAsync(run);
         }
         await StaleHumanInputProposalsAsync(scope.ServiceProvider, run, runNodeId: null);
         try
         {
             await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
-                reason: $"Retried from {target.NodeLabel ?? "a step"}", currentLoopRunId: run.Id);
+                reason: $"{(resumeSession ? "Resumed" : "Retried")} from {target.NodeLabel ?? "a step"}", currentLoopRunId: run.Id);
         }
         catch (Exception ex)
         {
@@ -762,7 +810,7 @@ public sealed class LoopEngine : ILoopEngine
     }
 
     /// <summary>Point <paramref name="run"/> back at <paramref name="target"/>'s node, with the input it had, and set it Running.</summary>
-    private static void PrepareRetry(LoopRun run, LoopRunNode target, string? prevOutput)
+    private static void PrepareRetry(LoopRun run, LoopRunNode target, string? prevOutput, (string SessionId, string Note)? resume = null)
     {
         run.CurrentNodeId = target.LoopNodeId;
         run.PreviousNodeOutput = prevOutput;
@@ -776,11 +824,21 @@ public sealed class LoopEngine : ILoopEngine
         run.IsHalted = false;
         run.HaltReason = null;
         run.ThrottleResetAt = null;
-        run.SteeringNote = null;
+        // A resume continues the failed attempt's agent session with a short note; the
+        // AI node executor sends only that note, as it does after a halt.
+        run.SteeringNote = resume?.Note;
+        if (resume is not null) run.CurrentAiSessionId = resume.Value.SessionId;
         run.HumanFeedbackReason = null;
         ResetUnattendedCounters(run);
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
+    }
+
+    private static string ResumeNote(string? error)
+    {
+        var reason = AiFailureClassifier.FirstLine(error, 300);
+        if (reason.Length == 0) reason = "unknown";
+        return $"You were interrupted (reason: {reason}). Continue the task from where you left off.";
     }
 
     private const string RetryOfEndedRunRefused = "Cannot retry a node of a run that has ended; start a new run instead";
@@ -798,7 +856,7 @@ public sealed class LoopEngine : ILoopEngine
     /// together under the run's lock, so a concurrent end or second reopen cannot
     /// split them and a run is never left reopened but not retried.
     /// </summary>
-    private static async Task ReopenToRetryAsync(LoopRun run, LoopRunNode target, string? prevOutput,
+    private static async Task ReopenToRetryAsync(LoopRun run, LoopRunNode target, string? prevOutput, (string SessionId, string Note)? resume,
         ILoopRunStore store, IWorkItemManager workItems, IEventLogService eventLog)
     {
         if ((await store.GetLatestByWorkItemAsync(run.WorkItemId))?.Id != run.Id
@@ -813,7 +871,7 @@ public sealed class LoopEngine : ILoopEngine
                 await store.ReloadAsync(run);
                 if (!EndedOnFailedNode(run))
                     throw new InvalidOperationException(RetryOfEndedRunRefused);
-                PrepareRetry(run, target, prevOutput);
+                PrepareRetry(run, target, prevOutput, resume);
                 run.CompletedAt = null;
                 await store.UpdateRunAsync(run);
             });
@@ -1278,6 +1336,14 @@ public sealed class LoopEngine : ILoopEngine
                         if (eventLog is not null)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeRetrying,
                                 $"{NodeDisplayName(node)} failed, retry {retry.Attempt}/{retry.MaxAttempts} in {retry.Delay.TotalSeconds:0}s: {retry.Error}",
+                                node.Id, runNodeId: runNodeId));
+                        break;
+                    }
+                    case NodeOutcome.ResumeFellBack fb:
+                    {
+                        if (eventLog is not null)
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.ResumeFellBackToRetry,
+                                $"{NodeDisplayName(node)}: could not resume the agent session, ran it from the beginning instead ({fb.Reason})",
                                 node.Id, runNodeId: runNodeId));
                         break;
                     }

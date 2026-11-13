@@ -144,6 +144,32 @@ public static class AiFailureClassifier
             : ClassifyText(error, trustAmbiguous: true);
     }
 
+    /// <summary>The first line of <paramref name="text"/>, trimmed and cut to <paramref name="max"/> characters; empty when there is none.</summary>
+    public static string FirstLine(string? text, int max)
+    {
+        var line = (text ?? string.Empty).Trim().Split('\n')[0].Trim();
+        return line.Length > max ? line[..max] : line;
+    }
+
+    private static readonly Regex[] SessionNotFoundRules =
+    {
+        Rule(@"\bno (?:conversation|session|rollout) found\b"),
+        Rule(@"\bsession\b[^.\n]{0,80}\bnot found\b"),
+        Rule(@"\b(?:could not|couldn.t|cannot|can.t) (?:find|resume|load) (?:the |that |a )?session\b"),
+    };
+
+    /// <summary>
+    /// Whether a failed start says the session it was asked to resume does not exist.
+    /// Read from the adapter's error text only (the stdout tail is the agent's own words).
+    /// </summary>
+    public static bool IsSessionNotFound(string? error)
+    {
+        error = AdapterFailureText.WithoutStdoutTail(error);
+        if (string.IsNullOrWhiteSpace(error)) return false;
+        try { return SessionNotFoundRules.Any(r => r.IsMatch(error)); }
+        catch (RegexMatchTimeoutException) { return false; }
+    }
+
     /// <summary>
     /// Classify a provider error message an adapter lifted out of a structured
     /// event (opencode's <c>{"type":"error"}</c>, claude-code's result error).

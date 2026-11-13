@@ -31,7 +31,13 @@ import RunCostSummary from "./RunCostSummary";
 import Icon from "../Icon";
 import MenuButton, { type MenuItem } from "../MenuButton";
 import { nodeStatusLabel, pillClass, runStatusLabel, runStatusTone } from "../../utils/labels";
-import { nodeTakesRetry, runOffersRetry, runTakesRetryNow } from "./retry";
+import {
+  nodeOffersResume,
+  nodeTakesRetry,
+  resumeDisabledReason,
+  runOffersRetry,
+  runTakesRetryNow,
+} from "./retry";
 import { runHasEnded } from "../../utils/runEnded";
 
 interface EffectiveInput {
@@ -187,6 +193,7 @@ function NodeRow({
   progressText,
   events,
   onRetry,
+  onResume,
   retryDisabled,
 }: {
   node: LoopRunNode;
@@ -200,6 +207,8 @@ function NodeRow({
   events: RunEvents;
   /** Absent when the run has ended: an ended run is not started again. */
   onRetry?: (runNodeId: string) => void;
+  /** Continue the failed attempt's agent session instead of starting the node over. */
+  onResume?: (runNodeId: string) => void;
   retryDisabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -245,6 +254,22 @@ function NodeRow({
           >
             <Icon name="retry" size={14} />
             Retry
+          </button>
+        )}
+        {onResume && nodeOffersResume({ status, nodeType }) && (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost wiv2-node-resume"
+            disabled={retryDisabled || !node.canResume}
+            title={
+              resumeDisabledReason(node) ??
+              "Resume this node's agent session where it left off, keeping what it already did and knew"
+            }
+            aria-label="Resume this node's agent session"
+            onClick={() => onResume(node.id)}
+          >
+            <Icon name="retry" size={14} />
+            Resume
           </button>
         )}
       </div>
@@ -486,6 +511,13 @@ function RunDetail({
       "Failed to retry from node.",
     );
 
+  const handleResume = (runNodeId: string) =>
+    actOnRun(
+      "retry",
+      (id) => loopRunService.resumeFromNode(id, runNodeId),
+      "Failed to resume from node.",
+    );
+
   const handleReclaim = (reclaimRun: (runId: string) => Promise<unknown>) =>
     actOnRun("reclaim", reclaimRun, "Failed to free the run's worktree and branch.", () =>
       setConfirmingReclaim(false),
@@ -715,6 +747,7 @@ function RunDetail({
                 progressText={progressText}
                 events={runEvents}
                 onRetry={canRetry ? (runNodeId) => void handleRetry(runNodeId) : undefined}
+                onResume={canRetry ? (runNodeId) => void handleResume(runNodeId) : undefined}
                 retryDisabled={retryDisabled}
               />
             </Fragment>

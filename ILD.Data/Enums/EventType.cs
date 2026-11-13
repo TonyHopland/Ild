@@ -76,4 +76,10 @@ public enum EventType
     /// same run. Names the attempt, the error and the delay before the next one.
     /// </summary>
     NodeRetrying = 25,
+
+    /// <summary>
+    /// A Resume of a failed AI node could not continue the agent session and ran
+    /// the node from the beginning instead. Carries the reason.
+    /// </summary>
+    ResumeFellBackToRetry = 26,
 }

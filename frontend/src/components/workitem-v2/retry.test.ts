@@ -1,6 +1,13 @@
 import { describe, expect, test } from "vite-plus/test";
 import { LoopRunNodeStatus, LoopRunStatus, NodeType, WorkItemStatus } from "../../types";
-import { nodeTakesRetry, runOffersRetry, runReopensOnRetry, runTakesRetryNow } from "./retry";
+import {
+  nodeOffersResume,
+  nodeTakesRetry,
+  resumeDisabledReason,
+  runOffersRetry,
+  runReopensOnRetry,
+  runTakesRetryNow,
+} from "./retry";
 
 describe("when a run can go back to a node", () => {
   test.each([
@@ -59,5 +66,26 @@ describe("when a run can go back to a node", () => {
     expect(nodeTakesRetry(LoopRunNodeStatus.Running, NodeType.AI)).toBe(false);
     expect(nodeTakesRetry(LoopRunNodeStatus.Succeeded, NodeType.AI)).toBe(true);
     expect(nodeTakesRetry(LoopRunNodeStatus.Succeeded, undefined)).toBe(true);
+  });
+});
+
+describe("when an attempt offers Resume", () => {
+  test.each([
+    [LoopRunNodeStatus.Failed, NodeType.AI, true],
+    [LoopRunNodeStatus.Interrupted, NodeType.AI, true],
+    [LoopRunNodeStatus.Succeeded, NodeType.AI, false],
+    [LoopRunNodeStatus.Failed, NodeType.Cmd, false],
+  ])("a %s %s node: %s", (status, nodeType, offered) => {
+    expect(nodeOffersResume({ status, nodeType })).toBe(offered);
+  });
+
+  test("it is disabled with the server's reason, and enabled without one", () => {
+    expect(resumeDisabledReason({ canResume: true })).toBeNull();
+    const reason = resumeDisabledReason({
+      canResume: false,
+      resumeUnavailableReason: "no session recorded",
+    });
+    expect(reason).toBe("no session recorded");
+    expect(resumeDisabledReason({})).toBe("Resume is not available for this attempt");
   });
 });

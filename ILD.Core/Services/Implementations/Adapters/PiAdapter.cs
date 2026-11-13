@@ -217,6 +217,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         SupportedTools = AiToolCatalog.DefaultTools,
         EmptyToolSelectionMeansNone = false,
         SupportsNoTools = true,
+        SupportsSessionResume = true,
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
     };
 

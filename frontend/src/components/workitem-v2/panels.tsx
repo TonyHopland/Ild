@@ -27,7 +27,14 @@ import { feedbackReasonLabel, pillClass, type Tone } from "../../utils/labels";
 import { failureMessage } from "./RunDetailSections";
 import { repositoryName } from "../../utils/repositoryName";
 import { PR_AWAITING_MERGE } from "./offers";
-import { NODE_FAILED, nodeTakesRetry, runReopensOnRetry, runTakesRetryNow } from "./retry";
+import {
+  NODE_FAILED,
+  nodeOffersResume,
+  nodeTakesRetry,
+  resumeDisabledReason,
+  runReopensOnRetry,
+  runTakesRetryNow,
+} from "./retry";
 
 /**
  * What the round is about to say on the pull request, and the chance to stop
@@ -221,6 +228,18 @@ function FailedNodeCard({
   const recorded = node.error ?? node.output;
   const failedAt = node.completedAt ? new Date(node.completedAt).toLocaleString() : null;
 
+  const resume = async () => {
+    setError(null);
+    try {
+      await detail.runLock.hold(run.id, "retry", () =>
+        loopRunService.resumeFromNode(run.id, node.id),
+      );
+      detail.refreshRuns();
+    } catch (e) {
+      setError(failureMessage(e, "Failed to resume from node."));
+    }
+  };
+
   const retry = async () => {
     setError(null);
     try {
@@ -266,6 +285,18 @@ function FailedNodeCard({
             Retry this node
           </button>
         )}
+        {canRetry && nodeOffersResume(node) && (
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            disabled={busy || !node.canResume}
+            title={resumeDisabledReason(node) ?? "Continue the agent session where it left off"}
+            onClick={() => void resume()}
+          >
+            <Icon name="retry" />
+            Resume agent session
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-sm btn-secondary"
@@ -290,7 +321,8 @@ function FailedNodeCard({
       {canRetry && (
         <div className="wiv2-failed-meta">
           Retry runs “{node.nodeLabel}” again with the same input, in the same worktree. The run
-          keeps its history.
+          keeps its history. Resume instead continues the agent's earlier session, so it keeps what
+          it had read and planned.
         </div>
       )}
       {error && <div className="preview-message preview-error">{error}</div>}
