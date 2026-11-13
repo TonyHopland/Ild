@@ -8,6 +8,7 @@ namespace ILD.Core.Services.RunHosts;
 /// Removes the objects of runs that are finished or gone, on a timer. A run host deletes a run's objects when the run ends;
 /// this is for what an ILD that was killed mid-run, or a cluster or socket that was unreachable, left behind.
 /// It only ever touches objects labelled with its own instance. The same sweep runs once at startup, with the other leftovers.
+/// Beside the sweep, it keeps the agents ILD has installed in the toolchain store, so a run or chat does not wait for them.
 /// </summary>
 public sealed class RunHostSweeper(
     IRunHost host, Func<CancellationToken, Task<IReadOnlySet<Guid>>> liveIds, TimeSpan interval, ILogger<RunHostSweeper>? logger = null)
@@ -18,12 +19,17 @@ public sealed class RunHostSweeper(
         if (host is not RoutingRunHost routing) return;
 
         await routing.Isolated.CheckAsync(stoppingToken);
+        await Task.WhenAll(SweepLoopAsync(routing.Isolated, stoppingToken), WarmLoopAsync(routing.Isolated, stoppingToken));
+    }
+
+    private async Task SweepLoopAsync(ExecRunHost isolated, CancellationToken stoppingToken)
+    {
         using var timer = new PeriodicTimer(interval);
         while (await WaitForNextAsync(timer, stoppingToken))
         {
             try
             {
-                await SweepAsync(routing.Isolated, stoppingToken);
+                await SweepAsync(isolated, stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -31,6 +37,19 @@ public sealed class RunHostSweeper(
             }
         }
     }
+
+    // Often, and from the start: an agent ILD installs or updates is in the store within a minute, not at the next run.
+    private static async Task WarmLoopAsync(ExecRunHost isolated, CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(WarmInterval);
+        do
+        {
+            await isolated.WarmAgentToolsAsync(stoppingToken);
+        }
+        while (await WaitForNextAsync(timer, stoppingToken));
+    }
+
+    private static readonly TimeSpan WarmInterval = TimeSpan.FromMinutes(1);
 
     internal async Task SweepAsync(ExecRunHost isolated, CancellationToken ct)
     {

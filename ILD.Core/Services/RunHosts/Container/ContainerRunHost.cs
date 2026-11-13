@@ -388,6 +388,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     protected override Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, Guid? repositoryId, CancellationToken ct)
         => ToolsForAsync(owner, plan, Agents(), repositoryId, ct);
 
+    protected override IReadOnlyList<RunAgent> StoreAgents() => _options.Toolchains ? Agents() : [];
+
     protected override bool ChatToolchains => _options.Toolchains;
 
     private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, IReadOnlyList<RunAgent> agents, Guid? repositoryId, CancellationToken ct)

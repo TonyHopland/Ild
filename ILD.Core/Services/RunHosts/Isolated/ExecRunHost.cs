@@ -463,6 +463,42 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return RunToolEnvironment.Merge(agentZone, toolchainZone, repositoryZone);
     }
 
+    /// <summary>The agents ILD has installed, when runs get them from the store; none when they do not.</summary>
+    protected virtual IReadOnlyList<RunAgent> StoreAgents() => [];
+
+    private string? _agentsNotWarmed;
+
+    /// <summary>
+    /// Installs the agents ILD has into the agents' zone ahead of the first run or chat that needs them, which otherwise waits
+    /// for it. Cheap when the zone already holds them. A set that failed is not tried again until it changes: the run that
+    /// needs it reports the failure. Never throws.
+    /// </summary>
+    public async Task WarmAgentToolsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var agents = StoreAgents();
+            if (agents.Count == 0) return;
+            var arguments = RunToolStore.Arguments([], agents);
+            var wanted = string.Join('\n', arguments);
+            if (wanted == _agentsNotWarmed) return;
+            try
+            {
+                await ToolZoneAsync("ILD", new RunToolMount(RunToolZone.Agents), RunToolStore.Root, arguments, true, null, ct);
+                _agentsNotWarmed = null;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                _agentsNotWarmed = wanted;
+                Logger?.LogWarning(ex, "Could not install the agents into the toolchain store ahead of time; the first run or chat that needs them tries again");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Logger?.LogWarning(ex, "Could not read which agents ILD has installed");
+        }
+    }
+
     private async Task<RunToolEnvironment> ToolZoneAsync(
         string label, RunToolMount zone, string root, IReadOnlyList<string> arguments, bool ignoreScripts, RunToolEnvironment? toolchains, CancellationToken ct)
     {
