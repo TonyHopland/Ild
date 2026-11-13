@@ -177,6 +177,22 @@ public class AdapterGatewayTests
     }
 
     [Fact]
+    public void A_base_url_provider_without_a_key_is_pointed_at_the_gateway_too()
+    {
+        var runContext = new LoopRunContext(Guid.NewGuid(), "1", "t", "d", Path.GetTempPath(), "b", [], null);
+
+        var (_, json) = OpenCodeAdapter.BuildOpenCodeConfig(Provider("opencode", null, "http://models.example.test:1234/v1"), new TestProcessEnvironment(), noTools: true, gateway: _lease);
+        var settings = PiAdapter.ResolveSettings(Provider("pi", null, "http://models.example.test:1234/v1"), runContext, null, null, new TestProcessEnvironment(), noTools: true, gateway: _lease);
+
+        var options = JsonDocument.Parse(json).RootElement.GetProperty("provider").EnumerateObject().Single().Value.GetProperty("options");
+        Assert.Equal("http://127.0.0.1:8080/gateway/upstream", options.GetProperty("baseURL").GetString());
+        Assert.Equal(_lease.Token, options.GetProperty("apiKey").GetString());
+        Assert.DoesNotContain("models.example.test", settings.ModelsJsonContent);
+        Assert.Contains("http://127.0.0.1:8080/gateway/upstream", settings.ModelsJsonContent);
+        Assert.Equal(_lease.Token, PiAdapter.BuildRunEnvironment(settings, Path.GetTempPath())["ILD_PI_PROVIDER_API_KEY"]);
+    }
+
+    [Fact]
     public void Pi_in_a_run_of_its_own_keeps_its_agent_directory_in_the_runs_home()
     {
         var provider = Provider("pi", baseUrl: "https://models.example.test/v1");

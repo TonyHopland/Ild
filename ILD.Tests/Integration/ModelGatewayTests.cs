@@ -304,10 +304,29 @@ public class ModelGatewayTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_provider_without_a_credential_is_not_forwarded()
+    public async Task A_provider_without_a_key_is_forwarded_with_no_credential_at_all()
     {
         var provider = await SeedProviderAsync();
         provider.ApiKey = null;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<IProviderStore>().UpdateAiProviderAsync(provider);
+        using var lease = Open(provider);
+
+        using var response = await _factory.CreateClient()
+            .SendAsync(Get("/gateway/upstream/models", lease.Token, apiKey: lease.Token), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var seen = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
+        Assert.Equal("", seen.GetProperty("authorization").GetString());
+        Assert.Equal("", seen.GetProperty("apiKey").GetString());
+        Assert.Equal("", seen.GetProperty("gatewayToken").GetString());
+    }
+
+    [Fact]
+    public async Task A_provider_without_a_base_url_is_not_forwarded()
+    {
+        var provider = await SeedProviderAsync();
+        provider.BaseUrl = "pi";
         await using (var scope = _factory.Services.CreateAsyncScope())
             await scope.ServiceProvider.GetRequiredService<IProviderStore>().UpdateAiProviderAsync(provider);
         using var lease = Open(provider);

@@ -98,9 +98,19 @@ public sealed class ModelCredentialSourceTests : IDisposable
     }
 
     [Fact]
-    public async Task A_base_url_provider_without_a_key_has_no_credential()
+    public async Task A_base_url_provider_without_a_key_forwards_to_its_base_url_with_no_secret()
     {
-        Assert.Null(await _source.ResolveAsync(Provider("opencode", null, "https://models.example.test/v1"), GatewayRoutes.Upstream, TestContext.Current.CancellationToken));
+        var credential = await _source.ResolveAsync(
+            Provider("opencode", null, "https://models.example.test/v1"), GatewayRoutes.Upstream, TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://models.example.test/v1", credential!.Upstream.ToString());
+        Assert.Null(credential.Secret);
+    }
+
+    [Fact]
+    public async Task A_provider_without_an_absolute_base_url_has_no_credential()
+    {
+        Assert.Null(await _source.ResolveAsync(Provider("pi", "key-1", "pi"), GatewayRoutes.Upstream, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -286,7 +296,7 @@ public sealed class ModelCredentialSourceTests : IDisposable
         var provider = Provider("codex");
         _handler.Status = HttpStatusCode.BadRequest;
 
-        async Task<string> Resolve() => (await _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken))!.Secret;
+        async Task<string?> Resolve() => (await _source.ResolveAsync(provider, GatewayRoutes.ChatGpt, TestContext.Current.CancellationToken))!.Secret;
 
         await Resolve();
         Assert.Single(_handler.Requests);

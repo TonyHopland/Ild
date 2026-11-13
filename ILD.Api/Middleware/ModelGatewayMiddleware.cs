@@ -249,7 +249,7 @@ public sealed partial class ModelGatewayMiddleware
         return context.Response.WriteAsJsonAsync(new { error = new { type = "ild_gateway", message } });
     }
 
-    // With no credential, the request goes out with none: every credential header the agent sent is dropped.
+    // With no credential, or one without a secret, the request goes out with none: every credential header the agent sent is dropped.
     internal sealed partial class SwapTransformer(Uri target, ModelCredential? credential, string? rewriteEndpointsTo) : HttpTransformer
     {
         [GeneratedRegex(@"https://([a-z0-9.-]+\.githubcopilot\.com)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -279,7 +279,7 @@ public sealed partial class ModelGatewayMiddleware
             proxyRequest.Headers.Host = null;
             if (rewriteEndpointsTo is not null) proxyRequest.Headers.AcceptEncoding.Clear();
 
-            if (credential is null)
+            if (credential?.Secret is not { } secret)
             {
                 foreach (var name in CredentialHeaders) proxyRequest.Headers.Remove(name);
                 return;
@@ -290,13 +290,13 @@ public sealed partial class ModelGatewayMiddleware
             {
                 if (proxyRequest.Headers.Remove(name))
                 {
-                    proxyRequest.Headers.TryAddWithoutValidation(name, credential.Secret);
+                    proxyRequest.Headers.TryAddWithoutValidation(name, secret);
                     carriedKey = true;
                 }
             }
             proxyRequest.Headers.Remove(TokenHeader);
             if (!carriedKey || proxyRequest.Headers.Authorization is not null)
-                proxyRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", credential.Secret);
+                proxyRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", secret);
 
             foreach (var (name, value) in credential.Headers)
             {
