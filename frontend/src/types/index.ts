@@ -609,6 +609,13 @@ export interface LoopRunNode {
   inputTokens?: number | null;
   outputTokens?: number | null;
   costUsd?: number | null;
+  /** Whether Resume (continue this attempt's agent session) works; run-detail endpoint, failed or interrupted AI attempts. */
+  canResume?: boolean;
+  /** Why Resume is unavailable, when it is. */
+  resumeUnavailableReason?: string | null;
+}
+
+export interface LoopRunAvailableSession| null;
 }
 
 export interface LoopRunAvailableSession {

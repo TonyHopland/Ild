@@ -690,6 +690,10 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/nodes/${runNodeId}/retry`, {});
   },
 
+  resumeFromNode: async (id: string, runNodeId: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/nodes/${runNodeId}/resume`, {});
+  },
+
   setRetain: async (id: string, retain: boolean): Promise<{ id: string; retain: boolean }> => {
     return api.put<{ id: string; retain: boolean }>(`/loopruns/${id}/retain`, { retain });
   },
