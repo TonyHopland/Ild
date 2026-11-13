@@ -19,6 +19,7 @@ const emit = hub.dispatch;
 const enforced: NetworkStatus = {
   enforcement: "enforced",
   reason: "nftables rules drop everything uid 10002 sends except loopback and DNS.",
+  contained: true,
   proxyEnabled: true,
   proxyPort: 3128,
   directRoutes: [],
@@ -26,6 +27,7 @@ const enforced: NetworkStatus = {
 const advisory: NetworkStatus = {
   enforcement: "advisory",
   reason: "NET_ADMIN is not granted to the container.",
+  contained: false,
   proxyEnabled: true,
   proxyPort: 3128,
   directRoutes: [],
@@ -1165,6 +1167,12 @@ describe("Network modes", () => {
     expect(contained.textContent).toMatch(/every process of that run/i);
     expect(contained.textContent).toMatch(/database, the WorkItem Server and the Kubernetes API/);
     expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
+    cleanup();
+
+    mockServices({ ...enforced, enforcement: "unverified" }, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    const unverified = (await screen.findByText(/Network mode is Off/)).closest("div")!;
+    expect(unverified.textContent).toMatch(/database, the WorkItem Server and the Kubernetes API/);
     cleanup();
 
     mockServices(advisory, "off");

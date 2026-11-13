@@ -9,79 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Behind a reverse proxy, sign-in attempts are slowed per caller instead of for everyone at once**, once `ILD_TRUSTED_PROXIES` names the proxy.
+- **An agent can no longer act as another run or chat, or reach another run's work item.**
+- **Runs can no longer reach ILD's database, the WorkItem Server, the Kubernetes API, or private, link-local and cloud metadata addresses**, unless you switch that protection off in Settings → Network or declare a forward.
+- **A run can no longer reach another run over the network.**
+- **A run's model calls follow the network mode and lists, and appear in the Network Log as "via model gateway".**
+- **Repeated sign-in attempts are slowed down per caller.** Behind a reverse proxy, name it in `ILD_TRUSTED_PROXIES`.
+- **A git host's webhook needs no ILD token.** Remove any `?access_token=` from the webhook URL in the git host's settings.
 - **The settings list no longer returns the WorkItem Server API key.**
-- **A run's model calls now follow the network mode and lists, and appear in the Network Log as "via model gateway"**; in `whitelist` mode ILD adds each provider's model host for it, and deleting that entry blocks the provider.
-- **Runs can no longer reach private and cluster-internal addresses (the LAN, other pods, storage exports) through the egress proxy**; a run that reached a LAN or in-cluster service through the proxy loses that until you declare a forward to it or switch the protection off in Settings → Network.
-- **Runs can no longer reach ILD or the WorkItem Server through the ports the stack publishes on its machine**, unless you switch that protection off in Settings → Network.
-- **Runs start on Docker 29, and survive a restart of ILD on Podman.**
-- **A run can no longer stall other runs' network access by flooding the network log, or exhaust ILD's memory through a coding agent's output**; the output limit is `ILD_MAX_AGENT_OUTPUT_MB`.
-- **A git host's webhook needs no ILD token.** It is let in by its provider's webhook secret alone, so remove any `?access_token=` from the webhook URL in the git host's settings.
-- **Repeated sign-in attempts are slowed down**, per caller address and, for a run, per user name, so a run can no longer guess the admin password at full speed; the wait doubles from 1 s to 5 minutes, and the operator signing in from outside a run network is never held up by a run.
-- **A run pod is never left without a NetworkPolicy, and Settings warns when the namespace has no default deny.** ILD deletes a pod, waits until it is gone, and only then its policies, instead of deleting them together; `docs/kubernetes` ships a default-deny policy and the `restricted` Pod Security label for the run namespace; an empty or malformed `ILD_K8S_ILD_POD_SELECTOR` stops ILD at startup; the policies admit ILD's pods only from ILD's own namespace (`ILD_K8S_ILD_NAMESPACE`); and a run's owner object is a ConfigMap, so ILD's Role no longer needs Secrets.
-- **A run can no longer exhaust or stop ILD's egress proxy by opening many connections.** The proxy and the forwarders cap open connections per source and in total, close one that sends no request or sits idle, and keep accepting after an accept fails.
-- **ILD stops reading what a run produces at a limit**, so a run can no longer exhaust ILD's memory or disk with a huge file, output, bundle or preview-data copy; the limits are `ILD_MAX_RUN_FILE_MB`, `ILD_MAX_RUN_OUTPUT_MB`, `ILD_MAX_BUNDLE_MB` and `ILD_MAX_PREVIEW_DATA_MB`.
-- **An agent can no longer act as another run or chat, or reach another run's work item.** Each run and chat turn gets its own token, which stops working when it ends.
-- **Chats and runs made before containers can no longer be run again.** A new turn, a resume, a retry or a terminal on one is refused and says to start a new one; reading and deleting them still work.
-- **A preview's health check only reaches the service's own loopback address and never follows a redirect.**
-- **A preview service name can no longer name a file outside the preview's log folder.** Service names are limited to letters, digits, '.', '_' and '-' (starting with a letter or digit), and ILD opens a service or install log without following a link and only inside the log folder. Links in kept preview data that point outside it are dropped when it is stored.
-- **Agents can no longer use the egress proxy without their launch's own credential, or reach other runs through it.** The proxy refuses a connection that does not carry the token ILD signed for its launch and takes the provider or installer scope only from that token, on the container host it serves only the run networks, and it always refuses another run's network and, by default, link-local and cloud metadata addresses.
-- **Preview commands and Cmd nodes always run inside the run, never on ILD's own machine**, and preview data kept between runs works with container and Kubernetes runs.
-- **A `{{WorkTree.File:...}}` placeholder reads only files inside the worktree.**
-- **The model gateway forwards only model calls**, so nothing in a run can use your Copilot or ChatGPT login for GitHub's hosted MCP or your Codex cloud tasks.
-- **Forwards answer on their real host name and port inside a run's container**, so TLS host name verification (`Verify-Full`) works; the `127.0.0.1` form stays, and is the only form in a Kubernetes pod.
-- **A repository clone URL can no longer carry a credential.** A new or changed URL with one is refused, an existing one shows a warning on the Repositories page, and agents never see it; put the token in the remote provider's API key.
-- **Toolchain installers go through the egress proxy**, under an Installers scope in Settings → Network whose allow list starts with the hosts installs need.
-- **Runs can no longer reach ILD's database, the WorkItem Server or the Kubernetes API**, unless you switch that protection off in Settings → Network or declare a forward to it.
-- **A repository can no longer plant code that every other run executes through the shared toolchain store.**
+- **A run can no longer exhaust ILD's memory, disk or egress proxy with huge output, huge files or many connections.**
+- **A repository clone URL can no longer carry a credential.** Put the token in the remote provider's API key.
 - **A repository can no longer hang ILD or exhaust its memory through a linked, special or oversized config or version file.**
+- **A `{{WorkTree.File:...}}` placeholder reads only files inside the worktree.**
+- **A preview's health check only reaches the service's own address and never follows a redirect.**
+- **A preview service name can no longer name a file outside the preview's log folder.**
 
 ### Added
 
-- **A work item and a chat show "Preparing container" while their container or pod is being made.**
-- **A new chat opens at once and takes messages while its container is still starting.**
-- **The shared chat container or pod is removed after 30 idle minutes** (`ILD_CHAT_IDLE_TIMEOUT_MINUTES`, `0` to keep it), so leftover dev servers do not pile up. The next chat makes it again.
-- **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets. Settings warns when the container socket is not rootless or cannot be reached.
-- **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux, without a `chgrp` after every restart.
-- **A run in a container or pod gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows.**
-- **Network forwards work in run and chat containers and pods.**
-- **A run restores NuGet packages from a private Azure Artifacts feed.**
-- **Chats share one container, or one pod in Kubernetes, and the provider sign-in terminal runs in a short-lived container, or pod, that keeps the login when it closes.**
+- **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets.
+- **A run gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows.**
+- **A work item and a chat show "Preparing container" while their container or pod is being made**, and a new chat takes messages meanwhile.
+- **The shared chat container or pod is removed after 30 idle minutes** (`ILD_CHAT_IDLE_TIMEOUT_MINUTES`, `0` to keep it).
+- **Settings → Network lists ILD's protected destinations and the address ranges each covers.**
+- **Toolchain installers have their own Installers scope in Settings → Network.**
+- **Forwards answer on their real host name and port inside a run's container**, so TLS host name verification works.
 - **Open in VS Code on a work item's Terminal tab opens the run's worktree in VS Code, attached to its Docker or Podman container.**
+- **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux.
+- **On Kubernetes, Settings warns when the run namespace has no default-deny NetworkPolicy.**
 
 ### Changed
 
-- **Settings → Network lists the address ranges each protected destination covers.**
 - **Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` before you upgrade.
+- **`ILD_API_URL` must name ILD by a host name that is not localhost**, such as the compose service; ILD does not start otherwise.
 - **On Kubernetes, ILD runs every loop run and chat in a pod.** Set up the RBAC and the shared tools claim from the deployment guide before you upgrade.
-- **The ILD image is smaller.**
-- **ILD and the WorkItem Server run as uid 10001, as documented.** They had silently run as 1654; the first start after the upgrade gives their volumes to the new uid.
+- **Chats and runs made before the upgrade can no longer be run again.** Reading and deleting them still work.
 - **Coding agents no longer hold your Claude, Codex, Copilot or API credentials.** Open each Claude subscription provider's terminal once after upgrading.
+- **ILD and the WorkItem Server run as uid 10001, as documented.**
+- **The ILD image is smaller.**
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
 
 ### Fixed
 
-- **A preview starts again after ILD was stopped abruptly while it ran**, instead of failing because its old processes still held the ports.
-- **Settings says when ILD cannot reach the container engine, also on a rootful engine.**
-- **Closing a work item's terminal ends its shell** on Kubernetes too.
+- **A preview starts again after ILD was stopped abruptly while it ran.**
 - **An OpenCode reply no longer includes the text of files the agent wrote.**
 - **A work item created through the API keeps the AI provider override it was sent.**
-- **A work item whose run was cancelled offers Clean up → Done and → Backlog**, and those are buttons in the dialog's footer rather than behind ⋯.
-- **The browser, Java tools and declared forwards in a run or chat reach the network through the egress proxy again.**
+- **A work item whose run was cancelled offers Clean up → Done and → Backlog.**
+- **The browser and Java tools in a run or chat reach the network through the egress proxy again.**
 - **A work item's terminal reaches the network the way its run does.**
-- **Chats and runs whose container network was made by an earlier version reach the network again, and show in the Network Log.**
-- **Copilot runs and chats in containers and pods can reach the model gateway and trust its certificate.**
-- **Network mode `off` gives runs a direct network route again** (any host, port and protocol, with no proxy variables), in containers and pods as ADR-0019 says; Settings → Network shows which runs have one.
-- **Containers and pods no longer hang on a malformed exit status, and a retried start keeps the run's checkout.**
-- **Cmd nodes and previews in containers can install packages again.**
-- **The model gateway only forwards the model API calls each agent needs.**
-- **ILD no longer leaves its containers running while it is down.**
-- **A chat's container or pod is replaced when the runner image or ILD's settings change.**
-- **A Codex login no longer dies when its refreshed token cannot be saved, a request disconnects mid-refresh, or you sign in again during one**, and a failing refresh backs off instead of retrying on every request.
 
 ### Removed
 
-- **The agent user and its firewall (`AGENT_USER`, `NET_ADMIN`, network mode Off's group).** Agents now stay behind the egress proxy.
+- **The agent user and its firewall (`AGENT_USER`, `NET_ADMIN`).**
 - **The `WITH_NODE`, `WITH_DOTNET_SDK` and `WITH_CHROME` build arguments.**
 
 ## [0.23.0] - 2026-11-04

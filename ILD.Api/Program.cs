@@ -81,7 +81,10 @@ try
         builder.Services.AddSingleton(gatewayTls);
         builder.WebHost.ConfigureKestrel(kestrel => GatewayTlsListener.Configure(kestrel, gatewayTls));
         builder.WebHost.UseUrls(string.Join(';',
-            builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey) is { Length: > 0 } urls ? urls : "http://localhost:5000", GatewayTlsListener.Url(gatewayTls, gatewayBind)));
+            GatewayTlsListener.WebUrls(
+                builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey),
+                builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.HttpPortsKey)),
+            GatewayTlsListener.Url(gatewayTls, gatewayBind)));
     }
 
     var connectionString = Environment.GetEnvironmentVariable("ILD_DB_CONNECTION_STRING")

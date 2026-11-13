@@ -52,11 +52,11 @@ instance. Understanding the trust boundaries matters when deploying it:
   `ILD_ALLOWED_ORIGINS`. PostgreSQL is not published to the host by the compose stack.
 - **Agents run apart from ILD.** ILD's image runs every loop run, chat and provider
   sign-in in a container of its own, or a pod on Kubernetes
-  ([ADR-0036](docs/adr/0036-runs-always-in-containers.md)), on a network that reaches
-  only ILD: not PostgreSQL, the WorkItem Server or another run. The exception is network
-  mode `off`, which gives a run or chat a direct route to the internet and your LAN for
-  as long as a process launched in `off` is running
-  ([docs/configuration.md](docs/configuration.md#agent-network-limits)). The connection strings,
+  ([ADR-0036](docs/adr/0036-runs-always-in-containers.md)), on a network that by default
+  reaches only ILD: not PostgreSQL, the WorkItem Server or another run. That default has
+  three exceptions, each an operator's choice: network mode `off` gives runs a direct
+  route out, a declared forward reaches the one destination it names, and a protected
+  destination switched off in Settings → Network is no longer refused. The connection strings,
   `ILD_SECRET_KEY` and `ILD_SESSION_TOKEN_PEPPER` never reach an agent's environment, and
   the database passwords are per deployment rather than constants shipped in this
   repository. Add any new orchestrator secret to `ILD_AGENT_ENV_DENYLIST` or the built-in

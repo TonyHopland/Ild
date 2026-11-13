@@ -453,8 +453,7 @@ export default function NetworkSettings() {
     );
 
   const activeMode = MODES.find((m) => m.value === mode);
-  // Agents run in containers or pods (enforced) unless ILD itself runs under dotnet run.
-  const contained = status?.enforcement === "enforced";
+  const contained = status?.contained === true;
   const routes = status?.directRoutes ?? [];
   const filtering = mode === "whitelist" || mode === "blacklist";
   const inEffect = entries.filter(

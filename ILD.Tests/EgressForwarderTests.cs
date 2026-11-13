@@ -44,7 +44,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         services.AddScoped<INetworkForwardStore, NetworkForwardStore>();
         services.AddScoped<IAppSettingStore, AppSettingStore>();
         _services = services.BuildServiceProvider();
-        _policy = new EgressPolicy(_services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
+        _policy = new EgressPolicy(_services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System, protectedSource: new LoggingControllerTests.IsolatedSource());
     }
 
     public async ValueTask InitializeAsync()
@@ -208,6 +208,19 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     public async Task A_forward_whose_destination_resolves_to_loopback_is_refused_and_never_dialled()
     {
         _resolvedTo = IPAddress.Loopback;
+        var forward = await DeclareAsync();
+
+        using var client = await DialAsync(forward.LocalPort);
+        await AssertEndsPromptlyAsync(client);
+
+        var recorded = Assert.Single(await RecordedAsync(1));
+        Assert.Equal(NetworkDecision.Blocked, recorded.Decision);
+    }
+
+    [Fact]
+    public async Task A_forward_whose_destination_resolves_into_a_run_network_is_refused_and_never_dialled()
+    {
+        _resolvedTo = IPAddress.Parse("10.88.0.5");
         var forward = await DeclareAsync();
 
         using var client = await DialAsync(forward.LocalPort);

@@ -47,6 +47,7 @@ internal sealed class ExecPty : IPtyConnection
     {
         var exitedByItself = _exited.Task.IsCompletedSuccessfully && _exited.Task.Result != ExecRunProcess.ConnectionLostExitCode;
         _exec.Dispose();
+        _output.Dispose();
         if (_end is not null && !exitedByItself && Interlocked.Exchange(ref _ended, 1) == 0)
             _ = Task.Run(_end);
     }

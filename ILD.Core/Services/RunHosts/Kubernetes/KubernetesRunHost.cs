@@ -813,11 +813,12 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
         }
     }
 
-    // Selects every pod ILD makes, and has the two policy types with no rule to allow anything.
+    // Selects every pod ILD makes or every pod of the namespace, and has the two policy types with no rule to allow anything.
     private static bool IsDefaultDeny(V1NetworkPolicy policy)
         => policy.Spec is { } spec
-            && spec.PodSelector?.MatchLabels is { Count: 1 } labels && labels.TryGetValue(RunPaths.ManagedByLabel, out var value) && value == RunPaths.ManagedByValue
-            && spec.PodSelector.MatchExpressions is null or { Count: 0 }
+            && (spec.PodSelector?.MatchLabels is null or { Count: 0 }
+                || spec.PodSelector.MatchLabels is { Count: 1 } labels && labels.TryGetValue(RunPaths.ManagedByLabel, out var value) && value == RunPaths.ManagedByValue)
+            && spec.PodSelector?.MatchExpressions is null or { Count: 0 }
             && spec.PolicyTypes is { } types && types.Contains("Ingress") && types.Contains("Egress")
             && spec.Ingress is null or { Count: 0 } && spec.Egress is null or { Count: 0 };
 

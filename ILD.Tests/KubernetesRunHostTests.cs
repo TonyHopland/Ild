@@ -1514,6 +1514,18 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_default_deny_for_every_pod_of_the_namespace_counts_too()
+    {
+        _api.SeedPolicy("default-deny-all", new V1NetworkPolicySpec
+        {
+            PodSelector = new V1LabelSelector(),
+            PolicyTypes = ["Ingress", "Egress"],
+        });
+
+        Assert.Null(await _host.WarningAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task The_settings_warning_says_nothing_when_the_policies_cannot_be_listed()
     {
         await _api.DisposeAsync();

@@ -39,12 +39,12 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_NETWORK_PROBE_TARGET`                   | `host:port` the [enforcement probe](#agent-network-limits) tries to reach directly from inside a run (default `1.1.1.1:443`); set one ILD itself can reach                                                                                                                                                                                                |
 | `ILD_AGENT_ENV_DENYLIST`                     | Comma-separated names of extra environment variables of ILD that never reach an agent ([what an agent's environment holds](#what-an-agents-environment-holds))                                                                                                                                                                                            |
 | `ILD_GATEWAY_TLS_PORT`                       | Port of the model gateway's HTTPS listener, which the Copilot CLI needs (default `8442`; `0` switches it off, and Copilot runs then fail). Under `dotnet run` it listens on loopback; in a container or pod it listens on all interfaces, with a certificate that names the host of `ILD_API_URL`, since runs reach it there                              |
-| `DO_NOT_TRACK`                               | Asks the agent CLIs not to send telemetry; compose defaults it to `1`. Opting back in has caveats (see below)                                                                                                                                                                                                                                             |
+| `DO_NOT_TRACK`                               | Asks the agent CLIs not to send telemetry; compose sets it to `1` on ILD's container. It reaches agents only under `dotnet run`: run and chat containers and pods are not given it (see below)                                                                                                                                                            |
 | `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                                                                                                                                                                                                                                                            |
 | `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                                                                                                                                                                                                                                                                     |
 | `WORKITEM_LOG_LEVEL`                         | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)                                                                                                                                                                                                                                                                     |
-| `GIT_CONFIG`                                 | Path to the host `.gitconfig` mounted into the ILD container (default `~/.gitconfig`); it is ILD's own git identity and settings, not a run's: runs have no `.gitconfig`                                                                                                                                                                                  |
-| `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`       | The git author identity for agent commits, passed to every run and chat container or pod. Runs have no `.gitconfig`, so unset means git has no identity to give them                                                                                                                                                                                      |
+| `GIT_CONFIG`                                 | Path to the host `.gitconfig` mounted into the ILD container (default `~/.gitconfig`). Git in ILD's own container reads it; run containers and pods do not get it                                                                                                                                                                                         |
+| `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`       | The git author identity of agent commits, passed to every run and chat. Run containers and pods have no `.gitconfig`, so set these                                                                                                                                                                                                                        |
 | `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | Override the git committer identity for agent commits                                                                                                                                                                                                                                                                                                     |
 | `ASPNETCORE_URLS`                            | HTTP bind address for each .NET host (standard ASP.NET Core variable)                                                                                                                                                                                                                                                                                     |
 
@@ -66,7 +66,7 @@ Where a run's agent, commands and files live is not a setting ([ADR-0036](adr/00
 
 ## Kubernetes run host
 
-When ILD's image runs in a Kubernetes cluster, each **loop run** gets a pod of its own with a volume of its own, created when the run starts and deleted when it is cleaned up. The pod stays up while a Human node waits, so previews keep working. Chats, scheduled jobs included, share one pod. The provider sign-in terminal runs in a short-lived pod of its own (`ild-signin-<id>`, labelled `ild/role=signin`), with no NetworkPolicy so the CLI's OAuth flow can reach the provider; it is deleted when the terminal closes, and the sweep removes one left behind. ILD keeps the graph, the human nodes, the database and the UI; the pod only executes. Setup, RBAC and the example manifests are in [Kubernetes run host](deployment.md#kubernetes-run-host); the decisions are in [ADR-0033](adr/0033-kubernetes-run-host.md).
+When ILD's image runs in a Kubernetes cluster, each **loop run** gets a pod of its own with a volume of its own, created when the run starts and deleted when it is cleaned up. The pod stays up while a Human node waits, so previews keep working. Chats, scheduled jobs included, share one pod. The provider sign-in terminal runs in a short-lived pod of its own (`ild-signin-<id>`, labelled `ild/role=signin`), with a NetworkPolicy of its own that allows all egress and no ingress, so the CLI's OAuth flow can reach the provider; it is deleted when the terminal closes, and the sweep removes one left behind. ILD keeps the graph, the human nodes, the database and the UI; the pod only executes. Setup, RBAC and the example manifests are in [Kubernetes run host](deployment.md#kubernetes-run-host); the decisions are in [ADR-0033](adr/0033-kubernetes-run-host.md).
 
 Nothing in ILD is specific to a CNI or a storage backend. The cluster needs Kubernetes 1.30 or later (the exec API's v5 channel protocol, which can close a command's stdin) and a CNI that enforces NetworkPolicy for the isolation described below.
 
@@ -163,9 +163,10 @@ A run mounts the zones it has something in, and only its own repository's. A **c
 
 ## Agent telemetry
 
-Coding-agent CLIs report usage to their vendors unless `DO_NOT_TRACK` is set, so
-compose defaults it to `1` on the ILD container and the agent processes inherit
-it. It is a convention rather than an enforcement point: each CLI decides whether
+Coding-agent CLIs report usage to their vendors unless `DO_NOT_TRACK` is set.
+Under `dotnet run` the agent processes inherit it from ILD's environment. Compose
+defaults it to `1` on the ILD container, but run and chat containers and pods
+are not given it, so it does not reach the agents there. It is a convention rather than an enforcement point: each CLI decides whether
 to honour it, and some carry their own switch instead — the Pi adapter sets
 `PI_TELEMETRY=0` for that reason. What can leave the container at all is settled
 by the egress limits below, not by this.
@@ -787,16 +788,16 @@ in the database takes effect only after ILD restarts.
 
 Build args of the `Dockerfile`. `docker-compose.yml` passes only `NODE_VERSION`, `DOTNET_VERSION`, `NODE_RUNTIME_VERSION`, `NPM_VERSION` and `WITH_CERTS` from `.env` to the `ild` service; the `runner` service passes none, and `ILD_UID`, `ILD_GID` and `RUNNER_WITH_CHROME` need `--build-arg` or an edit to the compose file:
 
-| Build arg              | Purpose                                                                                  |
-| ---------------------- | ---------------------------------------------------------------------------------------- |
-| `WITH_CERTS`           | Import `.crt` or `.pem` files from `certs/` at build time                                |
-| `DOTNET_VERSION`       | Tag of the .NET SDK and ASP.NET runtime images ILD is built and runs on (default `10.0`) |
-| `NODE_VERSION`         | Tag of the Node image the frontend is built with (default `26-alpine`)                   |
-| `NODE_RUNTIME_VERSION` | Node in ILD's image, which installs the coding agents (default `26.13.0`; see below)     |
-| `NPM_VERSION`          | npm installed over the one Node ships (default `12.2.1`; see below)                      |
-| `ILD_UID` / `ILD_GID`  | uid and gid of the `ild` user ILD runs as (default 10001)                                |
-| `RUNNER_WITH_CHROME`   | `runner` target only: `0` builds the runner image without Chrome (default `1`)           |
-| `RUNNER_UID`           | `runner` target only: uid and gid of the user runs execute as (default 10001)            |
+| Build arg              | Purpose                                                                                                        |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `WITH_CERTS`           | Import `.crt` or `.pem` files from `certs/` into ILD's image at build time; the runner image does not get them |
+| `DOTNET_VERSION`       | Tag of the .NET SDK and ASP.NET runtime images ILD is built and runs on (default `10.0`)                       |
+| `NODE_VERSION`         | Tag of the Node image the frontend is built with (default `26-alpine`)                                         |
+| `NODE_RUNTIME_VERSION` | Node in ILD's image, which installs the coding agents (default `26.13.0`; see below)                           |
+| `NPM_VERSION`          | npm installed over the one Node ships (default `12.2.1`; see below)                                            |
+| `ILD_UID` / `ILD_GID`  | uid and gid of the `ild` user ILD runs as (default 10001)                                                      |
+| `RUNNER_WITH_CHROME`   | `runner` target only: `0` builds the runner image without Chrome (default `1`)                                 |
+| `RUNNER_UID`           | `runner` target only: uid and gid of the user runs execute as (default 10001)                                  |
 
 ILD's image is the ASP.NET runtime with git, Node and npm, and `gosu`. It has no
 .NET SDK, Chrome or second user: agents never run in it
@@ -819,13 +820,14 @@ passes to the CLI are kept. The same denylist governs what a Worktree Preview's
 processes inherit — see
 [What a preview process runs as](#what-a-preview-process-runs-as).
 
-Every process ILD launches for an agent — the agent CLI, command and verification
+Under `dotnet run`, every process ILD launches for an agent — the agent CLI, command and verification
 steps, preview services and their install steps — also gets
 `MSBUILDDISABLENODEREUSE=1`, `UseSharedCompilation=false` and
 `DOTNET_CLI_USE_MSBUILD_SERVER=0`, so a `dotnet build`
 leaves no MSBuild nodes or compiler server running after it returns. Builds are
 somewhat slower for it. A variable the launch already sets is kept, and a
-preview's own `env` overrides them.
+preview's own `env` overrides them. Run containers and pods are not given these
+variables.
 
 The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot, Codex) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume, with the image's
@@ -858,7 +860,7 @@ reach: a whitelist, a blacklist, a mode toggle (`off` / `monitor` /
 `whitelist` / `blacklist`, default `monitor`, stored as the `network.mode` app setting) and a log
 of every destination the agent asked for, each line with **Add to whitelist** /
 **Add to blacklist**. The same section declares **forwards**, the way anything
-speaking raw TCP gets out at all, from a run's container or pod too (a relay answers the loopback port there) —
+speaking raw TCP gets out at all —
 see [Reaching a database from a preview](#reaching-a-database-from-a-preview). See
 [ADR-0019](adr/0019-agent-egress-through-in-container-proxy.md) and
 [ADR-0020](adr/0020-raw-tcp-egress-through-declared-forwards.md) for the design.
@@ -942,12 +944,14 @@ connection string), the WorkItem Server (the host of its URL), on Kubernetes
 the Kubernetes API, and with containers the machine ILD's container runs on, where
 the ports the stack publishes answer: the gateways of ILD's networks and the engine's
 name for the host (`host.docker.internal`, `host.containers.internal`). That machine's
-other addresses are covered by the **private** destination below. While one is on, the proxy refuses a connection whose resolved
+other addresses, the LAN's, cannot be told from inside a container; a published
+port there is covered by the `private` destination, below. While one is on, the proxy refuses a connection whose resolved
 addresses match it in every proxied mode, and a whitelist entry does not override
 it; the Network Log records it as `protected: <name>` with a link to the switch.
 Switching one off asks for confirmation, warns while it is off, and applies to the
 next connection. A declared forward is exempt (not from the loopback rule), since
-declaring it is your decision, and is judged by the mode and lists. The **private** and **link-local** destinations (see below) are ranges rather than hosts, and switch the same way.
+declaring it is your decision, and is judged by the mode and lists. Private and
+link-local ranges are protected destinations too: see below.
 
 **Names.** Run and chat environments have no working DNS in a proxied mode: ILD's own name comes from
 the container's hosts file (or the pod's `hostAliases`), and every other name is
@@ -972,13 +976,13 @@ still admits only run, chat and tools pods on that port, as a second layer, and 
 A run can never reach another run through the proxy: the container subnet pool and the
 IPs of ILD's pods are refused in every mode.
 
-LAN and private hosts (self-hosted git, a local model server) go through the proxy
-like any other host and the Network Log records them.
-On Container and Kubernetes run hosts the **private** protected destination (`10.0.0.0/8`, `172.16.0.0/12`,
-`192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`: your LAN, pod and service networks, storage exports) is on by
-default, so the proxy refuses them in every proxied mode and a whitelist entry does not override it, until you
-switch it off in Settings → Network or declare a forward to the host you need. A blacklist entry blocks only
-the names and literals it lists, not other names that resolve to the same address. Link-local and cloud metadata addresses
+LAN and private hosts (self-hosted git, a local model server) are the `private`
+protected destination: in a container or pod the proxy refuses them by default in every
+proxied mode, and the Network Log records the refusal. Reach one through a declared
+forward, or switch `private` off in Settings → Network; the mode and lists then judge
+them like any other host, and only `whitelist` keeps agents off your LAN,
+since a blacklist entry blocks only the names and literals it lists, not other
+names that resolve to the same address. Link-local and cloud metadata addresses
 (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::254`) are a protected destination, refused by
 default and switchable in Settings → Network like the others. The proxy resolves each host once and
 connects to the addresses it resolved.
@@ -1013,9 +1017,9 @@ to run tests directly should clear `NODE_USE_ENV_PROXY` too. Two consequences:
   that matters — a database, a cache, a mail server — see
   [Reaching a database from a preview](#reaching-a-database-from-a-preview).
 - In a container or pod `ILD_API_URL` is not a loopback address (`http://ild:8080`
-  under compose, a Service name on Kubernetes), so the agent's tool calls back
-  into ILD reach it directly, not through the proxy. ILD's host is on `NO_PROXY` there, so those calls go direct over the run's
-  network and a `whitelist` needs no entry for it.
+  under compose, a Service name on Kubernetes). The agent's tool calls back into
+  ILD go directly over the run's network, not through the proxy: ILD's host is on
+  `NO_PROXY`, so `whitelist` mode needs no entry for it.
 
 The log is swept, not kept forever: an entry older than
 `network.logRetentionDays` (default `30`, capped at 3650, `0` keeps the log

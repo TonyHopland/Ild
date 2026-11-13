@@ -1646,6 +1646,8 @@ export interface NetworkProtectedDestination {
 export interface NetworkStatus {
   enforcement: "enforced" | "advisory" | "unverified";
   reason: string;
+  /** Whether runs and chats sit in containers or pods, as opposed to on ILD's own machine. */
+  contained: boolean;
   proxyEnabled: boolean;
   proxyPort: number | null;
   /** The runs (and the chats' shared container) that have a direct route to the network now, which network mode Off gives and a later launch in another mode takes away. */

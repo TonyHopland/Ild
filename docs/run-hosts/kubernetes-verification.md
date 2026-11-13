@@ -33,7 +33,9 @@ The unit and integration tests run against a fake Kubernetes API. They cannot sh
 
    If the `ild` namespace denies ingress by default, allow pods labelled `app.kubernetes.io/managed-by=ild` from `ild-runs` to reach ports 8080 and 3128 of ILD's pods, and 8442 (the model gateway's TLS listener, which the Copilot CLI needs).
 
-4. Restart ILD and read its log. Expected: no startup failure; a warning only if the storage class's `reclaimPolicy` is not `Delete`. Check the class: `kubectl get storageclass ild-run-scratch -o jsonpath='{.reclaimPolicy}'` prints `Delete`.
+   If the `ild` namespace denies ingress by default, allow pods labelled `app.kubernetes.io/managed-by=ild` from `ild-runs` to reach ports 8080, 3128 and 8442 (the gateway's HTTPS port) of ILD's pods; [`ild-ingress-networkpolicy.yaml`](../kubernetes/ild-ingress-networkpolicy.yaml) is an example.
+
+4. Restart ILD and read its log. Expected: no startup failure; a warning only if the storage class's `reclaimPolicy` is not `Delete`. **Settings > General** warns about a missing default deny in the run namespace until step 4b applies one. Check the class: `kubectl get storageclass ild-run-scratch -o jsonpath='{.reclaimPolicy}'` prints `Delete`.
 
 ## 2. A full Develop run
 
@@ -43,6 +45,7 @@ Start a Develop loop on a small work item. Below, `<id>` is the run's id **witho
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Run reaches its Start node | One ConfigMap, PVC, NetworkPolicy and Pod, all named `ild-run-<run id>` and labelled `ild/instance` and `ild/run`. The PVC, NetworkPolicy and Pod have an owner reference to the ConfigMap: `kubectl -n ild-runs get pod ild-run-<id> -o jsonpath='{.metadata.ownerReferences[0].kind}'` prints `ConfigMap` |
 | Pod comes up               | `Running` and Ready within the pull time; `kubectl -n ild-runs get pod -o wide` shows pods of different runs on different nodes when more than one runs                                                                                                                                                     |
+| Toolchains                 | The first run installs the agent and the toolchains its repository needs into the `ild-tools` claim before the agent turns; a later run of the same repository starts without installing                                                                                                                    |
 | Agent turns                | The agent node completes; the run's event log shows the agent's output as it streams. `kubectl -n ild-runs exec ild-run-<id> -- ls /ild-run/<id>/repo` shows the checkout                                                                                                                                   |
 | Human reply                | The run waits at the Human node; the pod stays `Running`. Answer in the UI and the next node runs in the same pod                                                                                                                                                                                           |
 | Preview                    | Start the preview from the work item's Preview tab; the preview URL loads through the wildcard proxy                                                                                                                                                                                                        |
