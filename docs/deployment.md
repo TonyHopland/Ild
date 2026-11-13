@@ -63,7 +63,15 @@ A stack from before agents always ran in containers needs `ILD_CONTAINER_SOCKET_
 in `.env` (and `ILD_CONTAINER_SOCKET_GRANT=1` for a socket of the host's `root` group),
 and is started with `docker-compose.yml`. On its first start ILD's entrypoint gives ILD
 back the files the old agent user left in `/data` and `/worktrees`, which can take a
-while on a large volume.
+while on a large volume. After that upgrade:
+
+- Runs and chats made before it can be read and deleted but not run again: a new turn,
+  a resume, a retry or a terminal on one is refused. Start a new one.
+- Open the terminal of each Claude subscription provider once.
+- The old `ild-tools` volume is never mounted again and can be deleted; the
+  [toolchain store](configuration.md#run-toolchains) installs into new volumes.
+- On Kubernetes, apply the RBAC and create the tools claim from
+  [Kubernetes run host](#kubernetes-run-host) before starting the new version.
 
 The release that stores saved AI sessions in compressed chunks converts the existing
 ones in the background after startup, one at a time; the app is usable meanwhile, and a
@@ -249,7 +257,7 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
 
 - Kubernetes 1.30 or later, and a CNI that enforces NetworkPolicy. Without enforcement the pods start and work, but nothing keeps them off the rest of the cluster.
 - A StorageClass that can provision `ReadWriteOnce` volumes: the cluster's default class, or the one you name in `ILD_K8S_STORAGE_CLASS`. Prefer a class with `reclaimPolicy: Delete`; ILD warns at startup if it is not.
-- ILD's pods reachable from the run namespace at the Service in `ILD_API_URL`, on its HTTP port, on the egress proxy port (`ILD_NETWORK_PROXY_PORT`) and, for Copilot, on the gateway's HTTPS port (`ILD_GATEWAY_TLS_PORT`, default `8442`), so the Service must expose that port too. If the namespace ILD runs in denies ingress by default, allow the run pods (label `app.kubernetes.io/managed-by=ild`, in the run namespace) to those ports.
+- ILD's pods reachable from the run namespace at the Service in `ILD_API_URL`, on its HTTP port, on the egress proxy port (`ILD_NETWORK_PROXY_PORT`) and, for Copilot, on the gateway's HTTPS port (`ILD_GATEWAY_TLS_PORT`, default `8442`), so the Service must expose that port too. Each Service port must be the same number as the port ILD's pods listen on (`8080` → `8080`, not `80` → `8080`): a run's NetworkPolicy allows the port in `ILD_API_URL`, and a policy is applied to the pod's port. If the namespace ILD runs in denies ingress by default, allow the run pods (label `app.kubernetes.io/managed-by=ild`, in the run namespace) to those ports.
 
 ### Setup
 
@@ -360,7 +368,7 @@ On a Podman machine, compose talks to whichever of the two engines the machine f
 | `ild-config`    | The provider logins, ILD's alone                                                                                                                                                 |
 | `workitem-data` | Additional WorkItem Server runtime files under `/data`                                                                                                                           |
 
-Your host `~/.gitconfig` is mounted read-only into the ILD container, so agent commits inherit your local name and email by default. Point `GIT_CONFIG` at a different file, or override just the identity with `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (and the matching `GIT_COMMITTER_*` vars) in your `.env` — git reads those natively and they take precedence over the mounted file.
+Agents commit in the run's container, which has no `.gitconfig`: set `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (and the matching `GIT_COMMITTER_*` vars) in your `.env`, and ILD passes them to every run and chat. Your host `~/.gitconfig` (or the file `GIT_CONFIG` names) is mounted read-only into the ILD container and is read only by git there, not by agents.
 
 For host bind mounts instead of named volumes:
 

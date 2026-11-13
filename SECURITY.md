@@ -31,7 +31,9 @@ instance. Understanding the trust boundaries matters when deploying it:
   write the database without also holding the key. Without it, running from source, the
   hash is an unkeyed SHA-256 and anyone who can write the sessions table can mint a
   sign-in; startup warns when this is the case. All API and SignalR endpoints require
-  authentication except health, metrics, login, and the runtime log-level endpoint.
+  authentication except health, metrics, login, the runtime log-level endpoint and the
+  webhook routes, which take no ILD token and admit a caller on a provider's webhook
+  secret alone.
 - **The application executes commands and external agent CLIs by design.** `Cmd` nodes
   and preview commands in loop templates run shell commands inside per-item git worktrees,
   in the run's container or pod. Anyone who can author loop templates (i.e. the
@@ -47,8 +49,11 @@ instance. Understanding the trust boundaries matters when deploying it:
   `ILD_ALLOWED_ORIGINS`. PostgreSQL is not published to the host by the compose stack.
 - **Agents run apart from ILD.** ILD's image runs every loop run, chat and provider
   sign-in in a container of its own, or a pod on Kubernetes
-  ([ADR-0036](docs/adr/0036-runs-always-in-containers.md)), on a network that reaches
-  only ILD: not PostgreSQL, the WorkItem Server or another run. The connection strings,
+  ([ADR-0036](docs/adr/0036-runs-always-in-containers.md)), on a network that by default
+  reaches only ILD: not PostgreSQL, the WorkItem Server or another run. That default has
+  three exceptions, each an operator's choice: network mode `off` gives runs a direct
+  route out, a declared forward reaches the one destination it names, and a protected
+  destination switched off in Settings → Network is no longer refused. The connection strings,
   `ILD_SECRET_KEY` and `ILD_SESSION_TOKEN_PEPPER` never reach an agent's environment, and
   the database passwords are per deployment rather than constants shipped in this
   repository. Add any new orchestrator secret to `ILD_AGENT_ENV_DENYLIST` or the built-in

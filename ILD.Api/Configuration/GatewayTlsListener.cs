@@ -13,6 +13,17 @@ internal static class GatewayTlsListener
     public static string Url(GatewayTlsEndpoint tls, System.Net.IPAddress bindAddress)
         => $"https://{bindAddress}:{tls.Port}";
 
+    /// <summary>
+    /// The addresses Kestrel would have listened on by itself, which naming the gateway's listener replaces:
+    /// <c>ASPNETCORE_URLS</c>, else every port of <c>ASPNETCORE_HTTP_PORTS</c>, else Kestrel's default.
+    /// </summary>
+    public static string WebUrls(string? urls, string? httpPorts)
+    {
+        if (!string.IsNullOrWhiteSpace(urls)) return urls;
+        var ports = (httpPorts ?? string.Empty).Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return ports.Length > 0 ? string.Join(';', ports.Select(port => $"http://*:{port}")) : "http://localhost:5000";
+    }
+
     public static void Configure(KestrelServerOptions kestrel, GatewayTlsEndpoint tls)
         => kestrel.ConfigureEndpointDefaults(listen =>
         {

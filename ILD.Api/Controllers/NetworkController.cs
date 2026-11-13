@@ -101,6 +101,7 @@ public class NetworkController : ControllerBase
         {
             enforcement = _enforcement.EnforcementFor(_runHost.Kind),
             reason = _enforcement.ReasonFor(_runHost.Kind),
+            contained = _runHost.Kind != RunHostKind.Local,
             proxyEnabled = _enforcement.ProxyEnabled,
             proxyPort = _enforcement.ProxyPort,
             directRoutes = (await DirectRoutesAsync(ct)).Select(r => new { ownerId = r.OwnerId, chat = r.Chat }),

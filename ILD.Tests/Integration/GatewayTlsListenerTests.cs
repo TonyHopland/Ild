@@ -53,6 +53,14 @@ public class GatewayTlsListenerTests : IDisposable
         Assert.Equal("http", await client.GetStringAsync($"http://127.0.0.1:{plainPort}/", TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData("http://+:8081", "8080", "http://+:8081")]
+    [InlineData(null, "8080", "http://*:8080")]
+    [InlineData("", "8080;8081", "http://*:8080;http://*:8081")]
+    [InlineData(null, null, "http://localhost:5000")]
+    public void The_web_addresses_stay_what_Kestrel_would_have_listened_on(string? urls, string? httpPorts, string expected)
+        => Assert.Equal(expected, GatewayTlsListener.WebUrls(urls, httpPorts));
+
     [Fact]
     public void The_listener_url_names_the_bind_address_and_the_gateway_port()
     {

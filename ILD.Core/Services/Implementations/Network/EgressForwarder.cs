@@ -365,7 +365,7 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
                     return;
                 }
 
-                if (EgressDestinationGuard.Check(addresses, [], exemptFromProtections: true) is { } refusal)
+                if (snapshot.CheckAddresses(addresses, isForward: true) is { } refusal)
                 {
                     _log.Record(forward.Host, forward.Port, NetworkDecision.Blocked, aiProviderId: null, refusal.Reason);
                     return;

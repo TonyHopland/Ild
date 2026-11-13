@@ -53,6 +53,47 @@ public sealed class ExecStatusFailureTests
         Assert.Equal(ExecRunProcess.ConnectionLostExitCode, pty.ExitCode);
     }
 
+    private sealed class EndlessExec : IExecStream
+    {
+        private readonly CancellationTokenSource _disposed = new();
+        public Stream Stdout { get; }
+        public Stream? Stderr => null;
+        public Task<int?> Status { get; } = Task.FromResult<int?>(null);
+        public TaskCompletionSource Backlogged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public EndlessExec() => Stdout = new Endless(_disposed.Token, Backlogged);
+        public Task WriteStdinAsync(ReadOnlyMemory<byte> data, CancellationToken ct) => Task.CompletedTask;
+        public Task CloseStdinAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task ResizeAsync(int cols, int rows, CancellationToken ct = default) => Task.CompletedTask;
+        public void Dispose() => _disposed.Cancel();
+
+        private sealed class Endless(CancellationToken disposed, TaskCompletionSource backlogged) : MemoryStream
+        {
+            private int _reads;
+
+            public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                if (disposed.IsCancellationRequested) return ValueTask.FromResult(0);
+                if (++_reads > ByteChannelStream.Capacity) backlogged.TrySetResult();
+                buffer.Span[0] = (byte)'x';
+                return ValueTask.FromResult(1);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Closing_a_terminal_that_prints_faster_than_it_is_read_still_ends_it()
+    {
+        var raised = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exec = new EndlessExec();
+        var pty = new ExecPty(exec);
+        pty.ProcessExited += (_, e) => raised.TrySetResult(e.ExitCode);
+        await exec.Backlogged.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        pty.Dispose();
+
+        await raised.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public async Task A_status_that_is_not_json_reads_as_no_status()
     {

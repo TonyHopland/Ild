@@ -441,6 +441,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
                         AllowPrivilegeEscalation = false,
                         Capabilities = new V1Capabilities { Drop = ["ALL"] },
                     },
+                    Resources = Requests(),
                     VolumeMounts = [new V1VolumeMount { Name = ToolsVolume, MountPath = "/claim" }],
                 },
             ],

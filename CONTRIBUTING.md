@@ -12,7 +12,8 @@ full setup, and **[docs/architecture.md](docs/architecture.md)** for how the pie
 together.
 
 ```bash
-cp .env.example .env                            # then fill in the required secrets
+cp .env.example .env                            # then fill in the required secrets and ILD_CONTAINER_SOCKET_HOST
+# uncomment the `ports` line on the postgres service in docker-compose.yml
 docker compose up postgres workitem-server      # infrastructure
 set -a; . ./.env; set +a                        # compose reads .env; your shell does not
 export ILD_PASSWORD=letmein

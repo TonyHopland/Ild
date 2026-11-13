@@ -435,8 +435,15 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         finally
         {
             _execNames.TryRemove(installer, out _);
-            await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true", null, CancellationToken.None));
-            await RemoveNetworkAsync(Escaped(name), CancellationToken.None);
+            try
+            {
+                await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true", null, CancellationToken.None));
+                await RemoveNetworkAsync(Escaped(name), CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
+            {
+                Logger?.LogWarning(ex, "Could not remove the toolchain installer {Name}; the next sweep removes it", name);
+            }
         }
     }
 

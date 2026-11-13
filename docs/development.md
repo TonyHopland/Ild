@@ -8,7 +8,9 @@ docker compose up postgres workitem-server
 ```
 
 Compose refuses to start until `.env` sets `POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`,
-`WORKITEM_DB_PASSWORD`, `WORKITEM_API_KEYS` and `ILD_SESSION_TOKEN_PEPPER`. The two
+`WORKITEM_DB_PASSWORD`, `WORKITEM_API_KEYS`, `ILD_SESSION_TOKEN_PEPPER` and
+`ILD_CONTAINER_SOCKET_HOST` (compose checks it even when the `ild` service is not
+started; any path does while ILD runs from the host). The two
 database passwords are written into the `ild_core` and `ild_workitems` roles the first
 time the `postgres-data` volume is created, so the commands below reuse them rather
 than naming a constant. Compose reads `.env` on its own, but your shell does not, so

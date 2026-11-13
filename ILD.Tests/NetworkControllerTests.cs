@@ -528,6 +528,7 @@ public sealed class NetworkControllerTests : IDisposable
 
         Assert.Equal(enforcement, status["enforcement"].ToString());
         Assert.Equal(Proxied.ReasonFor(kind), status["reason"].ToString());
+        Assert.Equal(kind != RunHostKind.Local, bool.Parse(status["contained"].ToString()!));
         Assert.Equal("True", status["proxyEnabled"].ToString());
         Assert.Equal("3128", status["proxyPort"].ToString());
         Assert.False(status.ContainsKey("offAvailable"));

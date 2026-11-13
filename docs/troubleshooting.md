@@ -14,7 +14,7 @@ The WorkItem Server reclaims stale running items when heartbeats stop arriving. 
 
 **Webhook updates are not reaching ILD**
 
-The webhook route is not an anonymous bypass. Configure the expected bearer auth and HMAC settings together; a missing or mismatched secret causes rejection.
+The webhook routes take no ILD token: the git host proves itself with the provider's webhook secret alone, and a missing or mismatched secret is a 401. Set the same secret on the remote provider in ILD and in the git host's webhook settings, and remove any `?access_token=` from the webhook URL.
 
 **Preview URLs are not reachable from the host**
 

@@ -73,7 +73,7 @@ Use a work item on a repository with a `package.json` and an `.nvmrc` (say `20`)
 
 1. With a run at a Human node, kill ILD hard: `kill -9 <ild pid>` (or `podman kill ild`).
 2. The objects remain: the `podman ps -a`, `volume ls` and `network ls` listings still show the run's three objects.
-3. Restart ILD **with that run finished or removed** (cancel the run first, or delete its row), or with a different run set. Expected within the first sweep (startup, or `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`): the run's container, volume and network are gone, and ILD's log says `Removed the objects of run <run>`. `podman inspect ild --format '{{json .NetworkSettings.Networks}}'` no longer lists `ild-run-<run>`.
+3. Restart ILD **with that run finished or removed** (cancel the run first, or delete its row), or with a different run set. Expected within the first sweep (startup, or `ILD_CONTAINER_SWEEP_INTERVAL_MINUTES`): the run's container, volume and network are gone, and ILD's log says `Removed the leftover <run>, which is finished or gone`. `podman inspect ild --format '{{json .NetworkSettings.Networks}}'` no longer lists `ild-run-<run>`.
 4. A run that is still unfinished (including a failed one that can be retried) keeps its objects across the restart. This is intended.
 5. Objects of another instance survive: `podman run -d --label app.kubernetes.io/managed-by=ild --label ild/instance=other --label ild/run=00000000000000000000000000000001 --name other-probe alpine sleep 600`, restart ILD, and the probe is still there. Remove it afterwards.
 
