@@ -469,6 +469,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         SupportedTools = AiToolCatalog.DefaultTools,
         EmptyToolSelectionMeansNone = false,
         SupportsNoTools = true,
+        SupportsSessionResume = true,
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags, ModelHasShortFlag = true },
     };
 

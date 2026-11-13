@@ -2,6 +2,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 
 namespace ILD.Tests;
@@ -206,6 +207,29 @@ public class LoopEngineThrottleParkTests
         // Still throttled, so the run is back where it started — which is what
         // makes the re-park the next attempt rather than a new situation.
         Assert.Equal(HaltReason.Throttled, run.HaltReason);
+    }
+
+    [Fact]
+    public async Task An_automatic_resume_continues_the_captured_agent_session_rather_than_restarting_the_node()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("ai", NodeType.AI, "Coder");
+        var agent = new ScriptedExecutor(NodeType.AI,
+                new NodeOutcome.NodeStarting("do the work"),
+                new NodeOutcome.Interrupted(ParkReason, ProviderNotice))
+            .Then(new NodeOutcome.NodeStarting("continue"), new NodeOutcome.Terminal("done"));
+        h.Registry.Register(agent);
+        h.SeedRun("ai");
+        await h.RunAsync();
+        // The adapter reported the session mid-stream, before the throttle.
+        h.Db.Context.LoopRuns.Where(r => r.Id == h.RunId).ExecuteUpdate(s => s.SetProperty(r => r.CurrentAiSessionId, "sess-throttled"));
+        foreach (var entry in h.Db.Context.ChangeTracker.Entries<LoopRun>().ToList()) entry.Reload();
+
+        await h.Engine.ResumeFromHaltAsync(h.RunId, "auto", automatic: true);
+        await h.WaitUntilIdleAsync();
+
+        Assert.Equal("sess-throttled", agent.Seen[1].SessionId);
+        Assert.False(string.IsNullOrEmpty(agent.Seen[1].SteeringNote));
     }
 
     [Fact]

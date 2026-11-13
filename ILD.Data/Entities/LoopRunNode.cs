@@ -55,6 +55,10 @@ public class LoopRunNode
     // tokens/cost per provider. Null for non-AI nodes.
     public string? AiProvider { get; set; }
 
+    // The agent CLI's session id for this visit, written as soon as the adapter
+    // reports it (so it survives a non-zero exit). What Resume continues from.
+    public string? AiSessionId { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     [ForeignKey(nameof(LoopRunId))]

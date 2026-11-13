@@ -327,6 +327,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         SupportedTools = AiToolCatalog.IldOnlyTools,
         EmptyToolSelectionMeansNone = true,
         SupportsNoTools = false,
+        SupportsSessionResume = true,
         ExtraCliArgs = new()
         {
             ReservedFlags = ReservedCliFlags,

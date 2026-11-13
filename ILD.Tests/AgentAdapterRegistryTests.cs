@@ -121,6 +121,7 @@ public class AgentAdapterRegistryTests
         SupportedTools = [new AiToolDefinition("ild", "Ild", "ILD tools.")],
         EmptyToolSelectionMeansNone = true,
         SupportsNoTools = false,
+        SupportsSessionResume = false,
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ["--json"], ModelHasShortFlag = true },
     };
 

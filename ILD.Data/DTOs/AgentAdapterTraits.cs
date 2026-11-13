@@ -33,6 +33,12 @@ public sealed record AgentAdapterTraits
     /// </summary>
     public required bool SupportsNoTools { get; init; }
 
+    /// <summary>
+    /// Whether the CLI can continue a session by id and the adapter reports that
+    /// id. Gates the Resume action on a failed AI node.
+    /// </summary>
+    public required bool SupportsSessionResume { get; init; }
+
     /// <summary>What the "Extra CLI arguments" value may not contain for this type.</summary>
     public required ExtraCliArgsRules ExtraCliArgs { get; init; }
 
@@ -46,6 +52,7 @@ public sealed record AgentAdapterTraits
         SupportedTools = [],
         EmptyToolSelectionMeansNone = false,
         SupportsNoTools = true,
+        SupportsSessionResume = false,
         ExtraCliArgs = ExtraCliArgsRules.None,
     };
 }

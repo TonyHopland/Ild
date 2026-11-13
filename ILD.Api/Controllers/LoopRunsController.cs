@@ -256,8 +256,27 @@ public class LoopRunsController : ControllerBase
                 createdAt = v.CreatedAt,
                 updatedAt = v.UpdatedAt,
             }).ToList(),
-            nodes = runNodes.Select(LoopRunNodeResponse.From).ToList(),
+            nodes = await ResumeAwareNodesAsync(guid, runNodes),
         });
+    }
+
+    private async Task<List<LoopRunNodeResponse>> ResumeAwareNodesAsync(Guid runId, IReadOnlyList<ILD.Data.Entities.LoopRunNode> runNodes)
+    {
+        var lastId = runNodes.OrderBy(rn => rn.CreatedAt).LastOrDefault()?.Id;
+        var result = new List<LoopRunNodeResponse>(runNodes.Count);
+        foreach (var rn in runNodes)
+        {
+            var response = LoopRunNodeResponse.From(rn);
+            if (rn.LoopNode?.NodeType == NodeType.AI && rn.Status is LoopRunNodeStatus.Failed or LoopRunNodeStatus.Interrupted)
+            {
+                var reason = rn.Id == lastId
+                    ? await _loopEngine.GetResumeUnavailableReasonAsync(runId, rn.Id)
+                    : "not the attempt the run is parked on";
+                response = response with { CanResume = reason is null, ResumeUnavailableReason = reason };
+            }
+            result.Add(response);
+        }
+        return result;
     }
 
     // The PR snapshot is stored as a JSON string; surface it as a JSON value so
@@ -426,6 +445,28 @@ public class LoopRunsController : ControllerBase
         try
         {
             await _loopEngine.RetryFromNodeAsync(runGuid, nodeGuid);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        return Ok();
+    }
+
+    /// <summary>Like retry, but continues the failed AI attempt's agent session instead of starting a fresh one.</summary>
+    [HttpPost("{id}/nodes/{runNodeId}/resume")]
+    public async Task<IActionResult> ResumeFromNode(string id, string runNodeId)
+    {
+        if (!Guid.TryParse(id, out var runGuid))
+            return BadRequest(new { error = "Invalid run GUID" });
+        if (!Guid.TryParse(runNodeId, out var nodeGuid))
+            return BadRequest(new { error = "Invalid run node GUID" });
+
+        if (await PredatesContainersAsync(runGuid) is { } refusal) return refusal;
+
+        try
+        {
+            await _loopEngine.ResumeFromNodeAsync(runGuid, nodeGuid);
         }
         catch (InvalidOperationException ex)
         {

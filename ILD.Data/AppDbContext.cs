@@ -106,6 +106,12 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<LoopRun>()
             .Property(r => r.PrPushedCommit)
             .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
+        // The visit's agent session id is written mid-stream by a targeted update from
+        // the adapter's own scope; the tracked row the engine completes the visit with
+        // was loaded before it and must not write its null back.
+        modelBuilder.Entity<LoopRunNode>()
+            .Property(r => r.AiSessionId)
+            .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
     }
 
     /// <summary>

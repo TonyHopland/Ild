@@ -151,6 +151,16 @@ public interface ILoopEngine
     Task RetryFromNodeAsync(Guid runId, Guid runNodeId);
 
     /// <summary>
+    /// Like <see cref="RetryFromNodeAsync"/> for a failed or interrupted AI attempt, but
+    /// continues that attempt's agent session with a short continuation prompt instead of
+    /// starting a fresh one. Refused when <see cref="GetResumeUnavailableReasonAsync"/> names a reason.
+    /// </summary>
+    Task ResumeFromNodeAsync(Guid runId, Guid runNodeId);
+
+    /// <summary>Why the attempt cannot be resumed from its agent session (shown with the disabled button), or null when it can.</summary>
+    Task<string?> GetResumeUnavailableReasonAsync(Guid runId, Guid runNodeId);
+
+    /// <summary>
     /// Execute the template's Cleanup node once (out-of-band), regardless of
     /// the current node, then leave the run state untouched. Used when a run
     /// is abandoned but external resources (worktrees, etc.) still need

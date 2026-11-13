@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Open in VS Code on a work item's Terminal tab opens the run's worktree in VS Code, attached to its Docker or Podman container.**
 - **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux.
 - **On Kubernetes, Settings warns when the run namespace has no default-deny NetworkPolicy.**
+- **A failed or interrupted AI step can be resumed, not only retried.** Resume continues the agent's earlier session where it left off; Retry starts the step over.
 
 ### Changed
 

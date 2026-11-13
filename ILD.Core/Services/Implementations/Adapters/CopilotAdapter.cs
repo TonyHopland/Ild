@@ -246,6 +246,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         SupportedTools = AiToolCatalog.IldOnlyTools,
         EmptyToolSelectionMeansNone = true,
         SupportsNoTools = false,
+        SupportsSessionResume = false,
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
     };
 

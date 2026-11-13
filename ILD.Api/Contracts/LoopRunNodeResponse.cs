@@ -30,7 +30,12 @@ public sealed record LoopRunNodeResponse(
     // The edge the engine traversed to reach this node, so the run timeline can
     // label the routing by the edge's name (e.g. "Respond") rather than guessing
     // from node status. Null for the run's first node.
-    Guid? IncomingEdgeId)
+    Guid? IncomingEdgeId,
+    // Whether Resume (continue the attempt's agent session) is offered for this attempt,
+    // and why not when it is not. Only filled in on the run-detail endpoint, for a
+    // failed or interrupted AI attempt.
+    bool CanResume = false,
+    string? ResumeUnavailableReason = null)
 {
     public static LoopRunNodeResponse From(LoopRunNode rn) => new(
         rn.Id,

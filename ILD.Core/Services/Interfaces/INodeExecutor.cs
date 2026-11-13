@@ -145,6 +145,12 @@ public abstract record NodeOutcome
     public sealed record SessionBound(string SessionPlaceholder, string SessionId) : NodeOutcome;
 
     /// <summary>
+    /// A resume could not continue the agent session, so the node ran from the
+    /// beginning. The node keeps running; the engine only records it.
+    /// </summary>
+    public sealed record ResumeFellBack(string Reason) : NodeOutcome;
+
+    /// <summary>
     /// Set Variable node rendered its assignments. The engine writes them to the
     /// run's loop variables, in order and in one transaction, while the node's
     /// execution is running; if any write fails, none is written and the node fails.
