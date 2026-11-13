@@ -30,6 +30,8 @@ import type {
   ChatTurnProgressPayload,
   ChatTurnStartedPayload,
   ChatTurnCompletedPayload,
+  ChatPreparedPayload,
+  ChatPreparationFailedPayload,
   ChatLoopUpdatePayload,
   NetworkPolicyChangedPayload,
   NetworkLogAppendedPayload,
@@ -71,6 +73,8 @@ export interface SignalREventPayloads {
   ChatTurnProgress: ChatTurnProgressPayload;
   ChatTurnStarted: ChatTurnStartedPayload;
   ChatTurnCompleted: ChatTurnCompletedPayload;
+  ChatPrepared: ChatPreparedPayload;
+  ChatPreparationFailed: ChatPreparationFailedPayload;
   ChatLoopUpdate: ChatLoopUpdatePayload;
   NetworkPolicyChanged: NetworkPolicyChangedPayload;
   NetworkLogAppended: NetworkLogAppendedPayload;

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -38,6 +39,19 @@ public sealed class IldMcpServerEnvironmentTests : IDisposable
         Assert.Equal("http://api.invalid:1234", env["ILD_API_URL"]);
         Assert.Equal("supplied-token", env["ILD_API_TOKEN"]);
         Assert.Equal(runId.ToString(), env["ILD_LOOP_RUN_ID"]);
+    }
+
+    [Fact]
+    public void A_launch_gets_its_own_token_and_never_the_one_in_the_process_environment()
+    {
+        var inner = new TestProcessEnvironment { { "ILD_API_TOKEN", "process-wide" } };
+        var host = new Moq.Mock<ILD.Core.Services.RunHosts.IRunHost>().Object;
+
+        var launch = IldMcpServer.BuildEnvironment(Run(Guid.NewGuid()), environment: new RunFacingEnvironment(inner, host, "/tmp", "launch-token"));
+        var tokenless = IldMcpServer.BuildEnvironment(Run(Guid.NewGuid()), environment: new RunFacingEnvironment(inner, host, "/tmp"));
+
+        Assert.Equal("launch-token", launch["ILD_API_TOKEN"]);
+        Assert.False(tokenless.ContainsKey("ILD_API_TOKEN"));
     }
 
     [Theory]
@@ -84,14 +98,5 @@ public sealed class IldMcpServerEnvironmentTests : IDisposable
 
         Assert.False(File.Exists(path));
         Assert.True(File.Exists(other));
-    }
-
-    [Fact]
-    public void A_supplied_agent_user_without_a_read_root_refuses_the_default_root()
-    {
-        var environment = new TestProcessEnvironment { { AgentIsolation.AgentUserEnvVar, "agent" } };
-
-        Assert.Throws<InvalidOperationException>(() =>
-            IldMcpServer.TryWriteConfigFile("test", Guid.NewGuid(), new { }, NullLogger.Instance, environment: environment));
     }
 }

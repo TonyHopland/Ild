@@ -1,4 +1,7 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
 
 namespace ILD.Core.Services.Implementations.Network;
 
@@ -14,18 +17,81 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
 {
     public static readonly IPAddress ListenAddress = IPAddress.Loopback;
 
-    public static readonly EgressProxyOptions Disabled = new(false, 0);
+    /// <summary>What the proxy binds. Loopback, except where the agent runs in a container or pod and reaches the proxy at ILD's address
+    /// (the address differs on every run's network, so no narrower one serves them all; <see cref="AcceptsClient"/> and the credential do the narrowing).</summary>
+    public IPAddress BindAddress { get; init; } = IPAddress.Loopback;
 
     /// <summary>
-    /// The Basic-auth user name on a provider-scoped proxy URL. Some proxy clients
-    /// (undici among them) send <c>Proxy-Authorization</c> only when both user and
-    /// password are present, so the provider id travels as the password behind
-    /// this fixed name.
+    /// Whom the proxy serves, besides a valid credential: a connection from any other address is dropped before a byte is read.
+    /// Null serves every address. Narrows a bind that cannot be narrow.
     /// </summary>
-    public const string ScopeUser = "provider";
+    public Func<IPAddress, bool>? AcceptsClient { get; init; }
+
+    /// <summary>How long a connection may take to send its head or sit idle in a relay, and how many may be open at once.</summary>
+    public EgressLimits Limits { get; init; } = new();
+
+    /// <summary>Where the model gateway's TLS listener binds: loopback for local runs, else every interface, where the runs reach ILD.</summary>
+    public static IPAddress BindAddressFor(RunHostKind kind) => kind == RunHostKind.Local ? IPAddress.Loopback : IPAddress.Any;
+
+    /// <summary>
+    /// Whom the proxy serves for a run host. Local: loopback is all that can connect. Container: ILD has a different address on each
+    /// run's network, so no single bind fits and the proxy binds every interface; it answers loopback and the subnet pool the run
+    /// networks are cut from, and drops the rest (compose peers, the LAN). Kubernetes: every pod's route to ILD is its own, so there
+    /// is no filter, and the credential and the optional ingress NetworkPolicy do the narrowing.
+    /// </summary>
+    public static Func<IPAddress, bool>? ClientFilterFor(RunHostKind kind, Func<string, string?> setting)
+    {
+        if (kind != RunHostKind.Container) return null;
+        var pool = IpRange.TryParse(setting(ContainerRunHostOptions.SubnetPoolSetting)?.Trim() ?? string.Empty, out var configured)
+            ? configured
+            : IpRange.Parse(ContainerRunHostOptions.DefaultSubnetPool);
+        return address => EgressDestinationGuard.IsLoopback(address) || pool.Contains(address);
+    }
+
+    public static readonly EgressProxyOptions Disabled = new(false, 0);
+
+    /// <summary>The longest zone name the log column holds.</summary>
+    public const int MaxZoneLength = 64;
+
+    /// <summary>
+    /// ILD's own plain-HTTP port on loopback, where the proxy hands a request for an agents' preview hostname
+    /// (<see cref="Interfaces.PreviewProxyBase.AgentHost"/>); null when ILD listens on no plain-HTTP port it can name.
+    /// </summary>
+    public int? WebPort { get; init; }
+
+    /// <summary>
+    /// Whether worktree previews are on (<c>ILD_PREVIEW_PROXY_BASE</c> is set and usable). Off, the preview hostname is no route into
+    /// ILD at all: the proxy answers 404, so a run cannot reach ILD's web port through the loopback hand-off (ADR-0036).
+    /// </summary>
+    public bool PreviewsEnabled { get; init; }
 
     public static EgressProxyOptions FromEnvironment()
-        => Parse(Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar));
+        => Parse(Environment.GetEnvironmentVariable(AgentIsolation.EgressProxyPortEnvVar)) with
+        {
+            WebPort = ParseWebPort(Environment.GetEnvironmentVariable("ASPNETCORE_URLS"), Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS")),
+        };
+
+    /// <summary>
+    /// The port of the first <c>http://</c> address in <c>ASPNETCORE_URLS</c> (<c>http://+:8080;https://…</c>), else the
+    /// first of <c>ASPNETCORE_HTTP_PORTS</c>, which ASP.NET Core reads only when the first is unset.
+    /// </summary>
+    internal static int? ParseWebPort(string? urls, string? httpPorts)
+    {
+        foreach (var url in (urls ?? string.Empty).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) continue;
+            var authority = url["http://".Length..].Split('/', 2)[0];
+            var colon = authority.LastIndexOf(':');
+            return colon >= 0 && colon > authority.LastIndexOf(']') && int.TryParse(authority[(colon + 1)..], out var port) && port is > 0 and <= 65535
+                ? port
+                : 80;
+        }
+        if (!string.IsNullOrWhiteSpace(urls)) return null;
+        foreach (var value in (httpPorts ?? string.Empty).Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (int.TryParse(value, out var port) && port is > 0 and <= 65535)
+                return port;
+        return null;
+    }
 
     public static EgressProxyOptions Parse(string? configuredPort)
         => int.TryParse(configuredPort?.Trim(), out var port) && port > 0 && port <= 65535
@@ -33,16 +99,13 @@ public sealed record EgressProxyOptions(bool Enabled, int Port)
             : Disabled;
 
     /// <summary>
-    /// The URL a launch's <c>HTTP_PROXY</c> is set to, or <c>null</c> when the
-    /// proxy is disabled. With an <paramref name="aiProviderId"/> the URL carries
-    /// the provider as credentials, which the proxy reads back out of
-    /// <c>Proxy-Authorization</c> to apply that provider's scoped list entries.
+    /// The URL a launch's <c>HTTP_PROXY</c> is set to, or <c>null</c> when the proxy is disabled. It always carries a credential
+    /// <paramref name="credentials"/> signed for <paramref name="scope"/>, which the proxy requires and takes the launch's scope from.
     /// </summary>
-    public string? ClientUrl(Guid? aiProviderId)
-    {
-        if (!Enabled) return null;
-        return aiProviderId is { } id
-            ? $"http://{ScopeUser}:{id:D}@{ListenAddress}:{Port}"
-            : $"http://{ListenAddress}:{Port}";
-    }
+    public string? ClientUrl(EgressCredentials credentials, LaunchScope scope)
+        => Enabled ? $"http://{EgressCredentials.User}:{credentials.Mint(scope)}@{ListenAddress}:{Port}" : null;
+
+    /// <summary>The URL a toolchain installer for <paramref name="zone"/> (<c>agents</c>, <c>toolchains</c>, <c>repo-&lt;id&gt;</c>) is pointed at, or null when the proxy is disabled.</summary>
+    public string? InstallerUrl(EgressCredentials credentials, string zone)
+        => ClientUrl(credentials, new LaunchScope(LaunchKind.Installer, Installer: zone));
 }

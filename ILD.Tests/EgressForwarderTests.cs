@@ -32,6 +32,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     private EgressForwarder? _forwarder;
     private TcpListener? _upstream;
     private int _upstreamPort;
+    private IPAddress _resolvedTo = IPAddress.Parse("203.0.113.9");
 
     public EgressForwarderTests()
     {
@@ -43,7 +44,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         services.AddScoped<INetworkForwardStore, NetworkForwardStore>();
         services.AddScoped<IAppSettingStore, AppSettingStore>();
         _services = services.BuildServiceProvider();
-        _policy = new EgressPolicy(_services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
+        _policy = new EgressPolicy(_services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System, protectedSource: new LoggingControllerTests.IsolatedSource());
     }
 
     public async ValueTask InitializeAsync()
@@ -58,7 +59,14 @@ public sealed class EgressForwarderTests : IAsyncLifetime
             _policy,
             _log,
             new SilentNotifier(),
-            _diagnostics);
+            _diagnostics,
+            (_, _) => Task.FromResult(new[] { _resolvedTo }),
+            static async (_, port, ct) =>
+            {
+                var client = new TcpClient { NoDelay = true };
+                await client.ConnectAsync(IPAddress.Loopback, port, ct);
+                return client;
+            });
         await _forwarder.StartAsync(CancellationToken.None);
     }
 
@@ -194,6 +202,32 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         Assert.Equal("ping through the forward", await EchoAsync(client, "ping through the forward"));
 
         Assert.Equal(("localhost", _upstreamPort, NetworkDecision.Advisory, (Guid?)null), Assert.Single(await RecordedAsync(1)));
+    }
+
+    [Fact]
+    public async Task A_forward_whose_destination_resolves_to_loopback_is_refused_and_never_dialled()
+    {
+        _resolvedTo = IPAddress.Loopback;
+        var forward = await DeclareAsync();
+
+        using var client = await DialAsync(forward.LocalPort);
+        await AssertEndsPromptlyAsync(client);
+
+        var recorded = Assert.Single(await RecordedAsync(1));
+        Assert.Equal(NetworkDecision.Blocked, recorded.Decision);
+    }
+
+    [Fact]
+    public async Task A_forward_whose_destination_resolves_into_a_run_network_is_refused_and_never_dialled()
+    {
+        _resolvedTo = IPAddress.Parse("10.88.0.5");
+        var forward = await DeclareAsync();
+
+        using var client = await DialAsync(forward.LocalPort);
+        await AssertEndsPromptlyAsync(client);
+
+        var recorded = Assert.Single(await RecordedAsync(1));
+        Assert.Equal(NetworkDecision.Blocked, recorded.Decision);
     }
 
     /// <summary>
@@ -451,7 +485,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
             get { lock (_entries) return _entries.ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId)
+        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null, string? via = null)
         {
             lock (_entries)
             {
@@ -462,6 +496,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
                     _waiters.Remove(waiter);
                 }
             }
+            return true;
         }
 
         /// <summary>Completes once at least <paramref name="count"/> destinations have been recorded.</summary>
@@ -488,5 +523,47 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         public Task PolicyChangedAsync() => Task.CompletedTask;
         public Task LogEntryAppendedAsync(NetworkLogEntry entry) => Task.CompletedTask;
         public Task LogClearedAsync() => Task.CompletedTask;
+    }
+
+    private async Task RestartWithLimitsAsync(EgressLimits limits)
+    {
+        await _forwarder!.StopAsync(CancellationToken.None);
+        _forwarder = new EgressForwarder(
+            _services.GetRequiredService<IServiceScopeFactory>(), _policy, _log, new SilentNotifier(), _diagnostics,
+            (_, _) => Task.FromResult(new[] { _resolvedTo }),
+            static async (_, port, ct) =>
+            {
+                var client = new TcpClient { NoDelay = true };
+                await client.ConnectAsync(IPAddress.Loopback, port, ct);
+                return client;
+            },
+            limits);
+        await _forwarder.StartAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task A_connection_over_the_cap_is_closed_at_once()
+    {
+        await RestartWithLimitsAsync(new EgressLimits(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(1), 1, 10));
+        var forward = await DeclareAsync();
+
+        using var first = await DialAsync(forward.LocalPort);
+        Assert.Equal("one", await EchoAsync(first, "one"));
+        using var second = await DialAsync(forward.LocalPort);
+
+        await AssertEndsPromptlyAsync(second);
+        Assert.Equal("still open", await EchoAsync(first, "still open"));
+    }
+
+    [Fact]
+    public async Task A_relay_with_no_traffic_is_closed_after_the_idle_timeout()
+    {
+        await RestartWithLimitsAsync(new EgressLimits(TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(300), 10, 10));
+        var forward = await DeclareAsync();
+
+        using var client = await DialAsync(forward.LocalPort);
+        Assert.Equal("hello", await EchoAsync(client, "hello"));
+
+        await AssertEndsPromptlyAsync(client);
     }
 }

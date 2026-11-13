@@ -99,6 +99,8 @@ export interface WorkItem {
   latestLoopRunId?: string | null;
   /** Label of the node the active run is currently executing; null when idle. */
   currentNodeLabel?: string | null;
+  /** True while the run host is making the run's container or pod, before its first command can run. */
+  preparingContainer?: boolean;
   worktreePath?: string | null;
   branchName?: string | null;
   /**
@@ -243,6 +245,15 @@ export interface AttachmentLimits {
 }
 
 /**
+ * Where loop runs execute, as the environment of this instance chose. `warning` is present only when the
+ * host can say that its setup should be fixed, such as a container socket that is root on the machine.
+ */
+export interface RunHostInfo {
+  kind: "local" | "container" | "kubernetes";
+  warning?: string | null;
+}
+
+/**
  * One PR in a {@link WorkItem}'s history (mirrors the backend's
  * WorkItemPullRequest). Self-contained, because the runs it came from may
  * already have been reclaimed.
@@ -286,6 +297,10 @@ export interface WorktreePreviewService {
   suggestedPort: number | null;
   healthUrl: string | null;
   publicUrl: string | null;
+  /** http://127.0.0.1:<port>, the address that works from inside the run. */
+  localUrl: string | null;
+  /** The address the calling agent can open; set only on the agent API. */
+  agentUrl: string | null;
   logFilePath: string | null;
   processId: number | null;
   exitCode: number | null;
@@ -594,6 +609,10 @@ export interface LoopRunNode {
   inputTokens?: number | null;
   outputTokens?: number | null;
   costUsd?: number | null;
+  /** Whether Resume (continue this attempt's agent session) works; run-detail endpoint, failed or interrupted AI attempts. */
+  canResume?: boolean;
+  /** Why Resume is unavailable, when it is. */
+  resumeUnavailableReason?: string | null;
 }
 
 export interface LoopRunAvailableSession {
@@ -817,6 +836,8 @@ export interface Repository {
   name: string;
   remoteProviderId: string;
   cloneUrl: string;
+  // True when the stored URL carries a credential; the URL itself arrives without it.
+  cloneUrlHasCredentials?: boolean;
   defaultBranch: string | null;
   worktreesPath: string | null;
   defaultIntakeStatus: WorkItemStatus;
@@ -1125,6 +1146,7 @@ export interface AiProvider {
   type: string;
   baseUrl: string;
   apiKey: string;
+  hasApiKey?: boolean;
   model: string;
   isDefault: boolean;
   parallelism: number;
@@ -1151,8 +1173,16 @@ export interface AiProvider {
   emptyToolSelectionMeansNone?: boolean;
   supportsNoTools?: boolean;
   typeDisplayName?: string;
+  /**
+   * How a run reaches this provider's model credential, from its adapter:
+   * `gateway` means the agent holds only a placeholder, `read-only-copy` that it
+   * is given a copy it can read. Absent when the adapter does not say.
+   */
+  credentialPath?: CredentialPath | null;
   createdAt: string;
 }
+
+export type CredentialPath = "gateway" | "read-only-copy";
 
 /**
  * What a provider type's adapter declares about a model selector: `Required` is
@@ -1417,6 +1447,10 @@ export interface ChatSession {
   messages: ChatMessage[];
   /** The turn the server has in flight for this chat, or null when it is idle. */
   activeTurnId: string | null;
+  /** The chat's container is still being prepared; messages sent now wait for it. */
+  preparing?: boolean;
+  /** Why preparing the container failed, or null/absent when it has not. */
+  preparationError?: string | null;
 }
 
 /**
@@ -1523,6 +1557,15 @@ export interface ChatTurnStartedPayload {
   turnId: string;
 }
 
+export interface ChatPreparedPayload {
+  chatSessionId: string;
+}
+
+export interface ChatPreparationFailedPayload {
+  chatSessionId: string;
+  error: string;
+}
+
 export interface ChatTurnCompletedPayload {
   chatSessionId: string;
   turnId: string;
@@ -1554,6 +1597,8 @@ export interface NetworkPolicyEntry {
   listKind: NetworkListKind;
   /** Null applies to every agent launch; set, only to launches of that provider. */
   aiProviderId: string | null;
+  /** The installers' scope: applies to toolchain installers alone (global entries apply to them too). */
+  installers?: boolean;
   createdAt: string;
 }
 
@@ -1565,6 +1610,12 @@ export interface NetworkLogEntry {
   timestamp: string;
   decision: NetworkDecision;
   aiProviderId: string | null;
+  /** The toolchain zone (`agents`, `toolchains`, `repo-<id>`) whose installer made the connection. */
+  installer?: string | null;
+  /** Why ILD refused it when the lists were not the reason: `loopback` or `protected: <name>`. */
+  reason?: string | null;
+  /** `gateway` for a model call ILD made on a run's behalf through the model gateway; absent for a connection the proxy relayed. */
+  via?: string | null;
 }
 
 /**
@@ -1584,14 +1635,32 @@ export interface NetworkForward {
   listenError: string | null;
 }
 
-/** Whether the firewall behind the proxy is in place, and why not when it is not. */
+/** One piece of ILD's own infrastructure the proxy keeps agents away from, with the operator's switch. */
+export interface NetworkProtectedDestination {
+  id: string;
+  name: string;
+  hosts: string[];
+  addresses: string[];
+  /** The address ranges it covers, as the server lists them. */
+  ranges: string[];
+  enabled: boolean;
+}
+
+/** Whether runs and chats can reach the network only through the proxy, and why: `unverified` until a probe in a run has tried to get out, `advisory` when one did. */
 export interface NetworkStatus {
-  enforcement: "enforced" | "advisory";
+  enforcement: "enforced" | "advisory" | "unverified";
   reason: string;
+  /** Whether runs and chats sit in containers or pods, as opposed to on ILD's own machine. */
+  contained: boolean;
   proxyEnabled: boolean;
   proxyPort: number | null;
-  /** Whether an agent launched in network mode Off can reach the network here. */
-  offAvailable: boolean;
+  /** The runs (and the chats' shared container) that have a direct route to the network now, which network mode Off gives and a later launch in another mode takes away. */
+  directRoutes: DirectRoute[];
+}
+
+export interface DirectRoute {
+  ownerId: string;
+  chat: boolean;
 }
 
 export type NetworkPolicyChangedPayload = Record<string, never>;

@@ -23,7 +23,7 @@ internal sealed class CapturingAdapter(
     public string[] SupportedProviderTypes => ["claude-code"];
     public ConfigFieldDescriptor[] ConfigSchema => [];
     public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
-    public AgentAdapterTraits Traits => AgentAdapterTraits.None;
+    public AgentAdapterTraits Traits { get; init; } = AgentAdapterTraits.None;
 
     public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
     {

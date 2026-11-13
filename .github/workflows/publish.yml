@@ -1,6 +1,6 @@
 name: Publish
 
-# Build and push the two deployable images to GHCR. Called from ci.yml as a
+# Build and push the deployable images to GHCR. Called from ci.yml as a
 # final, build-gated job on release tags so a failing build never publishes.
 # Tagging/arch rules are recorded in docs/adr/0012-ghcr-image-tagging-strategy.md:
 #   tag vX.Y.Z    -> tags X.Y.Z / X.Y / latest, amd64 + arm64
@@ -26,20 +26,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [ild, ild-workitem-server]
+        image: [ild, ild-runner, ild-workitem-server]
         arch: [amd64, arm64]
         # Per-image and per-arch attributes, folded into all four combinations.
         include:
           - image: ild
             dockerfile: Dockerfile
-            # Batteries-included, matching the compose defaults. Coding agents
-            # (Pi, OpenCode, Claude Code) are not baked in — they install onto
-            # /data on demand from the AI Provider page; WITH_NODE provides npm.
+            # ILD itself. Runs, chats and sign-ins get containers of their own from ild-runner.
             extra_build_args: |
-              WITH_NODE=1
-              WITH_DOTNET_SDK=1
-              WITH_CHROME=1
               WITH_CERTS=0
+          # The slim image of a run's pod or container: an OS and mise, no toolchains or agents. ILD installs those
+          # per repository into a shared store the run mounts (docs/adr/0035-run-toolchains.md).
+          - image: ild-runner
+            dockerfile: Dockerfile
+            target: runner
+            extra_build_args: ""
           - image: ild-workitem-server
             dockerfile: Dockerfile.WorkItemServer
             extra_build_args: ""
@@ -86,6 +87,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
           platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY_PREFIX }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
@@ -123,7 +125,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [ild, ild-workitem-server]
+        image: [ild, ild-runner, ild-workitem-server]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4

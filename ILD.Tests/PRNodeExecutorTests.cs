@@ -159,7 +159,7 @@ public class PRNodeExecutorTests
         try
         {
             var b = new PrNodeBuilder();
-            b.RepositoryManager.Setup(m => m.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            b.RepositoryManager.Setup(m => m.HasUncommittedChangesAsync(worktree)).ReturnsAsync(false);
             b.RepositoryManager.Setup(m => m.PushAsync(worktree, It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
                 .ReturnsAsync((true, (string?)null));
             b.RepositoryManager.Setup(m => m.GetCommitsAheadCountAsync(worktree, "origin/release/1.0")).ReturnsAsync(0);
@@ -347,7 +347,7 @@ public class PRNodeExecutorTests
         Directory.CreateDirectory(worktree);
         var path = worktree;
         var b = new PrNodeBuilder();
-        b.RepositoryManager.Setup(m => m.GetDiffAsync(path)).ReturnsAsync(string.Empty);
+        b.RepositoryManager.Setup(m => m.HasUncommittedChangesAsync(path)).ReturnsAsync(false);
         b.RepositoryManager.Setup(m => m.GetCommitsAheadCountAsync(path, It.IsAny<string>())).ReturnsAsync(1);
         var calls = 0;
         b.RepositoryManager.Setup(m => m.PushAsync(path, It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))

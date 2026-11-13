@@ -24,9 +24,11 @@ public sealed class EgressRelay
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<long, Tunnel> _tunnels = new();
     private long _nextTunnelId;
+    private readonly TimeSpan _idleTimeout;
 
-    public EgressRelay(IEgressPolicy policy, INetworkLogRecorder log, ILogger logger)
+    public EgressRelay(IEgressPolicy policy, INetworkLogRecorder log, ILogger logger, TimeSpan idleTimeout)
     {
+        _idleTimeout = idleTimeout;
         _policy = policy;
         _log = log;
         _logger = logger;
@@ -61,11 +63,12 @@ public sealed class EgressRelay
         Guid? aiProviderId,
         CancellationToken stoppingToken,
         Func<CancellationToken, Task>? onOpen = null,
-        Func<NetworkStream, NetworkStream, CancellationToken, Task>? copyRequest = null,
-        Func<NetworkStream, NetworkStream, CancellationToken, Task>? copyResponse = null)
+        Func<NetworkStream, NetworkStream, CancellationToken, Action, Task>? copyRequest = null,
+        Func<NetworkStream, NetworkStream, CancellationToken, Action, Task>? copyResponse = null,
+        string? installer = null)
     {
         var id = Interlocked.Increment(ref _nextTunnelId);
-        using var tunnel = new Tunnel(host, port, aiProviderId, stoppingToken);
+        using var tunnel = new Tunnel(host, port, aiProviderId, installer, _idleTimeout, stoppingToken);
         _tunnels[id] = tunnel;
         try
         {
@@ -98,9 +101,9 @@ public sealed class EgressRelay
             var snapshot = await _policy.GetAsync().ConfigureAwait(false);
             foreach (var tunnel in _tunnels.Values)
             {
-                if (snapshot.Decide(tunnel.Host, tunnel.AiProviderId) != NetworkDecision.Blocked)
+                if (snapshot.Decide(tunnel.Host, tunnel.AiProviderId, tunnel.Installer) != NetworkDecision.Blocked)
                     continue;
-                _log.Record(tunnel.Host, tunnel.Port, NetworkDecision.Blocked, tunnel.AiProviderId);
+                _log.Record(tunnel.Host, tunnel.Port, NetworkDecision.Blocked, tunnel.AiProviderId, installer: tunnel.Installer);
                 tunnel.Reset();
             }
         }
@@ -118,14 +121,14 @@ public sealed class EgressRelay
     }
 
     private static async Task PumpAsync(NetworkStream from, NetworkStream to, Tunnel tunnel,
-        Func<NetworkStream, NetworkStream, CancellationToken, Task>? copy)
+        Func<NetworkStream, NetworkStream, CancellationToken, Action, Task>? copy)
     {
         try
         {
             if (copy is null)
-                await from.CopyToAsync(to, tunnel.Token).ConfigureAwait(false);
+                await CopyAsync(from, to, tunnel.Token, tunnel.Touch).ConfigureAwait(false);
             else
-                await copy(from, to, tunnel.Token).ConfigureAwait(false);
+                await copy(from, to, tunnel.Token, tunnel.Touch).ConfigureAwait(false);
             to.Socket.Shutdown(SocketShutdown.Send);
         }
         catch (Exception)
@@ -134,22 +137,45 @@ public sealed class EgressRelay
         }
     }
 
+    /// <summary>Copies until EOF, calling <paramref name="touch"/> for every read that returns bytes, so the idle timer sees it.</summary>
+    internal static async Task CopyAsync(NetworkStream from, NetworkStream to, CancellationToken ct, Action touch)
+    {
+        var buffer = new byte[81920];
+        int read;
+        while ((read = await from.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+        {
+            touch();
+            await to.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+        }
+    }
+
     private sealed class Tunnel : IDisposable
     {
         private readonly CancellationTokenSource _cts;
+        private readonly TimeSpan _idle;
 
-        public Tunnel(string host, int port, Guid? aiProviderId, CancellationToken stopping)
+        public Tunnel(string host, int port, Guid? aiProviderId, string? installer, TimeSpan idleTimeout, CancellationToken stopping)
         {
+            _idle = idleTimeout;
             Host = host;
             Port = port;
             AiProviderId = aiProviderId;
+            Installer = installer;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+            Touch();
         }
 
         public string Host { get; }
         public int Port { get; }
         public Guid? AiProviderId { get; }
+        public string? Installer { get; }
         public CancellationToken Token => _cts.Token;
+
+        /// <summary>Bytes moved: the idle timer starts over.</summary>
+        public void Touch()
+        {
+            try { _cts.CancelAfter(_idle); } catch (ObjectDisposedException) { }
+        }
 
         public void Reset()
         {

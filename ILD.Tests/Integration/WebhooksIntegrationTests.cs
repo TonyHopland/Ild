@@ -16,18 +16,15 @@ public class WebhooksIntegrationTests(SharedApiFactory factory) : IClassFixture<
     }
 
     [Fact]
-    public async Task Forgejo_reaches_the_HMAC_check_with_either_principals_token()
+    public async Task Forgejo_reaches_the_HMAC_check_with_no_token_and_with_one_that_is_no_longer_valid()
     {
-        // The bearer token here is whatever an operator pasted into the git host's
-        // webhook settings, which may be the agent service token as readily as a
-        // session token — so this route asks only for an authenticated caller and
-        // leaves the real gate to HMAC. A 403 would mean a working webhook
-        // configuration had been broken; the 401 is the signature check refusing.
         var client = factory.CreateClient();
-        var agentToken = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
-        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", agentToken);
+        var anonymous = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { }, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.DoesNotContain("No authentication token provided", await anonymous.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
 
-        var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { }, cancellationToken: TestContext.Current.CancellationToken);
+        // A webhook set up before, whose URL still carries a token that has since ended, keeps reaching the signature check.
+        var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo?access_token=ended", new { }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         // The controller's own 401, not the authentication scheme's: the request

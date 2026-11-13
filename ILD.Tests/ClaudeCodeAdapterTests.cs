@@ -349,7 +349,7 @@ public class ClaudeCodeAdapterTests
         MakeExecutable(scriptPath);
 
         var sessionPath = ClaudeCodeAdapter.GetSessionFilePath(
-            worktreeDir, CostSessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, environment)!;
+            worktreeDir, CostSessionId, environment)!;
         Directory.CreateDirectory(Path.GetDirectoryName(sessionPath)!);
         var ledger = string.Join('\n',
             "{\"type\":\"user\",\"sessionId\":\"sess-cost\",\"message\":{\"role\":\"user\",\"content\":\"go\"}}",

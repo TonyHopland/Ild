@@ -101,4 +101,35 @@ public class AiFailureResetTimeTests
             new DateTime(2026, 9, 3, 19, 10, 0, DateTimeKind.Utc),
             Parse("session limit · resets 7:10pm (UTC)", "retry in 45 minutes"));
     }
+
+    [Theory]
+    [InlineData("You've hit your 5-hour limit · resets 9:40pm (UTC)", 21, 40)]
+    [InlineData("You've hit your session limit · resets 9:40pm (UTC)", 21, 40)]
+    [InlineData("You've hit your weekly limit · resets 9:40pm (UTC)", 21, 40)]
+    [InlineData("You've hit your Opus limit · resets 9:40pm (UTC)", 21, 40)]
+    public void Every_limit_wording_is_an_interruption_with_its_reset_time(string notice, int hour, int minute)
+    {
+        Assert.Equal(ILD.Core.Services.Interfaces.FailureKind.Interrupted, AiFailureKind(notice));
+        Assert.Equal(new DateTime(2026, 9, 3, hour, minute, 0, DateTimeKind.Utc), Parse(notice));
+    }
+
+    [Fact]
+    public void The_epoch_form_is_an_interruption_with_that_instant_as_its_reset()
+    {
+        var reset = Now.AddHours(3);
+        var notice = $"Claude AI usage limit reached|{new DateTimeOffset(reset).ToUnixTimeSeconds()}";
+        Assert.Equal(ILD.Core.Services.Interfaces.FailureKind.Interrupted, AiFailureKind(notice));
+        Assert.Equal(reset, Parse(notice));
+    }
+
+    [Fact]
+    public void A_limit_with_an_unreadable_reset_is_still_an_interruption_without_a_time()
+    {
+        const string notice = "You've hit your 5-hour limit · resets 3pm (Europe/Oslo)";
+        Assert.Equal(ILD.Core.Services.Interfaces.FailureKind.Interrupted, AiFailureKind(notice));
+        Assert.Null(Parse(notice));
+    }
+
+    private static ILD.Core.Services.Interfaces.FailureKind AiFailureKind(string output)
+        => AiFailureClassifier.Classify(output, "exit=1 stderr=");
 }

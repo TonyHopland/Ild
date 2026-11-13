@@ -105,7 +105,7 @@ public class RemoteProviderService : IRemoteProvider
             // act on. A transport failure's detail (hosts, URLs, tokens in a
             // message) belongs in the server log, which is also the only place
             // it would otherwise be lost — every other method here swallows.
-            _log?.LogWarning(ex, "CI log fetch failed for check {CheckId} on {RepoUrl}", checkId, repoUrl);
+            _log?.LogWarning(ex, "CI log fetch failed for check {CheckId} on {RepoUrl}", checkId, RepositoryManager.WithoutUserInfo(repoUrl));
             return RemoteCiLog.Unavailable("Could not read the log for this check — the provider request failed.");
         }
     }
@@ -137,7 +137,7 @@ public class RemoteProviderService : IRemoteProvider
             // As with the CI log: the agent-facing message says only what the
             // agent can act on, and the transport detail goes to the server log,
             // which is otherwise the only place it would be lost.
-            _log?.LogWarning(ex, "Review ledger fetch failed for PR {PrNumber} on {RepoUrl}", prNumber, repoUrl);
+            _log?.LogWarning(ex, "Review ledger fetch failed for PR {PrNumber} on {RepoUrl}", prNumber, RepositoryManager.WithoutUserInfo(repoUrl));
             return RemotePrReviewLedger.Unavailable("Could not read the review on this pull request — the provider request failed.");
         }
     }
@@ -169,7 +169,7 @@ public class RemoteProviderService : IRemoteProvider
 
     private RemotePrWriteResult Refused(Exception ex, string what, string repoUrl)
     {
-        _log?.LogWarning(ex, "{What} failed on {RepoUrl}", what, repoUrl);
+        _log?.LogWarning(ex, "{What} failed on {RepoUrl}", what, RepositoryManager.WithoutUserInfo(repoUrl));
         return new RemotePrWriteResult(false, null, "The provider request failed.");
     }
 

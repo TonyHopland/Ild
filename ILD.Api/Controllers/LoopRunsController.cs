@@ -5,6 +5,9 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
@@ -253,8 +256,27 @@ public class LoopRunsController : ControllerBase
                 createdAt = v.CreatedAt,
                 updatedAt = v.UpdatedAt,
             }).ToList(),
-            nodes = runNodes.Select(LoopRunNodeResponse.From).ToList(),
+            nodes = await ResumeAwareNodesAsync(guid, runNodes),
         });
+    }
+
+    private async Task<List<LoopRunNodeResponse>> ResumeAwareNodesAsync(Guid runId, IReadOnlyList<ILD.Data.Entities.LoopRunNode> runNodes)
+    {
+        var lastId = runNodes.OrderBy(rn => rn.CreatedAt).LastOrDefault()?.Id;
+        var result = new List<LoopRunNodeResponse>(runNodes.Count);
+        foreach (var rn in runNodes)
+        {
+            var response = LoopRunNodeResponse.From(rn);
+            if (rn.LoopNode?.NodeType == NodeType.AI && rn.Status is LoopRunNodeStatus.Failed or LoopRunNodeStatus.Interrupted)
+            {
+                var reason = rn.Id == lastId
+                    ? await _loopEngine.GetResumeUnavailableReasonAsync(runId, rn.Id)
+                    : "not the attempt the run is parked on";
+                response = response with { CanResume = reason is null, ResumeUnavailableReason = reason };
+            }
+            result.Add(response);
+        }
+        return result;
     }
 
     // The PR snapshot is stored as a JSON string; surface it as a JSON value so
@@ -294,12 +316,21 @@ public class LoopRunsController : ControllerBase
         return Ok();
     }
 
+    private async Task<IActionResult?> PredatesContainersAsync(Guid runId)
+    {
+        var run = await _loopRunStore.GetByIdAsync(runId);
+        return run is not null && PredatesContainersException.Applies(HttpContext.RequestServices.GetRunHost(), run.WorktreePath)
+            ? BadRequest(new { error = PredatesContainersException.Text })
+            : null;
+    }
+
     [HttpPost("{id}/resume")]
     public async Task<IActionResult> Resume(string id)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
+        if (await PredatesContainersAsync(guid) is { } refusal) return refusal;
         await _loopEngine.ResumeRunAsync(guid);
         return Ok();
     }
@@ -335,6 +366,7 @@ public class LoopRunsController : ControllerBase
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
+        if (await PredatesContainersAsync(guid) is { } refusal) return refusal;
         await _loopEngine.ResumeFromHaltAsync(guid, request?.Note);
         return Ok();
     }
@@ -408,9 +440,33 @@ public class LoopRunsController : ControllerBase
         if (!Guid.TryParse(runNodeId, out var nodeGuid))
             return BadRequest(new { error = "Invalid run node GUID" });
 
+        if (await PredatesContainersAsync(runGuid) is { } refusal) return refusal;
+
         try
         {
             await _loopEngine.RetryFromNodeAsync(runGuid, nodeGuid);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        return Ok();
+    }
+
+    /// <summary>Like retry, but continues the failed AI attempt's agent session instead of starting a fresh one.</summary>
+    [HttpPost("{id}/nodes/{runNodeId}/resume")]
+    public async Task<IActionResult> ResumeFromNode(string id, string runNodeId)
+    {
+        if (!Guid.TryParse(id, out var runGuid))
+            return BadRequest(new { error = "Invalid run GUID" });
+        if (!Guid.TryParse(runNodeId, out var nodeGuid))
+            return BadRequest(new { error = "Invalid run node GUID" });
+
+        if (await PredatesContainersAsync(runGuid) is { } refusal) return refusal;
+
+        try
+        {
+            await _loopEngine.ResumeFromNodeAsync(runGuid, nodeGuid);
         }
         catch (InvalidOperationException ex)
         {
@@ -576,17 +632,52 @@ public class LoopRunsController : ControllerBase
         // session/usage limit), or cancelled — so a human can read the diff or
         // recover work. Only a still-Running run is off-limits: its executor is
         // actively writing the worktree, so a concurrent shell would race it.
+        // A refusal is said over an accepted socket: refused before the upgrade, it
+        // reaches the browser as a failed connection with no reason at all.
+        string? refusal = null;
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
-            return BadRequest(new { error = "Terminal is not available while the run is still executing." });
-        if (string.IsNullOrWhiteSpace(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
-            return BadRequest(new { error = "Run has no live worktree." });
+            refusal = "The terminal opens once the run stops executing: it is parked, done or failed.";
+        else if (PredatesContainersException.Applies(HttpContext.RequestServices.GetRunHost(), run.WorktreePath))
+            refusal = PredatesContainersException.Text;
+        else if (string.IsNullOrWhiteSpace(run.WorktreePath) || !await HttpContext.RequestServices.GetRunHost().DirectoryExistsAsync(run.WorktreePath, HttpContext.RequestAborted))
+            refusal = "The run has no worktree any more: it was cleaned up.";
+        if (refusal is not null)
+        {
+            using var refused = await HttpContext.WebSockets.AcceptWebSocketAsync();
+            await PtyWebSocketBridge.RefuseAsync(refused, refusal, HttpContext.RequestAborted);
+            return new EmptyResult();
+        }
 
         // The worktree is the run's, so its shell gets the feeds the run's processes get.
         var feeds = await _packageFeeds.ResolveAsync(
             await RunRepository.IdOfAsync(run, _workItemManager), HttpContext.RequestAborted);
         using var socket = await HttpContext.WebSockets.AcceptWebSocketAsync();
         await _shellSessions.RunAsync(
-            socket, run.WorktreePath, run.Id.ToString("N"), cols, rows, feeds.Feeds, HttpContext.RequestAborted);
+            socket, run.WorktreePath!, run.Id.ToString("N"), cols, rows, feeds.Feeds, HttpContext.RequestAborted);
         return new EmptyResult();
+    }
+
+    /// <summary>
+    /// The container and folder an editor on the engine's machine attaches to for the run's worktree. Only a run in a
+    /// Docker or Podman container has one; checking the worktree starts a stopped container again, which an editor
+    /// needs to attach.
+    /// </summary>
+    [HttpPost("{id}/editor")]
+    public async Task<IActionResult> OpenInEditor(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var run = await _loopRunStore.GetByIdAsync(guid);
+        if (run is null) return NotFound();
+        if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
+            return BadRequest(new { error = "The editor is not available while the run is still executing." });
+        var host = HttpContext.RequestServices.GetRunHost();
+        if (host.Kind != RunHostKind.Container || RunPaths.OwnerOf(run.WorktreePath) is not { } owner)
+            return Conflict(new { error = "Only a run in a Docker or Podman container can be opened in an editor." });
+        if (!await host.DirectoryExistsAsync(run.WorktreePath!, HttpContext.RequestAborted))
+            return BadRequest(new { error = "Run has no live worktree." });
+
+        return Ok(new { containerName = ContainerRunHost.ObjectName(owner), folder = run.WorktreePath });
     }
 }

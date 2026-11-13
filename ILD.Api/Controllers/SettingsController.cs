@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Migrations;
@@ -27,7 +28,7 @@ public class SettingsController : ControllerBase
     private readonly IEgressPolicy _egressPolicy;
     private readonly INetworkNotifier _networkNotifier;
     private readonly AttachmentLimits _attachmentLimits;
-    private readonly NetworkEnforcementStatus _enforcement;
+    private readonly IRunHost _runHost;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
@@ -60,7 +61,7 @@ public class SettingsController : ControllerBase
         IEgressPolicy egressPolicy,
         INetworkNotifier networkNotifier,
         AttachmentLimits attachmentLimits,
-        NetworkEnforcementStatus enforcement)
+        IRunHost runHost)
     {
         _store = store;
         _notifier = notifier;
@@ -70,7 +71,7 @@ public class SettingsController : ControllerBase
         _egressPolicy = egressPolicy;
         _networkNotifier = networkNotifier;
         _attachmentLimits = attachmentLimits;
-        _enforcement = enforcement;
+        _runHost = runHost;
     }
 
     public sealed class UpdateSettingRequest
@@ -87,7 +88,7 @@ public class SettingsController : ControllerBase
         var all = await _store.GetAllAsync(ct);
         // Always return the canonical keys (with defaults if missing) so the
         // frontend never has to special-case absence.
-        var map = all.Where(s => s.Key != NetworkModeMonitorMigrator.MarkerKey)
+        var map = all.Where(s => KnownKeys.Contains(s.Key))
             .ToDictionary(s => s.Key, s => s.Value, StringComparer.Ordinal);
         if (!map.ContainsKey(AppSettingKeys.SchedulerMaxConcurrent))
             map[AppSettingKeys.SchedulerMaxConcurrent] = AppSettingKeys.DefaultMaxConcurrent.ToString();
@@ -142,6 +143,18 @@ public class SettingsController : ControllerBase
         maxTotalBytesPerWorkItem = _attachmentLimits.MaxTotalBytesPerWorkItem,
     });
 
+    /// <summary>
+    /// Where loop runs execute (<see cref="RunHostOptions.Detect"/>), and a warning when that is set up in a way the operator should fix,
+    /// such as a container socket that is root on the machine. Read-only: the host follows from how ILD runs, and the
+    /// warning is absent whenever the engine cannot say.
+    /// </summary>
+    [HttpGet("run-host")]
+    public async Task<IActionResult> GetRunHost(CancellationToken ct) => Ok(new
+    {
+        kind = _runHost.Kind.ToString().ToLowerInvariant(),
+        warning = _runHost is RoutingRunHost routing ? await routing.Isolated.WarningAsync(ct) : null,
+    });
+
     [HttpGet("{key}")]
     public async Task<IActionResult> Get(string key, CancellationToken ct)
     {
@@ -157,8 +170,6 @@ public class SettingsController : ControllerBase
         if (!KnownKeys.Contains(key)) return NotFound(new { error = $"Unknown setting key '{key}'" });
         if (request.Value is not { } sent) return BadRequest(new { error = "A value is required." });
         if (!TryCanonicalize(key, sent, out var value, out var error)) return BadRequest(new { error });
-        if (key == AppSettingKeys.NetworkMode && EgressRules.TryParseMode(value, out var mode) && mode == NetworkMode.Off && !_enforcement.OffAvailable)
-            return BadRequest(new { error = $"Network mode Off is unavailable here, so agents launched in it would have no network. {_enforcement.Reason}" });
 
         await _store.UpsertAsync(key, value, ct);
 

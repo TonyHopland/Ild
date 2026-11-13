@@ -46,9 +46,15 @@ internal sealed class PrNodeBuilder
         Node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
     }
 
+    public FakeRunHost Host { get; } = new();
+
     public IServiceProvider Services()
     {
         var services = new ServiceCollection();
+        // The worktree a test staged on disk is the one the host has; a path that is not there is not.
+        if (!string.IsNullOrEmpty(Run.WorktreePath) && Directory.Exists(Run.WorktreePath))
+            Host.WithDirectory(Run.WorktreePath);
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(Host);
         services.AddSingleton(WorkItems.Object);
         services.AddSingleton(Providers.Object);
         services.AddSingleton(Remote.Object);

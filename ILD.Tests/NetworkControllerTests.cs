@@ -1,6 +1,7 @@
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -24,10 +25,12 @@ public sealed class NetworkControllerTests : IDisposable
 
     public void Dispose() => _db.Dispose();
 
-    private NetworkController Build(NetworkEnforcementStatus? status = null)
-        => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            status ?? NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null),
-            _forwarder);
+    private static readonly NetworkEnforcementStatus Proxied = NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128"));
+
+    private static IRunHost Host(RunHostKind kind) => Mock.Of<IRunHost>(h => h.Kind == kind);
+
+    private NetworkController Build(RunHostKind kind = RunHostKind.Container)
+        => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object, Proxied, _forwarder, Host(kind), _db.Settings);
 
     private sealed class StubForwarderState : IEgressForwarderState
     {
@@ -64,6 +67,34 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(".github.com", Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken)).Host);
         _policy.Verify(p => p.Invalidate(), Times.Once);
         _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
+    }
+
+    private sealed record ProtectedView(string Id, string Name, string[] Hosts, string[] Addresses, string[] Ranges, bool Enabled);
+
+    [Fact]
+    public async Task The_protected_destinations_are_listed_and_a_toggle_is_stored_and_takes_effect_on_the_next_connection()
+    {
+        _snapshot = EgressPolicySnapshot.Monitor with
+        {
+            Protected = [new ProtectedDestination(ProtectedDestination.Database, "ILD database", ["db.example"], [System.Net.IPAddress.Parse("10.0.0.7")]),
+                ProtectedDestination.LinkLocalRanges, ProtectedDestination.PrivateRanges],
+        };
+        var controller = Build();
+
+        var listed = Body<ProtectedView[]>(await controller.GetProtected(TestContext.Current.CancellationToken));
+        var set = Body<ProtectedView>(await controller.SetProtected(ProtectedDestination.Database, new NetworkController.SetProtectedRequest { Enabled = false }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(3, listed.Length);
+        var view = listed[0];
+        Assert.Equal(("database", "ILD database", true), (view.Id, view.Name, view.Enabled));
+        Assert.Equal(["10.0.0.7"], view.Addresses);
+        Assert.Empty(view.Ranges);
+        Assert.Equal(["169.254.0.0/16", "fe80::/10", "fd00:ec2::254"], listed[1].Ranges);
+        Assert.Equal(["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"], listed[2].Ranges);
+        Assert.False(set.Enabled);
+        Assert.Equal("false", (await _db.Settings.GetByKeyAsync("network.protect.database", TestContext.Current.CancellationToken))!.Value);
+        _policy.Verify(p => p.Invalidate(), Times.Once);
+        Assert.IsType<NotFoundResult>(await controller.SetProtected("nope", new NetworkController.SetProtectedRequest(), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -141,6 +172,44 @@ public sealed class NetworkControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task An_installers_entry_is_its_own_scope_beside_the_global_one_and_is_never_a_provider_entry_too()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var controller = Build();
+
+        var installers = Assert.IsType<CreatedAtActionResult>(await controller.AddEntry(
+            new NetworkController.AddEntryRequest { Host = "registry.example", ListKind = NetworkListKind.Whitelist, Installers = true }, ct));
+        var global = Assert.IsType<CreatedAtActionResult>(await controller.AddEntry(
+            new NetworkController.AddEntryRequest { Host = "registry.example", ListKind = NetworkListKind.Whitelist }, ct));
+        var again = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "registry.example", ListKind = NetworkListKind.Whitelist, Installers = true }, ct);
+        var both = await controller.AddEntry(new NetworkController.AddEntryRequest
+        {
+            Host = "other.example", ListKind = NetworkListKind.Whitelist, Installers = true, AiProviderId = await SeedProviderAsync(),
+        }, ct);
+
+        Assert.NotEqual(Body<EntryView>(installers).Id, Body<EntryView>(global).Id);
+        Assert.IsType<OkObjectResult>(again);
+        Assert.IsType<BadRequestObjectResult>(both);
+        Assert.Equal(1, (await _db.Network.GetEntriesAsync(ct)).Count(e => e.Installers));
+        Assert.Equal(1, (await _db.Network.GetEntriesAsync(ct)).Count(e => !e.Installers));
+    }
+
+    [Fact]
+    public async Task A_log_entry_an_installer_made_is_promoted_to_the_installers_scope_on_request()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var logged = new NetworkLogEntry { Host = "binaries.example", Port = 443, Timestamp = DateTime.UtcNow, Decision = NetworkDecision.Blocked, Installer = "repo-1" };
+        await _db.Network.AppendLogAsync(new[] { logged }, ct);
+        var controller = Build();
+
+        Assert.IsType<CreatedAtActionResult>(await controller.WhitelistFromLog(logged.Id, new NetworkController.AddFromLogRequest { ScopeToInstallers = true }, ct));
+
+        var entry = Assert.Single(await _db.Network.GetEntriesAsync(ct));
+        Assert.True(entry.Installers);
+        Assert.Null(entry.AiProviderId);
+    }
+
+    [Fact]
     public async Task A_log_entry_can_be_promoted_to_either_list_globally_or_scoped_to_its_provider()
     {
         var provider = new AiProvider { Id = Guid.NewGuid(), Name = "claude", Type = "claude-code", BaseUrl = "", Model = "" };
@@ -161,6 +230,20 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(2, (await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken)).Count);
 
         Assert.IsType<NotFoundResult>(await controller.WhitelistFromLog(Guid.NewGuid(), null, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(".example.com")]
+    [InlineData("*.com")]
+    public async Task A_log_row_whose_host_was_sent_as_a_pattern_cannot_become_a_rule(string host)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var logged = new NetworkLogEntry { Host = host, Port = 443, Timestamp = DateTime.UtcNow, Decision = NetworkDecision.Blocked };
+        await _db.Network.AppendLogAsync(new[] { logged }, ct);
+
+        Assert.IsType<BadRequestObjectResult>(await Build().WhitelistFromLog(logged.Id, null, ct));
+
+        Assert.Empty(await _db.Network.GetEntriesAsync(ct));
     }
 
     [Fact]
@@ -435,26 +518,21 @@ public sealed class NetworkControllerTests : IDisposable
         _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 
-    [Fact]
-    public void Status_reports_the_enforcement_the_entrypoint_announced()
+    [Theory]
+    [InlineData(RunHostKind.Local, "advisory")]
+    [InlineData(RunHostKind.Container, "unverified")]
+    [InlineData(RunHostKind.Kubernetes, "unverified")]
+    public async Task Status_reports_enforcement_by_where_runs_execute(RunHostKind kind, string enforcement)
     {
-        var advisory = Build(NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "advisory", "NET_ADMIN was not granted"));
+        var status = Body<Dictionary<string, object>>(await Build(kind).GetStatus(TestContext.Current.CancellationToken));
 
-        var status = Body<Dictionary<string, object>>(advisory.GetStatus());
-
-        Assert.Equal("advisory", status["enforcement"].ToString());
-        Assert.Equal("NET_ADMIN was not granted", status["reason"].ToString());
-        Assert.Equal("True", status["offAvailable"].ToString());
-    }
-
-    [Fact]
-    public void Status_reports_off_unavailable_under_the_firewall_without_an_open_group()
-    {
-        var enforced = Build(NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null));
-        var open = Build(NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "agent-open"));
-
-        Assert.Equal("False", Body<Dictionary<string, object>>(enforced.GetStatus())["offAvailable"].ToString());
-        Assert.Equal("True", Body<Dictionary<string, object>>(open.GetStatus())["offAvailable"].ToString());
+        Assert.Equal(enforcement, status["enforcement"].ToString());
+        Assert.Equal(Proxied.ReasonFor(kind), status["reason"].ToString());
+        Assert.Equal(kind != RunHostKind.Local, bool.Parse(status["contained"].ToString()!));
+        Assert.Equal("True", status["proxyEnabled"].ToString());
+        Assert.Equal("3128", status["proxyPort"].ToString());
+        Assert.False(status.ContainsKey("offAvailable"));
+        Assert.Equal("[]", status["directRoutes"].ToString());
     }
 
     private sealed record UpdatedEntryView(Guid Id, string Host, NetworkListKind ListKind, Guid? AiProviderId, DateTime CreatedAt);
@@ -595,10 +673,10 @@ public sealed class NetworkControllerTests : IDisposable
     public async Task The_unique_index_refusing_the_save_is_answered_like_a_duplicate()
     {
         var store = new Mock<INetworkPolicyStore>();
-        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
             .ThrowsAsync(new DbUpdateException("unique"));
         var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
 
         var result = await controller.UpdateEntry(Guid.NewGuid(), Rule("api.example.com"), TestContext.Current.CancellationToken);
 
@@ -613,10 +691,10 @@ public sealed class NetworkControllerTests : IDisposable
     public async Task A_rule_deleted_between_the_load_and_the_save_is_not_found()
     {
         var store = new Mock<INetworkPolicyStore>();
-        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
             .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
         var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
 
         var result = await controller.UpdateEntry(Guid.NewGuid(), Rule(), TestContext.Current.CancellationToken);
 
@@ -631,7 +709,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateException("unique"));
         var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
-            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
 
         var result = await controller.UpdateForward(Guid.NewGuid(), Forward(localPort: 15432), TestContext.Current.CancellationToken);
 
@@ -647,7 +725,7 @@ public sealed class NetworkControllerTests : IDisposable
         store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
         var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
-            NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null), _forwarder);
+            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
 
         var result = await controller.UpdateForward(Guid.NewGuid(), Forward(), TestContext.Current.CancellationToken);
 

@@ -3,11 +3,16 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Remote;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
+using ILD.Core.Services.RunHosts.Kubernetes;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Middleware;
 using ILD.Api.Services;
 using ILD.Data.Stores;
@@ -20,11 +25,25 @@ namespace ILD.Api.Configuration;
 
 public static class ServiceCollectionExtensions
 {
+    private static Func<CancellationToken, Task<IReadOnlySet<Guid>>> RetainedRuns(IServiceProvider sp) => async ct =>
+    {
+        using var scope = sp.CreateScope();
+        return await LiveRunIds.NotEndedAsync(scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>(), ct);
+    };
+
     public static IServiceCollection AddIldServices(this IServiceCollection services)
     {
-        services.AddSingleton<AgentAuthTokenProvider>();
+        services.AddScoped<IAgentTokenService, AgentTokenService>();
+        services.AddSingleton<IModelGatewayRegistry, ModelGatewayRegistry>();
+        // One instance for the process: it holds the Codex refresh lock and the "refresh next" flag.
+        services.AddHttpClient(nameof(ModelCredentialSource));
+        services.AddSingleton<IModelCredentialSource>(sp => new ModelCredentialSource(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(ModelCredentialSource)),
+            sp.GetRequiredService<ILogger<ModelCredentialSource>>()));
 
         services.AddScoped<IAuthService, AuthService>();
+        services.AddSingleton<LoginThrottle>();
+        services.AddSingleton(TrustedProxies.Parse(Environment.GetEnvironmentVariable(TrustedProxies.EnvVar)));
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
         services.AddScoped<IHumanInputProposalService, HumanInputProposalService>();
@@ -37,14 +56,58 @@ public static class ServiceCollectionExtensions
 
             return new RepositoryManager(
                 runner,
+                sp.GetRequiredService<IRunHost>(),
                 logger,
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot,
-                mirrorsRoot: RepositoryManager.MirrorRoot(config));
+                mirrorsRoot: RepositoryManager.MirrorRoot(config),
+                isBaseRepository: async (path, _) =>
+                {
+                    using var scope = sp.GetRequiredService<IServiceScopeFactory>().CreateScope();
+                    return RepositoryManager.IsBaseClone(
+                        path, config, await scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IProviderStore>().GetAllRepositoriesAsync());
+                });
         });
         services.AddSingleton<IRemoteRetryDelay, RemoteRetryDelay>();
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+        // Not a setting: containers (or pods in a cluster) from ILD's image, its own processes under dotnet run.
+        services.AddSingleton<IRunHost>(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var kind = RunHostOptions.Detect(name => config[name]);
+            var runner = sp.GetRequiredService<IProcessRunner>();
+            var credentials = sp.GetRequiredService<EgressCredentials>();
+            var local = new LocalRunHost(runner, sp, credentials: credentials);
+            if (kind == RunHostKind.Local) return local;
+
+            var loggers = sp.GetRequiredService<ILoggerFactory>();
+            var host = kind == RunHostKind.Kubernetes
+                ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials)
+                : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials);
+            host.Isolated.Probe = sp.GetRequiredService<NetworkEnforcementProbe>();
+            host.Isolated.Refusals = sp.GetRequiredService<InstallerRefusals>();
+            // The lasting copy of the preview data repositories keep; each run works on a copy of its own.
+            host.Isolated.PreviewData = new PreviewDataStore(PreviewVolumes.Root(config), sp.GetRequiredService<ILogger<PreviewDataStore>>())
+            {
+                MaxArchiveBytes = ILD.Core.Services.RunHosts.RunReadLimits.FromEnvironment(name => config[name]).MaxPreviewDataBytes,
+            };
+            // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
+            host.Isolated.Forwards = async ct =>
+            {
+                using var scope = sp.GetRequiredService<IServiceScopeFactory>().CreateScope();
+                var rows = await scope.ServiceProvider.GetRequiredService<INetworkForwardStore>().GetForwardsAsync(ct);
+                return rows.Select(r => new ILD.Core.Services.RunHosts.Isolated.RunForward(r.LocalPort, r.Host, r.Port)).ToList();
+            };
+            return host;
+        });
+        // Before GracefulRunDrainService, so it stops after the drain has parked the runs.
+        services.AddHostedService<RunHostShutdownService>();
+        services.AddHostedService(sp => new RunHostSweeper(
+            sp.GetRequiredService<IRunHost>(),
+            RetainedRuns(sp),
+            sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.SweepInterval : TimeSpan.FromMinutes(10),
+            sp.GetService<ILogger<RunHostSweeper>>()));
         services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, GitHubRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, AzureDevOpsRemoteGitProviderAdapter>();
@@ -123,6 +186,8 @@ public static class ServiceCollectionExtensions
         });
         services.AddScoped<IChatService, ChatService>();
         services.AddSingleton<IChatTurnRunner, ChatTurnRunner>();
+        services.AddSingleton<ChatPreparations>();
+        services.AddSingleton<RunPreparations>();
         services.AddScoped<ChatTitleGenerator>();
         services.AddSingleton<IChatTitleScheduler, ChatTitleScheduler>();
         services.AddSingleton<SignalRChatNotifier>();
@@ -150,10 +215,40 @@ public static class ServiceCollectionExtensions
         // at, the cached policy it consults, the recorder that persists what it
         // saw, and the enforcement status the entrypoint reported. All keyed off
         // ILD_NETWORK_PROXY_PORT; unset, nothing listens and launches are untouched.
-        services.AddSingleton(_ => EgressProxyOptions.FromEnvironment());
-        services.AddSingleton(sp => NetworkEnforcementStatus.FromEnvironment(sp.GetRequiredService<EgressProxyOptions>()));
+        // A run's pod or container reaches the egress proxy over the network, not on ILD's loopback.
+        // Each launch is given a token ILD signs, which the proxy requires and takes the launch's scope from. The key is kept in the data path.
+        services.AddSingleton(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var dataRoot = config["App:DataPath"] ?? Environment.GetEnvironmentVariable("ILD_DATA_PATH") ?? config["Storage:DataRoot"] ?? "data";
+            return EgressCredentials.Load(Path.Combine(dataRoot, "egress", "proxy.key"));
+        });
+        services.AddSingleton(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var kind = RunHostOptions.Detect(name => config[name]);
+            return EgressProxyOptions.FromEnvironment() with
+            {
+                PreviewsEnabled = sp.GetRequiredService<PreviewProxyBase>().Enabled,
+                BindAddress = EgressProxyOptions.BindAddressFor(kind),
+                AcceptsClient = EgressProxyOptions.ClientFilterFor(kind, name => Environment.GetEnvironmentVariable(name) ?? config[name]),
+            };
+        });
+        services.AddSingleton(sp => new NetworkEnforcementProbe(name => Environment.GetEnvironmentVariable(name) ?? sp.GetRequiredService<IConfiguration>()[name]));
+        services.AddSingleton(sp => NetworkEnforcementStatus.FromEnvironment(sp.GetRequiredService<EgressProxyOptions>()) with { Probe = sp.GetRequiredService<NetworkEnforcementProbe>() });
+        services.AddSingleton<IProtectedDestinationSource>(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            string? Read(string name) => Environment.GetEnvironmentVariable(name) ?? config[name];
+            return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>(),
+                isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]),
+                controlPlane: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.ControlPlaneAddressesAsync(ct) : Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]),
+                logger: sp.GetRequiredService<ILogger<ProtectedDestinationSource>>(),
+                hostAddresses: ProtectedDestinationSource.HostMachineAddresses);
+        });
         services.AddSingleton<IEgressPolicy, EgressPolicy>();
         services.AddSingleton<INetworkNotifier, SignalRNetworkNotifier>();
+        services.AddSingleton<InstallerRefusals>();
         services.AddSingleton<NetworkLogRecorder>();
         services.AddSingleton<INetworkLogRecorder>(sp => sp.GetRequiredService<NetworkLogRecorder>());
         services.AddHostedService(sp => sp.GetRequiredService<NetworkLogRecorder>());
@@ -187,6 +282,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAgentAdapter, CodexAdapter>();
 
         services.AddHttpClient();
+        WorktreePreviewService.ConfigureHealthProbeClient(services.AddHttpClient(WorktreePreviewService.HealthProbeClientName));
 
         // Remote WorkItem server wiring. The poller is created
         // unconditionally but stays disabled until a RemoteProvider with a

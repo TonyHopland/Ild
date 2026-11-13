@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -39,11 +40,11 @@ public class WorktreePreviewServiceLogTests : IDisposable
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         var configuration = new ConfigurationBuilder().Build();
         _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
         return _service;
     }
 
-    private void WriteConfig(int suggestedPort)
+    private void WriteConfig(int suggestedPort, string name = "web", bool install = false)
     {
         // A node one-liner that answers 200 on the health URL keeps the service
         // healthy so StartAsync stores the runtime and writes the service's log.
@@ -54,9 +55,10 @@ public class WorktreePreviewServiceLogTests : IDisposable
             "defaultProfile": "app",
             "profiles": {
               "app": {
+                {{(install ? "\"install\": [{ \"command\": \"echo installing\" }]," : "")}}
                 "services": [
                   {
-                    "name": "web",
+                    "name": {{System.Text.Json.JsonSerializer.Serialize(name)}},
                     "port": "web",
                     "suggestedPort": {{suggestedPort}},
                     "command": "PORT=${PORT} {{command}}",
@@ -150,6 +152,64 @@ public class WorktreePreviewServiceLogTests : IDisposable
         var log = await service.GetServiceLogAsync(_worktree, "../secret", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(log);
+    }
+
+    [Theory]
+    [InlineData("/tmp/ild-escape-x")]
+    [InlineData("../ild-escape-x")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    [InlineData("..")]
+    [InlineData(".hidden")]
+    public async Task A_service_name_that_is_not_a_bare_file_name_is_refused_before_anything_is_written(string name)
+    {
+        WriteConfig(FindFreePort(), name);
+        var service = BuildService();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(_worktree, cancellationToken: CancellationToken.None));
+
+        Assert.Contains("Preview service name", error.Message);
+        Assert.False(File.Exists("/tmp/ild-escape-x.log"));
+        Assert.False(File.Exists(Path.Combine(Path.GetTempPath(), "ild-escape-x.log")));
+    }
+
+    [Theory]
+    [InlineData("../x")]
+    [InlineData("a/b")]
+    public async Task Editing_a_service_to_a_name_that_is_not_a_bare_file_name_is_refused(string name)
+    {
+        WriteConfig(FindFreePort(), name);
+        var configPath = Path.Combine(_worktree, "ild.config.json");
+        var before = File.ReadAllText(configPath);
+        var service = BuildService();
+        var json = $$"""{"name":"{{name}}","command":"true","port":"web","healthUrl":"http://127.0.0.1:${PORT}/"}""";
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateServiceConfigAsync(_worktree, name, json, cancellationToken: CancellationToken.None));
+
+        Assert.Contains("Preview service name", error.Message);
+        Assert.Equal(before, File.ReadAllText(configPath));
+    }
+
+    [Theory]
+    [InlineData("web.log")]
+    [InlineData("install.log")]
+    public async Task A_log_that_is_a_link_is_not_written_through(string logName)
+    {
+        WriteConfig(FindFreePort(), install: true);
+        var service = BuildService();
+        var first = await service.StartAsync(_worktree, cancellationToken: CancellationToken.None);
+        var logDirectory = Path.GetDirectoryName(first.Services.Single().LogFilePath!)!;
+        await service.StopAsync(_worktree, TestContext.Current.CancellationToken);
+
+        var outside = Path.Combine(_worktree, "outside.txt");
+        File.WriteAllText(outside, "untouched");
+        var link = Path.Combine(logDirectory, logName);
+        File.Delete(link);
+        File.CreateSymbolicLink(link, outside);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(_worktree, cancellationToken: CancellationToken.None));
+
+        Assert.Equal("untouched", File.ReadAllText(outside));
     }
 
     private static int FindFreePort()

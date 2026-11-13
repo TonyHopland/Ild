@@ -1,5 +1,7 @@
 # ADR-0020: Raw-TCP egress is served by a declared, judged relay, not a hole in the firewall
 
+> **Amended by [ADR-0036](./0036-runs-always-in-containers.md).** In a run's or chat's container or pod, a forward's loopback port is answered by a `socat` relay ILD starts there before each command, tunnelling through the egress proxy with `CONNECT`; the proxy judges and logs the connection as it does every other.
+
 A Worktree Preview cannot reach a database, or anything else outside the
 container. Previews run as the agent uid ([ADR-0016](./0016-preview-runs-as-the-agent.md)),
 whose nftables rules accept loopback and DNS and drop everything else
@@ -55,9 +57,9 @@ confirming `route_localnet` behaviour in the target pod.
 
 ## Consequences
 
-- **`SSL Mode=Verify-Full` fails.** The client now addresses the server as
-  `127.0.0.1`, so hostname verification cannot succeed. Use a weaker SSL mode for
-  a forwarded connection, or reach the server directly from outside the container.
+- **`SSL Mode=Verify-Full` fails on `127.0.0.1:<localPort>`.** The client then
+  addresses the server as `127.0.0.1`, so hostname verification cannot succeed.
+  See the amendment below for the form that does work.
 - **A loopback forward is reachable by any agent-uid process**, not only the
   preview that motivated it. Forwards are therefore instance-wide rather than
   per-repository: per-repository scoping would be attribution, not isolation. This
@@ -71,3 +73,34 @@ confirming `route_localnet` behaviour in the target pod.
   above would buy.
 - **The orchestrator dials the destination.** As with the proxy, the lists are the
   only thing standing between a forward and any host the orchestrator can reach.
+
+## Amendment: forwards answer on their real name and port
+
+In a run's or chat's container, each forward is also answered on the destination's
+**real host name and port**, so a client that connects to `postgres:5432` reaches
+the forward and a TLS client checks the certificate against `postgres`:
+`SSL Mode=Verify-Full` (Npgsql), `sslmode=verify-full` (libpq) and `rediss://`
+with host checking now work. This is possible because every run and chat has a
+loopback and a hosts file of its own, which was not true when this ADR was written.
+
+- Each forward host gets its own loopback address in `127.1.0.0/16`, from a hash of
+  the name, so it is the same on every sync; forwards to one host on several ports
+  share it. A hosts file maps a name to one address, which is why the address belongs
+  to the name and not to the forward.
+- ILD writes a marked block into the environment's `/etc/hosts` whenever it syncs
+  the relays (before each command or terminal), and starts a relay on
+  `<address>:<destination port>`. The tunnel is unchanged: `CONNECT host:port`
+  through the egress proxy, judged and logged by host name, with TLS end to end.
+- `127.0.0.1:<localPort>` keeps working, so existing connection strings do too; the
+  real-name form is preferred.
+- A destination that is an IP address has no name to map and keeps the loopback
+  form only.
+- The hosts file is root's in a Docker or Podman container, and ILD writes it as root
+  without any capability, as it does for `resolv.conf`. In a Kubernetes pod kubelet
+  owns it and commands run as the non-root user, so it is not writable: the relays
+  keep the loopback form only there, and ILD logs that once. Hardening is not
+  weakened to change this, and `hostAliases` cannot follow forwards that change at
+  runtime. Under `dotnet run` there is one shared loopback, so only the loopback
+  form exists.
+- Names come from `/etc/hosts`, which the resolver reads before DNS, so this works
+  with DNS turned off in a run.

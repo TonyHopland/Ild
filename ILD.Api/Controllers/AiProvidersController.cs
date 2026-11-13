@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Api.Services;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -22,13 +23,15 @@ public class AiProvidersController : ControllerBase
     private readonly IProviderStore _providerStore;
     private readonly InteractiveProviderSessionService _interactiveSessions;
     private readonly IManagedAgentProvisioner _agentProvisioner;
+    private readonly ProviderNetworkEntries _networkEntries;
 
     public AiProvidersController(
         IAgentAdapterRegistry adapterRegistry,
         AppDbContext db,
         IProviderStore providerStore,
         InteractiveProviderSessionService interactiveSessions,
-        IManagedAgentProvisioner agentProvisioner)
+        IManagedAgentProvisioner agentProvisioner,
+        IEgressPolicy? egressPolicy = null)
     {
         _adapterRegistry = adapterRegistry;
         _supportedProviderTypes = adapterRegistry.GetAllSupportedProviderTypes()
@@ -37,6 +40,7 @@ public class AiProvidersController : ControllerBase
         _providerStore = providerStore;
         _interactiveSessions = interactiveSessions;
         _agentProvisioner = agentProvisioner;
+        _networkEntries = new ProviderNetworkEntries(db, egressPolicy);
     }
 
     /// <summary>
@@ -208,6 +212,13 @@ public class AiProvidersController : ControllerBase
             emptyToolSelectionMeansNone = traits.EmptyToolSelectionMeansNone,
             supportsNoTools = traits.SupportsNoTools,
             typeDisplayName = traits.DisplayName,
+            // How a run reaches its model credential, from the adapter; absent when it does not say.
+            credentialPath = _adapterRegistry.GetCredentialPath(p) switch
+            {
+                CredentialPath.Gateway => "gateway",
+                CredentialPath.ReadOnlyCopy => "read-only-copy",
+                _ => null,
+            },
             createdAt = p.CreatedAt,
             updatedAt = p.UpdatedAt,
         };
@@ -262,6 +273,8 @@ public class AiProvidersController : ControllerBase
         };
         if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.CreateAiProviderAsync(p, tags)) is { } conflict)
             return Conflict(new { error = conflict });
+        // Whitelist mode must not stop the provider's own model calls (ADR-0031), so its gateway upstream hosts are listed for it.
+        await _networkEntries.SyncAsync(p);
         // Agents aren't baked into the image; if this provider uses a managed
         // agent that isn't installed yet, install it in the background so the
         // first run doesn't fail on a missing CLI.
@@ -329,6 +342,7 @@ public class AiProvidersController : ControllerBase
         p.UpdatedAt = DateTime.UtcNow;
         if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.UpdateAiProviderAsync(p, tags)) is { } conflict)
             return Conflict(new { error = conflict });
+        await _networkEntries.SyncAsync(p);
         // If the type was changed to a managed agent, make sure it is installed.
         _agentProvisioner.EnsureInstalledForProviderType(p.Type);
         return Ok(ToResponse(p));

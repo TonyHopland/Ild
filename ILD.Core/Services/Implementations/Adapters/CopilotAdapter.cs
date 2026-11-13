@@ -1,5 +1,7 @@
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Text;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -68,6 +70,55 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
     public override AgentAdapterTraits Traits => TypeTraits;
 
+    public override CredentialPath? CredentialPathFor(AiProvider provider) => CredentialPath.Gateway;
+
+    /// <summary>
+    /// Points Copilot at the gateway's HTTPS listener, the only endpoint it accepts for GitHub, and trusts
+    /// that listener's certificate. The token has the shape of a GitHub OAuth token, which the CLI checks
+    /// before it makes a request; it is the run's placeholder, not a credential. The listener is reached at the
+    /// host the gateway lease names, the address the run reaches ILD on, and <paramref name="caCopy"/> is this
+    /// launch's own copy of the certificate, which the run host stages into the run. False without a listener.
+    /// </summary>
+    public static bool TryApplyGateway(ProcessStartInfo psi, IDictionary<string, string?> environment, ModelGatewayLease gateway, int? tlsPort, string caCopy)
+    {
+        if (tlsPort is not { } port || string.IsNullOrEmpty(caCopy)
+            || !Uri.TryCreate(gateway.BaseUrl, UriKind.Absolute, out var ild)) return false;
+        environment["GH_HOST"] = $"{ild.Host}:{port}";
+        environment["COPILOT_GITHUB_TOKEN"] = gateway.GitHubPlaceholder;
+        environment["NODE_EXTRA_CA_CERTS"] = caCopy;
+        environment["GH_TOKEN"] = null;
+        environment["GITHUB_TOKEN"] = null;
+        psi.ArgumentList.Insert(0, "--no-auto-update");
+        return true;
+    }
+
+    /// <summary>The gateway's HTTPS listener, which ILD registers when it is switched on. Null without DI.</summary>
+    private GatewayTlsEndpoint? GatewayTls()
+    {
+        if (ScopeFactory is null) return null;
+        using var scope = ScopeFactory.CreateScope();
+        return scope.ServiceProvider.GetService<GatewayTlsEndpoint>();
+    }
+
+    /// <summary>
+    /// A copy of the listener's certificate for this launch, in the agent read root under a name that carries the
+    /// owner, so a run host that cannot share the file stages it into the run. Null without a certificate file.
+    /// </summary>
+    private string? TryWriteCaCopy(AgentExecutionContext ctx, GatewayTlsEndpoint? tls)
+    {
+        if (tls is null) return null;
+        var source = tls.CaFile;
+        try
+        {
+            return IldMcpServer.TryWriteFile("ild-copilot-ca", OwnerOf(ctx), File.ReadAllBytes(source), ".pem", _logger, EnvironmentVariables);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not read the gateway certificate {Path}", source);
+            return null;
+        }
+    }
+
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         // See TypeTraits.SupportsNoTools: launching anyway would hand a caller
@@ -77,24 +128,34 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 "[copilot-error] the Copilot CLI cannot run without its tools, so it cannot take a call that must have none.");
 
         string? mcpConfigPath = null;
+        string? caCopy = null;
         try
         {
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Copilot, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[copilot-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
+            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx));
 
-            Process? proc;
+            using var gateway = OpenGateway(ctx);
+            IRunProcess? proc;
             try
             {
-                proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
-                    ctx);
+                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+                var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
+                if (gateway is not null)
+                {
+                    var tls = GatewayTls();
+                    caCopy = TryWriteCaCopy(ctx, tls);
+                    if (caCopy is null || !TryApplyGateway(psi, environment, gateway, tls?.Port, caCopy))
+                        return NodeExecutionResult.Fail(
+                            $"[copilot-error] the model gateway's HTTPS listener, which the Copilot CLI needs, is switched off or its certificate could not be read: set {GatewayTlsEndpoint.PortVariable} to a free port other than 0.");
+                }
+                proc = await StartAgentProcessAsync(psi, ctx, environment, [mcpConfigPath, caCopy]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -161,12 +222,16 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             {
                 try { File.Delete(mcpConfigPath); } catch { /* best effort */ }
             }
+            if (!string.IsNullOrEmpty(caCopy))
+            {
+                try { File.Delete(caCopy); } catch { /* best effort */ }
+            }
         }
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
     internal static readonly string[] ReservedCliFlags =
-        ["--allow-all-tools", "--no-color", "--add-dir", "--additional-mcp-config", "--prompt", "-p"];
+        ["--allow-all-tools", "--no-color", "--no-auto-update", "--add-dir", "--additional-mcp-config", "--prompt", "-p"];
 
     /// <summary>
     /// Copilot signs in through its own <c>/login</c> and its only tool is <c>ild</c>:
@@ -181,6 +246,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         SupportedTools = AiToolCatalog.IldOnlyTools,
         EmptyToolSelectionMeansNone = true,
         SupportsNoTools = false,
+        SupportsSessionResume = false,
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
     };
 
@@ -234,7 +300,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         }
 
         // Passed as `@file`, never inline JSON, so the server's API token stays
-        // out of argv (ADR-0014).
+        // out of argv.
         if (!string.IsNullOrWhiteSpace(mcpConfigPath))
         {
             psi.ArgumentList.Add("--additional-mcp-config");

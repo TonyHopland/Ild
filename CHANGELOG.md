@@ -7,9 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **BREAKING — a repository clone URL can no longer carry a credential.** Put the token in the remote provider's API key.
+- **An agent can no longer act as another run or chat, or reach another run's work item.**
+- **Runs can no longer reach ILD's database, the WorkItem Server, the Kubernetes API, or private, link-local and cloud metadata addresses**, unless you switch that protection off in Settings → Network or declare a forward.
+- **A run can no longer reach another run over the network.**
+- **A run's model calls follow the network mode and lists, and appear in the Network Log as "via model gateway".**
+- **Repeated sign-in attempts are slowed down per caller.** Behind a reverse proxy, name it in `ILD_TRUSTED_PROXIES`.
+- **A git host's webhook needs no ILD token.** Remove any `?access_token=` from the webhook URL in the git host's settings.
+- **The settings list no longer returns the WorkItem Server API key.**
+- **A run can no longer exhaust ILD's memory, disk or egress proxy with huge output, huge files or many connections.**
+- **A repository can no longer hang ILD or exhaust its memory through a linked, special or oversized config or version file.**
+- **A `{{WorkTree.File:...}}` placeholder reads only files inside the worktree.**
+- **A preview's health check only reaches the service's own address and never follows a redirect.**
+- **A preview service name can no longer name a file outside the preview's log folder.**
+
+### Added
+
+- **Every loop run, chat and provider sign-in runs in a container of its own, or in a pod when ILD runs in Kubernetes**, apart from ILD, its database and its secrets.
+- **A run gets the toolchains its repository needs and the coding agents ILD has installed, at the versions Settings shows.**
+- **A work item and a chat show "Preparing container" while their container or pod is being made**, and a new chat takes messages meanwhile.
+- **The shared chat container or pod is removed after 30 idle minutes** (`ILD_CHAT_IDLE_TIMEOUT_MINUTES`, `0` to keep it).
+- **Settings → Network lists ILD's protected destinations and the address ranges each covers.**
+- **Toolchain installers have their own Installers scope in Settings → Network.**
+- **Forwards answer on their real host name and port inside a run's container**, so TLS host name verification works.
+- **Open in VS Code on a work item's Terminal tab opens the run's worktree in VS Code, attached to its Docker or Podman container.**
+- **`ILD_CONTAINER_SOCKET_GRANT=1` lets ILD use a socket of the host's root group**, such as rootful Podman's on Linux.
+- **On Kubernetes, Settings warns when the run namespace has no default-deny NetworkPolicy.**
+- **A failed or interrupted AI step can be resumed, not only retried.** Resume continues the agent's earlier session where it left off; Retry starts the step over.
+
 ### Changed
 
+- **BREAKING — Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` before you upgrade.
+- **BREAKING — `ILD_API_URL` must name ILD by a host name that is not localhost**, such as the compose service; ILD does not start otherwise.
+- **BREAKING — on Kubernetes, ILD runs every loop run and chat in a pod.** Set up the RBAC and the shared tools claim from the deployment guide before you upgrade.
+- **BREAKING — chats and runs made before the upgrade can no longer be run again.** Reading and deleting them still work.
+- **BREAKING — coding agents no longer hold your Claude, Codex, Copilot or API credentials.** Open each Claude subscription provider's terminal once after upgrading.
+- **ILD and the WorkItem Server run as uid 10001, as documented.**
+- **The ILD image is smaller.**
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**
+
+### Fixed
+
+- **A Claude Code "5-hour limit" now parks the run until the limit resets, instead of failing the node.**
+- **A preview starts again after ILD was stopped abruptly while it ran.**
+- **A preview service started on its own shows as running at once**, instead of only after a refresh.
+- **An OpenCode reply no longer includes the text of files the agent wrote.**
+- **A work item created through the API keeps the AI provider override it was sent.**
+- **A work item whose run was cancelled offers Clean up → Done and → Backlog.**
+- **The browser and Java tools in a run or chat reach the network through the egress proxy again.**
+- **A work item's terminal reaches the network the way its run does.**
+
+### Removed
+
+- **The agent user and its firewall (`AGENT_USER`, `NET_ADMIN`).**
+- **The `WITH_NODE`, `WITH_DOTNET_SDK` and `WITH_CHROME` build arguments.**
 
 ## [0.23.0] - 2026-11-04
 

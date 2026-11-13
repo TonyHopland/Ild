@@ -1,6 +1,9 @@
+using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -46,6 +49,30 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
     public override AgentAdapterTraits Traits => TypeTraits;
 
+    public override CredentialPath? CredentialPathFor(AiProvider provider) => CredentialPath.Gateway;
+
+    /// <summary>
+    /// Points the CLI at the model gateway with the lease's placeholder in the slot its token has:
+    /// an API key travels as <c>x-api-key</c>, a subscription token as a bearer token. Nothing the
+    /// gateway swaps in is ever in the CLI's environment, arguments or files (ADR-0031).
+    /// </summary>
+    public static void ApplyGateway(IDictionary<string, string?> environment, ModelGatewayLease gateway, AiProvider provider)
+    {
+        environment["ANTHROPIC_BASE_URL"] = gateway.UrlFor(GatewayRoutes.Anthropic);
+        var key = ModelCredentialSource.ClaudeLongLivedToken(provider);
+        if (key is not null && key.StartsWith("sk-ant-api", StringComparison.Ordinal))
+        {
+            environment["ANTHROPIC_API_KEY"] = gateway.Token;
+            environment["CLAUDE_CODE_OAUTH_TOKEN"] = null;
+        }
+        else
+        {
+            environment["CLAUDE_CODE_OAUTH_TOKEN"] = gateway.Token;
+            environment["ANTHROPIC_API_KEY"] = null;
+        }
+        environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
+    }
+
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         string? mcpConfigPath = null;
@@ -55,7 +82,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[claude-code-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
@@ -65,7 +92,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
             if (!ctx.NoTools)
-                mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
+                mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx));
 
             // Fork: seed a copy of the source session's transcript under the
             // destination id (leaving the source file untouched) so the restore
@@ -85,17 +112,19 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 ? 0m
                 : await ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
 
-            Process? proc;
+            using var gateway = OpenGateway(ctx);
+            IRunProcess? proc;
             try
             {
-                proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
-                    ctx);
+                var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
+                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+                if (gateway is not null) ApplyGateway(environment, gateway, ctx.Provider);
+                proc = await StartAgentProcessAsync(psi, ctx, environment, [mcpConfigPath]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
                 return NodeExecutionResult.Fail(
-                    $"[claude-code-error] cannot start '{binaryPath}' — install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure you are logged in (e.g. via 'claude /login'). Details: {ex.Message}");
+                    $"[claude-code-error] cannot start '{binaryPath}' — install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure the provider has its long-lived token (open the provider terminal). Details: {ex.Message}");
             }
 
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
@@ -184,7 +213,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         return exitCode == 0
             ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParseClaude(stdout.RawStdout, costBeforeThisRun))
-            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
+            : NodeExecutionResult.Fail(
+                AdapterFailureText.NonZeroExit(exitCode, stderr, stdout.ErrorMessage, stdout.Content.Length > 0 ? stdout.Content : stdout.RawStdout),
+                response,
+                AiFailureClassifier.ClassifyProviderMessage(stdout.ErrorMessage));
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
@@ -199,10 +231,11 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     internal static readonly AgentAdapterTraits TypeTraits = new()
     {
         DisplayName = "Claude Code",
-        CliAuth = new("Claude Code", "run the `/login` slash command to sign in (with an active Claude Code subscription)"),
+        CliAuth = new("Claude Code", "let it run `claude setup-token` and sign in (with an active Claude Code subscription): ILD keeps the long-lived token it prints"),
         SupportedTools = AiToolCatalog.DefaultTools,
         EmptyToolSelectionMeansNone = false,
         SupportsNoTools = true,
+        SupportsSessionResume = true,
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
     };
 
@@ -310,11 +343,12 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     {
         var dllPath = IldMcpServer.ResolveServerDll(environment);
         if (dllPath == null) return null;
+        var (command, arguments) = IldMcpServer.LaunchFor(dllPath);
 
         return new Dictionary<string, object?>
         {
-            ["command"] = "dotnet",
-            ["args"] = new[] { dllPath },
+            ["command"] = command,
+            ["args"] = arguments.ToArray(),
             ["env"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
         };
     }
@@ -505,10 +539,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         if (ScopeFactory is null) return;
 
         // Claude keeps its session files in the shared credential store, which the
-        // agent can write, so they are only checked, written and read as the agent
-        // (see AgentWritableFiles), never by the orchestrator through a link.
-        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
-        if (path is null || await AgentWritableFiles.FileExistsAsync(path, ctx.Cancel)) return;
+        // agent can write, so they are only checked, written and read through the run host
+        // (see AgentWritableFiles), never through a link.
+        var path = SessionFilePath(worktreePath, sessionId);
+        if (path is null || await RunHost.FileExistsAsync(path, ctx.Cancel)) return;
 
         try
         {
@@ -523,7 +557,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// <summary>The cost the session's transcript says it reached, or zero when there is none or it cannot be read (logged).</summary>
     private async Task<decimal> ReadSessionCostBeforeAsync(string sessionId, string worktreePath, CancellationToken ct)
     {
-        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
+        var path = SessionFilePath(worktreePath, sessionId);
         if (path is null) return 0m;
 
         try
@@ -539,32 +573,39 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
     private async Task TryPersistSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
     {
-        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
+        var path = SessionFilePath(worktreePath, sessionId);
         if (path is null) return;
 
         await PersistSessionFileAsync(ctx, sessionId, path, SessionSnapshotFormats.ClaudeJsonl, _logger);
     }
 
-    // Claude keeps its sessions under the HOME it runs with, which under uid
-    // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
+    private string? SessionFilePath(string worktreePath, string sessionId)
+        => SessionFilePath(RunHost, worktreePath, sessionId, EnvironmentVariables);
+
+    /// <summary>Where Claude keeps the session: under the home the run's host says its CLIs run with, otherwise under ours.</summary>
+    internal static string? SessionFilePath(IRunHost host, string worktreePath, string sessionId, IProcessEnvironment environment)
+        => host.RunHomeFor(worktreePath) is { } home && !string.IsNullOrEmpty(sessionId)
+            ? Path.Combine(home, ".claude", "projects", EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl")
+            : GetSessionFilePath(worktreePath, sessionId, environment);
+
+    // Claude keeps its sessions under the HOME it runs with, which on this machine is ours.
     public static string? GetSessionFilePath(string worktreePath, string sessionId)
-        => GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, ProcessEnvironment.Current);
+        => GetSessionFilePath(worktreePath, sessionId, ProcessEnvironment.Current);
 
     /// <inheritdoc cref="GetSessionFilePath(string, string)"/>
     /// <param name="environment">Where our own <c>HOME</c> is read.</param>
-    internal static string? GetSessionFilePath(
-        string worktreePath, string sessionId, string? agentUser, string? agentHome, IProcessEnvironment environment)
+    internal static string? GetSessionFilePath(string worktreePath, string sessionId, IProcessEnvironment environment)
     {
         if (string.IsNullOrEmpty(worktreePath) || string.IsNullOrEmpty(sessionId)) return null;
-        return GetProjectsRoot(agentUser, agentHome, environment) is { } projects
+        return GetProjectsRoot(environment) is { } projects
             ? Path.Combine(projects, EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl")
             : null;
     }
 
     /// <summary>The <c>.claude/projects</c> directory under the <c>HOME</c> Claude runs with.</summary>
-    internal static string? GetProjectsRoot(string? agentUser, string? agentHome, IProcessEnvironment environment)
+    internal static string? GetProjectsRoot(IProcessEnvironment environment)
     {
-        var home = AgentIsolation.ResolveChildHome(agentUser, agentHome) ?? environment.Get("HOME");
+        var home = environment.Get("HOME");
         if (string.IsNullOrEmpty(home))
             home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".claude", "projects");

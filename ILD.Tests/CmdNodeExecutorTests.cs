@@ -1,3 +1,5 @@
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
@@ -26,9 +28,11 @@ public class CmdNodeExecutorTests : IDisposable
     }
 
     private NodeExecutionContext Context(
-        string command, CancellationToken cancel = default, Func<string, Task>? progress = null)
+        string command, CancellationToken cancel = default, Func<string, Task>? progress = null, ILD.Core.Services.RunHosts.IRunHost? host = null)
     {
         var services = new ServiceCollection();
+        // Real-shell tests leave the host unset and get the local one.
+        if (host is not null) services.AddSingleton(host);
         services.AddSingleton(new Mock<IWorkItemManager>().Object);
         services.AddSingleton(NoPackageFeeds.Resolver);
         return new NodeExecutionContext(
@@ -52,6 +56,23 @@ public class CmdNodeExecutorTests : IDisposable
         return outcomes;
     }
 
+    [Fact]
+    public async Task Output_without_a_newline_is_kept_up_to_the_limit_with_a_marker()
+    {
+        var progress = new System.Text.StringBuilder();
+        var ctx = Context(
+            "head -c 300000 /dev/zero | tr '\\0' x", TestContext.Current.CancellationToken, text => { lock (progress) progress.Append(text); return Task.CompletedTask; });
+        var outcomes = new List<NodeOutcome>();
+
+        await foreach (var outcome in new CmdNodeExecutor(new ILD.Core.Services.RunHosts.RunReadLimits { MaxOutputBytes = 1000 }).ExecuteAsync(ctx)) outcomes.Add(outcome);
+
+        var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success));
+        Assert.StartsWith(new string('x', 1000), success.Output);
+        Assert.Contains("truncated", success.Output);
+        Assert.InRange(success.Output!.Length, 1000, 1100);
+        Assert.Equal(1000, progress.ToString().Count(c => c == 'x'));
+    }
+
     [Theory]
     // The command reaches /bin/sh as one argv entry, so the shell — not .NET's
     // argument parser, and not a hand-rolled escape — is what interprets it.
@@ -67,7 +88,10 @@ public class CmdNodeExecutorTests : IDisposable
     [Fact]
     public async Task A_failing_command_fails_the_node_with_its_output()
     {
-        var outcomes = await RunAsync(Context("echo nope; echo bad >&2; exit 3", TestContext.Current.CancellationToken));
+        var host = new Fakes.FakeRunHost().WithDirectory(_worktree);
+        host.Script = _ => Fakes.FakeCommandScript.Prints("nope\n", "bad\n", code: 3);
+
+        var outcomes = await RunAsync(Context("echo nope; echo bad >&2; exit 3", TestContext.Current.CancellationToken, host: host));
 
         var fail = Assert.IsType<NodeOutcome.Fail>(Assert.Single(outcomes, o => o is NodeOutcome.Fail));
         Assert.Equal("exit code 3", fail.Reason);
@@ -116,155 +140,23 @@ public class CmdNodeExecutorTests : IDisposable
     }
 
     // A Cmd command runs in a worktree the agent just wrote, so in practice it
-    // runs agent-authored code and gets exactly the agent's privileges
-    // (ADR-0014/0016). Driven through the explicit-parameter seams: the test
-    // process is always single-uid (TestEnvironmentBaseline).
+    // runs agent-authored code and gets what an agent launch gets (ADR-0016).
     private const string TrickyCommand = "echo \"a  b\" 'it'\\''s' $HOME \\";
 
-    private static IEnumerable<string> OrchestratorOnlyNames() =>
-        AgentIsolation.SecretEnvironmentKeys.Concat(AgentIsolation.OrchestratorTopologyEnvKeys).Distinct();
-
     [Fact]
-    public void Under_uid_isolation_the_command_crosses_to_the_agent_uid_intact_in_the_worktree()
+    public void The_command_is_a_plain_shell_in_the_worktree_and_carries_no_environment_of_its_own()
     {
         var psi = CmdNodeExecutor.ShellStartInfo(TrickyCommand, _worktree);
-        psi.Environment["HOME"] = "/home/ild";
+        psi.Environment["ILD_ONLY_ON_THE_START_INFO"] = "x";
 
-        var spawned = CmdNodeExecutor.IsolateCommand(psi, "agent", "agents", "/home/agent", null);
+        Assert.Equal("/bin/sh", psi.FileName);
+        Assert.Equal(new[] { "-c", TrickyCommand }, psi.ArgumentList);
+        Assert.Equal(_worktree, psi.WorkingDirectory);
 
-        Assert.Equal("/usr/bin/setpriv", spawned.FileName);
-        var args = spawned.ArgumentList.ToList();
-        var sh = args.IndexOf("/bin/sh");
-        Assert.True(sh > 0, "the shell must be the command setpriv runs: " + string.Join(' ', args));
-        var setprivArgs = args.Take(sh).ToList();
-        Assert.Contains("--reuid=agent", setprivArgs);
-        Assert.Contains("--regid=agents", setprivArgs);
-        Assert.Contains("--init-groups", setprivArgs);
-        Assert.Contains("--inh-caps=-all", setprivArgs);
-        Assert.Contains("--ambient-caps=-all", setprivArgs);
-        Assert.Equal(new[] { "/bin/sh", "-c", TrickyCommand }, args.Skip(sh));
-        Assert.Equal(_worktree, spawned.WorkingDirectory);
-        Assert.Equal("/home/agent", spawned.Environment["HOME"]);
-    }
-
-    [Theory]
-    [InlineData("agent")]
-    // Single-uid mode keeps the orchestrator uid but still sheds what the command
-    // has no use for.
-    [InlineData(null)]
-    public void The_command_inherits_none_of_the_orchestrators_secrets_or_topology(string? agentUser)
-    {
-        var psi = CmdNodeExecutor.ShellStartInfo("echo hi", _worktree);
-        var seeded = OrchestratorOnlyNames().ToList();
-        foreach (var name in seeded)
-            psi.Environment[name] = "orchestrator-only";
-        // Seeded for real, so the absence checked below is the strip's doing.
-        Assert.All(seeded, name => Assert.True(psi.Environment.ContainsKey(name)));
-        Assert.Contains("ILD_SECRET_KEY", seeded);
-        Assert.Contains("ILD_DB_CONNECTION_STRING", seeded);
-        Assert.Contains("WORKITEM_DB_CONNECTION_STRING", seeded);
-        Assert.Contains("ILD_SESSION_TOKEN_PEPPER", seeded);
-        Assert.Contains("ILD_API_TOKEN", seeded);
-        Assert.Contains("ILD_AGENT_TOKEN", seeded);
-        Assert.Contains(AgentIsolation.PrivateRootEnvVar, seeded);
-        psi.Environment["GIT_AUTHOR_NAME"] = "ILD Agent";
-        psi.Environment["PATH"] = "/usr/bin:/bin";
-
-        var spawned = CmdNodeExecutor.IsolateCommand(psi, agentUser, agentUser, "/home/agent", null);
-
-        var leaked = seeded.Where(spawned.Environment.ContainsKey).ToList();
-        Assert.True(leaked.Count == 0, "leaked to the Cmd node's shell: " + string.Join(", ", leaked));
-        Assert.Equal("ILD Agent", spawned.Environment["GIT_AUTHOR_NAME"]);
-        Assert.Equal("/usr/bin:/bin", spawned.Environment["PATH"]);
-    }
-
-    [Fact]
-    public void The_command_carries_the_egress_proxy_over_a_stale_inherited_one()
-    {
-        const string proxy = "http://127.0.0.1:1";
-        var psi = CmdNodeExecutor.ShellStartInfo("echo hi", _worktree);
-        foreach (var (key, _) in AgentIsolation.EgressProxyEnvironment(proxy))
-            psi.Environment[key] = "http://stale.invalid:9";
-
-        var spawned = CmdNodeExecutor.IsolateCommand(psi, "agent", "agent", "/home/agent", proxy);
-
-        foreach (var (key, value) in AgentIsolation.EgressProxyEnvironment(proxy))
-            Assert.Equal(value, spawned.Environment[key]);
-        Assert.Equal(proxy, spawned.Environment["HTTP_PROXY"]);
-        Assert.Equal("1", spawned.Environment["NODE_USE_ENV_PROXY"]);
-    }
-
-    [Fact]
-    public void Single_uid_mode_spawns_a_plain_shell_in_the_worktree_with_path_and_home_as_inherited()
-    {
-        var psi = CmdNodeExecutor.ShellStartInfo(TrickyCommand, _worktree);
-        psi.Environment["PATH"] = "/usr/bin:/bin";
-        psi.Environment["HOME"] = "/home/ild";
-
-        var spawned = CmdNodeExecutor.IsolateCommand(psi, null, null, "/home/agent", null);
-
-        Assert.Equal("/bin/sh", spawned.FileName);
-        Assert.Equal(new[] { "-c", TrickyCommand }, spawned.ArgumentList);
-        Assert.Equal(_worktree, spawned.WorkingDirectory);
-        Assert.Equal("/usr/bin:/bin", spawned.Environment["PATH"]);
-        Assert.Equal("/home/ild", spawned.Environment["HOME"]);
-    }
-
-    [Fact]
-    public async Task A_real_run_does_not_hand_the_command_the_orchestrators_environment()
-    {
-        // The seams above are only half of it: the executor must actually spawn
-        // through them. The test process carries a real orchestrator-private root
-        // (TestEnvironmentBaseline), so a run that inherits it shows it in `env`.
-        var inherited = Environment.GetEnvironmentVariable(AgentIsolation.PrivateRootEnvVar);
-        Assert.False(string.IsNullOrEmpty(inherited), "the probe variable must be set for this test to mean anything");
-
-        var outcomes = await RunAsync(Context("env", TestContext.Current.CancellationToken));
-
-        var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success));
-        Assert.Contains("PATH=", success.Output);
-        Assert.DoesNotContain(AgentIsolation.PrivateRootEnvVar + "=", success.Output);
-    }
-
-    [Fact]
-    public async Task Setpriv_execs_the_shell_in_place_so_the_held_process_is_the_tree_root()
-    {
-        // The reap kills p's tree. Under uid isolation p is started as setpriv, so
-        // that reaches the command only if setpriv becomes the shell rather than
-        // forking it. The caps-only wrap is the same setpriv minus the uid switch,
-        // which this process has no privilege for.
-        var psi = AgentIsolation.DropInheritedCapabilities(
-            CmdNodeExecutor.ShellStartInfo("echo $$", _worktree), agentUser: "agent");
-        Assert.Equal("/usr/bin/setpriv", psi.FileName);
-
-        using var p = Process.Start(psi)!;
-        var printed = (await p.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken)).Trim();
-        await p.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(0, p.ExitCode);
-        Assert.Equal(p.Id.ToString(), printed);
-    }
-
-    [Fact]
-    public void The_cmd_command_crosses_to_the_agent_uid_with_the_orchestrators_secrets_stripped_and_egress_proxied()
-    {
-        var psi = CmdNodeExecutor.ShellStartInfo("make test", "/work");
-        foreach (var key in AgentIsolation.SecretEnvironmentKeys.Concat(AgentIsolation.OrchestratorTopologyEnvKeys))
-            psi.Environment[key] = "inherited-" + key;
-        psi.Environment["GIT_AUTHOR_NAME"] = "ILD";
-
-        CmdNodeExecutor.IsolateCommand(psi, "agent", "agent", "/home/agent", "http://proxy.test:3128");
-
-        Assert.Equal("/usr/bin/setpriv", psi.FileName);
-        Assert.Equal(new[]
-        {
-            "--reuid=agent", "--regid=agent", "--init-groups", "--inh-caps=-all", "--ambient-caps=-all", "--",
-            "/bin/sh", "-c", "make test",
-        }, psi.ArgumentList);
-        Assert.DoesNotContain(AgentIsolation.SecretEnvironmentKeys.Concat(AgentIsolation.OrchestratorTopologyEnvKeys), psi.Environment.ContainsKey);
-        Assert.Equal("ILD", psi.Environment["GIT_AUTHOR_NAME"]);
-        Assert.Equal("http://proxy.test:3128", psi.Environment["HTTPS_PROXY"]);
-        Assert.Equal("/home/agent", psi.Environment["HOME"]);
+        // What reaches the command is the environment its caller names (the package feeds), merged by the host.
+        var launched = LocalRunHost.Launch(RunCommand.Prepared(psi, environment: new Dictionary<string, string?> { ["FEED"] = "f" }), EgressProxyTests.Creds);
+        Assert.Equal("f", launched.Environment["FEED"]);
+        Assert.False(launched.Environment.ContainsKey("ILD_ONLY_ON_THE_START_INFO"));
     }
 
     // The grandchild is not our child, so there is no exit to await: poll /proc

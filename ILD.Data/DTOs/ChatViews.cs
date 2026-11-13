@@ -23,7 +23,9 @@ public sealed record ChatSessionView(
     IReadOnlyList<string> Tools,
     DateTime CreatedAt,
     IReadOnlyList<ChatMessageView> Messages,
-    Guid? ActiveTurnId = null);
+    Guid? ActiveTurnId = null,
+    bool Preparing = false,
+    string? PreparationError = null);
 
 /// <summary>
 /// A lightweight history-list row (ADR-0013): no transcript, just what the chat

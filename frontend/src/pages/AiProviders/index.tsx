@@ -7,6 +7,7 @@ import {
   CliAuth,
   ApiError,
   ConfigFieldDescriptor,
+  CredentialPath,
 } from "../../types";
 import { aiProviderService, agentAdapterService } from "../../services/auth";
 import AdapterConfigFields from "../../components/AdapterConfigFields";
@@ -16,6 +17,18 @@ import { sameTag } from "../../utils/providerTags";
 
 /** Adapter config value shapes rendered by {@link AdapterConfigFields}. */
 type ConfigValue = string | number | boolean;
+
+const CREDENTIAL_PATH_LABELS: Record<CredentialPath, string> = {
+  gateway: "Gateway",
+  "read-only-copy": "Read-only copy",
+};
+
+const CREDENTIAL_PATH_HINTS: Record<CredentialPath, string> = {
+  gateway:
+    "ILD adds the credential to the agent's requests. The agent only ever holds a placeholder.",
+  "read-only-copy":
+    "Each run gets a copy of the credential that the agent can read, but not change or share with other runs.",
+};
 
 /** The schema fields the server round-trips as dedicated, non-secret values. */
 const PERSISTED_CONFIG_FIELDS = ["customMcpServersJson", "extraArgs"] as const;
@@ -145,6 +158,10 @@ export default function AiProviders() {
   const cliAuthFor = (t: string): CliAuth | null => adapterFor(t)?.cliAuth ?? null;
   const cliAuth = cliAuthFor(type);
 
+  // A Claude subscription is used through a long-lived token (`claude setup-token`),
+  // which ILD keeps and the agent never sees. It is the one sign-in that also has a field.
+  const takesLongLivedToken = type.toLowerCase() === "claude-code";
+
   // What the selected type's adapter says about a model. Undefined means no
   // adapter declared anything.
   const modelSupport: AdapterModelSupport | undefined = adapterFor(type)?.modelSupport;
@@ -193,12 +210,12 @@ export default function AiProviders() {
     setSaveError(null);
     try {
       if (editingProvider) {
-        if (!cliAuth && apiKey) {
+        if ((!cliAuth || takesLongLivedToken) && apiKey) {
           data.apiKey = apiKey;
         }
         await aiProviderService.update(editingProvider.id, data);
       } else {
-        data.apiKey = cliAuth ? "" : apiKey;
+        data.apiKey = !cliAuth || takesLongLivedToken ? apiKey : "";
         await aiProviderService.create(data);
       }
     } catch (error) {
@@ -291,6 +308,26 @@ export default function AiProviders() {
                   </span>
                 </div>
               )}
+              {provider.type.toLowerCase() === "claude-code" && (
+                <div className="ap-field">
+                  <span className="ap-label">Long-lived token</span>
+                  <span className="ap-value ap-masked">
+                    {provider.hasApiKey ? "••••••••" : "(not set: open the terminal)"}
+                  </span>
+                </div>
+              )}
+              {provider.credentialPath && (
+                <div className="ap-field">
+                  <span className="ap-label">Credentials</span>
+                  <span
+                    className="ap-value"
+                    data-testid={`credential-path-${provider.id}`}
+                    title={CREDENTIAL_PATH_HINTS[provider.credentialPath]}
+                  >
+                    {CREDENTIAL_PATH_LABELS[provider.credentialPath]}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -347,7 +384,16 @@ export default function AiProviders() {
                   ))}
                 </select>
               </div>
-              {cliAuth ? (
+              {takesLongLivedToken && (
+                <div className="ap-cli-note">
+                  A Claude subscription is used through a long-lived token that ILD keeps and the
+                  agent never sees. Save the provider, then use <strong>Open terminal</strong>: it
+                  runs <code>claude setup-token</code> and saves the token it prints. A provider
+                  that was signed in before has to do this once. If ILD cannot find the token, paste
+                  it below.
+                </div>
+              )}
+              {cliAuth && !takesLongLivedToken ? (
                 <div className="ap-cli-note">
                   This provider type authenticates via the locally-installed {cliAuth.cliName} CLI.
                   The first time you set it up, save the provider and then use{" "}
@@ -358,7 +404,7 @@ export default function AiProviders() {
                   . Until you complete that one-time login, this provider will not work. Base URL
                   and API key are configured by the CLI itself and are not needed here.
                 </div>
-              ) : (
+              ) : !cliAuth ? (
                 <div className="form-group">
                   <label htmlFor="apBaseUrl">Base URL</label>
                   <input
@@ -369,7 +415,7 @@ export default function AiProviders() {
                     required
                   />
                 </div>
-              )}
+              ) : null}
               {supportsModel && (
                 <div className="form-group">
                   <label htmlFor="apModel">
@@ -388,9 +434,11 @@ export default function AiProviders() {
                   )}
                 </div>
               )}
-              {!cliAuth && (
+              {(!cliAuth || takesLongLivedToken) && (
                 <div className="form-group">
-                  <label htmlFor="apApiKey">API Key</label>
+                  <label htmlFor="apApiKey">
+                    {takesLongLivedToken ? "Long-lived token (from claude setup-token)" : "API Key"}
+                  </label>
                   <input
                     id="apApiKey"
                     type="password"

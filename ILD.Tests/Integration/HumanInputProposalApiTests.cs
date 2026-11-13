@@ -285,7 +285,7 @@ public class HumanInputProposalApiTests
         var parked = await SeedParkedAsync(host);
         var agent = refusal switch
         {
-            Refusal.NoSession => host.Agent(),
+            Refusal.NoSession => host.Human,
             Refusal.UnknownRun => host.Agent(runId: Guid.NewGuid()),
             Refusal.UnknownChat => host.Agent(chatSessionId: Guid.NewGuid()),
             _ => host.Agent(await SeedRunAsync(host.Factory)),

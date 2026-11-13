@@ -69,6 +69,10 @@ public record ChatTurnStartedPayload(Guid ChatSessionId, Guid TurnId);
 
 public record ChatTurnCompletedPayload(Guid ChatSessionId, Guid TurnId, bool Interrupted);
 
+public record ChatPreparedPayload(Guid ChatSessionId);
+
+public record ChatPreparationFailedPayload(Guid ChatSessionId, string Error);
+
 public record ChatLoopUpdatePayload(Guid ChatSessionId, string Document);
 
 public record ChatEditProposalsChangedPayload(Guid ChatSessionId);
@@ -92,7 +96,7 @@ public record NetworkPolicyChangedPayload();
 /// enum: the hub serialises enums as numbers where the REST API sends names, and
 /// the Settings page reads one shape from both.
 /// </summary>
-public record NetworkLogAppendedPayload(Guid Id, string Host, int Port, DateTime Timestamp, string Decision, Guid? AiProviderId);
+public record NetworkLogAppendedPayload(Guid Id, string Host, int Port, DateTime Timestamp, string Decision, Guid? AiProviderId, string? Reason = null, string? Installer = null, string? Via = null);
 
 public record NetworkLogClearedPayload();
 

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -37,7 +38,7 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
         var factory = new Mock<IHttpClientFactory>();
         var configuration = new ConfigurationBuilder().Build();
         return new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
     }
 
     private static JsonElement ToolDocument()

@@ -1,8 +1,13 @@
+using ILD.Core.Services.Implementations.Network;
+using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.RunHosts.Local;
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -24,7 +29,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// passed as <c>-m</c> when set; blank leaves the CLI's own default.
 ///
 /// Codex runs with <c>--dangerously-bypass-approvals-and-sandbox</c>: it cannot
-/// prompt headlessly, and the agent uid and the egress proxy (ADR-0014, ADR-0019)
+/// prompt headlessly, and the run host and the egress proxy (ADR-0019)
 /// are the sandbox. Of the per-node tool allowlist only <c>ild</c> applies.
 ///
 /// MCP servers are configured per launch with <c>-c mcp_servers.&lt;name&gt;=…</c>
@@ -41,17 +46,20 @@ namespace ILD.Core.Services.Implementations.Adapters;
 public sealed class CodexAdapter : CliAgentAdapterBase
 {
     private readonly ILogger _logger;
+    private readonly EgressCredentials? _credentials;
 
-    public CodexAdapter(ILogger<CodexAdapter>? logger = null, IProcessEnvironment? environment = null)
+    public CodexAdapter(ILogger<CodexAdapter>? logger = null, IProcessEnvironment? environment = null, EgressCredentials? credentials = null)
         : base(environment)
     {
+        _credentials = credentials;
         _logger = logger ?? NullLogger<CodexAdapter>.Instance;
     }
 
     public CodexAdapter(
-        IServiceScopeFactory scopeFactory, ILogger<CodexAdapter>? logger = null, IProcessEnvironment? environment = null)
+        IServiceScopeFactory scopeFactory, ILogger<CodexAdapter>? logger = null, IProcessEnvironment? environment = null, EgressCredentials? credentials = null)
         : base(scopeFactory, environment)
     {
+        _credentials = credentials;
         _logger = logger ?? NullLogger<CodexAdapter>.Instance;
     }
 
@@ -61,6 +69,77 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
     public override AgentAdapterTraits Traits => TypeTraits;
+
+    public override CredentialPath? CredentialPathFor(AiProvider provider) => CredentialPath.Gateway;
+
+    internal const string GatewayProviderId = "ild";
+
+    /// <summary>
+    /// Points codex at the model gateway through a provider of its own that keeps the ChatGPT login but
+    /// talks HTTP (the built-in one upgrades to a WebSocket the gateway does not relay). The run gets a
+    /// <c>CODEX_HOME</c> of its own whose login holds the run's token as the access token, so every
+    /// request codex makes carries it; the real login stays in the credential store (ADR-0031).
+    /// </summary>
+    public static void ApplyGateway(ProcessStartInfo psi, IDictionary<string, string?> environment, ModelGatewayLease gateway, string codexHome)
+    {
+        var chatGpt = gateway.UrlFor(GatewayRoutes.ChatGpt);
+        string[] settings =
+        [
+            $"chatgpt_base_url=\"{chatGpt}\"",
+            $"model_providers.{GatewayProviderId}={{name=\"ild\",base_url=\"{chatGpt}/codex\",wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
+            $"model_provider=\"{GatewayProviderId}\"",
+        ];
+        for (var i = 0; i < settings.Length; i++)
+        {
+            psi.ArgumentList.Insert(1 + 2 * i, "-c");
+            psi.ArgumentList.Insert(2 + 2 * i, settings[i]);
+        }
+        environment["CODEX_HOME"] = codexHome;
+        environment["OPENAI_API_KEY"] = null;
+    }
+
+    /// <summary>The directory removed with the run: codex's home for a gateway run.</summary>
+    public static Task<bool> DeleteRunFilesAsync(Guid runOrChatId, CancellationToken ct = default)
+        => AgentWritableFiles.DeleteAsync([RunCodexHome(runOrChatId)], ct);
+
+    private const string HomeDirSegment = "ild-codex-home";
+
+    private static string RunCodexHome(Guid runOrChatId)
+        => Path.Combine(AgentIsolation.ScratchRoot, HomeDirSegment, runOrChatId.ToString("N"));
+
+    /// <summary>The <c>auth.json</c> codex reads in the agent's home: a ChatGPT login with nothing in it that works anywhere.</summary>
+    internal static string BuildPlaceholderLogin(DateTimeOffset now, string runToken)
+    {
+        static string Segment(object value)
+            => Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(value)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var idToken = string.Join('.',
+            Segment(new { alg = "none", typ = "JWT" }),
+            Segment(new Dictionary<string, object>
+            {
+                ["email"] = "agent@ild.invalid",
+                ["exp"] = now.AddYears(1).ToUnixTimeSeconds(),
+                ["https://api.openai.com/auth"] = new Dictionary<string, object>
+                {
+                    ["chatgpt_account_id"] = "ild-placeholder",
+                    ["chatgpt_plan_type"] = "plus",
+                },
+            }),
+            "ild");
+        return JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["auth_mode"] = "chatgpt",
+            ["OPENAI_API_KEY"] = null,
+            ["tokens"] = new Dictionary<string, object>
+            {
+                ["id_token"] = idToken,
+                ["access_token"] = runToken,
+                ["refresh_token"] = "ild-placeholder-refresh",
+                ["account_id"] = "ild-placeholder",
+            },
+            ["last_refresh"] = now.UtcDateTime.ToString("O"),
+        });
+    }
+
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -77,13 +156,17 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Codex, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[codex-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, EnvironmentVariables);
+            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx), _credentials);
 
-            var sessionsDirectory = SessionsDirectory();
+            using var gateway = OpenGateway(ctx);
+            var codexHome = RunHost.RunHomeFor(worktreePath) is { } runHome
+                ? Path.Combine(runHome, ".codex")
+                : gateway is null ? UserCodexHome() : RunCodexHome(OwnerOf(ctx));
+            var sessionsDirectory = codexHome is null ? null : Path.Combine(codexHome, "sessions");
             if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId))
             {
                 // Fork: seed a copy of the source session under the new id, so the
@@ -108,12 +191,19 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
             var resumeId = await ResumableSessionAsync(ctx.SessionId, sessionsDirectory, ctx.Cancel);
 
-            Process? proc;
+            IRunProcess? proc;
             try
             {
-                proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
-                    ctx);
+                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+                var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
+                if (gateway is not null && codexHome is not null)
+                {
+                    await RunHost.CreateDirectoryAsync(codexHome, ctx.Cancel);
+                    await RunHost.WriteFileAsync(
+                        Path.Combine(codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, gateway.Token), ctx.Cancel);
+                    ApplyGateway(psi, environment, gateway, codexHome);
+                }
+                proc = await StartAgentProcessAsync(psi, ctx, environment, mcpServers.Select(server => server.ConfigFile));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -237,6 +327,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         SupportedTools = AiToolCatalog.IldOnlyTools,
         EmptyToolSelectionMeansNone = true,
         SupportsNoTools = false,
+        SupportsSessionResume = true,
         ExtraCliArgs = new()
         {
             ReservedFlags = ReservedCliFlags,
@@ -338,9 +429,10 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     /// configured; the process environment by default.
     /// </param>
     /// <param name="mode">The execution's network mode; custom servers are given the proxy only when it is proxied.</param>
+    /// <param name="credentials">What signs the proxy credential of the custom servers; without it they are given no proxy.</param>
     public static IReadOnlyList<CodexMcpServer> WriteMcpServers(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, NetworkMode mode,
-        Guid? chatSessionId = null, ILogger? logger = null, IProcessEnvironment? environment = null)
+        Guid? chatSessionId = null, ILogger? logger = null, IProcessEnvironment? environment = null, EgressCredentials? credentials = null)
     {
         logger ??= NullLogger.Instance;
         environment ??= ProcessEnvironment.Current;
@@ -361,7 +453,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                     "ild-codex-mcp", runContext.LoopRunId, IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
                     logger, environment) is { } settingsFile)
                 servers.Add(new("ild", settingsFile,
-                    $"{{command=\"dotnet\",args=[{TomlString(dll)}],env={{ILD_MCP_ENV_FILE={TomlString(settingsFile)}}},"
+                    $"{{{TomlLaunch(dll, [])},env={{ILD_MCP_ENV_FILE={TomlString(settingsFile)}}},"
                     + "required=true,startup_timeout_sec=30,tool_timeout_sec=120}"));
 
             // The parser reserves the "ild" name, so these can never clobber it.
@@ -369,7 +461,9 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             if (customServers.Count == 0)
                 return servers;
 
-            var (proxyUrl, _) = AgentIsolation.ResolveLaunchNetwork(mode, environment.Get(AgentIsolation.EgressProxyPortEnvVar), null, provider.Id);
+            var proxyUrl = credentials is null ? null : AgentIsolation.ResolveLaunchProxy(
+                credentials, mode, environment.Get(AgentIsolation.EgressProxyPortEnvVar),
+                new LaunchScope(chatSessionId is null ? LaunchKind.Run : LaunchKind.Chat, chatSessionId ?? runContext.LoopRunId, provider.Id));
             foreach (var server in customServers)
             {
                 if (!ConfigKeyName.IsMatch(server.Name) || dll is null)
@@ -393,7 +487,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
                 if (IldMcpServer.TryWriteConfigFile("ild-codex-mcp-server", runContext.LoopRunId, launch, logger, environment) is { } launchFile)
                     servers.Add(new(server.Name, launchFile,
-                        $"{{command=\"dotnet\",args=[{TomlString(dll)},\"--launch\",{TomlString(launchFile)}]}}"));
+                        $"{{{TomlLaunch(dll, ["--launch", launchFile])}}}"));
             }
 
             return servers;
@@ -416,6 +510,13 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     /// <summary>A name codex accepts unquoted in <c>-c mcp_servers.&lt;name&gt;=…</c>.</summary>
     private static readonly Regex ConfigKeyName = new("^[A-Za-z0-9_-]+$", RegexOptions.CultureInvariant);
+
+    /// <summary>The <c>command=…,args=[…]</c> pair that starts the ILD MCP server at <paramref name="dll"/>, then <paramref name="extra"/>.</summary>
+    private static string TomlLaunch(string dll, IReadOnlyList<string> extra)
+    {
+        var (command, arguments) = IldMcpServer.LaunchFor(dll);
+        return $"command={TomlString(command)},args=[{string.Join(",", arguments.Concat(extra).Select(TomlString))}]";
+    }
 
     /// <summary><paramref name="value"/> as a TOML basic string.</summary>
     private static string TomlString(string value)
@@ -522,19 +623,17 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     private static bool IsSessionId(string? sessionId) => sessionId is not null && SessionIdPattern.IsMatch(sessionId);
 
-    // codex keeps its sessions under the HOME it runs with, which under uid
-    // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
-    private string? SessionsDirectory()
+    // codex keeps its sessions under the HOME it runs with, which on this machine is ours.
+    private string? UserCodexHome()
     {
-        var home = AgentIsolation.ResolveChildHome(AgentIsolation.AgentUser, AgentIsolation.AgentHome)
-            ?? EnvironmentVariables.Get("HOME");
-        return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".codex", "sessions");
+        var home = EnvironmentVariables.Get("HOME");
+        return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".codex");
     }
 
     // The rollouts live in the shared credential store, which the agent can write,
-    // so they are only listed, read and written as the agent (see AgentWritableFiles).
-    private static async Task<string?> FindRolloutAsync(string sessionsDirectory, string sessionId, CancellationToken ct)
-        => (await AgentWritableFiles.ListFilesAsync(sessionsDirectory, $"rollout-*-{sessionId}.jsonl", ct))
+    // so they are only listed, read and written through the run host (see AgentWritableFiles).
+    private async Task<string?> FindRolloutAsync(string sessionsDirectory, string sessionId, CancellationToken ct)
+        => (await RunHost.ListFilesAsync(sessionsDirectory, $"rollout-*-{sessionId}.jsonl", ct))
             .Select(file => file.Path)
             .Order(StringComparer.Ordinal)
             .LastOrDefault();

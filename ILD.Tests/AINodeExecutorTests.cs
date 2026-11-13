@@ -40,7 +40,8 @@ public class AINodeExecutorTests
         IAgentAdapterRegistry? registry = null,
         WorkItemView? workItem = null,
         IAiProviderConcurrencyTracker? concurrency = null,
-        IEgressPolicy? egressPolicy = null)
+        IEgressPolicy? egressPolicy = null,
+        IAgentTokenService? agentTokens = null)
     {
         var wi = workItem ?? new WorkItemView { Id = "WI-1", RepositoryId = null };
         var wimMock = workItemManager ?? Mock.Of<IWorkItemManager>(m =>
@@ -65,6 +66,8 @@ public class AINodeExecutorTests
             services.AddSingleton(concurrency);
         if (egressPolicy is not null)
             services.AddSingleton(egressPolicy);
+        if (agentTokens is not null)
+            services.AddSingleton(agentTokens);
         return services.BuildServiceProvider();
     }
 
@@ -156,6 +159,74 @@ public class AINodeExecutorTests
     [Fact]
     public async Task An_AI_node_without_a_policy_launches_proxied_as_Monitor()
         => Assert.Equal(NetworkMode.Monitor, await LaunchModeOfAsync(null));
+
+    private sealed class RecordingTokens : IAgentTokenService
+    {
+        public List<(AgentTokenSource Source, Guid Id)> Issued { get; } = [];
+        public List<Guid> Revoked { get; } = [];
+
+        public Task<IssuedAgentToken> IssueAsync(AgentTokenSource source, Guid sourceId, DateTime? expiresAt = null, CancellationToken ct = default)
+        {
+            Issued.Add((source, sourceId));
+            return Task.FromResult(new IssuedAgentToken(Guid.NewGuid(), $"token-{Issued.Count}"));
+        }
+
+        public Task RevokeAsync(Guid tokenId, CancellationToken ct = default)
+        {
+            Revoked.Add(tokenId);
+            return Task.CompletedTask;
+        }
+
+        public Task<AgentTokenIdentity?> AuthenticateAsync(string token, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task RevokeAllForAsync(AgentTokenSource source, Guid sourceId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task RevokeAllLiveAsync(CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class ThrowingAdapter : IAgentAdapter
+    {
+        public string Name => "throwing";
+        public string[] SupportedProviderTypes => ["stub"];
+        public ConfigFieldDescriptor[] ConfigSchema => [];
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
+        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context) => throw new InvalidOperationException("boom");
+    }
+
+    private static (IServiceProvider Sp, RecordingTokens Tokens) BuildTokenServices(IAgentAdapter adapter)
+    {
+        var provider = new AiProvider { Id = Guid.NewGuid(), Name = "default", Type = "stub", IsDefault = true, Parallelism = 1, CreatedAt = DateTime.UtcNow };
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
+        var registry = Mock.Of<IAgentAdapterRegistry>(r =>
+            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
+        var tokens = new RecordingTokens();
+        return (BuildServices(providerStore.Object, registry: registry, agentTokens: tokens), tokens);
+    }
+
+    [Fact]
+    public async Task An_AI_node_launches_with_a_token_for_its_run_and_revokes_it_when_the_launch_ends()
+    {
+        var adapter = new CapturingAdapter();
+        var (sp, tokens) = BuildTokenServices(adapter);
+        var run = MakeRun();
+
+        await foreach (var _ in new AINodeExecutor().ExecuteAsync(BuildCtx(MakeNode("{}"), run, sp))) { }
+
+        Assert.Equal("token-1", adapter.Seen!.AgentApiToken);
+        Assert.Equal([(AgentTokenSource.Run, run.Id)], tokens.Issued);
+        Assert.Single(tokens.Revoked);
+    }
+
+    [Fact]
+    public async Task An_AI_node_whose_adapter_throws_still_revokes_its_token()
+    {
+        var (sp, tokens) = BuildTokenServices(new ThrowingAdapter());
+
+        await foreach (var _ in new AINodeExecutor().ExecuteAsync(BuildCtx(MakeNode("{}"), MakeRun(), sp))) { }
+
+        Assert.Single(tokens.Issued);
+        Assert.Single(tokens.Revoked);
+    }
 
     // Two rules both match "REJECT and review" (the first case-insensitively);
     // last-match-wins must route to whichever pattern sits later in the output.

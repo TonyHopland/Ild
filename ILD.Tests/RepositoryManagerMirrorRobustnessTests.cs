@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
@@ -15,7 +16,6 @@ namespace ILD.Tests;
 public class RepositoryManagerMirrorRobustnessTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.
-    private const string SharedGroup = "agents";
 
     private readonly string _tmp = Path.Combine(Path.GetTempPath(), "ild-mirror-robust-" + Guid.NewGuid().ToString("N"));
     private readonly string _mirrors;
@@ -37,13 +37,13 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.True(violations.Count == 0, "git isolation violated:\n" + string.Join("\n", violations));
     }
 
-    private RepositoryManager NewManager(bool isolated, IProcessRunner? inner = null)
+    private RepositoryManager NewManager(IProcessRunner? inner = null)
     {
-        var runner = new AuditingRunner(isolated, inner: inner);
+        var runner = new AuditingRunner(inner: inner);
         runner.Forbid(_worktrees);
         runner.Forbid(Path.Combine(_tmp, "base"));
         _runners.Add(runner);
-        return new RepositoryManager(runner, null, _worktrees, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup);
+        return new RepositoryManager(runner, new LocalRunHost(runner), null, _worktrees, _mirrors);
     }
 
     private async Task<(string Remote, string Base, GitAuthOptions Auth, string Worktree)> ClonedWithWorktreeAsync(RepositoryManager mgr, string branch)
@@ -78,10 +78,8 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         }
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_bundle_holding_a_malformed_object_is_refused_and_nothing_reaches_the_remote(bool isolated)
+    [Fact]
+    public async Task A_bundle_holding_a_malformed_object_is_refused_and_nothing_reaches_the_remote()
     {
         const string branch = "ild/wi-30-run-1";
         var source = Path.Combine(_tmp, "forger");
@@ -105,7 +103,7 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         var bundlePath = Path.Combine(_tmp, "forged.bundle");
         GitCli.Run(source, "bundle", "create", bundlePath, $"refs/heads/{branch}");
 
-        var mgr = NewManager(isolated, new ForgedBundleRunner(File.ReadAllBytes(bundlePath)));
+        var mgr = NewManager(new ForgedBundleRunner(File.ReadAllBytes(bundlePath)));
         var (remote, _, auth, wt) = await ClonedWithWorktreeAsync(mgr, branch);
         var before = AuditingRunner.BundleFilesUnderPrivateRoot();
 
@@ -117,12 +115,10 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.Empty(AuditingRunner.BundleFilesUnderPrivateRoot().Except(before));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_push_after_the_mirror_was_lost_keeps_the_other_remote_tracking_branches(bool isolated)
+    [Fact]
+    public async Task A_push_after_the_mirror_was_lost_keeps_the_other_remote_tracking_branches()
     {
-        var mgr = NewManager(isolated);
+        var mgr = NewManager();
         var (remote, basePath, auth, wt) = await ClonedWithWorktreeAsync(mgr, "ild/wi-31-run-1");
         Directory.Delete(Assert.Single(Directory.GetDirectories(_mirrors)), recursive: true);
 
@@ -133,12 +129,10 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.Equal(GitCli.Out(wt, "rev-parse", "HEAD"), GitCli.Out(basePath, "rev-parse", "refs/remotes/origin/ild/wi-31-run-1"));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_half_built_mirror_is_rebuilt_on_the_next_use(bool isolated)
+    [Fact]
+    public async Task A_half_built_mirror_is_rebuilt_on_the_next_use()
     {
-        var mgr = NewManager(isolated);
+        var mgr = NewManager();
         var (_, _, auth, wt) = await ClonedWithWorktreeAsync(mgr, "ild/wi-32-run-1");
         var mirror = Assert.Single(Directory.GetDirectories(_mirrors));
         File.Delete(Path.Combine(mirror, "HEAD"));
@@ -151,13 +145,11 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, "dot-git")]
-    [InlineData(true, "dot-git")]
-    [InlineData(false, "back-pointer")]
-    [InlineData(true, "back-pointer")]
-    public async Task A_pipe_where_the_git_pointer_belongs_is_refused_instead_of_blocking(bool isolated, string where)
+    [InlineData("dot-git")]
+    [InlineData("back-pointer")]
+    public async Task A_pipe_where_the_git_pointer_belongs_is_refused_instead_of_blocking(string where)
     {
-        var mgr = NewManager(isolated);
+        var mgr = NewManager();
         var (_, _, _, wt) = await ClonedWithWorktreeAsync(mgr, "ild/wi-33-run-1");
         var pointer = Path.Combine(wt, ".git");
         var target = where == "dot-git"
@@ -186,13 +178,11 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         return log;
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_passing_pre_push_hook_runs_before_the_push_with_the_line_git_would_give_it(bool isolated)
+    [Fact]
+    public async Task A_passing_pre_push_hook_runs_before_the_push_with_the_line_git_would_give_it()
     {
         const string branch = "ild/wi-35-run-1";
-        var mgr = NewManager(isolated);
+        var mgr = NewManager();
         var (remote, basePath, auth, wt) = await ClonedWithWorktreeAsync(mgr, branch);
         var log = PlantPrePush(Path.Combine(basePath, ".git", "hooks"), 0);
         var first = GitCli.Out(wt, "rev-parse", "HEAD");
@@ -211,13 +201,11 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.Equal($"args=origin {remote}\nrefs/heads/{branch} {second} refs/heads/{branch} {first}\n", File.ReadAllText(log));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_failing_pre_push_hook_stops_the_push_and_says_why(bool isolated)
+    [Fact]
+    public async Task A_failing_pre_push_hook_stops_the_push_and_says_why()
     {
         const string branch = "ild/wi-36-run-1";
-        var mgr = NewManager(isolated);
+        var mgr = NewManager();
         var (remote, basePath, auth, wt) = await ClonedWithWorktreeAsync(mgr, branch);
         PlantPrePush(Path.Combine(basePath, ".git", "hooks"), 1);
         var before = AuditingRunner.BundleFilesUnderPrivateRoot();
@@ -231,13 +219,11 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.Empty(AuditingRunner.BundleFilesUnderPrivateRoot().Except(before));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_pre_push_hook_found_through_core_hooksPath_runs(bool isolated)
+    [Fact]
+    public async Task A_pre_push_hook_found_through_core_hooksPath_runs()
     {
         const string branch = "ild/wi-37-run-1";
-        var mgr = NewManager(isolated);
+        var mgr = NewManager();
         var (remote, basePath, auth, wt) = await ClonedWithWorktreeAsync(mgr, branch);
         GitCli.Run(basePath, "config", "core.hooksPath", ".husky");
         var log = PlantPrePush(Path.Combine(wt, ".husky"), 1);
@@ -260,9 +246,10 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
 
         public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null, ProcessRunOptions? options = null)
         {
+            if (fileName == "/bin/sh" && args.Count > 3 && args[0] == "-c" && args[3].StartsWith(clonesParent, StringComparison.Ordinal))
+                CloneParentExisted = Directory.Exists(clonesParent);
             if (fileName == "git" && options?.CleanEnvironment != true)
             {
-                if (args.Contains("clone")) CloneParentExisted = Directory.Exists(clonesParent);
                 if (args.Contains("worktree") && args.Contains("add")) WorktreeParentExisted = Directory.Exists(worktreesParent);
             }
 
@@ -270,14 +257,12 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         }
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task The_folders_above_a_clone_and_a_worktree_are_made_by_the_agents_git_not_the_orchestrator(bool isolated)
+    [Fact]
+    public async Task The_folders_above_a_clone_and_a_worktree_are_made_by_the_agents_git_not_the_orchestrator()
     {
         var clonesParent = Path.Combine(_tmp, "store", "repos");
         var watcher = new ParentWatchingRunner(clonesParent, Path.Combine(_worktrees, "ild"));
-        var mgr = NewManager(isolated, watcher);
+        var mgr = NewManager(watcher);
         var remote = GitCli.MakeRemote(_tmp, "remote");
         var auth = new GitAuthOptions(remote, null);
 
@@ -289,24 +274,5 @@ public class RepositoryManagerMirrorRobustnessTests : IDisposable
         Assert.False(watcher.CloneParentExisted);
         Assert.False(watcher.WorktreeParentExisted);
         Assert.True(Directory.Exists(worktree));
-    }
-
-    [Fact]
-    public async Task The_setgid_bit_the_store_root_hands_down_survives_the_mode_tightening()
-    {
-        if (!OperatingSystem.IsLinux()) Assert.Skip("setgid inheritance is a Linux filesystem behaviour");
-        Directory.CreateDirectory(_mirrors);
-        File.SetUnixFileMode(_mirrors, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.SetGroup);
-        var probe = Directory.CreateDirectory(Path.Combine(_mirrors, "probe")).FullName;
-        if (!File.GetUnixFileMode(probe).HasFlag(UnixFileMode.SetGroup))
-            Assert.Skip("this filesystem does not hand setgid down to new directories");
-        Directory.Delete(probe);
-
-        var mgr = NewManager(isolated: false);
-        var (_, _, auth, wt) = await ClonedWithWorktreeAsync(mgr, "ild/wi-34-run-1");
-        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken, auth));
-
-        var mirror = Assert.Single(Directory.GetDirectories(_mirrors));
-        Assert.True(File.GetUnixFileMode(mirror).HasFlag(UnixFileMode.SetGroup));
     }
 }

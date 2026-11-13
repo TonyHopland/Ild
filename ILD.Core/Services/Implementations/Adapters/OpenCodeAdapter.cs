@@ -1,6 +1,8 @@
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -35,6 +37,13 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
     public override AgentAdapterTraits Traits => TypeTraits;
+
+    public override CredentialPath? CredentialPathFor(AiProvider provider)
+        => HoldsCredential(provider) ? CredentialPath.Gateway : null;
+
+    /// <summary>A key that reaches the model only through the gateway; a keyless endpoint has nothing to hide.</summary>
+    private static bool HoldsCredential(AiProvider provider)
+        => ModelCredentialSource.UpstreamKey(provider) is not null && Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -87,7 +96,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             var binaryPath = ResolveBinaryPath(ctx);
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[opencode-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
@@ -105,28 +114,29 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools);
+            using var gateway = OpenGateway(ctx);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway);
             var extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, _logger);
 
-            Process? proc = null;
+            IRunProcess? proc = null;
             try
             {
-                proc = StartAgentProcess(BuildRunProcessStartInfo(
+                proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
                     binaryPath,
                     worktreePath,
                     ctx.Prompt,
                     opencodeModel,
                     opencodeConfigJson,
                     sessionIdToUse,
-                    extraArgs: extraArgs), ctx);
+                    extraArgs: extraArgs), ctx, BuildRunEnvironment(opencodeConfigJson));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
-                if (ShouldRetryWithoutWorkingDirectory(ex, worktreePath))
+                if (await ShouldRetryWithoutWorkingDirectoryAsync(ex, worktreePath, ctx.Cancel))
                 {
                     try
                     {
-                        proc = StartAgentProcess(BuildRunProcessStartInfo(
+                        proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
                             binaryPath,
                             worktreePath,
                             ctx.Prompt,
@@ -134,7 +144,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                             opencodeConfigJson,
                             sessionIdToUse,
                             useWorktreeAsWorkingDirectory: false,
-                            extraArgs: extraArgs), ctx);
+                            extraArgs: extraArgs), ctx, BuildRunEnvironment(opencodeConfigJson));
                     }
                     catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
                     {
@@ -275,7 +285,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         return exitCode == 0
             ? NodeExecutionResult.Ok(response, prompt, sessionId, incomingSessionId, AdapterUsageParser.ParseOpenCode(stdout))
-            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
+            : NodeExecutionResult.Fail(AdapterFailureText.NonZeroExit(exitCode, stderr, jsonError, response), response);
     }
 
     private async Task<ManagedSessionRestoreResult> RestoreManagedSessionAsync(
@@ -350,13 +360,13 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return (null, sessionJson);
     }
 
-    private static async Task<OpencodeCommandResult> RunOpencodeCommandAsync(
+    private async Task<OpencodeCommandResult> RunOpencodeCommandAsync(
         string binaryPath,
         string worktreePath,
         AgentExecutionContext ctx,
         IReadOnlyList<string> arguments)
     {
-        Process? proc = null;
+        IRunProcess? proc = null;
         try
         {
             var psi = BuildProcessStartInfo(binaryPath, worktreePath);
@@ -365,16 +375,16 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
             // Session export/import must run as the same agent user as the run
             // itself, or it would look for the session under the wrong home.
-            proc = StartAgentProcess(psi, ctx);
+            proc = await StartAgentProcessAsync(psi, ctx);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
-            if (ShouldRetryWithoutWorkingDirectory(ex, worktreePath))
+            if (await ShouldRetryWithoutWorkingDirectoryAsync(ex, worktreePath, ctx.Cancel))
             {
                 var retryPsi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory: false);
                 foreach (var argument in arguments)
                     retryPsi.ArgumentList.Add(argument);
-                proc = StartAgentProcess(retryPsi, ctx);
+                proc = await StartAgentProcessAsync(retryPsi, ctx);
             }
             else
             {
@@ -459,8 +469,13 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         SupportedTools = AiToolCatalog.DefaultTools,
         EmptyToolSelectionMeansNone = false,
         SupportsNoTools = true,
+        SupportsSessionResume = true,
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags, ModelHasShortFlag = true },
     };
+
+    /// <summary>What opencode is launched with: its config, in the variable it reads it from.</summary>
+    public static Dictionary<string, string?> BuildRunEnvironment(string opencodeConfigJson)
+        => new(StringComparer.Ordinal) { ["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson };
 
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
@@ -473,7 +488,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         IReadOnlyList<string>? extraArgs = null)
     {
         var psi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory);
-        psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson;
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--dir");
         psi.ArgumentList.Add(worktreePath);
@@ -510,9 +524,13 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return psi;
     }
 
-    private static bool ShouldRetryWithoutWorkingDirectory(Exception ex, string worktreePath)
+    private async Task<bool> ShouldRetryWithoutWorkingDirectoryAsync(Exception ex, string worktreePath, CancellationToken ct)
     {
-        if (!Directory.Exists(worktreePath))
+        // Without a working directory a command starts on this machine, which on a container or Kubernetes host is not the run.
+        if (RunHost.Kind != RunHostKind.Local)
+            return false;
+
+        if (!await RunHost.DirectoryExistsAsync(worktreePath, ct))
             return false;
 
         var message = ex.Message;
@@ -566,8 +584,15 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     && typeProbe.ValueKind == JsonValueKind.String)
                 {
                     sawJsonEvents = true;
+                    // A tool call carries the tool's own input and output under the same
+                    // property names (a written file's `content`), which is not the reply.
+                    if (string.Equals(typeProbe.GetString(), "text", StringComparison.OrdinalIgnoreCase))
+                        ExtractTextFromElement(doc.RootElement, sb);
                 }
-                ExtractTextFromElement(doc.RootElement, sb);
+                else
+                {
+                    ExtractTextFromElement(doc.RootElement, sb);
+                }
                 // opencode's JSON output may carry the session id at the
                 // root (`{"sessionId": "..."}`) or nested under a `session`
                 // object (`{"session":{"id":"..."}}`). Walk the tree so we
@@ -748,7 +773,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null, bool noTools = false)
+    internal static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null, bool noTools = false, ModelGatewayLease? gateway = null)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
@@ -756,6 +781,12 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
 
         var baseUrl = provider.BaseUrl.TrimEnd('/');
+        var apiKey = provider.ApiKey ?? string.Empty;
+        if (gateway is not null && HoldsCredential(provider))
+        {
+            baseUrl = gateway.UrlFor(GatewayRoutes.Upstream);
+            apiKey = gateway.Token;
+        }
 
         // opencode runs with `--dir <cwd>`; reads outside that root are gated by
         // the `external_directory` permission. This is opencode's equivalent of
@@ -776,7 +807,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     ["options"] = new Dictionary<string, object?>
                     {
                         ["baseURL"] = baseUrl,
-                        ["apiKey"] = provider.ApiKey ?? string.Empty,
+                        ["apiKey"] = apiKey,
                     },
                     ["models"] = new Dictionary<string, object?>
                     {
@@ -863,11 +894,12 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     {
         var dllPath = IldMcpServer.ResolveServerDll(environment);
         if (dllPath == null) return null;
+        var (command, arguments) = IldMcpServer.LaunchFor(dllPath);
 
         return new Dictionary<string, object?>
         {
             ["type"] = "local",
-            ["command"] = new[] { "dotnet", dllPath },
+            ["command"] = new[] { command }.Concat(arguments).ToArray(),
             ["environment"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
         };
     }

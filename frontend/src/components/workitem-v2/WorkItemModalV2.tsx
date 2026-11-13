@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import "./workitem-v2.css";
 import { type ApiError, LoopRunStatus, WorkItem, WorkItemStatus } from "../../types";
-import { workItemService } from "../../services/auth";
+import { loopRunService, workItemService } from "../../services/auth";
 import useRenderedPrompt from "../../hooks/useRenderedPrompt";
 import ConfirmModal from "../ConfirmModal";
 import LoopRunTerminal from "../LoopRunTerminal";
@@ -13,7 +13,6 @@ import PendingEditProposals from "./PendingEditProposals";
 import EditPanel from "./EditPanel";
 import FilesPanel, { workItemKey } from "./FilesPanel";
 import HistoryPanel from "./HistoryPanel";
-import MenuButton, { type MenuItem } from "../MenuButton";
 import Icon from "../Icon";
 import { errorMessage } from "../../utils/errorMessage";
 import {
@@ -25,6 +24,7 @@ import {
   workItemStatusTone,
 } from "../../utils/labels";
 import { repositoryName } from "../../utils/repositoryName";
+import { openAppLink, vscodeAttachUri } from "../../utils/vscodeAttachUri";
 import { repositoryHoldOf, startOfferOf } from "./offers";
 
 type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal" | "history";
@@ -105,6 +105,27 @@ export default function WorkItemModalV2({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
+  // VS Code attaches to the run's container on the engine's machine; where runs have none, the button goes.
+  const [editorUnavailable, setEditorUnavailable] = useState(false);
+  const [editorError, setEditorError] = useState<string | null>(null);
+  const [openingEditor, setOpeningEditor] = useState(false);
+  useEffect(() => setEditorError(null), [workItem?.id, workItem?.status]);
+  const openInEditor = async (loopRunId: string) => {
+    setOpeningEditor(true);
+    setEditorError(null);
+    try {
+      const { containerName, folder } = await loopRunService.openInEditor(loopRunId);
+      openAppLink(vscodeAttachUri(containerName, folder));
+    } catch (error) {
+      if ((error as Partial<ApiError> | null)?.status === 409) setEditorUnavailable(true);
+      else
+        setEditorError(
+          (error as Partial<ApiError> | undefined)?.message || "Could not open VS Code.",
+        );
+    } finally {
+      setOpeningEditor(false);
+    }
+  };
   // Backlog to Work queue without dragging the card, which a phone cannot do,
   // and a Ready item its repository's limit or a paused scheduler holds back started anyway.
   const [moving, setMoving] = useState(false);
@@ -187,6 +208,7 @@ export default function WorkItemModalV2({
     // A terminal session belongs to the item it was opened on; switching items
     // must tear it down rather than leak the previous worktree's shell.
     setShowTerminal(false);
+    setEditorUnavailable(false);
     // Only reset when switching to a different item — status changes on the
     // same item must not yank the user away from the tab they are reading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -338,43 +360,16 @@ export default function WorkItemModalV2({
   ];
   const enabledTabs = tabs.filter((t) => !t.disabledReason);
 
+  // A run that has ended (cancelled, say) answers nothing any more, whatever the
+  // item was waiting for when it ended: cleaning up is all that is left to do.
   const showCleanupButtons =
     workItem.status === WorkItemStatus.HumanFeedback &&
-    workItem.humanFeedbackReason !== "Human Input Needed" &&
-    workItem.humanFeedbackReason !== "PR Awaiting Merge";
+    (currentRunFinished ||
+      (workItem.humanFeedbackReason !== "Human Input Needed" &&
+        workItem.humanFeedbackReason !== "PR Awaiting Merge"));
   // The footer's cleanup acts on the current run, so it waits for any other
   // action on that run, wherever in the dialog that was started.
   const currentRunBlocked = detail.runLock.pendingOf(workItem.currentLoopRunId) !== null;
-  // Secondary actions live behind ⋯ so the footer keeps one obvious button. The
-  // header's × is the only close.
-  const footerMenu: MenuItem[] = showCleanupButtons
-    ? [
-        {
-          id: "cleanup-done",
-          label: "Clean up → Done",
-          title: `End the run and mark the work item Done. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept.`,
-          disabled: currentRunBlocked,
-          onSelect: () =>
-            void detail.runLock.hold(
-              workItem.currentLoopRunId,
-              "abandon",
-              detail.handleCleanupDone,
-            ),
-        },
-        {
-          id: "cleanup-backlog",
-          label: "Clean up → Backlog",
-          title: `End the run and send the work item back to Backlog. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept.`,
-          disabled: currentRunBlocked,
-          onSelect: () =>
-            void detail.runLock.hold(
-              workItem.currentLoopRunId,
-              "abandon",
-              detail.handleCleanupBacklog,
-            ),
-        },
-      ]
-    : [];
 
   // Arrow keys move between the tabs that can be opened, skipping disabled ones.
   const handleTabKeyDown = (e: React.KeyboardEvent, id: TabId) => {
@@ -516,6 +511,28 @@ export default function WorkItemModalV2({
               >
                 Open Terminal
               </button>
+              {!editorUnavailable && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={openingEditor}
+                    onClick={() => void openInEditor(workItem.currentLoopRunId!)}
+                  >
+                    Open in VS Code
+                  </button>
+                  <p className="wiv2-terminal-hint">
+                    Needs VS Code with the Dev Containers extension on the machine that runs the
+                    container engine. With Podman, set <code>dev.containers.dockerPath</code> to{" "}
+                    <code>podman</code>.
+                  </p>
+                  {editorError && (
+                    <p className="wiv2-terminal-error" role="alert">
+                      {editorError}
+                    </p>
+                  )}
+                </>
+              )}
             </div>
           )}
         </section>
@@ -628,7 +645,40 @@ export default function WorkItemModalV2({
                 <div className="wiv2-content">{renderPanels()}</div>
               </div>
               <div className="wiv2-footer">
-                <MenuButton label="More actions" items={footerMenu} />
+                {showCleanupButtons && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-warning"
+                      title="End the run and mark the work item Done. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept."
+                      disabled={currentRunBlocked}
+                      onClick={() =>
+                        void detail.runLock.hold(
+                          workItem.currentLoopRunId,
+                          "abandon",
+                          detail.handleCleanupDone,
+                        )
+                      }
+                    >
+                      Clean up → Done
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      title="End the run and send the work item back to Backlog. The run's worktree, local branch and AI session data are removed unless it is pinned; the run and its history are kept."
+                      disabled={currentRunBlocked}
+                      onClick={() =>
+                        void detail.runLock.hold(
+                          workItem.currentLoopRunId,
+                          "abandon",
+                          detail.handleCleanupBacklog,
+                        )
+                      }
+                    >
+                      Clean up → Backlog
+                    </button>
+                  </>
+                )}
                 {moveError && (
                   <span className="wiv2-footer-error" role="alert">
                     {moveError}

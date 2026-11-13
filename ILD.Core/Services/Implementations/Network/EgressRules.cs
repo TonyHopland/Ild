@@ -15,7 +15,9 @@ namespace ILD.Core.Services.Implementations.Network;
 /// every host beneath it. <c>*.example.com</c> is accepted as the same suffix.
 /// Comparison is case-insensitive and ignores a trailing dot. An entry with an
 /// <see cref="NetworkPolicyEntry.AiProviderId"/> applies only to connections the
-/// agent made on behalf of that provider; one without applies to all.
+/// agent made on behalf of that provider; one without applies to all. An entry
+/// with <see cref="NetworkPolicyEntry.Installers"/> applies only to the connections of toolchain installers, which the
+/// global entries cover as well.
 /// </para>
 /// </summary>
 public static class EgressRules
@@ -41,6 +43,12 @@ public static class EgressRules
         NetworkMode.Blacklist => "blacklist",
         _ => "monitor",
     };
+
+    /// <summary>
+    /// A host taken from a connection that is written as a pattern, with a leading <c>.</c> or <c>*</c>. A real destination never is,
+    /// and a pattern in the log would become a suffix rule when whitelisted.
+    /// </summary>
+    public static bool LooksLikePattern(string host) => host.Length > 0 && host[0] is '.' or '*';
 
     /// <summary>
     /// Canonical form of a host as it appears on the wire: lower-case, no
@@ -195,7 +203,8 @@ public static class EgressRules
         NetworkMode mode,
         IEnumerable<NetworkPolicyEntry> entries,
         string host,
-        Guid? aiProviderId)
+        Guid? aiProviderId,
+        string? installer = null)
     {
         // Off is only ever seen by connections that were proxied before the switch to it;
         // they are judged as Monitor.
@@ -206,7 +215,9 @@ public static class EgressRules
         var wanted = mode == NetworkMode.Whitelist ? NetworkListKind.Whitelist : NetworkListKind.Blacklist;
         var listed = entries.Any(e =>
             e.ListKind == wanted
-            && (e.AiProviderId is null || e.AiProviderId == aiProviderId)
+            && (installer is null
+                ? !e.Installers && (e.AiProviderId is null || e.AiProviderId == aiProviderId)
+                : e.AiProviderId is null)
             && Matches(e.Host, canonical));
 
         return mode == NetworkMode.Whitelist

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
@@ -12,37 +13,48 @@ namespace ILD.Tests;
 /// A Worktree Preview follows the network mode (ADR-0019): its install steps and
 /// services launch without the proxy in Off and proxied otherwise, with the mode
 /// read when the start, single-service start or install is called. Observed on real
-/// children (each writes the proxy variable it was given to a file), since a crossing
-/// to the agent uid cannot be executed on this host.
+/// children (each writes the proxy variable it was given to a file). Runs alone because it
+/// clears the runner's proxy variables in the real process environment.
 /// </summary>
-[Collection(PreviewPortsCollection.Name)]
+[Collection(ProcessGlobalStateCollection.Name)]
 public class WorktreePreviewServiceNetworkModeTests : IDisposable
 {
-    private const string Proxy = "http://127.0.0.1:3128";
     private const string Record = "printf %s \\\"$HTTPS_PROXY\\\" > ";
 
     private readonly string _worktree = Path.Combine(Path.GetTempPath(), "ild-preview-mode-" + Guid.NewGuid().ToString("N"));
+    private static readonly string[] ProxyKeys =
+        { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY" };
+
+    private readonly Dictionary<string, string?> _previous = new(StringComparer.Ordinal);
     private WorktreePreviewService? _service;
 
-    public WorktreePreviewServiceNetworkModeTests() => Directory.CreateDirectory(_worktree);
+    // The children inherit the runner's own proxy variables, so an Off case would see them; clear them for the test.
+    public WorktreePreviewServiceNetworkModeTests()
+    {
+        Directory.CreateDirectory(_worktree);
+        foreach (var key in ProxyKeys)
+        {
+            _previous[key] = Environment.GetEnvironmentVariable(key);
+            Environment.SetEnvironmentVariable(key, null);
+        }
+    }
 
     public void Dispose()
     {
+        foreach (var (name, value) in _previous) Environment.SetEnvironmentVariable(name, value);
         try { _service?.StopAsync(_worktree).GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { _service?.Dispose(); } catch { /* best effort */ }
         try { Directory.Delete(_worktree, recursive: true); } catch { /* best effort */ }
         GC.SuppressFinalize(this);
     }
 
-    private WorktreePreviewService BuildService(
-        IEgressPolicy? policy, string? agentUser = null, string? agentGroup = null, string? openGroup = null)
+    private WorktreePreviewService BuildService(IEgressPolicy? policy)
     {
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         _service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, agentUser, agentGroup, agentHome: null,
-            egressProxy: Proxy, environment: new TestProcessEnvironment().WithRealPath(),
-            networkOpenGroup: openGroup, egressPolicy: policy);
+            NullLogger<WorktreePreviewService>.Instance,
+            egressProxy: new EgressProxyOptions(true, 3128), credentials: EgressProxyTests.Creds, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: policy, host: LocalRunHost.Shared);
         return _service;
     }
 
@@ -72,44 +84,73 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
         """);
     }
 
+    // What a preview command saw as its HTTPS_PROXY: nothing, or a proxy URL signed for a preview, which only the proxy's key reads.
+    private static void AssertProxy(bool proxied, string written)
+    {
+        if (!proxied) { Assert.Equal(string.Empty, written); return; }
+        Assert.EndsWith("@127.0.0.1:3128", written);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, written, out var scope));
+        Assert.Equal(LaunchKind.Preview, scope.Kind);
+    }
+
     private string Written(string name) => File.ReadAllText(Path.Combine(_worktree, name));
 
     [Theory]
-    [InlineData(NetworkMode.Off, "")]
-    [InlineData(NetworkMode.Monitor, Proxy)]
-    [InlineData(NetworkMode.Whitelist, Proxy)]
-    public async Task An_install_launches_in_the_mode_the_policy_reports(NetworkMode mode, string expected)
+    [InlineData(NetworkMode.Off, false)]
+    [InlineData(NetworkMode.Monitor, true)]
+    [InlineData(NetworkMode.Whitelist, true)]
+    public async Task An_install_launches_in_the_mode_the_policy_reports(NetworkMode mode, bool proxied)
     {
         WriteConfig();
 
         await BuildService(EgressPolicies.Reporting(mode)).InstallAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(expected, Written("install.out"));
+        AssertProxy(proxied, Written("install.out"));
     }
 
     [Theory]
-    [InlineData(NetworkMode.Off, "")]
-    [InlineData(NetworkMode.Blacklist, Proxy)]
-    public async Task A_preview_start_launches_its_install_step_and_service_in_the_mode_the_policy_reports(NetworkMode mode, string expected)
+    [InlineData(NetworkMode.Off, false)]
+    [InlineData(NetworkMode.Blacklist, true)]
+    public async Task A_preview_start_launches_its_install_step_and_service_in_the_mode_the_policy_reports(NetworkMode mode, bool proxied)
     {
         WriteConfig();
 
         await BuildService(EgressPolicies.Reporting(mode)).StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(expected, Written("install.out"));
-        Assert.Equal(expected, Written("web.out"));
+        AssertProxy(proxied, Written("install.out"));
+        AssertProxy(proxied, Written("web.out"));
     }
 
     [Theory]
-    [InlineData(NetworkMode.Off, "")]
-    [InlineData(NetworkMode.Monitor, Proxy)]
-    public async Task A_single_service_start_launches_in_the_mode_the_policy_reports(NetworkMode mode, string expected)
+    [InlineData(NetworkMode.Off, false)]
+    [InlineData(NetworkMode.Monitor, true)]
+    public async Task A_single_service_start_launches_in_the_mode_the_policy_reports(NetworkMode mode, bool proxied)
     {
         WriteConfig();
 
         await BuildService(EgressPolicies.Reporting(mode)).StartServiceAsync(_worktree, "web", cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(expected, Written("web.out"));
+        AssertProxy(proxied, Written("web.out"));
+    }
+
+    [Theory]
+    [InlineData(NetworkMode.Off)]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Blacklist)]
+    public async Task A_preview_hands_its_run_host_the_mode_it_was_launched_in(NetworkMode mode)
+    {
+        WriteConfig();
+        var config = Path.Combine(_worktree, "ild.config.json");
+        var host = new ILD.Tests.Fakes.FakeRunHost().WithDirectory(_worktree).WithFile(config, File.ReadAllText(config));
+        var factory = new Mock<IHttpClientFactory>();
+        using var service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
+            NullLogger<WorktreePreviewService>.Instance,
+            egressProxy: new EgressProxyOptions(true, 3128), credentials: EgressProxyTests.Creds, environment: new TestProcessEnvironment().WithRealPath(), egressPolicy: EgressPolicies.Reporting(mode), host: host);
+
+        await service.InstallAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.All(host.Started, c => Assert.Equal(mode, c.NetworkMode));
+        Assert.NotEmpty(host.Started);
     }
 
     [Fact]
@@ -119,24 +160,8 @@ public class WorktreePreviewServiceNetworkModeTests : IDisposable
 
         await BuildService(policy: null).StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(Proxy, Written("install.out"));
-        Assert.Equal(Proxy, Written("web.out"));
-    }
-
-    [Fact]
-    public void An_Off_step_under_uid_isolation_runs_under_the_open_group_and_a_proxied_one_under_the_primary_group()
-    {
-        var service = BuildService(policy: null, agentUser: "agent", agentGroup: "agent-primary", openGroup: "ild-net-open");
-        var step = new WorktreePreviewService.ResolvedStep("true", _worktree, new Dictionary<string, string>(StringComparer.Ordinal));
-
-        var off = service.BuildPreviewProcess(step with { NetworkMode = NetworkMode.Off });
-        var monitor = service.BuildPreviewProcess(step with { NetworkMode = NetworkMode.Monitor });
-
-        Assert.Contains("--regid=ild-net-open", off.ArgumentList);
-        Assert.DoesNotContain("--regid=agent-primary", off.ArgumentList);
-        Assert.False(off.Environment.ContainsKey("HTTPS_PROXY"));
-        Assert.Contains("--regid=agent-primary", monitor.ArgumentList);
-        Assert.Equal(Proxy, monitor.Environment["HTTPS_PROXY"]);
+        AssertProxy(true, Written("install.out"));
+        AssertProxy(true, Written("web.out"));
     }
 
     private static int FindFreePort()

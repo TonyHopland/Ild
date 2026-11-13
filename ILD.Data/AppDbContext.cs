@@ -33,6 +33,7 @@ public class AppDbContext : DbContext
     public DbSet<AiProviderTag> AiProviderTags => Set<AiProviderTag>();
     public DbSet<User> Users => Set<User>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<AgentToken> AgentTokens => Set<AgentToken>();
     public DbSet<UserPreference> UserPreferences => Set<UserPreference>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
@@ -104,6 +105,12 @@ public class AppDbContext : DbContext
         // heartbeat that sees it; a stale instance saved afterwards must not restore it.
         modelBuilder.Entity<LoopRun>()
             .Property(r => r.PrPushedCommit)
+            .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
+        // The visit's agent session id is written mid-stream by a targeted update from
+        // the adapter's own scope; the tracked row the engine completes the visit with
+        // was loaded before it and must not write its null back.
+        modelBuilder.Entity<LoopRunNode>()
+            .Property(r => r.AiSessionId)
             .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
     }
 
@@ -371,6 +378,12 @@ public class AppDbContext : DbContext
             e.HasIndex(s => s.UserId);
         });
 
+        modelBuilder.Entity<AgentToken>(e =>
+        {
+            e.HasIndex(t => t.TokenHash).IsUnique();
+            e.HasIndex(t => new { t.Source, t.SourceId });
+        });
+
         modelBuilder.Entity<AppSetting>(e =>
         {
             e.HasIndex(s => s.Key).IsUnique();
@@ -388,7 +401,7 @@ public class AppDbContext : DbContext
             // One row per pattern, list and scope, enforced where the race is: two
             // concurrent "Add to whitelist" clicks must not both insert. Nulls are
             // NOT distinct here, or every global entry could be duplicated freely.
-            e.HasIndex(p => new { p.ListKind, p.Host, p.AiProviderId })
+            e.HasIndex(p => new { p.ListKind, p.Host, p.AiProviderId, p.Installers })
                 .IsUnique()
                 .AreNullsDistinct(false);
         });

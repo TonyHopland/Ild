@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -12,16 +13,13 @@ namespace ILD.Tests;
 /// <para>
 /// A call that asked for a <see cref="ProcessRunOptions.CleanEnvironment"/> is the
 /// orchestrator's own (mirror operations, ls-remote); every other git call acts on
-/// an agent-writable repository and must be an agent call. The host cannot really
-/// <c>setpriv --reuid</c>, so in isolated mode the wrap is verified on the start
-/// info and the call is then run with the uid crossing removed (and tagged with
+/// an agent-writable repository and must be an agent-scoped call (tagged with
 /// <see cref="RouteVariable"/> so a planted hook can say who ran it).
 /// </para>
 /// </summary>
 internal sealed class AuditingRunner : IProcessRunner
 {
     public const string RouteVariable = "ILD_TEST_ROUTE";
-    public const string Setpriv = "/usr/bin/setpriv";
 
     private static readonly string[] OrchestratorAllowedKeys =
     [
@@ -37,24 +35,16 @@ internal sealed class AuditingRunner : IProcessRunner
     private readonly List<string> _violations = new();
     private readonly List<(string Path, UnixFileMode Mode)> _bundlesSeen = new();
     private readonly List<string> _forbiddenRoots = new();
+    private readonly List<string> _agentForbiddenRoots = new();
 
-    public AuditingRunner(bool isolated, bool tagRoutes = false, IProcessRunner? inner = null)
+    public AuditingRunner(bool tagRoutes = false, IProcessRunner? inner = null)
     {
-        Isolated = isolated;
-        Agent = new AgentIdentity("ild-agent", "ild-agents", Path.Combine(Path.GetTempPath(), "ild-agent-home"));
         _tagRoutes = tagRoutes;
         _inner = inner ?? new ProcessRunner();
         Seed = BuildSeed();
     }
 
-    public bool Isolated { get; }
-
-    /// <summary>The agent identity to give <see cref="RepositoryManager"/> in isolated mode, null otherwise.</summary>
-    public AgentIdentity Agent { get; }
-
-    public AgentIdentity? ManagerAgent => Isolated ? Agent : null;
-
-    /// <summary>What the orchestrator's environment looks like to the start-info check: every secret, topology key and git credential present.</summary>
+    /// <summary>What the orchestrator's environment looks like to the start-info check: every secret and git credential present.</summary>
     public Dictionary<string, string> Seed { get; }
 
     public IReadOnlyList<string> Violations { get { lock (_gate) return _violations.ToList(); } }
@@ -68,6 +58,9 @@ internal sealed class AuditingRunner : IProcessRunner
 
     /// <summary>Every git call in order, with the explicit environment the caller handed the runner.</summary>
     public IReadOnlyList<GitCall> Calls { get { lock (_gate) return _calls.ToList(); } }
+
+    /// <summary>Paths the agent has no business with (the mirror store): no agent-class call may run in or name them.</summary>
+    public void ForbidAgentAccess(string path) { lock (_gate) _agentForbiddenRoots.Add(Path.GetFullPath(path)); }
 
     /// <summary>Paths in agent-writable repositories: no orchestrator-class git call may run in or name them.</summary>
     public void Forbid(string path) { lock (_gate) _forbiddenRoots.Add(Path.GetFullPath(path)); }
@@ -85,8 +78,6 @@ internal sealed class AuditingRunner : IProcessRunner
             seed[(string)e.Key] = (string?)e.Value ?? string.Empty;
         foreach (var key in AgentIsolation.SecretEnvironmentKeys)
             seed[key] = "orchestrator-secret-" + key;
-        foreach (var key in AgentIsolation.OrchestratorTopologyEnvKeys)
-            seed[key] = "orchestrator-topology-" + key;
         seed["GIT_ASKPASS"] = "/orchestrator/askpass.sh";
         seed["ILD_GIT_USERNAME"] = "orchestrator-git-user";
         seed["ILD_GIT_PASSWORD"] = "orchestrator-git-password";
@@ -124,8 +115,7 @@ internal sealed class AuditingRunner : IProcessRunner
         if (_tagRoutes && (fileName == "git" || agentScript))
             forwarded[RouteVariable] = orchestrator ? "orchestrator" : "agent";
 
-        var executed = options is null ? null : options with { AsAgent = null };
-        return await _inner.RunAsync(fileName, args, workingDirectory, ct, forwarded, executed);
+        return await _inner.RunAsync(fileName, args, workingDirectory, ct, forwarded, options);
     }
 
     private void Audit(
@@ -133,34 +123,31 @@ internal sealed class AuditingRunner : IProcessRunner
         ProcessRunOptions? options, bool orchestrator)
     {
         var label = $"git {string.Join(' ', args)} (cwd={cwd ?? "<none>"})";
-        var psi = ProcessRunner.BuildStartInfo("git", args, cwd, env, options, Isolated ? Agent.User : null, Seed);
+        var psi = ProcessRunner.BuildStartInfo("git", args, cwd, env, options, Seed);
         var environment = psi.Environment.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value!, StringComparer.Ordinal);
-        var argv = psi.ArgumentList.ToList();
-
-        if (!Isolated && psi.FileName == Setpriv)
-            Violate($"{label}: setpriv used outside isolated mode");
 
         if (orchestrator)
-            AuditOrchestrator(label, args, cwd, psi.FileName, argv, environment);
+            AuditOrchestrator(label, args, cwd, environment);
         else
-            AuditAgent(label, psi.FileName, argv, environment);
+        {
+            AuditAgent(label, environment);
+            AuditAgentReach(label, args, cwd);
+        }
     }
 
     private void AuditAgentScript(
         string fileName, IReadOnlyList<string> args, string? cwd, IReadOnlyDictionary<string, string?>? env, ProcessRunOptions? options)
     {
-        var psi = ProcessRunner.BuildStartInfo(fileName, args, cwd, env, options, Isolated ? Agent.User : null, Seed);
+        var psi = ProcessRunner.BuildStartInfo(fileName, args, cwd, env, options, Seed);
         var environment = psi.Environment.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value!, StringComparer.Ordinal);
         var label = $"{fileName} {string.Join(' ', args.Take(2))} (cwd={cwd ?? "<none>"})";
-        if (!Isolated && psi.FileName == Setpriv)
-            Violate($"{label}: setpriv used outside isolated mode");
-        AuditAgent(label, psi.FileName, psi.ArgumentList.ToList(), environment, fileName);
+        AuditAgent(label, environment);
+        AuditAgentReach(label, args, cwd);
     }
 
-    private void AuditAgent(string label, string file, List<string> argv, Dictionary<string, string> environment, string command = "git")
+    private void AuditAgent(string label, Dictionary<string, string> environment)
     {
         var banned = AgentIsolation.SecretEnvironmentKeys
-            .Concat(AgentIsolation.OrchestratorTopologyEnvKeys)
             .Concat(new[] { "GIT_ASKPASS", "ILD_GIT_USERNAME", "ILD_GIT_PASSWORD" })
             .Where(environment.ContainsKey)
             .ToList();
@@ -172,20 +159,11 @@ internal sealed class AuditingRunner : IProcessRunner
             if (!environment.TryGetValue(key, out var value) || value != Seed[key])
                 Violate($"{label}: agent call lost {key}");
         }
-
-        if (!Isolated) return;
-
-        var dashDash = argv.IndexOf("--");
-        if (file != Setpriv || !argv.Contains($"--reuid={Agent.User}") || dashDash < 0 || dashDash + 1 >= argv.Count || argv[dashDash + 1] != command)
-            Violate($"{label}: not launched as the agent (start info: {file} {string.Join(' ', argv.Take(8))})");
     }
 
     private void AuditOrchestrator(
-        string label, IReadOnlyList<string> args, string? cwd, string file, List<string> argv, Dictionary<string, string> environment)
+        string label, IReadOnlyList<string> args, string? cwd, Dictionary<string, string> environment)
     {
-        if (argv.Any(a => a.StartsWith("--reuid", StringComparison.Ordinal)))
-            Violate($"{label}: orchestrator call crosses to another uid");
-
         var extra = environment.Keys
             .Where(k => !OrchestratorAllowedKeys.Contains(k)
                         && !k.StartsWith("GIT_CONFIG_KEY_", StringComparison.Ordinal)
@@ -250,6 +228,22 @@ internal sealed class AuditingRunner : IProcessRunner
         RecordBundles();
     }
 
+    private void AuditAgentReach(string label, IReadOnlyList<string> args, string? cwd)
+    {
+        foreach (var candidate in (cwd is null ? args : args.Append(cwd)).Where(a => a.Length > 0))
+        {
+            var value = candidate.Contains('=') ? candidate[(candidate.IndexOf('=') + 1)..] : candidate;
+            string full;
+            try { full = Path.GetFullPath(value); }
+            catch (ArgumentException) { continue; }
+            bool reaches;
+            lock (_gate)
+                reaches = _agentForbiddenRoots.Any(root => full == root || full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+            if (reaches)
+                Violate($"{label}: an agent call names the mirror store ({candidate})");
+        }
+    }
+
     private bool IsForbidden(string path)
     {
         string full;
@@ -269,8 +263,12 @@ internal sealed class AuditingRunner : IProcessRunner
 
         foreach (var path in BundleFilesUnderPrivateRoot())
         {
+            // The private root is shared with tests running in parallel, which delete their bundles and locks as they finish.
+            UnixFileMode mode;
+            try { mode = File.GetUnixFileMode(path); }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { continue; }
             lock (_gate)
-                _bundlesSeen.Add((path, File.GetUnixFileMode(path)));
+                _bundlesSeen.Add((path, mode));
         }
     }
 

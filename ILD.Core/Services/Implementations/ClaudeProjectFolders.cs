@@ -1,4 +1,6 @@
+using ILD.Core.Services.Implementations.Files;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using Microsoft.Extensions.Logging;
@@ -11,28 +13,26 @@ namespace ILD.Core.Services.Implementations;
 /// <c>$HOME/.claude/projects/&lt;encoded cwd&gt;</c> and its scratch under
 /// <c>/tmp/claude-&lt;uid&gt;/&lt;encoded cwd&gt;</c>. Ild copies each transcript into
 /// its database at the end of every turn, so once a run or chat is over they are
-/// only taking up the agent's disk. The agent owns them, so they are measured and
-/// deleted as the agent (<see cref="AgentWritableFiles"/>). Every deletion is
-/// best-effort: it is logged with the bytes it freed, and never throws.
+/// only taking up the agent's disk. The agent can write them, so they are measured
+/// and deleted without following links (<see cref="AgentWritableFiles"/>). Every
+/// deletion is best-effort: it is logged with the bytes it freed, and never throws.
 /// </summary>
 public sealed class ClaudeProjectFolders
 {
     private readonly string? _projectsRoot;
     private readonly string _tempRoot;
     private readonly ILogger<ClaudeProjectFolders> _log;
-    private string? _agentUid;
 
-    public ClaudeProjectFolders(
-        string? agentUser, string? agentHome, IProcessEnvironment environment, ILogger<ClaudeProjectFolders>? log = null, string tempRoot = "/tmp")
+    public ClaudeProjectFolders(IProcessEnvironment environment, ILogger<ClaudeProjectFolders>? log = null, string tempRoot = "/tmp")
     {
-        _projectsRoot = ClaudeCodeAdapter.GetProjectsRoot(agentUser, agentHome, environment);
+        _projectsRoot = ClaudeCodeAdapter.GetProjectsRoot(environment);
         _tempRoot = tempRoot;
         _log = log ?? NullLogger<ClaudeProjectFolders>.Instance;
     }
 
-    /// <summary>The folders of the HOME and uid Claude actually runs with.</summary>
+    /// <summary>The folders of the HOME and uid Claude runs with: this process's.</summary>
     public static ClaudeProjectFolders ForProcess(ILogger<ClaudeProjectFolders>? log = null)
-        => new(AgentIsolation.AgentUser, AgentIsolation.AgentHome, ProcessEnvironment.Current, log);
+        => new(ProcessEnvironment.Current, log);
 
     public string? ProjectsRoot => _projectsRoot;
 
@@ -48,8 +48,8 @@ public sealed class ClaudeProjectFolders
         try
         {
             var paths = new List<string> { Path.Combine(_projectsRoot, name) };
-            if (await GetAgentUidAsync(ct) is { } uid)
-                paths.Add(Path.Combine(_tempRoot, $"claude-{uid}", name));
+            if (!OperatingSystem.IsWindows())
+                paths.Add(Path.Combine(_tempRoot, $"claude-{geteuid()}", name));
 
             var (allGone, bytes) = await AgentWritableFiles.DeleteMeasuredAsync(paths, ct);
             if (!allGone)
@@ -109,6 +109,6 @@ public sealed class ClaudeProjectFolders
         }
     }
 
-    private async Task<string?> GetAgentUidAsync(CancellationToken ct)
-        => _agentUid ??= await AgentWritableFiles.GetUidAsync(ct);
+    [DllImport("libc")]
+    private static extern uint geteuid();
 }

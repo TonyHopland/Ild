@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Api.Authentication;
@@ -52,6 +53,39 @@ try
 
     if (!Directory.Exists(worktreesPath))
         Directory.CreateDirectory(worktreesPath);
+
+    // The Copilot CLI only takes an HTTPS endpoint for GitHub, so the model gateway also listens on
+    // TLS where runs reach ILD, with a certificate of its own on that listener only (ADR-0031). Port 0 switches it off.
+    if (!builder.Environment.IsEnvironment("Testing")
+        && ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortFrom(
+            Environment.GetEnvironmentVariable(ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortVariable)
+            ?? builder.Configuration["Gateway:TlsPort"]) is { } gatewayTlsPort)
+    {
+        // Runs reach ILD at the host of ILD_API_URL (as the run host spells it), so the listener is bound where runs
+        // reach ILD, as the egress proxy is, and its certificate names that host.
+        var gatewayHostNames = Uri.TryCreate(Environment.GetEnvironmentVariable("ILD_API_URL") ?? builder.Configuration["ILD_API_URL"], UriKind.Absolute, out var gatewayIldUrl)
+            ? new[] { gatewayIldUrl.Host, ILD.Core.Services.RunHosts.Isolated.ExecRunHost.RunFacingHost(gatewayIldUrl.Host) }
+            : Array.Empty<string>();
+        var gatewayBind = ILD.Core.Services.Implementations.Network.EgressProxyOptions.BindAddressFor(
+            ILD.Core.Services.RunHosts.RunHostOptions.Detect(name => builder.Configuration[name]));
+        var gatewayTls = ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.Create(
+            gatewayTlsPort,
+            Path.Combine(dataPath, "gateway"),
+            (name, bytes) =>
+            {
+                var path = Path.Combine(AgentIsolation.CreateAgentReadDirectory("gateway-ca"), name);
+                AgentIsolation.WriteAgentReadableFile(path, bytes);
+                return path;
+            },
+            gatewayHostNames);
+        builder.Services.AddSingleton(gatewayTls);
+        builder.WebHost.ConfigureKestrel(kestrel => GatewayTlsListener.Configure(kestrel, gatewayTls));
+        builder.WebHost.UseUrls(string.Join(';',
+            GatewayTlsListener.WebUrls(
+                builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.ServerUrlsKey),
+                builder.WebHost.GetSetting(Microsoft.AspNetCore.Hosting.WebHostDefaults.HttpPortsKey)),
+            GatewayTlsListener.Url(gatewayTls, gatewayBind)));
+    }
 
     var connectionString = Environment.GetEnvironmentVariable("ILD_DB_CONNECTION_STRING")
         ?? builder.Configuration["ILD_DB_CONNECTION_STRING"];
@@ -137,16 +171,11 @@ try
     _ = app.Services.GetRequiredService<ILoggerFactory>();
     hostLogger = Log.Logger;
 
-    _ = app.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>();
 
     // Attached here rather than injected: the buffer is a sink, so it is built
     // before the container holding the hub is.
     var logNotifier = app.Services.GetRequiredService<ILD.Api.Configuration.SignalRLogNotifier>();
     logBuffer.Appended = entry => _ = logNotifier.LogEntryAppendedAsync(entry);
-
-    // Refuse to start, rather than fail the first agent launch, when the files
-    // carrying the ILD API token would have no root the agent cannot write.
-    ILD.Core.Services.Implementations.AgentIsolation.EnsureAgentReadRoot();
 
     // What a restore that died with the previous process left behind: an upload, or a backup half written.
     try
@@ -219,6 +248,15 @@ try
             if (networkModesRenamed > 0)
                 Log.Information("Renamed the stored network mode off to monitor: it logged every connection, and off now means no proxy");
 
+            var installerDefaults = await ILD.Data.Migrations.InstallerNetworkDefaultsMigrator.MigrateAsync(dbContext);
+            if (installerDefaults > 0)
+                Log.Information("Added {Count} host(s) to the installers' default whitelist", installerDefaults);
+
+            // Providers that predate the gateway being under the network policy (ADR-0031) get their upstream hosts whitelisted once.
+            var gatewayEntries = await new ILD.Core.Services.Implementations.Network.ProviderNetworkEntries(dbContext).SeedAsync();
+            if (gatewayEntries > 0)
+                Log.Information("Whitelisted the model gateway upstream for {Count} provider(s)", gatewayEntries);
+
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also
             // clears dangling paths whose files a redeploy already wiped.
@@ -226,14 +264,8 @@ try
             if (payloadsInlined > 0)
                 Log.Information("Inlined {Count} offloaded event-log payload(s) into the database", payloadsInlined);
 
-            var agentUser = ILD.Core.Services.Implementations.AgentIsolation.AgentUser;
-
             if (ILD.Data.Security.SecretProtector.IsEnabled)
                 Log.Information("Secret encryption-at-rest is enabled (ILD_SECRET_KEY set)");
-            else if (agentUser is not null)
-                Log.Warning(
-                    "ILD_SECRET_KEY is not set while agent uid isolation is on ({AgentUser}) — provider API keys and webhook secrets sit in the database in plaintext, and the agent is a lower-trust user reaching the same database. Set it.",
-                    agentUser);
             else
                 Log.Warning("ILD_SECRET_KEY is not set — provider API keys and webhook secrets are stored in plaintext. Set it to enable encryption-at-rest.");
 
@@ -242,21 +274,20 @@ try
             else
                 Log.Warning("ILD_SESSION_TOKEN_PEPPER is not set — session tokens are hashed unkeyed, so anyone who can write the UserSessions table can mint a sign-in. Set it (setting it signs every device out once).");
 
+            // No agent launch survives the process that started it, so no token issued before this start is live.
+            await scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IAgentTokenService>().RevokeAllLiveAsync();
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ILD_AGENT_TOKEN")))
+                Log.Warning("ILD_AGENT_TOKEN is ignored: ILD issues each run and chat its own agent token.");
+
             // Before any run can start again: the token-bearing files of runs killed
             // with the previous process (see AgentRunFiles). Open runs and existing
             // chats keep their pi extension.
             try
             {
-                var active = (await dbContext.LoopRuns
-                        .Where(r => r.Status == ILD.Data.Enums.LoopRunStatus.Running
-                            || r.Status == ILD.Data.Enums.LoopRunStatus.WaitingHuman)
-                        .Select(r => r.Id)
-                        .ToListAsync())
-                    .Concat(await dbContext.ChatSessions.Select(c => c.Id).ToListAsync())
-                    .ToHashSet();
+                var active = await ILD.Api.Services.LiveRunIds.GetAsync(dbContext, CancellationToken.None);
                 var sweepLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
                     .CreateLogger(typeof(ILD.Core.Services.Implementations.AgentRunFiles));
-                if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(active, sweepLogger))
+                if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(scope.ServiceProvider.GetRequiredService<ILD.Core.Services.RunHosts.IRunHost>(), active, sweepLogger))
                     Log.Warning("Could not remove every token-bearing agent file the previous process left behind; see the warnings above");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -290,6 +321,8 @@ try
             }
         }
     }
+
+    app.UseMiddleware<ModelGatewayMiddleware>();
 
     app.UseSerilogRequestLogging();
 

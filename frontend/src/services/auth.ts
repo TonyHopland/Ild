@@ -7,6 +7,7 @@ import {
   WorkItemHistoryEntry,
   WorkItemAttachment,
   AttachmentLimits,
+  RunHostInfo,
   LoopTemplate,
   NodeOutput,
   LoopRun,
@@ -64,6 +65,7 @@ import {
   RunAnalyticsOverview,
   AnalyticsFilters,
   NetworkForward,
+  NetworkProtectedDestination,
   NetworkListKind,
   NetworkLogEntry,
   NetworkPolicyEntry,
@@ -651,6 +653,14 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/cleanup`, {});
   },
 
+  /**
+   * The container and folder VS Code attaches to for the run's worktree, starting a stopped container again.
+   * Refused with 409 where runs do not execute in Docker or Podman containers.
+   */
+  openInEditor: async (id: string): Promise<{ containerName: string; folder: string }> => {
+    return api.post<{ containerName: string; folder: string }>(`/loopruns/${id}/editor`, {});
+  },
+
   pause: async (id: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/pause`, {});
   },
@@ -678,6 +688,10 @@ export const loopRunService = {
 
   retryFromNode: async (id: string, runNodeId: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/nodes/${runNodeId}/retry`, {});
+  },
+
+  resumeFromNode: async (id: string, runNodeId: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/nodes/${runNodeId}/resume`, {});
   },
 
   setRetain: async (id: string, retain: boolean): Promise<{ id: string; retain: boolean }> => {
@@ -1211,6 +1225,9 @@ export const settingsService = {
   getAttachmentLimits: async (): Promise<AttachmentLimits> => {
     return api.get<AttachmentLimits>("/settings/attachments");
   },
+  getRunHost: async (): Promise<RunHostInfo> => {
+    return api.get<RunHostInfo>("/settings/run-host");
+  },
 };
 
 /** The egress filter mode: `off` logs only, `whitelist` allows listed hosts, `blacklist` blocks them. */
@@ -1230,12 +1247,18 @@ export const networkService = {
     host: string;
     listKind: NetworkListKind;
     aiProviderId?: string | null;
+    installers?: boolean;
   }): Promise<NetworkPolicyEntry> => {
     return api.post<NetworkPolicyEntry>("/network/entries", data);
   },
   updateEntry: async (
     id: string,
-    data: { host: string; listKind: NetworkListKind; aiProviderId?: string | null },
+    data: {
+      host: string;
+      listKind: NetworkListKind;
+      aiProviderId?: string | null;
+      installers?: boolean;
+    },
   ): Promise<NetworkPolicyEntry> => {
     return api.put<NetworkPolicyEntry>(`/network/entries/${id}`, data);
   },
@@ -1262,20 +1285,33 @@ export const networkService = {
   deleteForward: async (id: string): Promise<void> => {
     return api.delete<void>(`/network/forwards/${id}`);
   },
+  getProtected: async (): Promise<NetworkProtectedDestination[]> => {
+    return api.get<NetworkProtectedDestination[]>("/network/protected");
+  },
+  setProtected: async (id: string, enabled: boolean): Promise<NetworkProtectedDestination> => {
+    return api.put<NetworkProtectedDestination>(`/network/protected/${id}`, { enabled });
+  },
   getLog: async (take = 200): Promise<NetworkLogEntry[]> => {
     return api.get<NetworkLogEntry[]>(`/network/log?take=${take}`);
   },
   clearLog: async (): Promise<{ removed: number }> => {
     return api.delete<{ removed: number }>("/network/log");
   },
-  /** Promote a log line to a list; `scopeToProvider` limits the new entry to the line's provider. */
+  /**
+   * Promote a log line to a list; `scopeToProvider` limits the new entry to the line's provider and
+   * `scopeToInstallers` to the installers' scope.
+   */
   addLogEntryToList: async (
     id: string,
     listKind: NetworkListKind,
     scopeToProvider = false,
+    scopeToInstallers = false,
   ): Promise<NetworkPolicyEntry> => {
     const target = listKind === "Whitelist" ? "whitelist" : "blacklist";
-    return api.post<NetworkPolicyEntry>(`/network/log/${id}/${target}`, { scopeToProvider });
+    return api.post<NetworkPolicyEntry>(`/network/log/${id}/${target}`, {
+      scopeToProvider,
+      scopeToInstallers,
+    });
   },
 };
 

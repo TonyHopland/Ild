@@ -17,7 +17,7 @@ namespace ILD.Data.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.13")
+                .HasAnnotation("ProductVersion", "10.0.14")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -110,6 +110,42 @@ namespace ILD.Data.Migrations
                     b.HasKey("SnapshotId", "Seq");
 
                     b.ToTable("AdapterSessionSnapshotChunks");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.AgentToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("SourceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("Source", "SourceId");
+
+                    b.ToTable("AgentTokens");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.AiProvider", b =>
@@ -1083,6 +1119,9 @@ namespace ILD.Data.Migrations
                     b.Property<string>("AiProvider")
                         .HasColumnType("text");
 
+                    b.Property<string>("AiSessionId")
+                        .HasColumnType("text");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1435,11 +1474,23 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(253)
                         .HasColumnType("character varying(253)");
 
+                    b.Property<string>("Installer")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<int>("Port")
                         .HasColumnType("integer");
 
+                    b.Property<string>("Reason")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Via")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.HasKey("Id");
 
@@ -1454,6 +1505,9 @@ namespace ILD.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("AddedForProvider")
+                        .HasColumnType("boolean");
+
                     b.Property<Guid?>("AiProviderId")
                         .HasColumnType("uuid");
 
@@ -1467,6 +1521,9 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(253)
                         .HasColumnType("character varying(253)");
 
+                    b.Property<bool>("Installers")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("ListKind")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -1476,10 +1533,10 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("AiProviderId");
 
-                    b.HasIndex("ListKind", "Host", "AiProviderId")
+                    b.HasIndex("ListKind", "Host", "AiProviderId", "Installers")
                         .IsUnique();
 
-                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("ListKind", "Host", "AiProviderId"), false);
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("ListKind", "Host", "AiProviderId", "Installers"), false);
 
                     b.ToTable("NetworkPolicyEntries");
                 });

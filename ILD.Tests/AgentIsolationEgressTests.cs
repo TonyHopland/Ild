@@ -1,13 +1,16 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Network;
+using ILD.Core.Services.RunHosts;
+using ILD.Data.Enums;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// The agent side of ADR-0019: every crossing to the agent uid points the child
-/// at the egress proxy, and no orchestrator-side spawn is.
+/// The agent side of ADR-0019: every agent launch points the child at the egress
+/// proxy, and no orchestrator-side spawn is.
 /// </summary>
 public class AgentIsolationEgressTests
 {
@@ -35,46 +38,121 @@ public class AgentIsolationEgressTests
     [Fact]
     public void No_proxy_url_without_a_configured_port()
     {
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(null, null));
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl("", Guid.NewGuid()));
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl("not-a-port", null));
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl("0", null));
-        Assert.Null(AgentIsolation.ResolveEgressProxyUrl("70000", null));
+        var c = EgressProxyTests.Creds;
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, null, new LaunchScope()));
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, "", new LaunchScope(Provider: Guid.NewGuid())));
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, "not-a-port", new LaunchScope()));
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, "0", new LaunchScope()));
+        Assert.Null(AgentIsolation.ResolveEgressProxyUrl(c, "70000", new LaunchScope()));
+    }
+
+    /// <summary>The scope the proxy would read from the <c>Proxy-Authorization</c> a client sends for <paramref name="proxyUrl"/>, exactly as it does with the URL's user info.</summary>
+    internal static bool TryReadUrl(EgressCredentials credentials, string proxyUrl, out LaunchScope scope)
+        => credentials.TryRead("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(new Uri(proxyUrl).UserInfo)), out scope);
+
+    /// <summary>The scope in the proxy URL a run host put in <paramref name="environment"/> (<c>NAME=value</c> lines), read with the key launches are minted with.</summary>
+    internal static LaunchScope ScopeInEnvironment(IEnumerable<string> environment, EgressCredentials credentials)
+    {
+        var url = environment.Single(e => e.StartsWith("HTTPS_PROXY=", StringComparison.Ordinal))["HTTPS_PROXY=".Length..];
+        Assert.True(TryReadUrl(credentials, url, out var scope));
+        return scope;
     }
 
     [Fact]
-    public void The_proxy_url_is_loopback_and_names_the_provider_when_there_is_one()
+    public void Every_proxy_url_carries_a_credential_that_names_its_scope()
     {
         var id = Guid.Parse("7f2b9c1e-3a4d-4e5f-8a6b-1c2d3e4f5a6b");
+        var credentials = EgressProxyTests.Creds;
+        var run = Guid.NewGuid();
 
-        Assert.Equal("http://127.0.0.1:3128", AgentIsolation.ResolveEgressProxyUrl("3128", null));
-        Assert.Equal($"http://provider:{id}@127.0.0.1:3128", AgentIsolation.ResolveEgressProxyUrl("3128", id));
+        var unscoped = AgentIsolation.ResolveEgressProxyUrl(credentials, "3128", new LaunchScope(LaunchKind.Run, run))!;
+        var provider = AgentIsolation.ResolveEgressProxyUrl(credentials, "3128", new LaunchScope(LaunchKind.Chat, run, id))!;
+        var installer = new EgressProxyOptions(true, 3128).InstallerUrl(credentials, "repo-0123abcd")!;
+
+        Assert.StartsWith("http://ild:", unscoped);
+        Assert.EndsWith("@127.0.0.1:3128", unscoped);
+        Assert.True(TryReadUrl(credentials, unscoped, out var none));
+        Assert.Equal(new LaunchScope(LaunchKind.Run, run), none);
+        Assert.True(TryReadUrl(credentials, provider, out var scoped));
+        Assert.Equal(new LaunchScope(LaunchKind.Chat, run, id), scoped);
+        Assert.True(TryReadUrl(credentials, installer, out var zoned));
+        Assert.Equal(new LaunchScope(LaunchKind.Installer, Installer: "repo-0123abcd"), zoned);
+        Assert.Null(new EgressProxyOptions(false, 0).InstallerUrl(credentials, "agents"));
     }
 
     [Fact]
-    public void The_provider_in_the_url_round_trips_through_Proxy_Authorization()
+    public void Two_launches_never_hold_the_same_token()
     {
-        // Exactly what a client does with the URL's user info.
-        var id = Guid.NewGuid();
-        var uri = new Uri(AgentIsolation.ResolveEgressProxyUrl("3128", id)!);
-        var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(uri.UserInfo));
+        var credentials = EgressProxyTests.Creds;
+        var (runA, runB, provider) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var tokens = new[]
+        {
+            credentials.Mint(new LaunchScope(LaunchKind.Run, runA)),
+            credentials.Mint(new LaunchScope(LaunchKind.Run, runB)),
+            credentials.Mint(new LaunchScope(LaunchKind.Run, runA, provider)),
+            credentials.Mint(new LaunchScope(LaunchKind.Run, runB, provider)),
+            credentials.Mint(new LaunchScope(LaunchKind.Chat, runA)),
+        };
 
-        Assert.Equal(id, EgressProxy.ReadProviderScope(header));
-        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("provider:not-a-guid"))));
-        // Credentials some other tool put on the URL never attribute a provider,
-        // whatever their password looks like.
-        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"someone:{id}"))));
-        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(id.ToString()))));
-        Assert.Null(EgressProxy.ReadProviderScope("Bearer abc"));
-        Assert.Null(EgressProxy.ReadProviderScope("Basic %%%"));
+        Assert.Equal(tokens.Length, tokens.Distinct().Count());
+        Assert.True(credentials.TryRead("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("ild:" + tokens[1])), out var scope));
+        Assert.Equal(new LaunchScope(LaunchKind.Run, runB), scope);
     }
 
     [Fact]
-    public void Route_points_the_agent_at_the_proxy_and_keeps_loopback_direct()
+    public void A_credential_a_client_made_up_has_no_scope()
+    {
+        var id = Guid.NewGuid();
+        var credentials = EgressProxyTests.Creds;
+        static string Basic(string text) => "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+        var valid = credentials.Mint(new LaunchScope(Provider: id));
+
+        // The shapes the proxy used to take its scope from.
+        Assert.False(credentials.TryRead(Basic($"provider:{id}"), out _));
+        Assert.False(credentials.TryRead(Basic("installer:agents"), out _));
+        Assert.False(credentials.TryRead(Basic("provider:not-a-guid"), out _));
+        // A real token under another user name, or with no user, or not Basic, or not base64.
+        Assert.False(credentials.TryRead(Basic($"someone:{valid}"), out _));
+        Assert.False(credentials.TryRead(Basic(valid), out _));
+        Assert.False(credentials.TryRead("Bearer " + valid, out _));
+        Assert.False(credentials.TryRead("Basic %%%", out _));
+        Assert.False(credentials.TryRead(null, out _));
+        // A token signed with another key.
+        var other = new EgressCredentials(new byte[32]);
+        Assert.False(credentials.TryRead(Basic($"ild:{other.Mint(new LaunchScope(Installer: "agents"))}"), out _));
+        // A valid token whose scope was swapped for another's, keeping the old signature.
+        var forged = other.Mint(new LaunchScope(Installer: "agents")).Split('.')[0] + "." + valid.Split('.')[1];
+        Assert.False(credentials.TryRead(Basic($"ild:{forged}"), out _));
+        Assert.True(credentials.TryRead(Basic($"ild:{valid}"), out var read));
+        Assert.Equal(id, read.Provider);
+    }
+
+    [Fact]
+    public void A_token_survives_a_restart_because_the_key_is_kept_in_a_file()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ild-egress-" + Guid.NewGuid().ToString("N"), "egress", "proxy.key");
+        try
+        {
+            var token = EgressCredentials.Load(path).Mint(new LaunchScope(Installer: "toolchains"));
+            var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("ild:" + token));
+
+            Assert.True(EgressCredentials.Load(path).TryRead(header, out var scope));
+            Assert.Equal("toolchains", scope.Installer);
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(Path.GetDirectoryName(path))!, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_launch_is_pointed_at_the_proxy_and_keeps_loopback_direct()
     {
         var psi = BuildPsi();
 
-        AgentIsolation.Route(psi, "agent", "agent", "/home/agent", egressProxy: "http://127.0.0.1:3128");
+        AgentIsolation.ApplyLaunchEnvironment(psi, egressProxy: "http://127.0.0.1:3128");
 
         foreach (var key in new[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" })
             Assert.Equal("http://127.0.0.1:3128", psi.Environment[key]);
@@ -84,105 +162,87 @@ public class AgentIsolationEgressTests
         Assert.Equal(["localhost", "127.0.0.1", "::1", "[::1]"], psi.Environment["NO_PROXY"]!.Split(','));
         // Node's built-in fetch ignores the variables above without it.
         Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
-        // The crossing itself is unchanged.
-        Assert.Equal("/usr/bin/setpriv", psi.FileName);
-        Assert.Equal("/home/agent", psi.Environment["HOME"]);
+        Assert.Equal("/data/agents/claude-code/versions/v1/node_modules/.bin/claude", psi.FileName);
     }
 
     [Fact]
-    public void Route_leaves_the_environment_alone_when_no_proxy_is_configured()
+    public void A_launch_gets_no_proxy_when_none_is_configured()
     {
         var psi = BuildPsi();
+        foreach (var key in ProxyKeys)
+            psi.Environment.Remove(key);
 
-        AgentIsolation.Route(psi, "agent", "agent", "/home/agent", egressProxy: null);
+        AgentIsolation.ApplyLaunchEnvironment(psi, egressProxy: null);
 
         foreach (var key in ProxyKeys)
             Assert.False(psi.Environment.ContainsKey(key), $"{key} set without a proxy");
     }
 
-    [Fact]
-    public void The_funnel_does_not_depend_on_the_uid_crossing()
+    [Theory]
+    [InlineData(NetworkMode.Monitor, true)]
+    [InlineData(NetworkMode.Whitelist, true)]
+    [InlineData(NetworkMode.Blacklist, true)]
+    [InlineData(NetworkMode.Off, false)]
+    public void Every_mode_but_Off_points_a_local_launch_at_the_proxy(NetworkMode mode, bool proxied)
     {
-        // Single-uid deployment: the proxy still logs, so the launch is still pointed at it.
-        var psi = BuildPsi();
-
-        AgentIsolation.Route(psi, agentUser: null, agentGroup: null, agentHome: null, egressProxy: "http://127.0.0.1:3128");
-
-        Assert.Equal("http://127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
-        Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
-        Assert.NotEqual("/usr/bin/setpriv", psi.FileName);
+        var url = AgentIsolation.ResolveLaunchProxy(EgressProxyTests.Creds, mode, "3128", new LaunchScope());
+        Assert.Equal(proxied, url is not null);
+        if (url is not null)
+            Assert.EndsWith("@127.0.0.1:3128", url);
+        Assert.Null(AgentIsolation.ResolveLaunchProxy(EgressProxyTests.Creds, mode, null, new LaunchScope()));
     }
 
     [Fact]
     public void Orchestrator_side_spawns_are_never_proxied()
     {
         var psi = BuildPsi();
+        foreach (var key in ProxyKeys)
+            psi.Environment.Remove(key);
 
-        AgentIsolation.DropInheritedCapabilities(psi, "agent");
         AgentIsolation.StripOrchestratorEnvironment(psi);
 
-        Assert.Equal("/usr/bin/setpriv", psi.FileName);
         foreach (var key in ProxyKeys)
             Assert.False(psi.Environment.ContainsKey(key), $"{key} reached an orchestrator-side spawn");
     }
 
     [Fact]
-    public void RouteCommand_carries_the_proxy_with_the_pty_command()
+    public void TerminalCommand_carries_only_the_proxy_with_the_pty_command()
     {
-        var routed = AgentIsolation.RouteCommand("/usr/bin/claude", Array.Empty<string>(), "agent", "agent", "/home/agent",
+        var routed = AgentIsolation.TerminalCommand("/usr/bin/claude", Array.Empty<string>(),
             egressProxy: "http://provider:11111111-1111-1111-1111-111111111111@127.0.0.1:3128");
 
-        Assert.Equal("/usr/bin/setpriv", routed.FileName);
+        Assert.Equal("/usr/bin/claude", routed.FileName);
         Assert.Equal("http://provider:11111111-1111-1111-1111-111111111111@127.0.0.1:3128", routed.Environment["HTTPS_PROXY"]);
         Assert.Equal(AgentIsolation.EgressNoProxy, routed.Environment["no_proxy"]);
         Assert.Equal("1", routed.Environment["NODE_USE_ENV_PROXY"]);
-        Assert.Equal("/home/agent", routed.Environment["HOME"]);
-    }
-
-    [Fact]
-    public void RouteCommand_carries_only_the_proxy_when_isolation_is_off()
-    {
-        var routed = AgentIsolation.RouteCommand("/usr/bin/claude", Array.Empty<string>(), null, null, null,
-            egressProxy: "http://127.0.0.1:3128");
-
-        Assert.Equal("/usr/bin/claude", routed.FileName);
         Assert.Equal(ProxyKeys.OrderBy(k => k, StringComparer.Ordinal), routed.Environment.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Empty(AgentIsolation.TerminalCommand("/usr/bin/claude", Array.Empty<string>(), egressProxy: null).Environment);
     }
 
     [Fact]
-    public void Proxy_options_and_enforcement_status_follow_the_port_variable()
+    public void Proxy_options_and_status_follow_the_port_variable()
     {
         Assert.False(EgressProxyOptions.Parse(null).Enabled);
         Assert.False(EgressProxyOptions.Parse("x").Enabled);
         Assert.Equal(3128, EgressProxyOptions.Parse(" 3128 ").Port);
 
-        var noProxy = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Disabled, "enforced", null);
-        Assert.Equal(NetworkEnforcementStatus.Advisory, noProxy.Enforcement);
+        var noProxy = NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Disabled);
         Assert.False(noProxy.ProxyEnabled);
+        Assert.Null(noProxy.ProxyPort);
 
-        var enforced = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", "nft rules installed for uid 10002");
-        Assert.True(enforced.IsEnforced);
-        Assert.Equal("nft rules installed for uid 10002", enforced.Reason);
-        Assert.Equal(3128, enforced.ProxyPort);
-
-        var advisory = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "advisory", "NET_ADMIN not granted");
-        Assert.False(advisory.IsEnforced);
-        Assert.Equal("NET_ADMIN not granted", advisory.Reason);
-
-        var unreported = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), null, null);
-        Assert.Equal(NetworkEnforcementStatus.Advisory, unreported.Enforcement);
-        Assert.NotEmpty(unreported.Reason);
+        var proxied = NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128"));
+        Assert.True(proxied.ProxyEnabled);
+        Assert.Equal(3128, proxied.ProxyPort);
     }
 
-    [Fact]
-    public void An_enforced_status_without_a_reported_reason_still_says_why_Off_is_unavailable()
+    [Theory]
+    [InlineData(RunHostKind.Local, "advisory")]
+    [InlineData(RunHostKind.Container, "unverified")]
+    [InlineData(RunHostKind.Kubernetes, "unverified")]
+    public void Rules_are_claimed_enforced_only_after_a_probe_has_failed_to_get_out(RunHostKind kind, string enforcement)
     {
-        var closed = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null);
-        Assert.False(closed.OffAvailable);
-        Assert.Contains("Off is unavailable", closed.Reason);
-
-        var open = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "ild-net-open");
-        Assert.True(open.OffAvailable);
-        Assert.DoesNotContain("Off", open.Reason);
+        Assert.Equal(enforcement, NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128")).EnforcementFor(kind));
+        Assert.NotEmpty(NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128")).ReasonFor(kind));
+        Assert.NotEmpty(NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Disabled).ReasonFor(kind));
     }
 }

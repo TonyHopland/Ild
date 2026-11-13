@@ -1,5 +1,4 @@
 using System.Text;
-using ILD.Api.Authentication;
 using ILD.Data.Entities;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -10,12 +9,9 @@ namespace ILD.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/webhooks")]
-// The caller is a git host replaying an operator-configured credential, which may
-// hold either principal's token — so this asks only for an authenticated caller,
-// exactly as before. The adapter's own webhook check below is the real gate; the
-// token is the outer one, and dropping it to anonymous would remove a check that
-// exists today.
-[Authorize(Policy = IldAuthentication.AgentOrUserPolicy)]
+// The caller is a git host, which proves itself with the webhook secret of one of its providers and with nothing else:
+// a token of ILD's own in a forge's webhook settings would be an operator's session, readable there and in every proxy log.
+[AllowAnonymous]
 public class WebhooksController : ControllerBase
 {
     private readonly IPrSyncService _prSync;

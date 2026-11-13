@@ -107,7 +107,7 @@ public class ManagedAgentAutoUpdateTests : IDisposable
     private static TimeSpan Days(double d) => TimeSpan.FromDays(d);
 
     private ManagedAgentService Create(Runner runner, Registry registry, IManagedAgentUsage? usage = null)
-        => new(new HttpClient(registry), runner, _dataRoot, logger: null, agentUser: null, usage: usage ?? _usage);
+        => new(new HttpClient(registry), runner, _dataRoot, logger: null, usage: usage ?? _usage);
 
     private string[] VersionDirs()
     {

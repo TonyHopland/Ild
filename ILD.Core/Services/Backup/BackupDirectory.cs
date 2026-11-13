@@ -6,8 +6,7 @@ namespace ILD.Core.Services.Backup;
 /// Where ILD keeps backup files of its own: the automatic backup a restore takes of the data it
 /// replaces, and the upload a restore is working from. Only ILD's own user can read the
 /// directory (0700) and the files in it (0600). It is under the data root and nowhere the web
-/// server serves, and it is not a place the agent uid is given: ADR-0014 keeps the agent away
-/// from the data, and a backup is all of it.
+/// server serves, and it is not a place an agent is given: a backup is all of the data.
 /// </summary>
 public sealed class BackupDirectory
 {

@@ -1,4 +1,6 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Remote;
@@ -20,6 +22,7 @@ namespace ILD.Core.Services.Implementations;
 /// </summary>
 public class WorkItemManager : IWorkItemManager
 {
+    private readonly IRunHost _runHost;
     private readonly IRepositoryManager _repoManager;
     private readonly IProviderStore _providerStore;
     private readonly IEventLogService _eventLog;
@@ -35,6 +38,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IRemoteProvider? _remoteProvider;
     private readonly ILogger<WorkItemManager> _logger;
     private readonly RepositoryParallelismHolds _repositoryHolds;
+    private readonly RunPreparations? _runPreparations;
     private readonly IFinishedRunCleaner? _finishedRunCleaner;
     private readonly IHumanInputProposalStore? _humanInputProposals;
 
@@ -46,6 +50,7 @@ public class WorkItemManager : IWorkItemManager
         IWorkItemServerClient server,
         IWorkItemServerOptionsResolver options,
         BootstrapCredentials instance,
+        IRunHost runHost,
         IWorkItemNotifier? notifier = null,
         IWorktreePreviewService? previewService = null,
         IWorkItemScheduler? scheduler = null,
@@ -55,8 +60,11 @@ public class WorkItemManager : IWorkItemManager
         ILogger<WorkItemManager>? logger = null,
         RepositoryParallelismHolds? repositoryHolds = null,
         IFinishedRunCleaner? finishedRunCleaner = null,
-        IHumanInputProposalStore? humanInputProposals = null)
+        IHumanInputProposalStore? humanInputProposals = null,
+        RunPreparations? runPreparations = null)
     {
+        _runPreparations = runPreparations;
+        _runHost = runHost;
         _humanInputProposals = humanInputProposals;
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -69,7 +77,7 @@ public class WorkItemManager : IWorkItemManager
         _previewService = previewService ?? new NoopPreviewService();
         _scheduler = scheduler;
         _engine = engine;
-        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _previewService, _notifier);
+        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _runHost, _previewService, _notifier);
         _remoteProvider = remoteProvider;
         _logger = logger ?? NullLogger<WorkItemManager>.Instance;
         _repositoryHolds = repositoryHolds ?? new RepositoryParallelismHolds();
@@ -531,6 +539,8 @@ public class WorkItemManager : IWorkItemManager
             PendingEditProposalCount = remote.PendingEditProposalCount,
             // The latest pass's hold is only meaningful while the item is still Ready.
             RepositoryParallelismHold = remote.Status == RemoteWorkItemStatus.Ready ? _repositoryHolds.Get(remote.Id) : null,
+            // Only a running item can be waiting on its container.
+            PreparingContainer = remote.Status == RemoteWorkItemStatus.Running && _runPreparations?.IsPreparing(remote.Id) == true,
         };
     }
 
@@ -1293,7 +1303,7 @@ public class WorkItemManager : IWorkItemManager
         var wi = await GetWorkItemAsync(workItemId);
         if (wi is null)
             return (null, "Work item not found.");
-        if (string.IsNullOrWhiteSpace(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
+        if (string.IsNullOrWhiteSpace(wi.WorktreePath) || !await _runHost.DirectoryExistsAsync(wi.WorktreePath))
             return (null, "Work item does not currently have an active worktree.");
         if (wi.RunRepositoryId is null)
             return (null, "Work item has no associated repository.");
@@ -1320,7 +1330,7 @@ public class WorkItemManager : IWorkItemManager
         var branch = workItem.BranchName;
         var worktreePath = workItem.WorktreePath;
         if (string.IsNullOrWhiteSpace(branch)
-            || string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath)
+            || string.IsNullOrWhiteSpace(worktreePath) || !await _runHost.DirectoryExistsAsync(worktreePath)
             || workItem.RunRepositoryId is not { } repositoryId)
             return null;
 
@@ -1352,8 +1362,8 @@ public class WorkItemManager : IWorkItemManager
 
         // Mirror the PR node's prep: commit only when there is something to
         // commit, then push the branch with the repository's credentials.
-        var diff = await _repoManager.GetDiffAsync(ctx.WorktreePath);
-        if (!string.IsNullOrEmpty(diff) && !await _repoManager.CommitAsync(ctx.WorktreePath, ctx.WorkItem.Title))
+        var dirty = await _repoManager.HasUncommittedChangesAsync(ctx.WorktreePath);
+        if (dirty && !await _repoManager.CommitAsync(ctx.WorktreePath, ctx.WorkItem.Title))
             return (false, null, "Failed to commit uncommitted changes.");
 
         var pushResult = await _repoManager.PushAsync(ctx.WorktreePath, ctx.Branch, default, ctx.Auth);
@@ -1386,7 +1396,7 @@ public class WorkItemManager : IWorkItemManager
 
         // The rebase below only ever touches local refs, so this fetch is the one
         // step that needs the repository's credentials — which is exactly what the
-        // agent uid cannot supply for itself (ADR-0014).
+        // agent cannot supply for itself.
         if (!await _repoManager.FetchAsync(ctx.WorktreePath, cancellationToken, ctx.Auth))
             return new PullBranchResult(
                 PullBranchOutcome.Failed,
@@ -1412,14 +1422,6 @@ public class WorkItemManager : IWorkItemManager
         // Rebase rather than merge, matching what the Start node does with the
         // default branch: the run branch stays a linear series of the run's own
         // commits on top of whatever origin holds.
-        //
-        // This rewrites far more of the working tree than the commit on the push
-        // path does, and it runs as the ORCHESTRATOR inside a worktree the agent
-        // uid has been writing to. That is safe without any ownership fix-up:
-        // /worktrees is provisioned as a shared read/write tree (setgid + a default
-        // ACL granting the shared group rwx, see entrypoint.sh), so agent-created
-        // files are group-writable by the orchestrator and the files git writes
-        // here come out writable by the agent — ownership differs, access does not.
         var rebase = await _repoManager.RebaseAsync(ctx.WorktreePath, upstream, cancellationToken);
         if (!rebase.Success)
         {

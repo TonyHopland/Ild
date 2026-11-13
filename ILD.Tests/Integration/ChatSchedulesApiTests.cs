@@ -94,7 +94,7 @@ public sealed class ChatSchedulesApiTests
         // The agent service token authenticates, but it is not a user.
         using var agent = host.Factory.CreateClient();
         agent.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer",
-            host.Factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
+            host.Factory.Services.IssueAgentToken());
         var ct = TestContext.Current.CancellationToken;
         using (var r = await agent.GetAsync("/api/v1/chat/schedules", ct)) Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode);
         using (var r = await agent.PostAsJsonAsync("/api/v1/chat/schedules", Body(name: "agent's"), ct)) Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode);

@@ -5,8 +5,8 @@ namespace ILD.McpServer.Tools;
 
 /// <summary>
 /// MCP tools for the loop the user has open in the Loop Editor (loop editor
-/// context, ADR-0011). Scoped to the chat session via the
-/// <c>X-ILD-Chat-Session-Id</c> header that <see cref="IldClient"/> sends; the
+/// context, ADR-0011). Scoped to the chat session by the
+/// chat token <see cref="IldClient"/> sends; the
 /// browser stashes the live document on every chat message, so these always act
 /// on the loop as-of the current turn.
 ///

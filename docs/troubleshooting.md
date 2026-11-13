@@ -14,7 +14,7 @@ The WorkItem Server reclaims stale running items when heartbeats stop arriving. 
 
 **Webhook updates are not reaching ILD**
 
-The webhook route is not an anonymous bypass. Configure the expected bearer auth and HMAC settings together; a missing or mismatched secret causes rejection.
+The webhook routes take no ILD token: the git host proves itself with the provider's webhook secret alone, and a missing or mismatched secret is a 401. Set the same secret on the remote provider in ILD and in the git host's webhook settings, and remove any `?access_token=` from the webhook URL.
 
 **Preview URLs are not reachable from the host**
 
@@ -35,24 +35,24 @@ error MSB3374: The last access/last write time on file
 Access to the path '...' is denied.
 ```
 
-Two different users have built in the same worktree. A file created `0755` by one of them clamps the inherited `g:ild-agents:rwx` ACL to an effective `r-x` for the other (`MSB3021`), and setting an explicit mtime through `utimensat` requires being the file's **owner** — group write is irrelevant and no mode or ACL scheme can grant it (`MSB3374`). Other toolchains that rewrite an existing output tree can hit the same wall; .NET just names it precisely.
+Two different users have built in the same worktree. A file created `0755` by one of them is read-only for the other (`MSB3021`), and setting an explicit mtime through `utimensat` requires being the file's **owner** — group write is irrelevant and no mode or ACL scheme can grant it (`MSB3374`). Other toolchains that rewrite an existing output tree can hit the same wall; .NET just names it precisely.
 
-Previews ([ADR-0016](adr/0016-preview-runs-as-the-agent.md)) and Cmd nodes now run as the `agent` user, the same one the coding agent builds under, so this cannot arise on a worktree used since. A worktree previewed or built by a Cmd node on an older build still holds mixed-ownership output and needs clearing **once**:
+Previews and Cmd nodes run in the run's container as the same user the coding agent builds under, so this cannot arise on a run started since. A worktree built by two users on an older build still holds mixed-ownership output and needs clearing **once**:
 
 ```sh
 find /worktrees/<worktree> -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +
 ```
 
-Adjust the directory names for your toolchain (`target`, `build`, `node_modules/.cache`, …), then start the preview or rerun the Cmd node. If it recurs on a fresh worktree, something else is building as the orchestrator, and that is what to look at, not the file modes.
+Adjust the directory names for your toolchain (`target`, `build`, `node_modules/.cache`, …), then start the preview or rerun the Cmd node. If it recurs on a fresh worktree, something else is building as another user, and that is what to look at, not the file modes.
 
-**`setpriv: setresuid failed: Operation not permitted` inside a preview**
+**No run or chat can start: ILD cannot open the container engine's socket**
 
-Only reachable if the application you are previewing is itself an ILD, or reads the same `ILD_AGENT_USER` variable: it inherited that value from the outer instance, concluded uid isolation was on, and tried to `setpriv --reuid` without holding `CAP_SETUID` — which a preview child does not have and must not have. Usually seen when opening an interactive provider terminal inside the preview.
+ILD's log says why at startup, and **Settings > General** shows the reason. Check that `ILD_CONTAINER_SOCKET_HOST` in `.env` is the socket of the engine compose talks to ([Which socket](deployment.md#which-socket)). A socket of the host's `root` group (rootful Podman on Linux) needs `ILD_CONTAINER_SOCKET_GRANT=1`. A log warning that the socket's group is unmapped (`userns-remap`) means the container needs `--userns=host`, or another socket. On a rootless engine, restart ILD after restarting the engine's socket. See [The engine socket](deployment.md#the-engine-socket).
 
-Fixed on current builds, which pass none of the outer instance's uid topology down. On an older build, neutralise the three variables in that repository's `ild.config.json` and remove them again after upgrading:
+**A run's container fails to start with `crun: open 'memory.max'`**
 
-```json
-"ILD_AGENT_USER": "",
-"ILD_ORCHESTRATOR_PRIVATE_ROOT": "${STATE_DIR}/private",
-"ILD_AGENT_SCRATCH_ROOT": "${STATE_DIR}/scratch"
-```
+The rootless engine's cgroup controllers are not delegated. Set `ILD_RUN_CPU_LIMIT=0`, `ILD_RUN_MEMORY_LIMIT=0` and `ILD_RUN_PIDS_LIMIT=0` in `.env`; see [Deployment](deployment.md#which-socket).
+
+**Open in VS Code does nothing, or VS Code cannot find the container**
+
+The button on a work item's **Terminal** tab opens VS Code attached to the run's container, with the worktree open. It is there only when runs execute in Docker or Podman containers, and not while the run is executing. The browser hands the link to VS Code on the machine you browse from, so that machine must run the container engine ILD uses and have VS Code with the Dev Containers extension. With Podman, set `dev.containers.dockerPath` to `podman` in VS Code's settings. A stopped container is started again when you press the button.

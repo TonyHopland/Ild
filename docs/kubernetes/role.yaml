@@ -1,0 +1,24 @@
+# What ILD may do in the namespace the run pods live in (ILD_K8S_NAMESPACE). Nothing outside it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ild-runs
+  labels:
+    # ILD's Role can create pods; this keeps a compromised ILD from making a privileged one. Every pod ILD makes meets it.
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ild-run-host
+  namespace: ild-runs
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "persistentvolumeclaims", "configmaps"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "list", "delete"]

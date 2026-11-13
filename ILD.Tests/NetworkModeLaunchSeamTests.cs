@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text;
@@ -7,6 +8,7 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -17,16 +19,13 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
-/// The launch seams that read the process-wide proxy port and open group follow the
-/// network mode (ADR-0019): in Off no proxy variable and, under uid isolation, the
-/// open group for <c>--regid</c>; in every other mode the launch is as before.
-/// Runs alone because it sets those variables in the real process environment.
+/// The launch seams that read the process-wide proxy port follow the network mode
+/// (ADR-0019): in Off no proxy variable; in every other mode the provider-scoped proxy.
+/// Runs alone because it sets that variable in the real process environment.
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
 public sealed class NetworkModeLaunchSeamTests : IDisposable
 {
-    private const string OpenGroup = "ild-net-open";
-
     private static readonly string[] ProxyKeys =
         { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY" };
 
@@ -38,8 +37,6 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         Directory.CreateDirectory(_worktree);
         foreach (var key in ProxyKeys) Set(key, null);
         Set(AgentIsolation.EgressProxyPortEnvVar, "3128");
-        Set(AgentIsolation.NetworkOpenGroupEnvVar, OpenGroup);
-        Set(AgentIsolation.AgentUserEnvVar, null);
     }
 
     public void Dispose()
@@ -55,13 +52,6 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         Environment.SetEnvironmentVariable(name, value);
     }
 
-    private void IsolateAs(string user, string group)
-    {
-        Set(AgentIsolation.AgentUserEnvVar, user);
-        Set(AgentIsolation.AgentGroupEnvVar, group);
-        Set(AgentIsolation.AgentHomeEnvVar, "/home/agent");
-    }
-
     private static AgentExecutionContext Execution(NetworkMode mode) => new(
         new AiProvider { Id = Guid.NewGuid(), Name = "p", Type = "claude-code", BaseUrl = "http://localhost", Model = "m", Parallelism = 1 },
         "prompt",
@@ -70,33 +60,29 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         Cancel: CancellationToken.None,
         NetworkMode: mode);
 
+    private static ProcessStartInfo Prepare(ProcessStartInfo psi, AgentExecutionContext ctx)
+        => LocalRunHost.PrepareAgentLaunch(psi, EgressProxyTests.Creds, ctx.Provider.Id, ctx.NetworkMode, ctx.Environment is null ? null : CommandEnvironment.Of(ctx.Environment));
+
     [Theory]
     [InlineData(NetworkMode.Monitor)]
     [InlineData(NetworkMode.Whitelist)]
     [InlineData(NetworkMode.Blacklist)]
-    public void An_adapter_launch_in_a_proxied_mode_is_what_it_was_before_Off_existed(NetworkMode mode)
+    public void An_adapter_launch_in_a_proxied_mode_gets_the_provider_scoped_proxy(NetworkMode mode)
     {
-        IsolateAs("agent", "agent-primary");
+        var psi = Prepare(new ProcessStartInfo("claude"), Execution(mode));
 
-        var psi = CliAgentAdapterBase.RouteForExecution(new ProcessStartInfo("claude"), Execution(mode));
-
-        Assert.Contains("--regid=agent-primary", psi.ArgumentList);
-        Assert.DoesNotContain($"--regid={OpenGroup}", psi.ArgumentList);
-        Assert.StartsWith("http://provider:", psi.Environment["HTTPS_PROXY"]);
+        Assert.StartsWith("http://ild:", psi.Environment["HTTPS_PROXY"]);
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, psi.Environment["HTTPS_PROXY"]!, out var scope));
+        Assert.NotNull(scope.Provider);
         Assert.EndsWith("@127.0.0.1:3128", psi.Environment["HTTPS_PROXY"]);
         Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
     }
 
     [Fact]
-    public void An_adapter_launch_in_Off_runs_under_the_open_group_with_no_proxy_variable()
+    public void An_adapter_launch_in_Off_has_no_proxy_variable()
     {
-        IsolateAs("agent", "agent-primary");
+        var psi = Prepare(new ProcessStartInfo("claude"), Execution(NetworkMode.Off));
 
-        var psi = CliAgentAdapterBase.RouteForExecution(new ProcessStartInfo("claude"), Execution(NetworkMode.Off));
-
-        Assert.Contains($"--regid={OpenGroup}", psi.ArgumentList);
-        Assert.Contains("--init-groups", psi.ArgumentList);
-        Assert.DoesNotContain("--regid=agent-primary", psi.ArgumentList);
         foreach (var key in ProxyKeys)
             Assert.False(psi.Environment.ContainsKey(key), $"{key} set for an Off launch");
     }
@@ -106,7 +92,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     {
         var ctx = Execution(NetworkMode.Off) with { Environment = new Dictionary<string, string> { ["FEED_TOKEN"] = "t" } };
 
-        var psi = CliAgentAdapterBase.RouteForExecution(new ProcessStartInfo("claude"), ctx);
+        var psi = Prepare(new ProcessStartInfo("claude"), ctx);
 
         Assert.Equal("t", psi.Environment["FEED_TOKEN"]);
     }
@@ -116,6 +102,7 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton(new Mock<IWorkItemManager>().Object);
         services.AddSingleton(NoPackageFeeds.Resolver);
+        services.AddSingleton(EgressProxyTests.Creds);
         if (policy is not null) services.AddSingleton(policy);
         var ctx = new NodeExecutionContext(
             new LoopRun { Id = Guid.NewGuid(), WorktreePath = _worktree },
@@ -142,16 +129,50 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     [InlineData(NetworkMode.Monitor)]
     [InlineData(NetworkMode.Whitelist)]
     public async Task A_Cmd_node_runs_proxied_in_every_other_mode(NetworkMode mode)
-        => Assert.Equal("http://127.0.0.1:3128", (await RunCmdNodeAsync(EgressPolicies.Reporting(mode))).Trim());
+        => AssertUnscopedProxy(await RunCmdNodeAsync(EgressPolicies.Reporting(mode)));
+
+    // What an isolated host reads to leave the proxy off (and open the direct route) for a command it runs in the run's own environment.
+    [Theory]
+    [InlineData(NetworkMode.Off)]
+    [InlineData(NetworkMode.Monitor)]
+    [InlineData(NetworkMode.Whitelist)]
+    public async Task A_Cmd_node_hands_its_run_host_the_mode_it_was_launched_in(NetworkMode mode)
+    {
+        var host = new ILD.Tests.Fakes.FakeRunHost();
+        host.WithDirectory(_worktree);
+        var services = new ServiceCollection();
+        services.AddSingleton<IRunHost>(host);
+        services.AddSingleton(new Mock<IWorkItemManager>().Object);
+        services.AddSingleton(NoPackageFeeds.Resolver);
+        services.AddSingleton(EgressPolicies.Reporting(mode));
+        var ctx = new NodeExecutionContext(
+            new LoopRun { Id = Guid.NewGuid(), WorktreePath = _worktree },
+            new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Cmd, Label = "cmd", Config = System.Text.Json.JsonSerializer.Serialize(new { command = "true" }) },
+            services.BuildServiceProvider(),
+            CancellationToken.None);
+
+        await foreach (var _ in new CmdNodeExecutor().ExecuteAsync(ctx)) { }
+
+        Assert.Equal(mode, Assert.Single(host.Started).NetworkMode);
+    }
 
     [Fact]
     public async Task A_Cmd_node_without_a_policy_runs_proxied_as_Monitor()
-        => Assert.Equal("http://127.0.0.1:3128", (await RunCmdNodeAsync(null)).Trim());
+        => AssertUnscopedProxy(await RunCmdNodeAsync(null));
+
+    private static void AssertUnscopedProxy(string url)
+    {
+        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, url.Trim(), out var scope));
+        Assert.Equal(LaunchKind.Run, scope.Kind);
+        Assert.Null(scope.Provider);
+        Assert.Null(scope.Installer);
+        Assert.EndsWith("@127.0.0.1:3128", url.Trim());
+    }
 
     private async Task<string> RunTerminalAsync(IEgressPolicy? policy)
     {
         var (server, client) = WebSocketPair.Create();
-        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance, policy);
+        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance, policy, host: new LocalRunHost(credentials: EgressProxyTests.Creds));
         var provider = new AiProvider
         {
             Id = Guid.NewGuid(),

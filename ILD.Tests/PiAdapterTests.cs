@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
@@ -443,7 +444,7 @@ public class PiAdapterTests
             Assert.Single(System.Text.RegularExpressions.Regex.Matches(ildTs, @"registerMcpServer\("));
             Assert.Matches(@"""?exposure""?\s*:\s*""direct""", ildTs);
             Assert.Matches(@"""?timeout""?\s*:\s*120\b", ildTs);
-            Assert.Contains("ild-mcp-server.dll", ildTs);
+            Assert.Contains("ild-mcp-server", ildTs);
             Assert.Contains("ILD_API_URL", ildTs);
             Assert.Contains("ILD_LOOP_RUN_ID", ildTs);
             Assert.Contains(runId.ToString(), ildTs);
@@ -674,7 +675,7 @@ public class PiAdapterTests
         var scriptPath = WriteRecordingPi(worktreeDir);
         var environment = new TestProcessEnvironment
         {
-            { "ILD_API_TOKEN", "!a$b${C}" },
+            { "ILD_API_TOKEN", "process-wide" },
             { "ILD_API_URL", "http://example.com/$api" },
         };
 
@@ -684,10 +685,12 @@ public class PiAdapterTests
                 binaryPath: scriptPath,
                 worktreePath: worktreeDir,
                 runId: runId,
-                executionCount: 1));
+                executionCount: 1,
+                agentApiToken: "!a$b${C}"));
 
             Assert.True(result.Success, result.Error);
             var ildTs = File.ReadAllText(ExtensionArgument(worktreeDir));
+            Assert.DoesNotContain("process-wide", ildTs);
             Assert.Contains("$!a$$b$${C}", ildTs);
             Assert.Contains("http://example.com/$$api", ildTs);
             Assert.DoesNotContain("\"!a$b${C}\"", ildTs);
@@ -793,7 +796,8 @@ public class PiAdapterTests
         Guid? runId = null,
         string? sessionId = null,
         bool manageSession = false,
-        Action<string>? onSessionId = null)
+        Action<string>? onSessionId = null,
+        string? agentApiToken = null)
     {
         var dict = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
             config ?? "{}") ?? new System.Collections.Generic.Dictionary<string, object>();
@@ -826,7 +830,8 @@ public class PiAdapterTests
             ProgressCallback: progressCallback,
             SessionId: sessionId,
             ManageSession: manageSession,
-            OnSessionId: onSessionId);
+            OnSessionId: onSessionId,
+            AgentApiToken: agentApiToken);
     }
 
     private static string NewWorktree(string prefix)
@@ -897,6 +902,7 @@ public class PiAdapterTests
         await connection.OpenAsync();
 
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 

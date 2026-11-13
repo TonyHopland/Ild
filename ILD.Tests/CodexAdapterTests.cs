@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text.Json;
@@ -58,7 +59,7 @@ public sealed class CodexAdapterTests : IDisposable
             { AgentIsolation.AgentReadRootEnvVar, _readRoot },
             { "ILD_MCP_SERVER_DLL", _fakeDll },
             { "ILD_API_URL", "http://ild.example:5000" },
-            { "ILD_API_TOKEN", Token },
+            { "ILD_API_TOKEN", "process-wide-token" },
             { "HOME", _home },
         };
     }
@@ -426,6 +427,7 @@ public sealed class CodexAdapterTests : IDisposable
         {
             RunContext = RunContext(ownerId, _worktree),
             ChatSessionId = chat ? ownerId : null,
+            AgentApiToken = Token,
         });
 
         Assert.True(result.Success, result.Error);
@@ -464,7 +466,9 @@ public sealed class CodexAdapterTests : IDisposable
             Assert.Equal("npx", root.GetProperty("command").GetString());
             Assert.Equal(new[] { "-y", "docs-mcp" }, root.GetProperty("args").EnumerateArray().Select(a => a.GetString()).ToArray());
             var env = root.GetProperty("env");
-            var proxy = AgentIsolation.ResolveEgressProxyUrl("3128", provider.Id)!;
+            var proxy = Assert.IsType<string>(env.GetProperty("HTTPS_PROXY").GetString());
+            Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, proxy, out var proxyScope));
+            Assert.Equal(provider.Id, proxyScope.Provider);
             Assert.Equal("docs-secret", env.GetProperty("DOCS_TOKEN").GetString());
             Assert.Equal(proxy, env.GetProperty("HTTP_PROXY").GetString());
             Assert.Equal(proxy, env.GetProperty("https_proxy").GetString());
@@ -478,18 +482,18 @@ public sealed class CodexAdapterTests : IDisposable
 
         // Secrets stay in the files: never in codex's argv or environment.
         var environ = File.ReadAllText(Path.Combine(_out, "env"));
-        foreach (var secret in new[] { Token, "docs-secret", "docs-mcp" })
+        foreach (var secret in new[] { Token, "process-wide-token", "docs-secret", "docs-mcp" })
         {
             Assert.DoesNotContain(argv, a => a.Contains(secret));
             Assert.DoesNotContain(secret, environ);
         }
 
-        // Readable by the agent group, changeable by the orchestrator only; named for the run or chat.
+        // Owner-only; named for the run or chat.
         var written = WrittenFiles();
         Assert.Equal(new[] { ildStrings[^1], docsStrings[3] }.Order(), written.Select(w => w.Path).Order());
         foreach (var (path, mode, owner) in written)
         {
-            Assert.Equal("640", mode);
+            Assert.Equal("600", mode);
             Assert.Equal(Environment.UserName, owner);
             Assert.Contains($"-{ownerId:N}-", Path.GetFileName(path));
         }
@@ -787,11 +791,12 @@ public sealed class CodexAdapterTests : IDisposable
     private CodexAdapter Adapter(SnapshotDb? store = null)
     {
         if (store is null)
-            return new CodexAdapter(_logger, _environment);
+            return new CodexAdapter(_logger, _environment, EgressProxyTests.Creds);
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         store.Register(services);
         var provider = services.BuildServiceProvider();
-        return new CodexAdapter(provider.GetRequiredService<IServiceScopeFactory>(), _logger, _environment);
+        return new CodexAdapter(provider.GetRequiredService<IServiceScopeFactory>(), _logger, _environment, EgressProxyTests.Creds);
     }
 
     private AiProvider Provider(string binaryPath, string model = "", string? extraArgs = null, string? customMcpServersJson = null)

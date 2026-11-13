@@ -17,6 +17,9 @@ namespace ILD.Tests;
 /// <item><see cref="PiAdapterAgentDirectoryTests"/> swaps pi's shared, fixed-name
 /// scratch directories for links, which every pi turn in the process goes
 /// through.</item>
+/// <item><see cref="LocalRunHostUserToolsTests"/> sets <c>HOME</c>, <c>PATH</c>, the orchestrator's secrets and the three
+/// root variables in the real process environment, because what it proves is what a launch on the local host is made from
+/// and does not inherit.</item>
 /// <item><see cref="Integration.StorageOverviewTests"/> points the agent scratch
 /// root (<c>ILD_AGENT_SCRATCH_ROOT</c>) at a directory of its own, which every
 /// scratch directory the process creates would then land in, and in another test
@@ -25,6 +28,9 @@ namespace ILD.Tests;
 /// set the static session-token pepper, which every host and every
 /// <see cref="ILD.Core.Services.Implementations.AuthService"/> hashes tokens
 /// with.</item>
+/// <item><see cref="WorktreePreviewServiceNetworkModeTests"/> clears the runner's proxy
+/// variables in the real process environment, because a preview child inherits them and
+/// the Off cases assert it was given none.</item>
 /// <item><see cref="ProductionKeyDerivationTests"/> switches off the static PBKDF2 iteration
 /// overrides that lower every backup and sign-in in the process, to pin the production counts.</item>
 /// </list>

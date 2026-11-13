@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -69,6 +70,28 @@ public class WorkItemsControllerBranchNameTests
         var created = Assert.IsType<CreatedAtActionResult>(result);
         var id = Assert.IsType<WorkItemView>(created.Value).Id;
         Assert.Equal(legalStored, Stored(field, (await mgr.GetWorkItemAsync(id))!));
+    }
+
+    [Fact]
+    public async Task Create_keeps_the_ai_provider_override_it_is_sent()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _db = db;
+        var provider = Guid.NewGuid();
+        db.Context.AiProviders.Add(new AiProvider { Id = provider, Name = "p", Type = "claude-code", Model = "m" });
+        db.Context.SaveChanges();
+
+        var result = await controller.Create(new WorkItemCreateRequest
+        {
+            Title = "t",
+            RepositoryId = repoId.ToString(),
+            AiProviderOverride = "OverrideAll",
+            AiProviderOverrideId = provider.ToString(),
+        });
+
+        var id = Assert.IsType<WorkItemView>(Assert.IsType<CreatedAtActionResult>(result).Value).Id;
+        var stored = (await mgr.GetWorkItemAsync(id))!;
+        Assert.Equal(provider, stored.AiProviderOverrideId);
     }
 
     [Theory]
@@ -150,7 +173,7 @@ public class WorkItemsControllerBranchNameTests
             db.LoopRuns,
             db.ServerClient,
             db.ServerOptions, TestActors.Instance,
-            engine: new Mock<ILoopEngine>().Object);
+            engine: new Mock<ILoopEngine>().Object, runHost: LocalRunHost.Shared);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
         branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))

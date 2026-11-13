@@ -20,8 +20,6 @@ namespace ILD.Tests.Integration;
 /// </summary>
 internal abstract class ProposalApiTestHost : IAsyncDisposable
 {
-    public const string RunHeader = "X-ILD-Run-Id";
-    public const string ChatHeader = "X-ILD-Chat-Session-Id";
 
     public Mock<IWorkItemNotifier> WorkItemNotifier { get; } = new();
     public Mock<IChatNotifier> ChatNotifier { get; } = new();
@@ -56,10 +54,8 @@ internal abstract class ProposalApiTestHost : IAsyncDisposable
     public HttpClient Agent(Guid? runId = null, Guid? chatSessionId = null)
     {
         var client = Factory.CreateClient();
-        var token = Factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        var token = Factory.Services.IssueAgentToken(runId, chatSessionId);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        if (runId is { } run) client.DefaultRequestHeaders.Add(RunHeader, run.ToString());
-        if (chatSessionId is { } chat) client.DefaultRequestHeaders.Add(ChatHeader, chat.ToString());
         return client;
     }
 

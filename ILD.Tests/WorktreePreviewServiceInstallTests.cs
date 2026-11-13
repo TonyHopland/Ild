@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -37,10 +38,10 @@ public class WorktreePreviewServiceInstallTests : IDisposable
         var configuration = new ConfigurationBuilder().Build();
         return environment is null
             ? new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-                NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims())
+                NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared)
             : new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
                 NullLogger<WorktreePreviewService>.Instance,
-                agentUser: null, agentGroup: null, agentHome: null, environment: environment);
+                environment: environment, host: LocalRunHost.Shared);
     }
 
     private void WriteConfig(string installCommand)
@@ -133,8 +134,7 @@ public class WorktreePreviewServiceInstallTests : IDisposable
     [Fact]
     public async Task InstallAsync_appends_npm_global_bin_so_image_tools_win_ties()
     {
-        // Position, not mere presence. Under uid isolation this directory is the
-        // AGENT's ($AGENT_HOME/.local/bin, chowned to it by the entrypoint), and
+        // Position, not mere presence. This directory is agent-writable, and
         // this is the ORCHESTRATOR's own PATH — inherited by ProcessRunner, which
         // spawns bare `git` and `npm`, and by Cmd nodes. First
         // position would let a file the agent dropped there answer for them and run
@@ -191,20 +191,27 @@ public class WorktreePreviewServiceInstallTests : IDisposable
     }
 
     [Fact]
-    public async Task InstallAsync_runs_its_steps_with_npm_global_bin_ahead_of_the_supplied_path()
+    public async Task InstallAsync_runs_its_local_steps_with_npm_global_bin_first_and_the_prefix_in_home()
     {
         // The preview's own children get the directory first (see the ordering test
-        // above for why the host PATH gets it last).
-        var environment = SuppliedEnvironment(out var expectedBin).WithRealPath();
-        var suppliedPath = environment.Get("PATH");
-        WriteConfig("printf '%s' \\\"$HOME|$PATH\\\" > env.marker");
-        var service = BuildService(environment);
+        // above for why the host PATH gets it last). The local host puts it there, from
+        // the HOME the step inherits: the preview service leaves it to the host.
+        var home = Environment.GetEnvironmentVariable("HOME");
+        Assert.False(string.IsNullOrWhiteSpace(home));
+        var expectedBin = Path.Combine(home!, ".local", "bin");
+        WriteConfig("printf '%s' \\\"$HOME|$NPM_CONFIG_PREFIX|$PATH\\\" > env.marker");
+        var service = BuildService();
 
         await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
 
         var seen = File.ReadAllText(Path.Combine(_worktree, "env.marker")).Split('|');
-        Assert.Equal(environment.Get("HOME"), seen[0]);
-        Assert.Equal($"{expectedBin}{Path.PathSeparator}{suppliedPath}", seen[1]);
+        Assert.Equal(home, seen[0]);
+        Assert.Equal(Path.Combine(home!, ".local"), seen[1]);
+        // The step runs in a login shell, whose profile may put directories of its own in front.
+        var path = seen[2].Split(Path.PathSeparator);
+        Assert.Contains(expectedBin, path);
+        var system = Array.IndexOf(path, "/usr/bin");
+        Assert.True(system < 0 || Array.IndexOf(path, expectedBin) < system);
     }
 
     [Fact]

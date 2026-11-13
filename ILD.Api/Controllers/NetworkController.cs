@@ -1,6 +1,8 @@
 using System.ComponentModel.DataAnnotations;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -31,6 +33,8 @@ public class NetworkController : ControllerBase
     private readonly INetworkNotifier _notifier;
     private readonly NetworkEnforcementStatus _enforcement;
     private readonly IEgressForwarderState _forwarder;
+    private readonly IRunHost _runHost;
+    private readonly IAppSettingStore _settings;
 
     public NetworkController(
         INetworkPolicyStore store,
@@ -39,8 +43,12 @@ public class NetworkController : ControllerBase
         IEgressPolicy policy,
         INetworkNotifier notifier,
         NetworkEnforcementStatus enforcement,
-        IEgressForwarderState forwarder)
+        IEgressForwarderState forwarder,
+        IRunHost runHost,
+        IAppSettingStore settings)
     {
+        _settings = settings;
+        _runHost = runHost;
         _store = store;
         _forwards = forwards;
         _providers = providers;
@@ -59,6 +67,9 @@ public class NetworkController : ControllerBase
         public NetworkListKind ListKind { get; set; }
 
         public Guid? AiProviderId { get; set; }
+
+        /// <summary>The installers' scope (toolchain installers, ADR-0035); not with a provider.</summary>
+        public bool Installers { get; set; }
     }
 
     public sealed class AddForwardRequest
@@ -79,18 +90,52 @@ public class NetworkController : ControllerBase
     {
         /// <summary>Scope the new entry to the log entry's provider instead of making it global.</summary>
         public bool ScopeToProvider { get; set; }
+
+        /// <summary>Scope the new entry to the installers instead of making it global; for a destination a toolchain installer asked for.</summary>
+        public bool ScopeToInstallers { get; set; }
     }
 
     [HttpGet("status")]
-    public IActionResult GetStatus()
+    public async Task<IActionResult> GetStatus(CancellationToken ct)
         => Ok(new
         {
-            enforcement = _enforcement.Enforcement,
-            reason = _enforcement.Reason,
+            enforcement = _enforcement.EnforcementFor(_runHost.Kind),
+            reason = _enforcement.ReasonFor(_runHost.Kind),
+            contained = _runHost.Kind != RunHostKind.Local,
             proxyEnabled = _enforcement.ProxyEnabled,
             proxyPort = _enforcement.ProxyPort,
-            offAvailable = _enforcement.OffAvailable,
+            directRoutes = (await DirectRoutesAsync(ct)).Select(r => new { ownerId = r.OwnerId, chat = r.Chat }),
         });
+
+    // The runs and chats that have a direct route (network mode Off) now. The page shows the rest of the status when the engine or cluster cannot say.
+    private async Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct)
+    {
+        if (_runHost is not RoutingRunHost routing) return [];
+        try { return await routing.Isolated.DirectRoutesAsync(ct); }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return [];
+        }
+    }
+
+    public sealed class SetProtectedRequest
+    {
+        public bool Enabled { get; set; }
+    }
+
+    [HttpGet("protected")]
+    public async Task<IActionResult> GetProtected(CancellationToken ct)
+        => Ok((await _policy.GetAsync(ct)).Protected.Select(View));
+
+    [HttpPut("protected/{id}")]
+    public async Task<IActionResult> SetProtected(string id, [FromBody] SetProtectedRequest request, CancellationToken ct)
+    {
+        var current = (await _policy.GetAsync(ct)).Protected.FirstOrDefault(p => p.Id == id);
+        if (current is null) return NotFound();
+        await _settings.UpsertAsync(ProtectedDestination.SettingKey(id), request.Enabled ? "true" : "false", ct);
+        await PolicyChangedAsync();
+        return Ok(View(current with { Enabled = request.Enabled }));
+    }
 
     [HttpGet("entries")]
     public async Task<IActionResult> GetEntries(CancellationToken ct)
@@ -102,7 +147,7 @@ public class NetworkController : ControllerBase
         var (invalid, host) = await ValidateEntryAsync(request);
         if (invalid is not null) return invalid;
 
-        var (entry, created) = await AddOrFindAsync(host, request.ListKind, request.AiProviderId, ct);
+        var (entry, created) = await AddOrFindAsync(host, request.ListKind, request.AiProviderId, request.Installers, ct);
         return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
     }
 
@@ -111,13 +156,13 @@ public class NetworkController : ControllerBase
     {
         var (invalid, host) = await ValidateEntryAsync(request);
         if (invalid is not null) return invalid;
-        if (await _store.FindEntryAsync(request.ListKind, host, request.AiProviderId, ct) is { } other && other.Id != id)
+        if (await _store.FindEntryAsync(request.ListKind, host, request.AiProviderId, ct, request.Installers) is { } other && other.Id != id)
             return RuleExists(request.ListKind, host);
 
         NetworkPolicyEntry? entry;
         try
         {
-            entry = await _store.UpdateEntryAsync(id, host, request.ListKind, request.AiProviderId, ct);
+            entry = await _store.UpdateEntryAsync(id, host, request.ListKind, request.AiProviderId, ct, request.Installers);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -140,6 +185,8 @@ public class NetworkController : ControllerBase
             return (BadRequest(new { error = "listKind must be 'Whitelist' or 'Blacklist'" }), string.Empty);
         if (!EgressRules.TryNormalizePattern(request.Host, out var host, out var error))
             return (BadRequest(new { error }), string.Empty);
+        if (request.Installers && request.AiProviderId is not null)
+            return (BadRequest(new { error = "An entry is for the installers or for one provider, not both" }), string.Empty);
         if (request.AiProviderId is { } providerId && await _providers.GetAiProviderByIdAsync(providerId) is null)
             return (BadRequest(new { error = "Unknown AI provider" }), string.Empty);
         return (null, host);
@@ -264,24 +311,28 @@ public class NetworkController : ControllerBase
 
     [HttpPost("log/{id:guid}/whitelist")]
     public Task<IActionResult> WhitelistFromLog(Guid id, [FromBody] AddFromLogRequest? request, CancellationToken ct)
-        => AddFromLogAsync(id, NetworkListKind.Whitelist, request?.ScopeToProvider ?? false, ct);
+        => AddFromLogAsync(id, NetworkListKind.Whitelist, request?.ScopeToProvider ?? false, request?.ScopeToInstallers ?? false, ct);
 
     [HttpPost("log/{id:guid}/blacklist")]
     public Task<IActionResult> BlacklistFromLog(Guid id, [FromBody] AddFromLogRequest? request, CancellationToken ct)
-        => AddFromLogAsync(id, NetworkListKind.Blacklist, request?.ScopeToProvider ?? false, ct);
+        => AddFromLogAsync(id, NetworkListKind.Blacklist, request?.ScopeToProvider ?? false, request?.ScopeToInstallers ?? false, ct);
 
-    private async Task<IActionResult> AddFromLogAsync(Guid logId, NetworkListKind kind, bool scopeToProvider, CancellationToken ct)
+    private async Task<IActionResult> AddFromLogAsync(Guid logId, NetworkListKind kind, bool scopeToProvider, bool scopeToInstallers, CancellationToken ct)
     {
         var logged = await _store.GetLogEntryAsync(logId, ct);
         if (logged is null) return NotFound();
+        // A host an agent wrote as a pattern is logged as sent; from the log it must stay a single host, never a suffix rule.
+        if (EgressRules.LooksLikePattern(logged.Host.Trim()))
+            return BadRequest(new { error = "This host was sent as a pattern, not a host name, so it cannot be added from the log" });
         if (!EgressRules.TryNormalizePattern(logged.Host, out var host, out var error))
             return BadRequest(new { error });
 
         var providerId = scopeToProvider ? logged.AiProviderId : null;
         if (providerId is { } id && await _providers.GetAiProviderByIdAsync(id) is null)
             providerId = null;
+        var installers = scopeToInstallers && logged.Installer is not null;
 
-        var (entry, created) = await AddOrFindAsync(host, kind, providerId, ct);
+        var (entry, created) = await AddOrFindAsync(host, kind, providerId, installers, ct);
         return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
     }
 
@@ -291,9 +342,9 @@ public class NetworkController : ControllerBase
     /// unique index on (list, host, scope) covers two clicks racing, whose loser
     /// re-reads the winner instead of failing.
     /// </summary>
-    private async Task<(NetworkPolicyEntry Entry, bool Created)> AddOrFindAsync(string host, NetworkListKind kind, Guid? providerId, CancellationToken ct)
+    private async Task<(NetworkPolicyEntry Entry, bool Created)> AddOrFindAsync(string host, NetworkListKind kind, Guid? providerId, bool installers, CancellationToken ct)
     {
-        if (await _store.FindEntryAsync(kind, host, providerId, ct) is { } existing)
+        if (await _store.FindEntryAsync(kind, host, providerId, ct, installers) is { } existing)
             return (existing, false);
 
         var entry = new NetworkPolicyEntry
@@ -302,6 +353,7 @@ public class NetworkController : ControllerBase
             Host = host,
             ListKind = kind,
             AiProviderId = providerId,
+            Installers = installers,
             CreatedAt = DateTime.UtcNow,
         };
         try
@@ -310,7 +362,7 @@ public class NetworkController : ControllerBase
         }
         catch (DbUpdateException)
         {
-            var winner = await _store.FindEntryAsync(kind, host, providerId, ct);
+            var winner = await _store.FindEntryAsync(kind, host, providerId, ct, installers);
             if (winner is null) throw;
             return (winner, false);
         }
@@ -325,7 +377,7 @@ public class NetworkController : ControllerBase
     }
 
     private static object View(NetworkPolicyEntry e)
-        => new { id = e.Id, host = e.Host, listKind = e.ListKind, aiProviderId = e.AiProviderId, createdAt = e.CreatedAt };
+        => new { id = e.Id, host = e.Host, listKind = e.ListKind, aiProviderId = e.AiProviderId, installers = e.Installers, createdAt = e.CreatedAt };
 
     /// <summary>
     /// A forward plus the two things about it that are not in its row: what the
@@ -345,6 +397,9 @@ public class NetworkController : ControllerBase
             listenError = _forwarder.ListenErrorFor(f.Id),
         };
 
+    private static object View(ProtectedDestination p)
+        => new { id = p.Id, name = p.Name, hosts = p.Hosts, addresses = p.Addresses.Select(a => a.ToString()), ranges = p.Ranges.Select(r => r.ToString()), enabled = p.Enabled };
+
     private static object View(NetworkLogEntry l)
-        => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId };
+        => new { id = l.Id, host = l.Host, port = l.Port, timestamp = l.Timestamp, decision = l.Decision, aiProviderId = l.AiProviderId, installer = l.Installer, reason = l.Reason, via = l.Via };
 }

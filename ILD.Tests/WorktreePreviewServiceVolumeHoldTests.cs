@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -27,8 +28,8 @@ public sealed class WorktreePreviewServiceVolumeHoldTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WorktreesPath"] = Path.Combine(_root, "worktrees") })
             .Build();
         _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, agentUser: null, agentGroup: null, agentHome: null,
-            environment: new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } }.WithRealPath());
+            NullLogger<WorktreePreviewService>.Instance,
+            environment: new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } }.WithRealPath(), host: LocalRunHost.Shared);
     }
 
     public void Dispose()

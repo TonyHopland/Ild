@@ -1,3 +1,5 @@
+using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -11,7 +13,6 @@ namespace ILD.Tests;
 public sealed class RepositoryManagerTests : IDisposable
 {
     // Not a group this host knows, so the mirrors stay where they are made.
-    private const string SharedGroup = "agents";
 
     private readonly string _tmp;
     private readonly string _repo;
@@ -21,14 +22,12 @@ public sealed class RepositoryManagerTests : IDisposable
 
     private RepositoryManager NewManager(string worktreesRoot, ILogger<RepositoryManager>? logger = null)
     {
-        var runner = new AuditingRunner(isolated: false);
+        var runner = new AuditingRunner();
         runner.Forbid(_repo);
         runner.Forbid(worktreesRoot);
         lock (_auditors) _auditors.Add(runner);
-        return new RepositoryManager(runner, logger, worktreesRoot, runner.ManagerAgent, _mirrors, sharedGroup: SharedGroup);
+        return new RepositoryManager(runner, new LocalRunHost(runner), logger, worktreesRoot, _mirrors);
     }
-
-    private static readonly AgentIdentity IsolatedAgent = new("agent", "agents", "/home/agent");
 
     private void Forbid(string path)
     {
@@ -102,8 +101,7 @@ public sealed class RepositoryManagerTests : IDisposable
 
         Assert.True((await mgr.CommitAsync(path, "add file")));
 
-        var diff = await mgr.GetDiffAsync(path);
-        Assert.NotNull(diff);
+        Assert.False(await mgr.HasUncommittedChangesAsync(path));
 
         // CommitAsync runs `git add -A`, so anything the worktree setup dropped
         // on disk rides along into the run commit — and from there into the PR.
@@ -324,9 +322,8 @@ public sealed class RepositoryManagerTests : IDisposable
             Assert.Equal("oauth2", call.Environment["ILD_GIT_USERNAME"]);
             Assert.Equal("token-123", call.Environment["ILD_GIT_PASSWORD"]);
         });
-        var clone = calls.Single(c => c.Args.Contains("clone"));
-        Assert.False(clone.Orchestrator);
-        Assert.DoesNotContain(origin, clone.Args);
+        // The agent's clone is made from a bundle on stdin, so no git call of ours names the origin to it.
+        Assert.DoesNotContain(calls, c => !c.Orchestrator && c.Args.Contains(origin));
     }
 
     [Fact]
@@ -471,149 +468,6 @@ public sealed class RepositoryManagerTests : IDisposable
         Assert.Contains("keep", unchanged.Content);
     }
 
-    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    private static UnixFileMode Mode(string path) => File.GetUnixFileMode(path) & (UnixFileMode)0x1FF;
-
-    [Fact]
-    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    public async Task ShareWorktree_gives_the_group_read_write_and_leaves_everything_else_alone()
-    {
-        var (work, mgr) = CloneWithOrigin();
-        var wt = await mgr.CreateWorktreeAsync(work, "feature-share");
-
-        var shot = Path.Combine(wt, "shot.png");
-        var script = Path.Combine(wt, "run.sh");
-        var plain = Path.Combine(wt, "plain.txt");
-        var dir = Path.Combine(wt, "private");
-        var inDir = Path.Combine(dir, "inner.txt");
-        var nestedGit = Path.Combine(wt, "vendor", ".git");
-        var nestedGitFile = Path.Combine(nestedGit, "config");
-        var outside = Path.Combine(_tmp, "outside.txt");
-        var link = Path.Combine(wt, "link.txt");
-        Directory.CreateDirectory(dir);
-        Directory.CreateDirectory(nestedGit);
-        File.WriteAllText(shot, "png");
-        File.WriteAllText(script, "#!/bin/sh\n");
-        File.WriteAllText(plain, "x");
-        File.WriteAllText(inDir, "y");
-        File.WriteAllText(nestedGitFile, "z");
-        File.WriteAllText(outside, "o");
-        File.CreateSymbolicLink(link, outside);
-        File.SetUnixFileMode(shot, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        File.SetUnixFileMode(plain, (UnixFileMode)0x1A4);
-        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        File.SetUnixFileMode(inDir, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        File.SetUnixFileMode(nestedGitFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        File.SetUnixFileMode(outside, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        var pointer = Path.Combine(wt, ".git");
-        Assert.True(File.Exists(pointer));
-        File.SetUnixFileMode(pointer, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-
-        var ok = await mgr.ShareWorktreeWithOrchestratorAsync(wt, TestContext.Current.CancellationToken);
-
-        Assert.True(ok);
-        Assert.Equal((UnixFileMode)0x1B0, Mode(shot));
-        Assert.Equal((UnixFileMode)0x1F8, Mode(script));
-        Assert.Equal((UnixFileMode)0x1B4, Mode(plain));
-        Assert.Equal((UnixFileMode)0x1F8, Mode(dir));
-        Assert.Equal((UnixFileMode)0x1B0, Mode(inDir));
-        Assert.Equal((UnixFileMode)0x180, Mode(pointer));
-        Assert.Equal((UnixFileMode)0x180, Mode(nestedGitFile));
-        Assert.Equal((UnixFileMode)0x180, Mode(outside));
-    }
-
-    [Fact]
-    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    public async Task ShareWorktree_covers_what_git_can_see_and_leaves_ignored_and_unchanged_files_alone()
-    {
-        var (work, mgr) = CloneWithOrigin();
-        var wt = await mgr.CreateWorktreeAsync(work, "feature-share-scope");
-        File.WriteAllText(Path.Combine(wt, ".gitignore"), "build/\n");
-        Git(wt, "add", ".gitignore");
-        Git(wt, "commit", "-m", "ignore");
-
-        var untracked = Path.Combine(wt, "new.png");
-        var committed = Path.Combine(wt, "committed.png");
-        var newDir = Path.Combine(wt, "fresh");
-        var inNewDir = Path.Combine(newDir, "inner.png");
-        var ignoredDir = Path.Combine(wt, "build");
-        var ignored = Path.Combine(ignoredDir, "out.bin");
-        var untouched = Path.Combine(wt, "mod.txt");
-        Directory.CreateDirectory(newDir);
-        Directory.CreateDirectory(ignoredDir);
-        foreach (var file in new[] { untracked, committed, inNewDir, ignored })
-            File.WriteAllText(file, "x");
-        Git(wt, "add", "committed.png");
-        Git(wt, "commit", "-m", "shot");
-        var owner = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        foreach (var file in new[] { untracked, committed, inNewDir, ignored, untouched })
-            File.SetUnixFileMode(file, owner);
-        File.SetUnixFileMode(newDir, owner | UnixFileMode.UserExecute);
-        File.SetUnixFileMode(ignoredDir, owner | UnixFileMode.UserExecute);
-
-        Assert.True(await mgr.ShareWorktreeWithOrchestratorAsync(wt, TestContext.Current.CancellationToken));
-
-        Assert.Equal((UnixFileMode)0x1B0, Mode(untracked));
-        Assert.Equal((UnixFileMode)0x1B0, Mode(committed));
-        Assert.Equal((UnixFileMode)0x1F8, Mode(newDir));
-        Assert.Equal((UnixFileMode)0x1B0, Mode(inNewDir));
-        Assert.Equal((UnixFileMode)0x1C0, Mode(ignoredDir));
-        Assert.Equal((UnixFileMode)0x180, Mode(ignored));
-        Assert.Equal((UnixFileMode)0x180, Mode(untouched));
-    }
-
-    [Fact]
-    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    public async Task ShareWorktree_skips_files_owned_by_someone_else_without_failing()
-    {
-        if (!Environment.IsPrivilegedProcess) Assert.Skip("giving a file to another user needs root");
-        var (work, mgr) = CloneWithOrigin();
-        var wt = await mgr.CreateWorktreeAsync(work, "feature-share-foreign");
-        var foreign = Path.Combine(wt, "foreign.txt");
-        var mine = Path.Combine(wt, "mine.txt");
-        File.WriteAllText(foreign, "x");
-        File.WriteAllText(mine, "x");
-        File.SetUnixFileMode(foreign, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        File.SetUnixFileMode(mine, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        Assert.Equal(0, Chown(foreign, 65534, 65534));
-
-        Assert.True(await mgr.ShareWorktreeWithOrchestratorAsync(wt, TestContext.Current.CancellationToken));
-
-        Assert.Equal((UnixFileMode)0x180, Mode(foreign));
-        Assert.Equal((UnixFileMode)0x1B0, Mode(mine));
-    }
-
-    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "chown", SetLastError = true)]
-    private static extern int Chown(string path, int owner, int group);
-
-    [Fact]
-    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    public async Task ReadWorktreeFile_repairs_only_the_requested_file_and_the_directories_above_it()
-    {
-        if (Environment.IsPrivilegedProcess) Assert.Skip("root reads a mode-0000 file");
-        var (work, mgr) = CloneWithOrigin();
-        var wt = await mgr.CreateWorktreeAsync(work, "feature-targeted");
-        var dir = Path.Combine(wt, "docs");
-        var shot = Path.Combine(dir, "shot.png");
-        var sibling = Path.Combine(dir, "other.png");
-        var elsewhere = Path.Combine(wt, "elsewhere.png");
-        Directory.CreateDirectory(dir);
-        foreach (var file in new[] { shot, sibling, elsewhere })
-            File.WriteAllText(file, "x");
-        File.SetUnixFileMode(shot, UnixFileMode.None);
-        File.SetUnixFileMode(sibling, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        File.SetUnixFileMode(elsewhere, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-        await Assert.ThrowsAsync<WorktreeFileUnreadableException>(() => mgr.ReadWorktreeFileAsync(wt, "docs/shot.png"));
-
-        Assert.Equal((UnixFileMode)0x30, Mode(shot));
-        Assert.Equal((UnixFileMode)0x1F8, Mode(dir));
-        Assert.Equal((UnixFileMode)0x180, Mode(sibling));
-        Assert.Equal((UnixFileMode)0x180, Mode(elsewhere));
-    }
-
     [Fact]
     [System.Runtime.Versioning.SupportedOSPlatform("linux")]
     public async Task OpenWorktreeFile_reports_an_unreadable_file_rather_than_answering_not_found()
@@ -634,24 +488,7 @@ public sealed class RepositoryManagerTests : IDisposable
 
     [Fact]
     [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    public async Task ShareWorktree_refuses_a_directory_that_is_not_one_of_ours_and_changes_nothing()
-    {
-        var (_, mgr) = CloneWithOrigin();
-        var stray = Path.Combine(_tmp, "stray");
-        Directory.CreateDirectory(stray);
-        var file = Path.Combine(stray, "f.txt");
-        File.WriteAllText(file, "x");
-        File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-
-        var ok = await mgr.ShareWorktreeWithOrchestratorAsync(stray, TestContext.Current.CancellationToken);
-
-        Assert.False(ok);
-        Assert.Equal((UnixFileMode)0x180, Mode(file));
-    }
-
-    [Fact]
-    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    public async Task ReadWorktreeFile_repairs_once_then_reports_a_file_it_still_cannot_read()
+    public async Task ReadWorktreeFile_reports_a_file_it_cannot_read()
     {
         if (Environment.IsPrivilegedProcess) Assert.Skip("root reads a mode-0000 file");
         var (work, mgr) = CloneWithOrigin();
@@ -661,8 +498,6 @@ public sealed class RepositoryManagerTests : IDisposable
         File.SetUnixFileMode(locked, UnixFileMode.None);
 
         await Assert.ThrowsAsync<WorktreeFileUnreadableException>(() => mgr.ReadWorktreeFileAsync(wt, "locked.png"));
-
-        Assert.Equal((UnixFileMode)0x30, Mode(locked));
     }
 
     [Fact]
@@ -1296,7 +1131,7 @@ public sealed class RepositoryManagerTests : IDisposable
         var runner = new CancellingRebaseRunner();
         // A directory with a .git directory is a clone of ours, which is all the manager checks before it runs git.
         Directory.CreateDirectory(Path.Combine(_repo, ".git"));
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), IsolatedAgent, _mirrors, sharedGroup: SharedGroup);
+        var mgr = new RepositoryManager(runner, new LocalRunHost(runner), null, Path.Combine(_tmp, "wt"), _mirrors);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -1309,8 +1144,8 @@ public sealed class RepositoryManagerTests : IDisposable
         // killed on arrival for the same reason the rebase was.
         var abort = runner.Calls.Single(c => c.Args.Contains("--abort"));
         Assert.False(abort.Token.IsCancellationRequested);
-        Assert.Equal(IsolatedAgent, abort.Options?.AsAgent);
-        Assert.Equal(IsolatedAgent, runner.Calls.First(c => c.Args.Contains("rebase") && !c.Args.Contains("--abort")).Options?.AsAgent);
+        Assert.True(abort.Options?.AgentScoped);
+        Assert.True(runner.Calls.First(c => c.Args.Contains("rebase") && !c.Args.Contains("--abort")).Options?.AgentScoped);
     }
 
     [Fact]
@@ -1406,7 +1241,7 @@ public sealed class RepositoryManagerTests : IDisposable
         // `--exit-code` puts the answer in the exit code; corroborating it against
         // stdout only adds a way to mistake an existing branch for a free one, and
         // that is the direction the conflict check must never fail in.
-        var mgr = new RepositoryManager(new SilentSuccessRunner(), worktreesRoot: Path.Combine(_tmp, "wt"), mirrorsRoot: _mirrors);
+        var mgr = new RepositoryManager(new SilentSuccessRunner(), LocalRunHost.Shared, worktreesRoot: Path.Combine(_tmp, "wt"), mirrorsRoot: _mirrors);
 
         Assert.True(await mgr.RemoteHasBranchAsync("https://example.invalid/repo.git", "feature/foo", TestContext.Current.CancellationToken));
     }

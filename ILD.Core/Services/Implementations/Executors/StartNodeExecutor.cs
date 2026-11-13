@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -19,6 +20,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         var providerStore = sp.GetRequiredService<IProviderStore>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
+        var host = sp.GetRunHost();
 
         var wi = await workItems.GetWorkItemAsync(ctx.Run.WorkItemId);
         var repositoryId = RunRepository.IdOf(ctx.Run, wi);
@@ -45,14 +47,14 @@ public sealed class StartNodeExecutor : INodeExecutor
             System.Text.Json.JsonSerializer.Serialize(new { nodeType = "Start", message = "initialized" }));
 
         var hasHealthyWorktree = !string.IsNullOrEmpty(ctx.Run.WorktreePath)
-            && Directory.Exists(ctx.Run.WorktreePath)
+            && await host.DirectoryExistsAsync(ctx.Run.WorktreePath, ctx.CancellationToken)
             && await repoManager.ValidateWorktreeHealthAsync(ctx.Run.WorktreePath);
 
         string worktreePath;
         string branchName;
         if (!hasHealthyWorktree)
         {
-            var (ok, path, branch, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, ctx.Run, repo, wi, gitAuth);
+            var (ok, path, branch, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, host, ctx.Run, repo, wi, gitAuth);
             if (!ok)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "worktree setup failed");
@@ -125,7 +127,7 @@ public sealed class StartNodeExecutor : INodeExecutor
     }
 
     private static async Task<(bool Ok, string? Path, string? Branch, string? Error)> EnsureWorktreeAsync(
-        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager,
+        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager, IRunHost host,
         LoopRun run, Repository repo, WorkItemView wi, GitAuthOptions? gitAuth)
     {
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
@@ -140,7 +142,8 @@ public sealed class StartNodeExecutor : INodeExecutor
                 ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
             if (!baseOk) return (false, null, null, baseError);
 
-            path = await repoManager.CreateWorktreeAsync(basePath!, branch);
+            path = (await CreateEnvironmentAsync(ctx, sp, host, wi.Id,
+                new RunEnvironmentRequest(run.Id, basePath!, branch, repo.Id, KeepPreviewData: repo.KeepPreviewData))).WorkingDirectory;
             await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         }
         try
@@ -154,6 +157,38 @@ public sealed class StartNodeExecutor : INodeExecutor
             return (false, null, null, $"rebase onto origin/{baseBranch} failed: {ex.Message}");
         }
         return (true, path, branch, null);
+    }
+
+    /// <summary>
+    /// Creates the run's environment, showing the work item as preparing its
+    /// container while an isolated host does. A failure propagates unchanged
+    /// after the mark is cleared.
+    /// </summary>
+    private static async Task<RunEnvironment> CreateEnvironmentAsync(
+        NodeExecutionContext ctx, IServiceProvider sp, IRunHost host, string workItemId, RunEnvironmentRequest request)
+    {
+        var preparations = host.Kind == RunHostKind.Local ? null : sp.GetService<RunPreparations>();
+        if (preparations is null) return await host.CreateAsync(request, ctx.CancellationToken);
+
+        var notifier = sp.GetService<IWorkItemNotifier>();
+        preparations.Begin(workItemId);
+        try
+        {
+            await AnnounceAsync(notifier, workItemId);
+            return await host.CreateAsync(request, ctx.CancellationToken);
+        }
+        finally
+        {
+            preparations.End(workItemId);
+            await AnnounceAsync(notifier, workItemId);
+        }
+    }
+
+    private static async Task AnnounceAsync(IWorkItemNotifier? notifier, string workItemId)
+    {
+        if (notifier is null) return;
+        try { await notifier.RunProgressedAsync(workItemId); }
+        catch { /* a missed refresh must not fail the run */ }
     }
 
     /// <summary>
@@ -187,7 +222,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         // discovered from the remote rather than typed, so only an override is
         // worth the round trip.
         if (run.BaseBranchOverride is not null
-            && !await repoManager.RemoteBranchExistsAsync(basePath, baseBranch))
+            && !await repoManager.RemoteBranchExistsInBaseRepoAsync(basePath, baseBranch))
         {
             return (false, null,
                 $"base branch 'origin/{baseBranch}' does not exist on the remote — "

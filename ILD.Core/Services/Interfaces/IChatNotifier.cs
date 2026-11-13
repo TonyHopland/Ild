@@ -72,6 +72,12 @@ public interface IChatNotifier
     /// <summary>The chat's title changed; a hint to the owner's inbox, like <see cref="UnreadChangedAsync"/>.</summary>
     Task TitleChangedAsync(string userId, Guid chatSessionId);
 
+    /// <summary>The chat's container is ready, so a chat shown as preparing can settle.</summary>
+    Task ChatPreparedAsync(Guid chatSessionId) => Task.CompletedTask;
+
+    /// <summary>Preparing the chat's container failed with <paramref name="error"/>.</summary>
+    Task ChatPreparationFailedAsync(Guid chatSessionId, string error) => Task.CompletedTask;
+
     /// <summary>
     /// A turn started or ended in the chat, so whether it is busy may have changed;
     /// a hint to the owner's inbox, like <see cref="UnreadChangedAsync"/>. Sent once

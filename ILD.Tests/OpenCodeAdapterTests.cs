@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text;
@@ -291,7 +292,7 @@ public class OpenCodeAdapterTests
             useWorktreeAsWorkingDirectory: false);
 
         Assert.True(string.IsNullOrEmpty(psi.WorkingDirectory));
-        Assert.Equal("{\"config\":true}", psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"]);
+        Assert.Equal("{\"config\":true}", OpenCodeAdapter.BuildRunEnvironment("{\"config\":true}")["OPENCODE_CONFIG_CONTENT"]);
         Assert.Equal(new[]
         {
             "run",
@@ -1316,6 +1317,7 @@ public class OpenCodeAdapterTests
         await connection.OpenAsync();
 
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 

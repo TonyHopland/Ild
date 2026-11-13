@@ -1,5 +1,7 @@
 # ADR-0014: The coding agent runs under a separate OS user from the orchestrator
 
+> **Status: superseded by [ADR-0036](./0036-runs-always-in-containers.md).** Agents no longer run in ILD's container, so there is no second user.
+
 The orchestrator (`dotnet ILD.Api.dll`, PID 1) and the coding-agent CLI it spawns
 (claude / opencode / pi / copilot) now run as **two distinct, non-root Linux
 users** — `ild` (uid 10001) for the orchestrator and `agent` (uid 10002) for the
@@ -31,8 +33,7 @@ memory or its private files by virtue of being the same user.
     as the agent, after each AI and Cmd node (files git can see: changed since the fork
     point or untracked, plus their directories; ignored files are left alone) and, for
     that one file, when a Files-tab read or download is refused.
-  - **read-only** — `/data/agents`, the npm-installed CLIs, and `/data/git-mirrors`,
-    the orchestrator's git mirrors (below). The agent execs the CLIs
+  - **read-only** — `/data/agents` and the npm-installed CLIs. The agent execs the CLIs
     but must not rewrite them, because the orchestrator runs those same binaries
     as `ild` (version checks, the provider terminal); a writable install would be
     a way straight back across the boundary. Mode `2750` with a `g:ild-agents:r-x`
@@ -143,9 +144,14 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   authorship is unchanged). The repository's own hooks keep running — as the agent.
   What reaches a remote goes through a persistent bare **mirror** per remote
   (`{DataPath}/git-mirrors/<hash of the clone URL without credentials>`), owned by the
-  orchestrator: a fetch brings the remote's branches into the mirror, and the agent
-  then fetches from the mirror's path (or clones from it with `--no-local`, a full
-  copy) without credentials. A push is the agent writing a `git bundle` of the branch
+  orchestrator: a fetch brings the remote's branches into the mirror, and the code then
+  enters the run as a `git bundle` the orchestrator writes from the mirror (`git bundle
+  create`, as the orchestrator) and streams to the agent's stdin; the agent writes it to a
+  scratch file of its own and clones or fetches from that, without credentials. A fetch
+  into an existing clone sends only what the clone says it lacks, falling back to a full
+  bundle, and sets the remote-tracking refs from the mirror's list of branches rather than
+  with `--prune`. The agent never reads the mirror and no path crosses between the two.
+  A push is the agent writing a `git bundle` of the branch
   to its stdout, the orchestrator holding that stream in an owner-only file and
   indexing it into the mirror with its objects checked (`index-pack --fsck-objects`;
   git before 2.46 does not apply `transfer.fsckObjects` to a bundle), and the orchestrator
@@ -157,10 +163,10 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   the askpass credential only when there is one)
   and `GIT_CONFIG_*` entries that switch off `core.hooksPath`, `core.fsmonitor`, the
   credential helper, `core.sshCommand` and the `ext` transport. A mirror keeps no
-  remote, URL or credential and is never writable by the agent: it is a read-only
-  shared tree like the agent installs, closed to the agent while the orchestrator's git
-  writes to it and opened again only once the modes git wrote have been tightened and everything in it has been moved into the agent's group (ILD does that itself, for the store root, each mirror and what is in them, rather than relying on how the deployment made the store; it fails with a message if it cannot).
-  Operations on one mirror are serialized, the agent's reads of it included. The price is a second
+  remote, URL or credential and is owner-only (`0700`, the store root too, re-applied on
+  every open so a store an earlier version shared is closed on upgrade): the agent has no
+  access to it, which is what lets a run sit on another host.
+  Operations on one mirror are serialized. The price is a second
   copy of every repository and a first fetch per repository after upgrading; the
   worktree's `pre-push` hook is run by ILD as the agent, with git's own arguments and stdin, before
   the mirror push and without credentials, and a failing hook stops the push. A hook that needs the

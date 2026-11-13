@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Runtime.Versioning;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
@@ -57,7 +58,7 @@ public class PreviewStartWaitTests
         {
             using var service = new WorktreePreviewService(
                 new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-                NullLogger<WorktreePreviewService>.Instance, agentUser: null, agentGroup: null, agentHome: null);
+                NullLogger<WorktreePreviewService>.Instance, LocalRunHost.Shared);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.BeginStartAsync(root, null, TestContext.Current.CancellationToken));
 
@@ -77,7 +78,7 @@ public class PreviewStartWaitTests
     {
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(m => m.GetWorkItemAsync(id)).ReturnsAsync(new WorkItemView { Id = id, WorktreePath = WorktreePath });
-        return new AgentController(
+        var controller = new AgentController(
             workItems.Object,
             new Mock<ILoopTemplateManager>().Object,
             db.LoopRuns,
@@ -89,6 +90,8 @@ public class PreviewStartWaitTests
             new Mock<IChatNotifier>().Object,
             TestActors.Instance,
             new Mock<IWorkItemNotifier>().Object);
+        controller.ControllerContext = new ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() };
+        return controller;
     }
 
     private static WorkItemsController BuildUser(string id, Mock<IWorktreePreviewService> preview, TestDb db)

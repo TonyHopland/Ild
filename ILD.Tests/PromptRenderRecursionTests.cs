@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Executors;
@@ -75,7 +76,7 @@ public class PromptRenderRecursionTests
         eventLog.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>())).ReturnsAsync(Array.Empty<EventLog>());
 
         var renderer = new PromptRenderingService(
-            new PromptTemplateResolver(), eventLog.Object, conversation.Object, runStore.Object, Mock.Of<IGlobalVariableStore>());
+            new PromptTemplateResolver(host: LocalRunHost.Shared), eventLog.Object, conversation.Object, runStore.Object, Mock.Of<IGlobalVariableStore>());
         return new Arranged(runId, providerStore, workItems, runStore, renderer);
     }
 
@@ -135,7 +136,7 @@ public class PromptRenderRecursionTests
         services.AddSingleton(arranged.WorkItems.Object);
         services.AddSingleton(arranged.RunStore.Object);
         services.AddSingleton(registry);
-        services.AddSingleton<IPromptTemplateResolver>(new PromptTemplateResolver());
+        services.AddSingleton<IPromptTemplateResolver>(new PromptTemplateResolver(host: LocalRunHost.Shared));
         services.AddSingleton<IPromptRenderingService>(arranged.Renderer);
         var sp = services.BuildServiceProvider();
 

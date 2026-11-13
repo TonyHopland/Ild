@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -103,7 +104,7 @@ public sealed class RepositoryParallelismTests : IDisposable
 
     private WorkItemManager Manager() => new(new Mock<IRepositoryManager>().Object, _db.Providers,
         new Mock<IEventLogService>().Object, _db.LoopRuns, _db.ServerClient, _db.ServerOptions, TestActors.Instance,
-        repositoryHolds: _holds);
+        repositoryHolds: _holds, runHost: LocalRunHost.Shared);
 
     [Fact]
     public async Task With_parallelism_one_items_run_one_after_another_and_the_rest_stay_in_ready_untouched()

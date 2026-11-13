@@ -1,3 +1,6 @@
+using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.RunHosts.Local;
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -83,7 +86,7 @@ public class RunReclaimerTests : IDisposable
         var run = Run(worktree: "/nonexistent/worktree", branch: "ild/wi-a-run-1");
         run.RepositoryId = repositoryId;
 
-        var ok = await new RunReclaimer(repo.Object, providers.Object).ReclaimLocalStateAsync(run);
+        var ok = await new RunReclaimer(repo.Object, providers.Object, new LocalRunHost(repositories: repo.Object)).ReclaimLocalStateAsync(run);
 
         Assert.True(ok);
         repo.Verify(r => r.PruneWorktreesAsync(baseRepo), Times.Once);
@@ -266,7 +269,7 @@ public class RunReclaimerTests : IDisposable
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
-    public async Task Reclaim_deletes_the_state_directory_the_preview_used_for_the_worktree_but_never_persisted_preview_data(
+    public async Task Reclaim_deletes_the_state_directory_and_the_runs_copy_of_the_preview_data_and_stores_that_copy_when_the_repository_keeps_it(
         bool keepPreviewData, bool storedPathNotNormalized)
     {
         var worktreesRoot = NewTempDir();
@@ -290,11 +293,20 @@ public class RunReclaimerTests : IDisposable
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WorktreesPath"] = worktreesRoot })
             .Build();
-        using var preview = new WorktreePreviewService(new Mock<IHttpClientFactory>().Object, configuration,
-            PreviewProxyBase.Disabled, NullLogger<WorktreePreviewService>.Instance,
-            agentUser: null, agentGroup: null, agentHome: null,
-            environment: new TestProcessEnvironment { { "HOME", Path.Combine(worktreesRoot, "home") } }.WithRealPath());
+        var repo = new Mock<IRepositoryManager>();
+        repo.Setup(r => r.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(stored);
+        repo.Setup(r => r.DestroyWorktreeAsync(stored))
+            .Callback(() => Directory.Delete(worktree, recursive: true))
+            .Returns(Task.CompletedTask);
+        var host = new LocalRunHost(repositories: repo.Object, configuration: configuration);
         var repositoryId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        await host.CreateAsync(new RunEnvironmentRequest(runId, stored, "ild/wi-a", repositoryId, KeepPreviewData: keepPreviewData),
+            TestContext.Current.CancellationToken);
+        _tempDirs.Add(LocalRunHost.PreviewDataCopyOf(runId, stored));
+        using var preview = new WorktreePreviewService(new Mock<IHttpClientFactory>().Object, configuration,
+            PreviewProxyBase.Disabled, NullLogger<WorktreePreviewService>.Instance, host,
+            environment: new TestProcessEnvironment { { "HOME", Path.Combine(worktreesRoot, "home") } }.WithRealPath());
         await preview.InstallAsync(stored, volumes: new PreviewVolumeScope(repositoryId, keepPreviewData, "wi-a", "Title"),
             cancellationToken: TestContext.Current.CancellationToken);
         var stateDirectory = File.ReadAllText(Path.Combine(worktreesRoot, "state.path"));
@@ -302,25 +314,23 @@ public class RunReclaimerTests : IDisposable
         _tempDirs.Add(stateDirectory);
         Assert.True(File.Exists(Path.Combine(stateDirectory, "scratch")));
 
-        var repo = new Mock<IRepositoryManager>();
-        repo.Setup(r => r.DestroyWorktreeAsync(stored))
-            .Callback(() => Directory.Delete(worktree, recursive: true))
-            .Returns(Task.CompletedTask);
+        var run = Run(stored, branch: null);
+        run.Id = runId;
+        run.RepositoryId = repositoryId;
 
-        Assert.True(await Build(repo).ReclaimLocalStateAsync(Run(stored, branch: null)));
+        Assert.True(await new RunReclaimer(repo.Object, new Mock<IProviderStore>().Object, host).ReclaimLocalStateAsync(run));
 
         Assert.False(AgentWritableFiles.EntryExists(stateDirectory), "the run's ${STATE_DIR} was left behind");
-        if (keepPreviewData)
-            Assert.True(File.Exists(Path.Combine(volume, "kept")), "reclaiming a run removed the repository's preview data");
-        else
-            Assert.False(AgentWritableFiles.EntryExists(volume));
+        Assert.False(AgentWritableFiles.EntryExists(volume), "the run's volume was left behind");
+        var kept = Path.Combine(PreviewVolumes.RepositoryFolder(configuration, repositoryId), "data", "kept");
+        Assert.Equal(keepPreviewData, File.Exists(kept));
     }
 
     private static RunReclaimer Build(
         Mock<IRepositoryManager> repo,
         Mock<IWorktreePreviewService>? preview = null,
         Mock<IWorkItemNotifier>? notifier = null)
-        => new(repo.Object, new Mock<IProviderStore>().Object, preview?.Object, notifier?.Object);
+        => new(repo.Object, new Mock<IProviderStore>().Object, new LocalRunHost(repositories: repo.Object), preview?.Object, notifier?.Object);
 
     private static LoopRun Run(string? worktree, string? branch) => new()
     {

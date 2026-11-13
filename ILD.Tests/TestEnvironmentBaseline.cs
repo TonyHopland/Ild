@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Runtime.CompilerServices;
 using ILD.Core.Services.Implementations;
 using ILD.Data.Security;
@@ -5,46 +6,18 @@ using ILD.Data.Security;
 namespace ILD.Tests;
 
 /// <summary>
-/// Pins the ADR-0014 uid-isolation environment to its unit-test baseline before
-/// any test runs, so the suite's result does not depend on what the shell that
-/// launched it happened to export.
-///
-/// <para>
-/// The ADR states the intent — "routing is a no-op unless <c>ILD_AGENT_USER</c> is
-/// set, so unit tests keep the pre-isolation behavior unchanged" — and the tests
-/// are written to it: the ones that care about isolation drive it through the
-/// explicit-parameter overloads (<see cref="AgentIsolation.Route(System.Diagnostics.ProcessStartInfo, string?, string?, string?)"/>
-/// and friends) rather than the process-global variables. Nothing enforced the
-/// "unless" half, though, so the guarantee only held where the variables happened
-/// to be absent. In a dev worktree <em>inside</em> the running container they are
-/// already set, and 77 tests fail for reasons that have nothing to do with the
-/// code under test — <c>setpriv --reuid=agent</c> failing with "initgroups failed"
-/// for a uid holding no <c>CAP_SETUID</c>, and roots the live orchestrator
-/// provisioned for its own uid.
-/// </para>
-///
-/// <para>
-/// The two roots need opposite treatment, which is the whole subtlety here.
-/// Clearing <c>ILD_AGENT_SCRATCH_ROOT</c> is enough because its fallback is
-/// <c>TMPDIR</c>, which the test process can write. Clearing
-/// <c>ILD_ORCHESTRATOR_PRIVATE_ROOT</c> is not, because its fallback is a fixed
-/// <c>TMPDIR/ild-orchestrator-private</c> — the very directory the entrypoint has
-/// already created <c>0700</c> under the orchestrator's uid — so it has to be
-/// pointed somewhere this process owns.
-/// </para>
+/// Pins the environment ILD reads its roots and secret list from to a baseline of the
+/// test run's own before any test runs, so the suite's result does not depend on what
+/// the shell that launched it happened to export. The scratch root falls back to
+/// <c>TMPDIR</c>, so clearing it is enough; the orchestrator-private root falls back
+/// to a fixed <c>TMPDIR/ild-orchestrator-private</c> another ILD on the machine may
+/// own, so it is pointed at a directory of this run's.
 /// </summary>
 internal static class TestEnvironmentBaseline
 {
     [ModuleInitializer]
     internal static void Apply()
     {
-        // Isolation off: this process is a single uid with no privilege to drop
-        // from, which is the deployment shape the ADR calls "local development,
-        // unit tests, any single-uid deployment".
-        Environment.SetEnvironmentVariable(AgentIsolation.AgentUserEnvVar, null);
-        Environment.SetEnvironmentVariable(AgentIsolation.AgentGroupEnvVar, null);
-        Environment.SetEnvironmentVariable(AgentIsolation.SharedGroupEnvVar, null);
-        Environment.SetEnvironmentVariable(AgentIsolation.AgentHomeEnvVar, null);
         Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, null);
 
         // Not merely defensive: SecretEnvironmentKeys reads this, so a deployment

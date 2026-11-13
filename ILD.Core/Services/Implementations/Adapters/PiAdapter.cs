@@ -1,7 +1,11 @@
+using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.RunHosts.Local;
+using ILD.Core.Services.RunHosts;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -36,17 +40,35 @@ public sealed class PiAdapter : CliAgentAdapterBase
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
     public override AgentAdapterTraits Traits => TypeTraits;
 
+    public override CredentialPath? CredentialPathFor(AiProvider provider)
+    {
+        if (!Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _)) return CredentialPath.ReadOnlyCopy;
+        return ModelCredentialSource.UpstreamKey(provider) is null ? null : CredentialPath.Gateway;
+    }
+
+    /// <summary>pi's own sign-in, kept in the credential store, which the run gets a copy of rather than the store.</summary>
+    private static string? ReadStoredLogin(IProcessEnvironment environment)
+    {
+        var home = environment.Get("HOME");
+        var path = string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".pi", "agent", "auth.json");
+        try { return path is not null && File.Exists(path) ? File.ReadAllText(path) : null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+    }
+
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         try
         {
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables, ctx.NoTools);
+            using var gateway = OpenGateway(ctx);
+            // A run in its own pod or container cannot see ILD's scratch directory: pi's files go to the run's home there.
+            var runHome = string.IsNullOrWhiteSpace(ctx.RunContext.WorktreePath) ? null : RunHost.RunHomeFor(ctx.RunContext.WorktreePath);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, RunFacingEnvironmentFor(ctx), ctx.NoTools, gateway, runHome);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
 
             var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath))
+            if (string.IsNullOrWhiteSpace(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
                 return NodeExecutionResult.Fail(
                     "[pi-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
@@ -58,8 +80,10 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // turn's Chat Context preamble is already reachable — there is no
             // per-directory config to set for ctx.AdditionalAllowedDirectories.
 
-            var sessionDirectory = Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
-            await AgentWritableFiles.CreateDirectoryAsync(sessionDirectory, ctx.Cancel);
+            var sessionDirectory = runHome is not null
+                ? Path.Combine(runHome, ".pi", "sessions")
+                : Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
+            await RunHost.CreateDirectoryAsync(sessionDirectory, ctx.Cancel);
             await PrepareRuntimeFilesAsync(settings, ctx.Cancel);
 
             string? sessionIdToUse = ctx.SessionId;
@@ -77,16 +101,16 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 sessionPathToUse = restoreResult.SessionPathToUse;
             }
 
-            Process? proc;
+            IRunProcess? proc;
             try
             {
-                proc = StartAgentProcess(BuildRunProcessStartInfo(
+                proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
                     settings,
                     worktreePath,
                     sessionDirectory,
                     sessionIdToUse,
                     sessionPathToUse,
-                    ExtraCliArgs.ForLaunch(ctx.Provider, _logger)), ctx);
+                    ExtraCliArgs.ForLaunch(ctx.Provider, _logger)), ctx, BuildRunEnvironment(settings, sessionDirectory), [settings.IldExtensionPath]);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -176,7 +200,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
         return exitCode == 0
             ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParsePi(stdout.RawStdout))
-            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
+            : NodeExecutionResult.Fail(AdapterFailureText.NonZeroExit(exitCode, stderr, null, response), response);
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
@@ -193,8 +217,28 @@ public sealed class PiAdapter : CliAgentAdapterBase
         SupportedTools = AiToolCatalog.DefaultTools,
         EmptyToolSelectionMeansNone = false,
         SupportsNoTools = true,
+        SupportsSessionResume = true,
         ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
     };
+
+    /// <summary>What pi is launched with: no update check or telemetry, its session and agent directories, and the provider's API key under the name its config reads.</summary>
+    internal static Dictionary<string, string?> BuildRunEnvironment(PiAdapterSettings settings, string sessionDirectory)
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["PI_SKIP_VERSION_CHECK"] = "1",
+            ["PI_TELEMETRY"] = "0",
+            ["PI_CODING_AGENT_SESSION_DIR"] = sessionDirectory,
+        };
+        if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
+            environment["PI_CODING_AGENT_DIR"] = settings.AgentDirectory;
+        if (!string.IsNullOrWhiteSpace(settings.ApiKeyEnvironmentVariableName)
+            && !string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            environment[settings.ApiKeyEnvironmentVariableName] = settings.ApiKey;
+        }
+        return environment;
+    }
 
     // The prompt is not an argument here — pi reads its turn from stdin (see
     // the StandardInput write in ExecuteAsync), so the extra arguments go last.
@@ -215,19 +259,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
             CreateNoWindow = true,
             WorkingDirectory = worktreePath,
         };
-
-        psi.EnvironmentVariables["PI_SKIP_VERSION_CHECK"] = "1";
-        psi.EnvironmentVariables["PI_TELEMETRY"] = "0";
-        psi.EnvironmentVariables["PI_CODING_AGENT_SESSION_DIR"] = sessionDirectory;
-
-        if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
-            psi.EnvironmentVariables["PI_CODING_AGENT_DIR"] = settings.AgentDirectory;
-
-        if (!string.IsNullOrWhiteSpace(settings.ApiKeyEnvironmentVariableName)
-            && !string.IsNullOrWhiteSpace(settings.ApiKey))
-        {
-            psi.EnvironmentVariables[settings.ApiKeyEnvironmentVariableName] = settings.ApiKey;
-        }
 
         psi.ArgumentList.Add("--mode");
         psi.ArgumentList.Add("json");
@@ -466,9 +497,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     // The session dir is the agent's to write, so it is listed and read as the
     // agent (see AgentWritableFiles), never by the orchestrator through a link.
-    private static async Task<string?> FindSessionFileAsync(string sessionDirectory, string sessionId, CancellationToken ct)
+    private async Task<string?> FindSessionFileAsync(string sessionDirectory, string sessionId, CancellationToken ct)
     {
-        var files = await AgentWritableFiles.ListFilesAsync(sessionDirectory, "*.jsonl", ct);
+        var files = await RunHost.ListFilesAsync(sessionDirectory, "*.jsonl", ct);
 
         var exactPath = BuildSnapshotPath(sessionDirectory, sessionId);
         if (files.Any(file => file.Path == exactPath))
@@ -512,21 +543,25 @@ public sealed class PiAdapter : CliAgentAdapterBase
         return sb.ToString();
     }
 
-    private static async Task PrepareRuntimeFilesAsync(PiAdapterSettings settings, CancellationToken ct)
+    private async Task PrepareRuntimeFilesAsync(PiAdapterSettings settings, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
         {
-            await AgentWritableFiles.CreateDirectoryAsync(settings.AgentDirectory, ct);
+            await RunHost.CreateDirectoryAsync(settings.AgentDirectory, ct);
 
             // Older builds wrote an HTTP-calling ild.ts here, and the agent dir is
             // reused by later turns of the same run or chat. pi loads it before any
             // `-e` path and keeps the first tool of a name, so a leftover would
             // shadow the MCP tools; it also still holds the token of its day.
             // Whatever is there goes, and what cannot go never holds up the launch.
-            await AgentWritableFiles.DeleteAsync([LegacyExtensionPath(settings.AgentDirectory)], ct);
+            await RunHost.DeleteAsync([LegacyExtensionPath(settings.AgentDirectory)], ct);
+
+            if (!string.IsNullOrWhiteSpace(settings.ReadOnlyAuthJson))
+                await RunHost.WriteReadOnlyFileAsync(
+                    Path.Combine(settings.AgentDirectory, "auth.json"), settings.ReadOnlyAuthJson, ct);
 
             if (!string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
-                await AgentWritableFiles.WriteFileAsync(
+                await RunHost.WriteFileAsync(
                     Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent, ct);
         }
 
@@ -542,7 +577,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     /// session id). The ILD extension holds the API token and lives where only the
     /// orchestrator can write, so failing to remove it throws, for the caller to keep
     /// its run or chat and retry. The agent and session directories are the agent's
-    /// and may hold anything it planted; they are cleared as the agent and never fail
+    /// and may hold anything it planted; they are cleared without following links and never fail
     /// the caller. Returns whether those are fully gone.
     /// </summary>
     public static async Task<bool> DeleteRunFilesAsync(Guid loopRunId, CancellationToken ct = default)
@@ -588,11 +623,14 @@ public sealed class PiAdapter : CliAgentAdapterBase
             : [];
     }
 
-    private static PiAdapterSettings ResolveSettings(
+    internal static PiAdapterSettings ResolveSettings(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId,
-        IProcessEnvironment environment, bool noTools)
+        IProcessEnvironment environment, bool noTools, ModelGatewayLease? gateway = null, string? runHome = null)
     {
         var loopRunId = runContext.LoopRunId;
+        var runAgentDirectory = runHome is not null
+            ? Path.Combine(runHome, ".pi", "agent")
+            : Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
         var config = AiProviderConfig.Parse(provider.Config);
         var binaryPath = config.BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Pi, environment));
         var apiKey = config.ApiKey ?? provider.ApiKey;
@@ -604,7 +642,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
             ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
-        var ildServerDll = (ildServer?["args"] as string[])?.FirstOrDefault();
+        // The DLL its tool names are read from, whether the entry starts it through dotnet or its apphost.
+        var ildServerDll = ildServer is null ? null : IldMcpServer.ResolveServerDll(environment);
         var toolNames = BuildPiToolNames(enabledToolKeys, ildServerDll);
 
         // Loaded with `-e` from its own directory rather than from the agent dir,
@@ -635,10 +674,23 @@ public sealed class PiAdapter : CliAgentAdapterBase
             providerName ??= BuildSyntheticProviderName(provider);
             model = StripProviderPrefix(model, providerName);
 
-            agentDirectory = Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
+            agentDirectory = runAgentDirectory;
             apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
-            modelsJsonContent = BuildModelsJson(provider, providerName!, model, api, apiKeyEnvironmentVariableName, apiKey);
+            var baseUrl = provider.BaseUrl;
+            if (gateway is not null && !string.IsNullOrWhiteSpace(apiKey))
+            {
+                baseUrl = gateway.UrlFor(GatewayRoutes.Upstream);
+                apiKey = gateway.Token;
+            }
+            modelsJsonContent = BuildModelsJson(baseUrl, providerName!, model, api, apiKeyEnvironmentVariableName, apiKey);
             passApiKeyViaCli = false;
+        }
+
+        string? readOnlyAuthJson = null;
+        if (!hasAbsoluteBaseUrl && gateway is not null && ReadStoredLogin(environment) is { } login)
+        {
+            agentDirectory = runAgentDirectory;
+            readOnlyAuthJson = login;
         }
 
         model = StripProviderPrefix(model, providerName);
@@ -655,7 +707,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
             ildExtensionPath,
             ildExtensionContent,
             toolNames,
-            noTools);
+            noTools,
+            readOnlyAuthJson);
     }
 
     private static IReadOnlyList<string> BuildPiToolNames(IReadOnlyList<string> enabledToolKeys, string? ildServerDll)
@@ -710,7 +763,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     }
 
     private static string BuildModelsJson(
-        AiProvider provider,
+        string baseUrl,
         string providerName,
         string model,
         string api,
@@ -719,7 +772,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     {
         var providerNode = new JsonObject
         {
-            ["baseUrl"] = provider.BaseUrl,
+            ["baseUrl"] = baseUrl,
             ["api"] = api,
             // Pi treats a plain uppercase apiKey (e.g. "ILD_PI_PROVIDER_API_KEY")
             // as a *literal* key; a "$"-prefix tells it to interpolate the named
@@ -797,7 +850,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         string? IldExtensionPath,
         string? IldExtensionContent,
         IReadOnlyList<string> ToolNames,
-        bool NoTools);
+        bool NoTools,
+        string? ReadOnlyAuthJson = null);
 
     internal sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents, bool SawTurnEnd);
 

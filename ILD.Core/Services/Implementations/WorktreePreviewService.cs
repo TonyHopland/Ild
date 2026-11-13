@@ -9,10 +9,15 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
+using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
@@ -20,6 +25,9 @@ namespace ILD.Core.Services.Implementations;
 public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposable
 {
     private const string ConfigFileName = "ild.config.json";
+
+    /// <summary>How much of an install command's output is kept; the rest is read and dropped.</summary>
+    private readonly RunReadLimits _outputLimits = RunReadLimits.FromEnvironment();
     private static readonly Regex TemplateTokenRegex = new("\\$\\{([^}]+)\\}", RegexOptions.Compiled);
 
     /// <summary>
@@ -38,11 +46,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly IConfiguration _configuration;
     private readonly PreviewProxyBase _proxyBase;
     private readonly ILogger<WorktreePreviewService> _logger;
-    private readonly string? _agentUser;
-    private readonly string? _agentGroup;
-    private readonly string? _agentHome;
-    private readonly string? _egressProxy;
-    private readonly string? _networkOpenGroup;
+    private readonly EgressProxyOptions? _egressProxy;
+    private readonly EgressCredentials? _credentials;
     private readonly IEgressPolicy? _egressPolicy;
     private readonly IProcessEnvironment _environment;
     private readonly Func<int, bool> _isPortAvailable;
@@ -69,29 +74,25 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         AllowTrailingCommas = true,
     };
 
+    private readonly IRunHost _host;
+
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
         PreviewDataClaims claims,
+        IRunHost host,
         IEgressPolicy? egressPolicy = null,
-        IWorkItemNotifier? notifier = null)
-        : this(httpClientFactory, configuration, proxyBase, logger,
-            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
-            AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims,
-            networkOpenGroup: AgentIsolation.NetworkOpenGroup, egressPolicy: egressPolicy, notifier: notifier)
+        IWorkItemNotifier? notifier = null,
+        EgressCredentials? credentials = null)
+        : this(httpClientFactory, configuration, proxyBase, logger, host,
+            EgressProxyOptions.FromEnvironment(), credentials, ProcessEnvironment.Current, claims: claims,
+            egressPolicy: egressPolicy, notifier: notifier)
     {
     }
 
     /// <summary>
-    /// The uid-isolation parameters taken explicitly rather than read from the
-    /// process environment — the convention <c>ManagedAgentService</c> and the
-    /// <c>AgentIsolation</c> overloads already use, so a test can drive the
-    /// isolated shape without setting variables that would turn isolation on for
-    /// every other test in the host process. The DI constructor above supplies the
-    /// production values; all three are null when isolation is off, and every
-    /// decision keyed off them then reduces to the pre-isolation behaviour.
     /// <paramref name="environment"/> is where our own <c>HOME</c> and <c>PATH</c>
     /// are read, and where an install puts the npm global bin on <c>PATH</c>: the
     /// process environment unless a test supplies its own.
@@ -99,37 +100,31 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// handed out: binding it on loopback unless a test supplies its own.
     /// <paramref name="claims"/> records which previews hold each repository's preview
     /// data: the host's, which its reset consults too, or a private one.
-    /// <paramref name="networkOpenGroup"/> and <paramref name="egressPolicy"/> decide what a launch gets
-    /// in network mode Off (<see cref="AgentIsolation.ResolveLaunchNetwork(NetworkMode, string?, string?)"/>);
-    /// with no policy every launch is proxied, as <paramref name="egressProxy"/> says.
+    /// <paramref name="egressPolicy"/> decides whether a launch is proxied: not in network mode Off
+    /// ; with no policy every launch
+    /// is proxied, as <paramref name="egressProxy"/> says, under a credential <paramref name="credentials"/> signs for the preview.
     /// </summary>
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
-        string? agentUser,
-        string? agentGroup,
-        string? agentHome,
-        string? egressProxy = null,
+        IRunHost host,
+        EgressProxyOptions? egressProxy = null,
+        EgressCredentials? credentials = null,
         IProcessEnvironment? environment = null,
         Func<int, bool>? isPortAvailable = null,
         PreviewDataClaims? claims = null,
-        string? networkOpenGroup = null,
         IEgressPolicy? egressPolicy = null,
         IWorkItemNotifier? notifier = null)
     {
+        _host = host;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _proxyBase = proxyBase;
         _logger = logger;
-        // Blank and unset are the same thing throughout AgentIsolation; normalise
-        // once here so every decision below can just test for null.
-        _agentUser = NonEmpty(agentUser);
-        _agentGroup = NonEmpty(agentGroup);
-        _agentHome = NonEmpty(agentHome);
-        _egressProxy = NonEmpty(egressProxy);
-        _networkOpenGroup = NonEmpty(networkOpenGroup);
+        _egressProxy = egressProxy;
+        _credentials = credentials;
         _egressPolicy = egressPolicy;
         _environment = environment ?? ProcessEnvironment.Current;
         _isPortAvailable = isPortAvailable ?? IsPortAvailable;
@@ -137,17 +132,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _notifier = notifier;
     }
 
-    /// <summary>
-    /// The <c>HOME</c> a preview step actually runs with once it has crossed to the
-    /// agent uid, or <c>null</c> when the crossing leaves <c>HOME</c> alone — which
-    /// covers both "isolation is off" and "isolation is on but no agent home is
-    /// configured". <see cref="AgentIsolation.ResolveChildHome"/> owns the rule and
-    /// the crossing applies the same answer, so the npm prefix derived from it here
-    /// cannot drift from the <c>HOME</c> the child is really given.
-    /// </summary>
-    private string? ChildHome => AgentIsolation.ResolveChildHome(_agentUser, _agentHome);
-
-    private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     public async Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default)
     {
@@ -349,6 +333,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 await RetireRuntimeAsync(existing, cancellationToken);
                 _runtimes.TryRemove(normalized, out _);
             }
+            else
+            {
+                await EndLeftBehindAsync(normalized, cancellationToken);
+            }
 
             var mode = await _egressPolicy.LaunchModeAsync(cancellationToken);
             lease = await ClaimPreviewDataAsync(options.Volumes, normalized, holdsGate: true, cancellationToken);
@@ -446,6 +434,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                     row.Status = "starting";
                     row.HealthUrl = healthUrl;
                     row.PublicUrl = publicUrl;
+                    row.LocalUrl = ComposeLocalUrl(port);
                     row.LogFilePath = process.LogFilePath;
                     row.ProcessId = process.Process.Id;
                 });
@@ -466,19 +455,19 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             }
         }
 
-        failures.AddRange(await Task.WhenAll(launched.Select(l => AwaitHealthAsync(l.Service, l.Process, l.HealthUrl, progress, cancellationToken))));
+        failures.AddRange(await Task.WhenAll(launched.Select(l => AwaitHealthAsync(l.Service, l.Process, l.HealthUrl, runtime.WorktreePath, progress, cancellationToken))));
         return failures.FirstOrDefault(failure => failure != null);
     }
 
     private async Task<Exception?> AwaitHealthAsync(
-        PreviewServiceConfig service, ManagedPreviewProcess process, string healthUrl, StartProgress progress, CancellationToken cancellationToken)
+        PreviewServiceConfig service, ManagedPreviewProcess process, string healthUrl, string worktreePath, StartProgress progress, CancellationToken cancellationToken)
     {
         await ReportServiceAsync(progress, service.Name, row => row.Status = "waitingForHealth");
 
         Exception? failure = null;
         try
         {
-            await WaitForHealthAsync(service.Name, healthUrl, cancellationToken, process);
+            await WaitForHealthAsync(service.Name, healthUrl, worktreePath, cancellationToken, process);
         }
         catch (InvalidOperationException ex)
         {
@@ -517,11 +506,32 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 return BuildStoppedResponse(loaded, runtime.ProfileName, runtime.PublicHost, runtime.StateDirectory, loaded.ConfigPath);
             }
 
+            await EndLeftBehindAsync(normalized, cancellationToken);
             return BuildStoppedResponse(loaded);
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Ends the preview processes an earlier ILD left running in the worktree's run or chat when it ended without
+    /// stopping them: this ILD knows nothing of them, and they hold the ports the next start needs. Skipped while
+    /// another worktree of the same chat has a preview this ILD started, since the two share what is ended.
+    /// </summary>
+    private async Task EndLeftBehindAsync(string normalized, CancellationToken cancellationToken)
+    {
+        if (RunPaths.HolderOf(normalized) is not { } holder) return;
+        if (_runtimes.Keys.Any(other => RunPaths.HolderOf(other) == holder)) return;
+        try
+        {
+            if (await _host.KillUnownedAsync(holder, cancellationToken) is > 0 and var ended)
+                _logger.LogInformation("Ended {Count} preview process(es) left running in {Worktree} by an ILD that did not stop them", ended, normalized);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not end the preview processes left running in {Worktree}", normalized);
         }
     }
 
@@ -598,7 +608,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 throw;
             }
 
-            await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), cancellationToken);
+            await PublishAsync(options.WorkItemId);
+            await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), runtime.WorktreePath, cancellationToken);
 
             return BuildResponse(loaded, runtime);
         }
@@ -710,7 +721,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException($"Preview service '{serviceName}' not found in profile '{resolvedProfileName}'.");
 
         services[index] = JsonNode.Parse(serviceConfigJson);
-        await File.WriteAllTextAsync(loaded.ConfigPath!, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+        await _host.WriteFileAsync(loaded.ConfigPath!, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     public async Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
@@ -722,7 +733,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // name with a path separator (or "..") could escape it. StartServiceAsync
         // composes the path the same way; reject anything that isn't a bare file
         // name rather than reading an arbitrary file off disk.
-        if (!string.Equals(serviceName, Path.GetFileName(serviceName), StringComparison.Ordinal))
+        if (!IsSafeServiceName(serviceName))
             return null;
 
         var normalized = NormalizeWorktreePath(worktreePath);
@@ -769,7 +780,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // The install runs outside the gate, holding the preview data through its own lease.
         using (var lease = await ClaimPreviewDataAsync(volumes, normalized, holdsGate: false, cancellationToken))
         {
-            var stateDirectory = BuildStateDirectory(normalized);
+            var stateDirectory = await BuildStateDirectoryAsync(normalized, cancellationToken);
             var logDirectory = BuildLogDirectory(normalized);
 
             // Install needs no ports or running services — build a port-less runtime so
@@ -785,8 +796,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
                 new List<ManagedPreviewProcess>(),
                 DotEnvParser.Parse(customEnv),
-                new PackageFeedFileShare(packageFeeds ?? [], "install", _logger),
-                await PreviewVolumes.CreateFoldersAsync(_configuration, profile.Volumes, volumes, stateDirectory, cancellationToken));
+                new PackageFeedFileShare(packageFeeds ?? [], FeedFilePrefix(normalized, "install"), _logger),
+                await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, volumes, stateDirectory, _logger, cancellationToken));
 
             await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken);
             return new WorktreeInstallResult(true);
@@ -876,7 +887,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 p.Service.Name, p.Service.Public, p.Service.RewriteHost, p.IsRunning, p.Service.Port,
                 runtime.Ports.TryGetValue(p.Service.Port, out var port) ? port : 0))
             .ToList();
-        return SelectPreviewTarget(workItemId, serviceName, rows);
+        return SelectPreviewTarget(workItemId, serviceName, rows) with { WorktreePath = workItem.WorktreePath };
     }
 
     /// <summary>Splits a preview hostname's leading label into its work item id and optional service name.</summary>
@@ -982,12 +993,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private async Task<LoadedPreviewConfig> LoadConfigAsync(string worktreePath, CancellationToken cancellationToken)
     {
         var configPath = Path.Combine(worktreePath, ConfigFileName);
-        if (!File.Exists(configPath))
+        await using var stream = await _host.OpenReadAsync(configPath, cancellationToken);
+        if (stream is null)
         {
             return new LoadedPreviewConfig(false, worktreePath, configPath, null, $"No {ConfigFileName} found in worktree root.");
         }
 
-        await using var stream = File.OpenRead(configPath);
         var config = await JsonSerializer.DeserializeAsync<IldWorkspaceConfig>(stream, _jsonOptions, cancellationToken);
         if (config?.Preview?.Profiles == null || config.Preview.Profiles.Count == 0)
         {
@@ -1001,9 +1012,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     // or replaced without re-serializing the strongly-typed model (which would drop
     // fields the model does not surface). Tolerates comments and trailing commas, the
     // same as the strongly-typed loader.
-    private static async Task<JsonNode?> LoadConfigNodeAsync(string configPath, CancellationToken cancellationToken)
+    private async Task<JsonNode?> LoadConfigNodeAsync(string configPath, CancellationToken cancellationToken)
     {
-        await using var stream = File.OpenRead(configPath);
+        await using var stream = await _host.OpenReadAsync(configPath, cancellationToken)
+            ?? throw new FileNotFoundException(configPath);
         return await JsonNode.ParseAsync(
             stream,
             nodeOptions: null,
@@ -1071,16 +1083,53 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// satisfy to be started. Duplicate-name detection across a profile stays in
     /// <see cref="ValidateProfile"/> since it is inherently cross-service.
     /// </summary>
+    private static readonly Regex SafeServiceNameRegex = new(@"^[A-Za-z0-9][A-Za-z0-9._-]*\z", RegexOptions.Compiled);
+
+    /// <summary>
+    /// A service name becomes the file name of its log, so it must be a bare name: no separator, no
+    /// <c>..</c>, nothing rooted. The one rule for the write side (validation) and the read side.
+    /// </summary>
+    internal static bool IsSafeServiceName(string? name) => name != null && SafeServiceNameRegex.IsMatch(name);
+
+    /// <summary>
+    /// True for an absolute http(s) URL whose host, as parsed, is the service's own loopback. The health probe is
+    /// made from ILD's network position, so it may only ever name the run's own address, never a host the agent chose.
+    /// </summary>
+    internal static bool IsOwnLoopbackHealthUrl(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+           && uri.Scheme is "http" or "https"
+           && uri.Host is "127.0.0.1" or "localhost" or "[::1]" or "0.0.0.0";
+
+    private static string HealthUrlNotLoopbackMessage(string serviceName)
+        => $"Preview service '{serviceName}' healthUrl must name the service's own loopback (127.0.0.1, localhost, [::1] or 0.0.0.0).";
+
+    /// <summary>Replaces template tokens with values of the right shape, to check a URL's host before the launch resolves it.</summary>
+    private static string StandInTokens(string value)
+        => TemplateTokenRegex.Replace(value, match =>
+        {
+            var token = match.Groups[1].Value;
+            if (string.Equals(token, "HOST", StringComparison.OrdinalIgnoreCase))
+                return "0.0.0.0";
+            if (string.Equals(token, "PORT", StringComparison.OrdinalIgnoreCase)
+                || token.StartsWith("PORT:", StringComparison.OrdinalIgnoreCase))
+                return "1";
+            return "x";
+        });
+
     private static void ValidateService(string profileName, PreviewServiceConfig service)
     {
         if (string.IsNullOrWhiteSpace(service.Name))
             throw new InvalidOperationException($"Preview profile '{profileName}' has a service with no name.");
+        if (!IsSafeServiceName(service.Name))
+            throw new InvalidOperationException($"Preview service name '{service.Name}' must start with a letter or digit and contain only letters, digits, '.', '_' and '-'.");
         if (string.IsNullOrWhiteSpace(service.Command))
             throw new InvalidOperationException($"Preview service '{service.Name}' has no command.");
         if (string.IsNullOrWhiteSpace(service.Port))
             throw new InvalidOperationException($"Preview service '{service.Name}' has no port alias.");
         if (string.IsNullOrWhiteSpace(service.HealthUrl))
             throw new InvalidOperationException($"Preview service '{service.Name}' must define healthUrl.");
+        if (!IsOwnLoopbackHealthUrl(StandInTokens(service.HealthUrl)))
+            throw new InvalidOperationException(HealthUrlNotLoopbackMessage(service.Name));
         if (service.SuggestedPort is <= 0)
             throw new InvalidOperationException($"Preview service '{service.Name}' has invalid suggestedPort '{service.SuggestedPort}'.");
     }
@@ -1203,7 +1252,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         StartProgress? progress = null)
     {
         var publicHost = ResolvePublicHost(options.PublicHost);
-        var stateDirectory = BuildStateDirectory(normalized);
+        var stateDirectory = await BuildStateDirectoryAsync(normalized, cancellationToken);
         var logDirectory = BuildLogDirectory(normalized);
 
         var ports = AllocatePorts(profile, options.PortOverrides);
@@ -1217,8 +1266,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ports,
             new List<ManagedPreviewProcess>(),
             DotEnvParser.Parse(options.CustomEnv),
-            new PackageFeedFileShare(options.PackageFeeds ?? [], "preview", _logger),
-            await PreviewVolumes.CreateFoldersAsync(_configuration, profile.Volumes, options.Volumes, stateDirectory, cancellationToken),
+            new PackageFeedFileShare(options.PackageFeeds ?? [], FeedFilePrefix(normalized, "preview"), _logger),
+            await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, options.Volumes, stateDirectory, _logger, cancellationToken),
             lease,
             options.WorkItemId);
 
@@ -1430,14 +1479,18 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 await onProgress(new WorktreePreviewInstallProgress { Index = index + 1, Total = installSteps.Count, Command = step.Command });
             }
 
-            var resolved = await BuildResolvedStepAsync(step, runtime, null, feeds.Environment, mode, cancellationToken);
+            var resolved = await BuildResolvedStepAsync(step, runtime, null, feeds, mode, cancellationToken);
             var result = await RunCommandAsync(resolved, cancellationToken);
 
             var builder = new StringBuilder();
             builder.AppendLine($"> {resolved.Command}");
             if (!string.IsNullOrWhiteSpace(result.StdOut)) builder.AppendLine(result.StdOut.TrimEnd());
             if (!string.IsNullOrWhiteSpace(result.StdErr)) builder.AppendLine(result.StdErr.TrimEnd());
-            await File.AppendAllTextAsync(installLogPath, builder.ToString() + Environment.NewLine, cancellationToken);
+            await using (var installLog = AppendLog.Open(runtime.LogDirectory, installLogPath))
+            {
+                var bytes = Encoding.UTF8.GetBytes(builder.ToString() + Environment.NewLine);
+                await installLog.WriteAsync(bytes, cancellationToken);
+            }
 
             if (result.ExitCode != 0)
             {
@@ -1467,9 +1520,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         try
         {
-            var resolved = await BuildResolvedStepAsync(service, runtime, service.Port, feeds.Environment, mode, cancellationToken);
+            var resolved = await BuildResolvedStepAsync(service, runtime, service.Port, feeds, mode, cancellationToken);
             var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
-            writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+            writer = new StreamWriter(AppendLog.Open(runtime.LogDirectory, logPath))
             {
                 AutoFlush = true,
             };
@@ -1482,13 +1535,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             // the gate the pumps contend for.
             await writer.WriteLineAsync($"> {resolved.Command}");
 
-            var process = Process.Start(BuildPreviewProcess(resolved))
-                ?? throw new InvalidOperationException($"Failed to start preview service '{service.Name}'.");
+            var process = await _host.StartCommandAsync(PreparedCommand(resolved), cancellationToken);
 
             // Subscribed before the check, so an exit that has already happened and
             // one still to come both let go (the lease ignores the second).
-            process.EnableRaisingEvents = true;
-            process.Exited += (_, _) => feeds.Dispose();
+            _ = process.WaitForExitAsync().ContinueWith(_ => feeds.Dispose(), TaskScheduler.Default);
             if (process.HasExited)
                 feeds.Dispose();
 
@@ -1520,6 +1571,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         runtime.ClearProcesses();
     }
 
+    /// <summary>How long a stop waits for a killed service to exit. Tests shorten it.</summary>
+    internal TimeSpan KillGrace { get; set; } = TimeSpan.FromSeconds(5);
+
     private async Task StopProcessAsync(ManagedPreviewProcess process, CancellationToken cancellationToken)
     {
         // Claim it first: from here on the Process gets killed and disposed, so an
@@ -1530,8 +1584,26 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             if (!process.Process.HasExited)
             {
-                process.Process.Kill(entireProcessTree: true);
-                await process.Process.WaitForExitAsync(cancellationToken);
+                if (!process.Process.TryKill(out var failure))
+                {
+                    _logger.LogWarning("Failed to kill preview service {Service}: {Failure}", process.Service.Name, failure);
+                }
+                else
+                {
+                    // Kill only signals; bound the wait so a process that never
+                    // exits cannot hold the preview gate (or a teardown that has
+                    // no cancellation) forever.
+                    using var grace = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    grace.CancelAfter(KillGrace);
+                    try
+                    {
+                        await process.Process.WaitForExitAsync(grace.Token);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        _logger.LogWarning("Preview service {Service} was still alive {Seconds:0.###}s after being killed", process.Service.Name, KillGrace.TotalSeconds);
+                    }
+                }
             }
         }
         catch (InvalidOperationException)
@@ -1545,7 +1617,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         try
         {
-            await Task.WhenAll(process.StdOutPump, process.StdErrPump);
+            // The pumps end when the output pipes close. A process that survived the
+            // kill keeps them open, so this wait carries the same bound.
+            await Task.WhenAll(process.StdOutPump, process.StdErrPump).WaitAsync(KillGrace);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Preview service {Service} output was still open {Seconds:0.###}s after the stop; not waiting for it", process.Service.Name, KillGrace.TotalSeconds);
         }
         catch
         {
@@ -1627,6 +1705,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             SuggestedPort = process.Service.SuggestedPort,
             HealthUrl = healthUrl,
             PublicUrl = publicUrl,
+            LocalUrl = ComposeLocalUrl(port),
             LogFilePath = process.LogFilePath,
             ProcessId = process.Process.Id,
             ExitCode = process.Process.HasExited ? process.Process.ExitCode : null,
@@ -1653,6 +1732,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         => ComposePublicUrl(
             ResolveOptionalTemplate(service.PublicUrl, runtime, service.Port),
             _proxyBase, runtime.WorkItemId, service.Name, runtime.PublicHost, port, singlePublicService);
+
+    /// <summary>The loopback address of a service's allocated port; null without one.</summary>
+    internal static string? ComposeLocalUrl(int? port)
+        => port is int allocated ? $"http://127.0.0.1:{allocated}" : null;
 
     /// <summary>The precedence of <see cref="BuildPublicUrl"/> over values already resolved.</summary>
     internal static string? ComposePublicUrl(
@@ -1776,6 +1859,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             row.Status = "stopped";
             row.HealthUrl = null;
             row.PublicUrl = null;
+            row.LocalUrl = null;
         }
     }
 
@@ -1855,15 +1939,17 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// A process that must stay up while it is probed: once it has exited and a probe has
     /// still failed, the wait ends at once rather than at the timeout.
     /// </param>
-    private async Task WaitForHealthAsync(string serviceName, string healthUrl, CancellationToken cancellationToken, ManagedPreviewProcess? watched = null)
+    private async Task WaitForHealthAsync(
+        string serviceName, string healthUrl, string worktreePath, CancellationToken cancellationToken, ManagedPreviewProcess? watched = null)
     {
-        using var client = _httpClientFactory.CreateClient();
+        using var client = _httpClientFactory.CreateClient(HealthProbeClientName);
+        var probed = await ReachableHealthUrlAsync(_host, healthUrl, worktreePath, cancellationToken);
         for (var attempt = 0; attempt < 60; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                using var response = await client.GetAsync(healthUrl, cancellationToken);
+                using var response = await client.GetAsync(probed, cancellationToken);
                 if (response.IsSuccessStatusCode)
                     return;
             }
@@ -1880,35 +1966,57 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
         }
 
-        throw new InvalidOperationException($"Preview service '{serviceName}' did not become healthy at {healthUrl}.");
+        throw new InvalidOperationException(
+            $"Preview service '{serviceName}' did not become healthy at {healthUrl}{(probed == healthUrl ? "" : $" (reached at {probed})")}.");
+    }
+
+    /// <summary>
+    /// The client the health probe uses. It never follows a redirect, so a service cannot send ILD on to another host;
+    /// a 3xx is not healthy and the probe tries the original URL again.
+    /// </summary>
+    public const string HealthProbeClientName = "preview-health-probe";
+
+    /// <summary>Makes the named client the health probe uses: no redirects followed, a short timeout per request.</summary>
+    public static IHttpClientBuilder ConfigureHealthProbeClient(IHttpClientBuilder builder)
+        => builder
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+
+    /// <summary>
+    /// Where ILD reaches <paramref name="healthUrl"/>. A service's health URL names its own machine's loopback
+    /// (<c>http://127.0.0.1:${PORT}/health</c>), which is ILD's only when the preview runs on ILD's machine. A preview in a
+    /// run's pod or container is reached where the preview proxy reaches it, at the address the run host gives for the
+    /// port. Any other host is refused: ILD never probes an address the agent chose.
+    /// </summary>
+    internal static async Task<string> ReachableHealthUrlAsync(IRunHost host, string healthUrl, string worktreePath, CancellationToken cancellationToken)
+    {
+        if (!IsOwnLoopbackHealthUrl(healthUrl))
+            throw new InvalidOperationException("A preview's health URL must name the service's own loopback (127.0.0.1, localhost, [::1] or 0.0.0.0).");
+        var uri = new Uri(healthUrl);
+
+        var target = await host.PreviewTargetAsync(worktreePath, uri.Port, cancellationToken);
+        return target.Host == uri.Host && target.Port == uri.Port
+            ? healthUrl
+            : new UriBuilder(uri) { Host = target.Host, Port = target.Port }.Uri.ToString();
     }
 
     /// <summary>
     /// Per-worktree preview state the <em>preview itself</em> writes — the npm cache
     /// its install steps populate, and whatever a profile puts under
-    /// <c>${STATE_DIR}</c>. Rooted at the shared scratch root: the setgid,
-    /// shared-group tree with a default ACL that the entrypoint provisions for
-    /// exactly this. The preview's steps run as the agent (ADR-0016) and must be
-    /// able to write here, which the orchestrator-private root would not allow.
-    ///
-    /// <para>
-    /// The old private-root rationale — the agent can predict this path, so it could
-    /// pre-create it and plant content the steps then consume — does not survive the
-    /// steps becoming the agent: the agent planting something its own uid then reads
-    /// crosses no boundary. It survives for anything the <em>orchestrator</em>
-    /// touches, which is why the log files are not here; see
-    /// <see cref="BuildLogDirectory"/>. What this does cost is that preview state is
-    /// reachable by every run's agent through the shared <c>ild-agents</c> group —
-    /// the residual ADR-0014 already states for every other shared tree, not a new
-    /// one.
-    /// </para>
+    /// <c>${STATE_DIR}</c>. Where the run host says, so the preview's steps can write
+    /// it and see it where they run.
     /// </summary>
-    private static string BuildStateDirectory(string worktreePath)
-        => AgentIsolation.CreateScratchDirectory(StateDirectorySegments(worktreePath));
+    private async Task<string> BuildStateDirectoryAsync(string worktreePath, CancellationToken cancellationToken)
+    {
+        RunInFor(worktreePath);
+        var stateDirectory = _host.PreviewStateDirectoryFor(worktreePath);
+        await _host.CreateDirectoryAsync(NpmCacheOf(stateDirectory), cancellationToken);
+        return stateDirectory;
+    }
 
     /// <summary>
-    /// The <c>${STATE_DIR}</c> a preview of <paramref name="worktreePath"/> uses, in
-    /// whatever form the path is given, without creating it: what run reclaim deletes.
+    /// The <c>${STATE_DIR}</c> a preview of <paramref name="worktreePath"/> uses on ILD's
+    /// own machine, in whatever form the path is given, without creating it.
     /// </summary>
     public static string StateDirectoryOf(string worktreePath)
         => Path.Combine([AgentIsolation.ScratchRoot, .. StateDirectorySegments(NormalizeWorktreePath(worktreePath))]);
@@ -1922,31 +2030,28 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// the orchestrator — the stdout/stderr pumps
     /// (<see cref="LaunchServiceProcessAsync"/>, <see cref="RunInstallStepsAsync"/>)
     /// run in-process, and <see cref="GetServiceLogAsync"/> serves them to
-    /// <c>get_preview_logs</c>. Moving the preview's steps to the agent uid did
-    /// nothing to move those.
+    /// <c>get_preview_logs</c>.
     ///
     /// <para>
-    /// So the private root's reasoning applies here undiminished. The path is a hash
-    /// of the worktree, which the agent knows, and a shared-group directory would let
-    /// it pre-create <c>install.log</c> as a symlink to somewhere only the
+    /// The path is a hash of the worktree, which the agent knows, and a directory it
+    /// could write would let it pre-create <c>install.log</c> as a symlink to somewhere only the
     /// orchestrator can write — <c>~/.profile</c>, say, which the next
     /// <c>/bin/sh -lc</c> preview spawn would then execute as the orchestrator. The
     /// read side is the mirror: an arbitrary orchestrator-readable file, served
-    /// through the API. The <c>0700</c> root, created before any agent-uid process
-    /// runs, is what forecloses both; it is the same guarantee the git askpass helper
-    /// relies on (ADR-0014).
+    /// through the API. The <c>0700</c> private root is what forecloses both; it
+    /// is the same guarantee the git askpass helper relies on.
     /// </para>
     /// </summary>
     private static string BuildLogDirectory(string worktreePath)
         => AgentIsolation.CreatePrivateDirectory("preview", WorktreeSlug(worktreePath));
 
-    private static string WorktreeSlug(string worktreePath)
+    internal static string WorktreeSlug(string worktreePath)
         => Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(worktreePath))).ToLowerInvariant();
 
     private async Task<ResolvedStep> BuildResolvedStepAsync(
         PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias,
-        IReadOnlyDictionary<string, string> feedEnvironment, NetworkMode mode, CancellationToken cancellationToken)
+        PackageFeedFileShare.Lease feeds, NetworkMode mode, CancellationToken cancellationToken)
     {
         var workingDirectory = await ResolveWorkingDirectoryAsync(step.Cwd, runtime, currentPortAlias, cancellationToken);
         var environment = MergePreviewEnvironment(
@@ -1954,14 +2059,28 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             step.Env,
             value => ResolveTemplate(value, runtime, currentPortAlias),
             runtime.CustomEnv,
-            feedEnvironment);
+            feeds.Environment);
 
         return new ResolvedStep(
             ResolveTemplate(step.Command, runtime, currentPortAlias),
             workingDirectory,
             environment,
-            mode);
+            mode,
+            feeds.Path is null ? [] : [feeds.Path],
+            RunInFor(runtime.WorktreePath));
     }
+
+    /// <summary>
+    /// The run or chat a preview of <paramref name="worktreePath"/> runs in. When runs are isolated a worktree
+    /// that is in neither (one left on ILD's own disk from before the host was switched) is refused: its steps
+    /// would otherwise start on ILD's own machine.
+    /// </summary>
+    private Guid? RunInFor(string worktreePath)
+        => RunPaths.HolderOf(worktreePath)
+            ?? (_host.Kind == RunHostKind.Local
+                ? null
+                : throw new InvalidOperationException(
+                    $"Refusing to preview {worktreePath}: runs are isolated and this worktree is not in a run, so its commands would run on ILD's own machine. Start a new run of the work item."));
 
     /// <summary>
     /// Layers a step's environment onto <paramref name="defaults"/>, which it returns.
@@ -2010,58 +2129,31 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     /// <summary>
     /// The base environment every preview step starts from, before the service's own
-    /// <c>env</c> and then the repository's <c>.env</c> are layered over it. Takes the
-    /// state directory rather than the whole runtime because that is the only part
-    /// it needs — which also makes what a preview child's <c>HOME</c> and npm prefix
-    /// resolve to assertable without standing up a runtime.
+    /// <c>env</c> and then the repository's <c>.env</c> are layered over it: only what
+    /// belongs to the preview itself, the npm cache in its state directory.
+    /// <para>
+    /// Deliberately not <c>HOME</c>, <c>PATH</c> or the npm prefix. Those belong to
+    /// wherever the step runs, which only the run host knows — a run container sets
+    /// its own when it is made, and the local host gives a command ours
+    /// (<see cref="LocalRunHost.Launch"/>). Built here from ILD's own, they
+    /// named directories a run does not have, and replaced the ones it does.
+    /// </para>
     /// </summary>
-    internal Dictionary<string, string> BuildDefaultEnvironment(string stateDirectory)
-    {
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    internal static Dictionary<string, string> BuildDefaultEnvironment(string stateDirectory)
+        => new(StringComparer.OrdinalIgnoreCase) { ["NPM_CONFIG_CACHE"] = NpmCacheOf(stateDirectory) };
 
-        var home = ResolveHomeDirectory();
-        var npmPrefix = Path.Combine(home, ".local");
-        var npmBin = GetNpmGlobalBinDirectory();
-        var npmCache = Path.Combine(stateDirectory, "npm-cache");
-
-        EnsureNpmDirectory(npmPrefix);
-        EnsureNpmDirectory(npmBin);
-        Directory.CreateDirectory(npmCache);
-
-        var currentPath = _environment.Get("PATH") ?? string.Empty;
-
-        environment["HOME"] = home;
-        environment["NPM_CONFIG_PREFIX"] = npmPrefix;
-        environment["NPM_CONFIG_CACHE"] = npmCache;
-        environment["PATH"] = string.IsNullOrWhiteSpace(currentPath)
-            ? npmBin
-            : $"{npmBin}{Path.PathSeparator}{currentPath}";
-
-        return environment;
-    }
+    private static string NpmCacheOf(string stateDirectory) => Path.Combine(stateDirectory, "npm-cache");
 
     /// <summary>
-    /// The <c>HOME</c> a preview step runs with, and the root the npm global prefix
-    /// is derived from. Under uid isolation that is the <em>agent's</em> home:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?, string?)"/>
-    /// sets <c>HOME</c> there as part of the crossing, so deriving the prefix from
-    /// anything else would point <c>npm install -g</c> at a directory the uid
-    /// running it cannot write — the orchestrator's home is <c>0710</c>,
-    /// traverse-only for the agent.
+    /// ILD's own <c>HOME</c>, the root of the npm global bin added to ILD's own PATH.
     /// </summary>
     private string ResolveHomeDirectory()
     {
-        if (ChildHome is { } childHome)
-            return childHome;
-
         var home = _environment.Get("HOME");
         if (string.IsNullOrWhiteSpace(home))
         {
-            // Not reachable in the container (HOME is always set), and only
-            // reachable at all when isolation is off — so this is the single-uid
-            // fallback. It must still not be a fixed path in world-writable /tmp:
-            // the step's npm would read a planted ~/.npmrc. Same reasoning as the
-            // askpass helper (ADR-0014).
+            // Never a fixed path in world-writable /tmp: the step's npm would read
+            // a planted ~/.npmrc. Same reasoning as the askpass helper.
             return AgentIsolation.CreatePrivateDirectory("home");
         }
 
@@ -2070,60 +2162,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
-    /// The directory where <c>npm install -g</c> places executables during an
-    /// install step (<see cref="BuildDefaultEnvironment"/> points
+    /// The directory where <c>npm install -g</c> places executables during a local
+    /// install step (<see cref="LocalRunHost.Launch"/> points
     /// <c>NPM_CONFIG_PREFIX</c> at <c>$HOME/.local</c>, so global CLIs such as
     /// <c>vp</c> land in <c>$HOME/.local/bin</c>).
     /// </summary>
     private string GetNpmGlobalBinDirectory()
         => Path.Combine(ResolveHomeDirectory(), ".local", "bin");
-
-    /// <summary>
-    /// Create one of the npm prefix directories — but never inside the agent's home.
-    /// The entrypoint provisions that home's scaffolding as the agent uid; a
-    /// directory the orchestrator created there would be owned by the orchestrator,
-    /// in a home whose group the agent is not a member of, and the agent's own
-    /// <c>npm install -g</c> would then fail on a prefix it cannot write. There, the
-    /// orchestrator only <em>names</em> the path.
-    ///
-    /// <para>
-    /// The test is containment in the home the child is actually given, not "is
-    /// isolation on" — those are different questions when a crossing is configured
-    /// with a user but no home. The prefix then lands in the orchestrator's own
-    /// home, where the orchestrator both may and must create it: skipping would
-    /// leave <see cref="EnsureInstalledToolsOnProcessPath"/> advertising a
-    /// directory that does not exist.
-    /// </para>
-    /// </summary>
-    private void EnsureNpmDirectory(string path)
-    {
-        if (ChildHome is { } childHome && IsInside(path, childHome))
-            return;
-
-        Directory.CreateDirectory(path);
-    }
-
-    private static bool IsInside(string path, string root)
-    {
-        // Resolve the root through any symlinks first. Path.GetFullPath normalizes
-        // ".." but not links, so a symlinked agent home would compare against a name
-        // that is not where the directory actually lives and the containment test
-        // could answer wrong in either direction.
-        var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Resolve(root))) + Path.DirectorySeparatorChar;
-        return Path.GetFullPath(Resolve(path)).StartsWith(prefix, StringComparison.Ordinal);
-
-        static string Resolve(string value)
-        {
-            try
-            {
-                // Only an existing entry can be resolved; a path yet to be created
-                // has no link to follow, so its literal form is already the answer.
-                return new DirectoryInfo(value).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? value;
-            }
-            catch (IOException) { return value; }
-            catch (UnauthorizedAccessException) { return value; }
-        }
-    }
 
     /// <summary>
     /// Add the npm global bin directory to the host process PATH so the agents can
@@ -2134,24 +2179,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// the Start node's install. Idempotent.
     ///
     /// <para>
-    /// Under uid isolation both ends of that hand-off are the agent — the install
-    /// step that writes the tool and the nodes that later exec it — so the prefix
-    /// following the agent's home makes this path exactly right rather than
-    /// approximately: before, a binary under the orchestrator's
-    /// <c>/home/ild/.local/bin</c> was executable by the agent only by accident of
-    /// mode bits.
-    /// </para>
-    ///
-    /// <para>
     /// It is <em>appended</em>, not prepended. This is the orchestrator's own PATH,
-    /// and under isolation the directory being added is agent-writable, so a planted
+    /// and the directory being added is agent-writable, so a planted
     /// binary sharing a name with something the image ships would otherwise be
     /// preferred by every orchestrator-side spawn that resolves by bare name — git
     /// and npm through <c>ProcessRunner</c>, for instance. Appending means the
     /// image's copy wins ties and only genuinely new tools are contributed, which is
-    /// all this was ever for. (The preview's own children still get it first: they
-    /// run as the agent, where a tool it installed beating one in the image is the
-    /// intended behaviour and crosses no boundary.)
+    /// all this was ever for. (The preview's own children still get it first, where a tool it installed
+    /// beating one in the image is the intended behaviour.)
     /// </para>
     /// </summary>
     private void EnsureInstalledToolsOnProcessPath()
@@ -2161,9 +2196,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // Create the directory up front. It is only populated lazily (by an
         // `npm install -g` in a Start node), but agents launched with this PATH
         // — e.g. Claude Code — warn when a PATH entry does not exist on disk.
-        // Under isolation the entrypoint has already created it as the agent; see
-        // EnsureNpmDirectory for why the orchestrator must not.
-        EnsureNpmDirectory(npmBin);
+        Directory.CreateDirectory(npmBin);
 
         var currentPath = _environment.Get("PATH") ?? string.Empty;
 
@@ -2180,7 +2213,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private string ResolveHealthUrl(PreviewServiceConfig service, PreviewRuntime runtime)
     {
-        return ResolveTemplate(service.HealthUrl!, runtime, service.Port);
+        var resolved = ResolveTemplate(service.HealthUrl!, runtime, service.Port);
+        if (!IsOwnLoopbackHealthUrl(resolved))
+            throw new InvalidOperationException(HealthUrlNotLoopbackMessage(service.Name));
+        return resolved;
     }
 
     private async Task<string> ResolveWorkingDirectoryAsync(string? cwd, PreviewRuntime runtime, string? currentPortAlias, CancellationToken cancellationToken)
@@ -2194,12 +2230,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             : Path.Combine(runtime.WorktreePath, resolved));
 
         // A volume may be shared by every work item of the repository, and the agent
-        // can write it, so the directory is made as the agent rather than by us.
+        // can write it, so the directory is made without following what it left there.
         if (PreviewVolumes.Contain(runtime.Volumes, full))
         {
             try
             {
-                await AgentWritableFiles.CreateDirectoryAsync(full, cancellationToken);
+                await _host.CreateDirectoryAsync(full, cancellationToken);
             }
             catch (IOException ex)
             {
@@ -2215,7 +2251,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException($"Preview cwd '{resolved}' escapes the worktree/state directory boundary.");
         }
 
-        Directory.CreateDirectory(full);
+        await _host.CreateDirectoryAsync(full, cancellationToken);
         return full;
     }
 
@@ -2258,30 +2294,23 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
-    /// The one place a preview child's uid, capabilities and environment are
-    /// decided — both spawn sites (install steps and long-running services) go
-    /// through it, so neither can drift from the other.
+    /// The one place a preview child's process is
+    /// built — both spawn sites (install steps and long-running services) go
+    /// through it, so neither can drift from the other. Its environment is not
+    /// built here: <see cref="PreparedCommand"/> hands the resolved step's to the host once, which merges it.
     ///
     /// <para>
     /// The command text comes from the worktree's <c>ild.config.json</c>, a file the
     /// agent writes and can trigger itself through the ILD MCP tools. It is
-    /// therefore agent-authored code, and it runs as the agent:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?, string?)"/>
-    /// drops it to the agent uid, clears the inherited and ambient capability sets,
-    /// and points <c>HOME</c> at the agent's own home. That gives a preview command
-    /// exactly the privileges the agent already has and nothing more — and, because
-    /// the agent's own builds in the same worktree run under that uid too, it is
-    /// what stops a preview build tripping over files the agent owns (ADR-0016).
-    /// With <c>ILD_AGENT_USER</c> unset the routing is a no-op and the command runs
-    /// inline as the current user, exactly as before.
+    /// therefore agent-authored code, and gets what an agent launch gets: none of the
+    /// orchestrator's secrets, and the egress proxy of its network mode (ADR-0016).
     /// </para>
     ///
     /// <para>
     /// The environment is constructed, not inherited: .NET pre-populates a child's
     /// from the current process, which would otherwise hand a preview command the
     /// DB connection strings, the encryption-at-rest key, the orchestrator's own API
-    /// tokens, and the variables describing this process's identity and private
-    /// directories. Stripping happens before the resolved step's environment is
+    /// tokens. Stripping happens before the resolved step's environment is
     /// applied, never after, so what it removes is only ever what was
     /// <em>inherited</em>: refusing to inherit is not refusing to be configured. A
     /// preview that legitimately needs one of those names sets it in
@@ -2302,25 +2331,32 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         psi.ArgumentList.Add("-lc");
         psi.ArgumentList.Add(resolved.Command);
 
-        AgentIsolation.StripOrchestratorEnvironment(psi);
-        var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(resolved.NetworkMode, _egressProxy, _networkOpenGroup);
-        AgentIsolation.Route(psi, _agentUser, _agentGroup, _agentHome, proxy, regid);
-
-        foreach (var entry in resolved.Environment)
-        {
-            psi.Environment[entry.Key] = entry.Value;
-        }
-
         return psi;
     }
 
+    // What the caller sets on the process is passed on as such, and the credential file with it, so a host that starts the
+    // command in a run of its own keeps the variables and copies the file in. It runs in the worktree's run, or nowhere.
+    internal RunCommand PreparedCommand(ResolvedStep resolved)
+        => RunCommand.Prepared(BuildPreviewProcess(resolved), environment: CommandEnvironment.Of(resolved.Environment), files: resolved.Files, networkMode: resolved.NetworkMode)
+            with { RunIn = resolved.RunIn, EgressProxy = ProxyFor(resolved) };
+
+    // The proxy a preview command is pointed at, signed for the run it runs in: none in network mode Off, or where no proxy runs.
+    private string? ProxyFor(ResolvedStep resolved)
+        => resolved.NetworkMode == NetworkMode.Off || _credentials is null ? null : _egressProxy?.ClientUrl(_credentials, new LaunchScope(LaunchKind.Preview, resolved.RunIn));
+
+    // The run id leads the name, which is how the run's files are found and what a host checks before it copies one in.
+    internal static string FeedFilePrefix(string worktreePath, string kind)
+        => RunPaths.OwnerOf(worktreePath) is { } run ? $"{run:N}-{kind}" : kind;
+
     private async Task<CommandResult> RunCommandAsync(ResolvedStep resolved, CancellationToken cancellationToken)
     {
-        using var process = Process.Start(BuildPreviewProcess(resolved))
-            ?? throw new InvalidOperationException($"Failed to start command '{resolved.Command}'.");
+        using var process = await _host.StartCommandAsync(PreparedCommand(resolved), cancellationToken);
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        var limit = _outputLimits.MaxOutputBytes;
+        var stdoutTask = BoundedOutput.PumpAsync(process.StandardOutput, limit, text => { stdout.Append(text); return Task.CompletedTask; }, cancellationToken);
+        var stderrTask = BoundedOutput.PumpAsync(process.StandardError, limit, text => { stderr.Append(text); return Task.CompletedTask; }, cancellationToken);
 
         try
         {
@@ -2328,19 +2364,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
         catch (OperationCanceledException)
         {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-                // Already exited.
-            }
-
+            if (!process.TryKill(out var failure))
+                _logger.LogWarning("Failed to kill cancelled preview command: {Failure}", failure);
             throw;
         }
 
-        return new CommandResult(process.ExitCode, await stdoutTask, await stderrTask);
+        await Task.WhenAll(stdoutTask, stderrTask);
+        return new CommandResult(process.ExitCode, stdout.ToString(), stderr.ToString());
     }
 
     private sealed record PendingStart(
@@ -2399,45 +2429,18 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             lock (_writers)
             {
-                var next = Copy(_snapshot);
+                var next = _snapshot.Clone();
                 change(next);
                 _snapshot = next;
             }
         }
-
-        private static WorktreePreviewResponse Copy(WorktreePreviewResponse source) => new()
-        {
-            Configured = source.Configured,
-            State = source.State,
-            WorktreePath = source.WorktreePath,
-            ConfigPath = source.ConfigPath,
-            ProfileName = source.ProfileName,
-            PublicHost = source.PublicHost,
-            StateDirectory = source.StateDirectory,
-            Message = source.Message,
-            Install = source.Install,
-            Services = source.Services.Select(row => new WorktreePreviewServiceResponse
-            {
-                Name = row.Name,
-                PortAlias = row.PortAlias,
-                Status = row.Status,
-                Port = row.Port,
-                SuggestedPort = row.SuggestedPort,
-                HealthUrl = row.HealthUrl,
-                PublicUrl = row.PublicUrl,
-                LogFilePath = row.LogFilePath,
-                ProcessId = row.ProcessId,
-                ExitCode = row.ExitCode,
-                Error = row.Error,
-            }).ToList(),
-        };
     }
 
     private sealed record LoadedPreviewConfig(bool Configured, string WorktreePath, string ConfigPath, IldWorkspaceConfig? Config, string? Message);
 
     internal sealed record ResolvedStep(
         string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment,
-        NetworkMode NetworkMode = NetworkMode.Monitor);
+        NetworkMode NetworkMode = NetworkMode.Monitor, IReadOnlyList<string>? Files = null, Guid? RunIn = null);
     private sealed record CommandResult(int ExitCode, string StdOut, string StdErr);
 
     private sealed class PreviewRuntime
@@ -2546,7 +2549,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     {
         public ManagedPreviewProcess(
             PreviewServiceConfig service,
-            Process process,
+            IRunProcess process,
             StreamWriter writer,
             SemaphoreSlim writeGate,
             Task stdOutPump,
@@ -2565,7 +2568,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
 
         public PreviewServiceConfig Service { get; }
-        public Process Process { get; }
+        public IRunProcess Process { get; }
         public StreamWriter Writer { get; }
         public SemaphoreSlim WriteGate { get; }
         public Task StdOutPump { get; }
@@ -2658,4 +2661,4 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         /// </summary>
         public bool RewriteHost { get; set; } = true;
     }
-}
+}

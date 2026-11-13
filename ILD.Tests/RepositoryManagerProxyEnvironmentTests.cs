@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 
@@ -45,7 +46,7 @@ public class RepositoryManagerProxyEnvironmentTests : IDisposable
         IReadOnlyDictionary<string, string> orchestratorEnvironment, GitAuthOptions? auth = null)
     {
         var runner = new RecordingRunner();
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), null, Path.Combine(_tmp, "mirrors"),
+        var mgr = new RepositoryManager(runner, new LocalRunHost(runner), null, Path.Combine(_tmp, "wt"), Path.Combine(_tmp, "mirrors"),
             readEnvironment: Reader(orchestratorEnvironment));
 
         await mgr.ProbeRemoteAsync("https://example.invalid/r.git", null, TestContext.Current.CancellationToken, auth);
@@ -105,10 +106,10 @@ public class RepositoryManagerProxyEnvironmentTests : IDisposable
     public async Task Mirror_clone_gives_every_orchestrator_git_call_the_proxy_variables_and_nothing_else()
     {
         var remote = GitCli.MakeRemote(_tmp, "remote");
-        var runner = new AuditingRunner(isolated: false);
+        var runner = new AuditingRunner();
         var proxies = AllProxies();
-        var mgr = new RepositoryManager(runner, null, Path.Combine(_tmp, "wt"), runner.ManagerAgent, Path.Combine(_tmp, "mirrors"),
-            sharedGroup: "agents", readEnvironment: Reader(proxies.Concat(Noise).ToDictionary(p => p.Key, p => p.Value)));
+        var mgr = new RepositoryManager(runner, new LocalRunHost(runner), null, Path.Combine(_tmp, "wt"), Path.Combine(_tmp, "mirrors"),
+            readEnvironment: Reader(proxies.Concat(Noise).ToDictionary(p => p.Key, p => p.Value)));
 
         var (success, error) = await mgr.CloneAsync(remote, Path.Combine(_tmp, "target"), TestContext.Current.CancellationToken);
 

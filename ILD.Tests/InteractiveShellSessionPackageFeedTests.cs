@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -34,7 +35,7 @@ public sealed class InteractiveShellSessionPackageFeedTests : IDisposable
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         cts.CancelAfter(TimeSpan.FromSeconds(30));
         var (server, client) = WebSocketPair.Create();
-        var session = new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance)
+        var session = new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance, host: LocalRunHost.Shared)
             .RunAsync(server, _worktree, Guid.NewGuid().ToString("N"), 120, 30, feeds, cts.Token);
 
         // The session closes as soon as the shell exits, which can drop output the

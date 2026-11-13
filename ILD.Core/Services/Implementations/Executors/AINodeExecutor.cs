@@ -153,7 +153,9 @@ public sealed class AINodeExecutor : INodeExecutor
         yield return new NodeOutcome.NodeStarting(rendered);
 
         NodeExecutionResult result;
+        string? fellBackReason = null;
         var feeds = PackageFeedEnvironment.None;
+        IssuedAgentToken? agentToken = null;
         try
         {
             string? incomingSessionId = null;
@@ -193,16 +195,31 @@ public sealed class AINodeExecutor : INodeExecutor
             feeds = PackageFeedCredentialFiles.Materialize(
                 packageFeeds.Feeds, ctx.Run.Id.ToString("N"), sp.GetService<ILogger<AINodeExecutor>>());
             var runId = ctx.Run.Id;
+            var agentTokens = sp.GetService<IAgentTokenService>();
+            agentToken = agentTokens is null ? null : await agentTokens.IssueAsync(AgentTokenSource.Run, runId, ct: ctx.CancellationToken);
             var agentCtx = new AgentExecutionContext(
                 provider, rendered, runContext, 0, ctx.CancellationToken,
                 ctx.ProgressCallback, cfg.ToolAllowlist,
                 SessionId: incomingSessionId, IncomingSessionId: incomingSessionId,
                 ManageSession: manageSession,
-                OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid),
+                OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, ctx.Node.Id, sid),
                 ForkFromSessionId: forkFromSessionId,
                 Environment: feeds.Environment,
+                AgentFiles: feeds.FilePath is null ? null : [feeds.FilePath],
+                AgentApiToken: agentToken?.Token,
                 NetworkMode: await sp.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken));
             result = await adapter.ExecuteAsync(agentCtx);
+
+            // A resume whose session the CLI no longer has fails at startup. Run the node
+            // from the beginning instead, once, and say so in the run's events.
+            if (!result.Success && isSteering && AiFailureClassifier.IsSessionNotFound(result.Error))
+            {
+                fellBackReason = AiFailureClassifier.FirstLine(result.Error, 200) is { Length: > 0 } why ? why : "session not found";
+                var fresh = rendering is null
+                    ? cfg.Prompt ?? string.Empty
+                    : await rendering.RenderAsync(cfg.Prompt ?? string.Empty, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput);
+                result = await adapter.ExecuteAsync(agentCtx with { Prompt = fresh, SessionId = null, IncomingSessionId = null });
+            }
         }
         catch (Exception ex)
         {
@@ -210,9 +227,14 @@ public sealed class AINodeExecutor : INodeExecutor
         }
         finally
         {
+            if (agentToken is not null)
+                await sp.GetRequiredService<IAgentTokenService>().RevokeAsync(agentToken.TokenId, CancellationToken.None);
             feeds.Dispose();
             concurrency?.Exit(providerId);
         }
+
+        if (fellBackReason is not null)
+            yield return new NodeOutcome.ResumeFellBack(fellBackReason);
 
         if (result.Success)
         {
@@ -407,7 +429,7 @@ public sealed class AINodeExecutor : INodeExecutor
     /// explainable after the fact.
     /// </para>
     /// </summary>
-    private static void PersistSessionId(IServiceScopeFactory factory, Guid runId, string sessionId)
+    private static void PersistSessionId(IServiceScopeFactory factory, Guid runId, Guid loopNodeId, string sessionId)
     {
         try
         {
@@ -415,8 +437,10 @@ public sealed class AINodeExecutor : INodeExecutor
             var sp = scope.ServiceProvider;
             try
             {
-                sp.GetRequiredService<ILoopRunStore>()
-                    .SetCurrentAiSessionIdAsync(runId, sessionId).GetAwaiter().GetResult();
+                var store = sp.GetRequiredService<ILoopRunStore>();
+                store.SetCurrentAiSessionIdAsync(runId, sessionId).GetAwaiter().GetResult();
+                // Also on the visit itself, so a failed attempt keeps the session Resume continues from.
+                store.SetRunNodeAiSessionIdAsync(runId, loopNodeId, sessionId).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {

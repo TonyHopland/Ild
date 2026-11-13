@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -33,7 +34,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
     private ServiceProvider _services = null!;
 
     private string SessionPath => ClaudeCodeAdapter.GetSessionFilePath(
-        _worktree, SessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, _environment)!;
+        _worktree, SessionId, _environment)!;
 
     public async ValueTask InitializeAsync()
     {
@@ -42,6 +43,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         _connection = new SqliteConnection("Filename=:memory:");
         await _connection.OpenAsync();
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection).AddInterceptors(_sql));
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
         _services = services.BuildServiceProvider();
@@ -83,14 +85,9 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
     [Fact]
     public void Session_files_live_under_the_home_the_claude_child_runs_with()
     {
-        var agentHome = Path.Combine(_home, "agent-home");
-        var agentProjects = Path.Combine(agentHome, ".claude", "projects") + Path.DirectorySeparatorChar;
         var ownProjects = Path.Combine(_home, ".claude", "projects") + Path.DirectorySeparatorChar;
 
-        Assert.StartsWith(agentProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome, _environment));
-        // Isolation off, or no agent home configured: the crossing leaves HOME alone.
-        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, agentUser: null, agentHome, _environment));
-        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome: null, _environment));
+        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, _environment));
     }
 
     [Fact]
@@ -223,6 +220,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         // Another writer lands between this turn's metadata read and its append.
         var raced = 0;
         var racing = new ServiceCollection();
+        racing.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         racing.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection));
         racing.AddScoped<IAdapterSessionSnapshotStore>(sp => new RacingSnapshotStore(
             new AdapterSessionSnapshotStore(sp.GetRequiredService<AppDbContext>()), async () =>

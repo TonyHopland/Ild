@@ -18,6 +18,7 @@ import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { stageParkedNode } from "../../test-support.parkedNode";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
+import { openAppLink, vscodeAttachUri } from "../../utils/vscodeAttachUri";
 
 // The real terminal spins up an xterm instance and a WebSocket, neither of which
 // jsdom provides. Stub it with a marker that echoes the props the modal passes so
@@ -43,6 +44,11 @@ vi.mock("../LoopRunTerminal", () => ({
       </button>
     </div>
   ),
+}));
+
+vi.mock("../../utils/vscodeAttachUri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/vscodeAttachUri")>()),
+  openAppLink: vi.fn(),
 }));
 
 afterEach(() => {
@@ -531,6 +537,7 @@ describe("WorkItemModalV2", () => {
   const LOOP_ROW_CASES: Array<{
     name: string;
     run: Partial<LoopRun>;
+    preparingContainer?: boolean;
     status: WorkItemStatus;
     loopRow: { contains: string[]; lacks: string[] } | null;
   }> = [
@@ -540,6 +547,13 @@ describe("WorkItemModalV2", () => {
       status: WorkItemStatus.Running,
       // The current node label is shown beside the loop name.
       loopRow: { contains: ["build-loop", "Implement"], lacks: [] },
+    },
+    {
+      name: "overview shows Preparing container in place of the node while the container is made",
+      run: { status: LoopRunStatus.Running, completedAt: null, currentNodeId: "n-1" },
+      status: WorkItemStatus.Running,
+      preparingContainer: true,
+      loopRow: { contains: ["build-loop", "Preparing container"], lacks: ["Implement"] },
     },
     {
       name: "overview shows the loop name without a node when the run has no current node",
@@ -555,12 +569,12 @@ describe("WorkItemModalV2", () => {
     },
   ];
 
-  test.each(LOOP_ROW_CASES)("$name", async ({ run, status, loopRow }) => {
+  test.each(LOOP_ROW_CASES)("$name", async ({ run, status, loopRow, preparingContainer }) => {
     mockServices([makeRun(run)]);
     vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
       makeTemplate({ id: "tmpl-1", name: "build-loop" }),
     ]);
-    await renderDialog(makeWorkItem({ status, currentLoopRunId: "run-1" }));
+    await renderDialog(makeWorkItem({ status, currentLoopRunId: "run-1", preparingContainer }));
 
     if (loopRow) {
       const row = (await screen.findByText("Loop")).parentElement;
@@ -1848,17 +1862,42 @@ describe("WorkItemModalV2", () => {
       }),
     );
 
-    // The cleanups sit behind the footer's ⋯, but Delete is not among them.
+    // The cleanups are buttons in the footer, with nothing to open first; Delete is not among them.
     const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
-    fireEvent.click(within(footer as HTMLElement).getByRole("button", { name: "More actions" }));
     expect(
-      within(footer as HTMLElement).getByRole("menuitem", { name: "Clean up → Done" }),
+      within(footer as HTMLElement).getByRole("button", { name: "Clean up → Done" }),
     ).toBeTruthy();
     expect(
-      within(footer as HTMLElement).getByRole("menuitem", { name: "Clean up → Backlog" }),
+      within(footer as HTMLElement).getByRole("button", { name: "Clean up → Backlog" }),
     ).toBeTruthy();
+    expect(
+      within(footer as HTMLElement).queryByRole("button", { name: "More actions" }),
+    ).toBeNull();
     expect(within(footer as HTMLElement).queryByRole("button", { name: "Delete" })).toBeNull();
-    expect(within(footer as HTMLElement).queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  test("an item left waiting on a run that was cancelled offers the cleanups, and one still waiting does not", async () => {
+    const waiting = {
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+      currentLoopRunId: "run-1",
+    };
+    mockServices([makeRun({ id: "run-1", status: LoopRunStatus.Cancelled })]);
+    await renderDialog(makeWorkItem(waiting));
+
+    const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    expect(
+      await within(footer as HTMLElement).findByRole("button", { name: "Clean up → Backlog" }),
+    ).toBeTruthy();
+
+    cleanup();
+    mockServices([makeRun({ id: "run-1", status: LoopRunStatus.WaitingHuman, completedAt: null })]);
+    await renderDialog(makeWorkItem(waiting));
+
+    const live = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    expect(
+      within(live as HTMLElement).queryByRole("button", { name: "Clean up → Backlog" }),
+    ).toBeNull();
   });
 
   test("an Escape typed in the chat over the dialog is the chat's, and leaves the work item open", async () => {
@@ -2093,6 +2132,61 @@ describe("WorkItemModalV2", () => {
     const stillThere = screen.getByTestId("embedded-terminal");
     expect(stillThere).toBe(term);
     expect(stillThere.closest("[role='tabpanel']")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  async function openTerminalTab() {
+    await renderDialog(
+      makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/ild-run/run1/repo" }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      await Promise.resolve();
+    });
+  }
+
+  test("Open in VS Code asks for the run's container and opens VS Code attached to it", async () => {
+    mockServices();
+    vi.mocked(openAppLink).mockClear();
+    const openInEditor = vi
+      .spyOn(authServices.loopRunService, "openInEditor")
+      .mockResolvedValue({ containerName: "ild-run-run1", folder: "/ild-run/run1/repo" });
+    await openTerminalTab();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+      await Promise.resolve();
+    });
+
+    expect(openInEditor).toHaveBeenCalledWith("run-1");
+    expect(openAppLink).toHaveBeenCalledWith(vscodeAttachUri("ild-run-run1", "/ild-run/run1/repo"));
+  });
+
+  test("Open in VS Code shows why it could not open, and goes where runs have no container", async () => {
+    mockServices();
+    vi.mocked(openAppLink).mockClear();
+    const openInEditor = vi
+      .spyOn(authServices.loopRunService, "openInEditor")
+      .mockRejectedValueOnce({
+        status: 400,
+        message: "Run has no live worktree.",
+      } satisfies ApiError)
+      .mockRejectedValueOnce({ status: 409, message: "No container." } satisfies ApiError);
+    await openTerminalTab();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("alert").textContent).toBe("Run has no live worktree.");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+      await Promise.resolve();
+    });
+    expect(openInEditor).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Open in VS Code" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Terminal" })).toBeTruthy();
+    expect(openAppLink).not.toHaveBeenCalled();
   });
 
   test("losing the worktree while on the Terminal tab falls back to Overview, even when running", async () => {
@@ -2463,11 +2557,9 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     });
   }
 
-  // The cleanup sits behind the footer's ⋯: open the menu if it is shut.
   const footerCleanup = () => {
-    if (!screen.queryByRole("menuitem", { name: "Clean up → Done" }))
-      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
-    return screen.getByRole("menuitem", { name: "Clean up → Done" });
+    const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    return within(footer as HTMLElement).getByRole("button", { name: "Clean up → Done" });
   };
   const deleteRun = () => runAction(/delete run/i);
 

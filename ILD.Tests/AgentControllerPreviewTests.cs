@@ -25,7 +25,7 @@ public class AgentControllerPreviewTests
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
 
-        return new AgentController(
+        var controller = new AgentController(
             workItems.Object,
             new Mock<ILoopTemplateManager>().Object,
             db.LoopRuns,
@@ -37,6 +37,8 @@ public class AgentControllerPreviewTests
             new Mock<IChatNotifier>().Object,
             TestActors.Instance,
             notifier.Object);
+        controller.ControllerContext = new ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() };
+        return controller;
     }
 
     private static WorkItemView ItemWithWorktree(string id) => new()
@@ -242,5 +244,107 @@ public class AgentControllerPreviewTests
         Assert.IsType<BadRequestObjectResult>(result);
         preview.Verify(p => p.StartAsync(It.IsAny<string>(), It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()), Times.Never);
         notifier.Verify(n => n.PreviewStateChangedAsync(It.IsAny<string>()), Times.Never);
+    }
+
+    private static async Task<WorktreePreviewServiceResponse> GetAgentService(
+        string workItemId, string? runHeader, string? chatHeader, TestDb db)
+    {
+        var preview = new Mock<IWorktreePreviewService>();
+        preview.Setup(p => p.GetStatusAsync(WorktreePath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorktreePreviewResponse
+            {
+                State = "running",
+                WorktreePath = WorktreePath,
+                Services =
+                {
+                    new WorktreePreviewServiceResponse
+                    {
+                        Name = "web",
+                        Port = 5173,
+                        PublicUrl = "http://wi-7.ild.localhost:8080",
+                        LocalUrl = "http://127.0.0.1:5173",
+                    },
+                },
+            });
+        var controller = BuildController(ItemWithWorktree(workItemId), preview, new Mock<IWorkItemNotifier>(), db);
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        if (runHeader != null) http.User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, Guid.Parse(runHeader));
+        else if (chatHeader != null) http.User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Chat, Guid.Parse(chatHeader));
+        controller.ControllerContext = new ControllerContext { HttpContext = http };
+
+        var ok = Assert.IsType<OkObjectResult>(await controller.GetPreview(workItemId));
+        return Assert.Single(Assert.IsType<WorktreePreviewResponse>(ok.Value).Services);
+    }
+
+    private static Guid SeedRun(TestDb db, string workItemId)
+    {
+        var template = new ILD.Data.Entities.LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
+        var version = new ILD.Data.Entities.LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        var run = new ILD.Data.Entities.LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = version.Id,
+            Status = ILD.Data.Enums.LoopRunStatus.Running,
+            RecoveryPolicy = ILD.Data.Enums.RecoveryPolicy.AutoResume,
+        };
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.LoopRuns.Add(run);
+        db.Context.SaveChanges();
+        return run.Id;
+    }
+
+    [Fact]
+    public async Task A_run_on_the_same_work_item_gets_the_local_address_as_agentUrl()
+    {
+        using var db = new TestDb();
+        var id = Guid.NewGuid().ToString();
+        var runId = SeedRun(db, id);
+
+        var service = await GetAgentService(id, runId.ToString(), null, db);
+
+        Assert.Equal("http://127.0.0.1:5173", service.AgentUrl);
+        Assert.Equal("http://wi-7.ild.localhost:8080", service.PublicUrl);
+    }
+
+    [Fact]
+    public async Task A_run_on_another_work_item_is_refused_its_preview()
+    {
+        using var db = new TestDb();
+        var id = Guid.NewGuid().ToString();
+        var runId = SeedRun(db, Guid.NewGuid().ToString());
+        var preview = new Mock<IWorktreePreviewService>();
+        var controller = BuildController(ItemWithWorktree(id), preview, new Mock<IWorkItemNotifier>(), db);
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+            {
+                User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, runId),
+            },
+        };
+
+        var result = await controller.GetPreview(id);
+
+        Assert.Equal(403, Assert.IsType<ObjectResult>(result).StatusCode);
+        preview.Verify(p => p.GetStatusAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_chat_session_gets_the_public_address_as_agentUrl()
+    {
+        using var db = new TestDb();
+        var service = await GetAgentService(Guid.NewGuid().ToString(), null, Guid.NewGuid().ToString(), db);
+
+        Assert.Equal("http://wi-7.ild.localhost:8080", service.AgentUrl);
+    }
+
+    [Fact]
+    public async Task A_call_without_headers_gets_the_public_address_as_agentUrl()
+    {
+        using var db = new TestDb();
+        var service = await GetAgentService(Guid.NewGuid().ToString(), null, null, db);
+
+        Assert.Equal("http://wi-7.ild.localhost:8080", service.AgentUrl);
     }
 }

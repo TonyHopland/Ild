@@ -48,6 +48,15 @@ else
   fail "expected only '$marker' on output, got: $output"
 fi
 
+# The drop to the runtime user must keep the supplementary groups /etc/group gives it: grant_engine_socket
+# makes it a member of the engine socket's group. `gosu user:group` sets no supplementary groups at all, so
+# ILD then cannot open the socket and no run starts; `gosu user` sets them.
+if grep -Eq '^[[:space:]]*exec gosu "\$RUNTIME_USER" "\$@"' "$entrypoint" && ! grep -Eq 'exec gosu "\$RUNTIME_USER:' "$entrypoint"; then
+  pass "the drop is 'gosu \$RUNTIME_USER', which keeps the supplementary groups"
+else
+  fail "the drop to the runtime user is not 'exec gosu \"\$RUNTIME_USER\" \"\$@\"'; with user:group gosu drops the engine socket's group"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "$failures assertion(s) failed"; exit 1
 fi

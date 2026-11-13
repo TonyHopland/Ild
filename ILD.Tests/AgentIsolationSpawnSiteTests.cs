@@ -1,118 +1,120 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// ADR-0014's capability drop is an invariant over <em>every</em> orchestrator-side
-/// spawn, but nothing about constructing a <c>Process</c> forces a caller to
-/// remember it — the Cmd node executor ran unwrapped because the rule lived only in
-/// prose. This scans ILD.Core's sources and fails on a spawn no <c>AgentIsolation</c>
-/// wrap reaches, so a fourth site cannot drift the way the third did.
+/// Where the agent's processes and files live is the run host's business (ADR-0014's uid split is the
+/// <c>local</c> host's way of doing it), so nothing else may start a process, open a PTY, name
+/// <c>setpriv</c>, or open a worktree or the agent's home itself: that is what lets a host that puts the run
+/// somewhere else plug in. This scans the sources of ILD.Core and ILD.Api and fails on any of those outside
+/// <c>RunHosts/Local</c>.
 ///
 /// <para>
-/// It has no allowlist: a correctly wrapped new site passes on its own and never
-/// needs this test edited. What it asks for is that the wrap be visible in the spawn
-/// statement — inline, or delegated to a builder that hands back a wrapped
-/// <c>Process</c>/<c>ProcessStartInfo</c>. A source scan has no types to follow, so
-/// wrapping several statements earlier reads as a violation here; that is the point,
-/// since it also reads that way to the next person editing the method.
+/// It has no allowlist beyond that folder: a new spawn site is a violation until it goes through
+/// <c>IRunHost</c>; the file helpers in <c>Implementations/Files</c> start theirs through <c>RunHosts/Local/LocalShell</c>.
+/// <c>new ProcessStartInfo</c> is not a spawn site — it only describes a launch, and the host is what starts it.
 /// </para>
 ///
 /// <para>
-/// Its one blind spot is a string interpolation hole: <c>$"{…}"</c> is blanked
-/// whole, so a spawn written inside one goes unseen. Reading holes back out needs
-/// a real lexer, and no spawn has ever been written in one.
+/// Its one blind spot is a string interpolation hole: <c>$"{…}"</c> is blanked whole, so a spawn written
+/// inside one goes unseen. Reading holes back out needs a real lexer, and no spawn has ever been written in one.
 /// </para>
 /// </summary>
 public class AgentIsolationSpawnSiteTests
 {
-    // The two wraps that actually rewrite a spawn through setpriv. Reading a path
-    // off AgentIsolation is not isolation, so those calls must not count.
-    private static readonly string[] WrapCalls =
+    private static readonly Regex SpawnSite = new(
+        @"\bProcess\.Start\s*\(|\bnew\s+Process\b|\bPtyProvider\b|\bsetpriv\b", RegexOptions.Compiled);
+
+    // A read of the worktree or of an agent's home by the orchestrator's own uid and filesystem. Statements are
+    // matched whole, so `Directory.Exists(run.WorktreePath)` and a worktree path built three lines up both count.
+    private static readonly Regex WorktreeRead = new(
+        @"\b(?:Directory|File)\.(?:Exists|ReadAll\w+|Open\w*|Enumerate\w+|GetFiles|GetDirectories)\s*\([^;]*(?:[Ww]orktreePath|worktreePath|[Ww]orktree\b|AgentHome)",
+        RegexOptions.Compiled);
+
+    // A path derived from a worktree path and held in a variable (`var full = Resolve(worktreePath, p)`) is still
+    // a worktree path when it reaches a file call.
+    private static readonly Regex DerivedPath = new(@"\b(?:var|string)\s+(?<name>\w+)\s*=\s*[^;]*(?:[Ww]orktreePath|worktreePath)[^;]*;", RegexOptions.Compiled);
+    private static readonly Regex FileCall = new(@"\b(?:(?:Directory|File)\.\w+|new\s+FileStream)\s*\([^;]*;", RegexOptions.Compiled);
+
+    /// <summary>Offsets in <paramref name="redacted"/> where a worktree path, spelled out or held in a variable derived from one, is read.</summary>
+    private static IEnumerable<int> WorktreeReadOffsets(string redacted)
     {
-        "AgentIsolation.Route(",
-        "AgentIsolation.DropInheritedCapabilities(",
-    };
+        foreach (Match m in WorktreeRead.Matches(redacted)) yield return m.Index;
 
-    // Every process starts life at one of these two, so covering construction covers
-    // spawning: an instance p.Start() is always preceded by a `new Process`.
-    private static readonly Regex SpawnSite =
-        new(@"\bProcess\.Start\s*\(|\bnew\s+Process\b", RegexOptions.Compiled);
-
-    // A launcher must HAND BACK the wrapped spawn, so its return type carries the
-    // whole restriction. Without it, every method that merely contains a wrapped
-    // spawn — ProcessRunner.RunAsync, CmdNodeExecutor.RunProcessAsync — reads as a launcher, and a later spawn
-    // statement passes by naming one of them: the drift this test exists to catch.
-    private const string Returns =
-        @"\b(?:(?:Task|ValueTask)\s*<\s*Process(?:StartInfo)?\??\s*>|Process(?:StartInfo)?\??)\s+";
-
-    private static readonly Regex BlockBodied =
-        new(Returns + @"(?<name>[A-Za-z_]\w*)\s*(<[^()<>]*>)?\s*\([^;{}]*\)\s*(where[^;{}]*)?\{", RegexOptions.Compiled);
-
-    private static readonly Regex ExpressionBodied =
-        new(Returns + @"(?<name>[A-Za-z_]\w*)\s*(<[^()<>]*>)?\s*\([^;{}]*\)\s*=>(?<body>[^;{}]*);", RegexOptions.Compiled);
+        var derived = DerivedPath.Matches(redacted).Select(m => m.Groups["name"].Value).Distinct().ToList();
+        if (derived.Count == 0) yield break;
+        foreach (Match call in FileCall.Matches(redacted))
+        {
+            if (derived.Any(name => Regex.IsMatch(call.Value, $@"\b{Regex.Escape(name)}\b")))
+                yield return call.Index;
+        }
+    }
 
     [Fact]
-    public void Every_process_spawn_in_ILD_Core_is_wrapped_by_AgentIsolation()
+    public void No_process_spawn_PTY_or_setpriv_exists_outside_the_local_run_host()
     {
-        var sources = CoreSourceFiles().ToDictionary(f => f, f => Redact(File.ReadAllText(f)), StringComparer.Ordinal);
-        var launchers = LauncherNames(sources.Values);
-
+        var sources = SourceFiles().ToDictionary(f => f, f => Redact(File.ReadAllText(f)), StringComparer.Ordinal);
         var sites = sources
             .SelectMany(entry => SpawnSite.Matches(entry.Value).Select(m => (File: entry.Key, Source: entry.Value, Match: m)))
             .ToList();
 
-        // Redaction or the spawn pattern silently matching nothing would turn this
-        // into a test that passes because it looked nowhere.
-        Assert.True(sites.Count >= 5, $"expected ILD.Core to still spawn processes, found {sites.Count} sites");
+        // Redaction or the pattern silently matching nothing would turn this into a test that passes because it
+        // looked nowhere.
+        Assert.True(
+            Regex.IsMatch(Redact(File.ReadAllText(Path.Combine(RepositoryRoot(), "ILD.Core", "Services", "RunHosts", "Local", "LocalRunHost.cs"))), SpawnSite.ToString()),
+            "the local run host should still hold the spawn");
 
-        var unwrapped = sites
-            .Where(s => !IsWrapped(Statement(s.Source, s.Match.Index), launchers))
-            .Select(s => $"{Path.GetFileName(s.File)}:{LineOf(s.Source, s.Match.Index)}")
+        var outside = sites
+            .Select(s => $"{Path.GetFileName(s.File)}:{LineOf(s.Source, s.Match.Index)} {s.Match.Value}")
             .ToList();
 
-        Assert.True(unwrapped.Count == 0,
-            "Process spawned without an AgentIsolation wrap (ADR-0014):\n  " + string.Join("\n  ", unwrapped));
+        Assert.True(outside.Count == 0,
+            "A process, PTY or setpriv outside RunHosts/Local; go through IRunHost:\n  " + string.Join("\n  ", outside));
+    }
+
+    [Fact]
+    public void No_worktree_or_agent_home_is_read_by_path_outside_the_local_run_host()
+    {
+        var reads = SourceFiles()
+            .SelectMany(f =>
+            {
+                var source = Redact(File.ReadAllText(f));
+                return WorktreeReadOffsets(source).Select(i => $"{Path.GetFileName(f)}:{LineOf(source, i)}");
+            })
+            .ToList();
+
+        Assert.True(reads.Count == 0,
+            "A worktree or agent home read by path outside RunHosts/Local; use IRunHost's file members:\n  " + string.Join("\n  ", reads));
     }
 
     [Theory]
-    // Inline, as ProcessRunner does it.
-    [InlineData("Process.Start(AgentIsolation.DropInheritedCapabilities(psi));", true)]
-    // Through an object initializer, as the Cmd node executor does it.
-    [InlineData("using var p = new Process { StartInfo = AgentIsolation.Route(psi), EnableRaisingEvents = true };", true)]
-    // Through a builder, as WorktreePreviewService does it.
-    [InlineData("var proc = Process.Start(BuildWrapped(step)) ?? throw new InvalidOperationException(\"no\");", true)]
-    [InlineData("var p = new Process(); p.StartInfo = psi;", false)]
-    [InlineData("Process.Start(psi);", false)]
-    // A builder that does not wrap must not launder the spawn.
-    [InlineData("Process.Start(BuildPlain(step));", false)]
-    // A method that merely CONTAINS a wrapped spawn is not a launcher — naming it
-    // must not vouch for a second, unwrapped one.
-    [InlineData("Process.Start(RunAsync().StartInfo);", false)]
-    // AgentIsolation is more than the wrap; the rest of it isolates nothing.
-    [InlineData("Process.Start(new ProcessStartInfo(AgentIsolation.ScratchRoot));", false)]
-    public void The_scan_tells_a_wrapped_spawn_from_a_drifted_one(string statement, bool wrapped)
-    {
-        var launchers = LauncherNames(new[]
-        {
-            Redact("class F { ProcessStartInfo BuildWrapped(S s) => AgentIsolation.Route(Psi(s)); }"),
-            Redact("class F { ProcessStartInfo BuildPlain(S s) { return Psi(s); } }"),
-            Redact("class F { async Task<R> RunAsync(S s) { return R(Process.Start(AgentIsolation.Route(Psi(s)))); } }"),
-        });
-        var source = Redact(statement);
-        var site = SpawnSite.Match(source);
+    [InlineData("Process.Start(psi);", true)]
+    [InlineData("using var p = new Process { StartInfo = psi };", true)]
+    [InlineData("var pty = await PtyProvider.SpawnAsync(options, ct);", true)]
+    [InlineData("var wrapped = new[] { \"/usr/bin/setpriv\" }; var s = setpriv;", true)]
+    [InlineData("var psi = new ProcessStartInfo(\"git\");", false)]
+    [InlineData("await host.StartCommandAsync(RunCommand.Prepared(psi));", false)]
+    public void The_scan_tells_a_spawn_from_a_description_of_one(string statement, bool spawn)
+        => Assert.Equal(spawn, SpawnSite.IsMatch(Redact(statement)));
 
-        Assert.True(site.Success);
-        Assert.Equal(wrapped, IsWrapped(Statement(source, site.Index), launchers));
-    }
+    [Theory]
+    [InlineData("if (!Directory.Exists(run.WorktreePath)) return;", true)]
+    [InlineData("var text = File.ReadAllText(Path.Combine(worktreePath, \"a\"));", true)]
+    [InlineData("Directory.Exists(logDirectory);", false)]
+    [InlineData("var full = ResolveSafePath(worktreePath, p); var b = await File.ReadAllBytesAsync(full);", true)]
+    [InlineData("var full = ResolveSafePath(worktreePath, p); return new FileStream(full, FileMode.Open);", true)]
+    [InlineData("var full = Path.Combine(logDirectory, p); var b = await File.ReadAllBytesAsync(full);", false)]
+    [InlineData("await host.DirectoryExistsAsync(worktreePath, ct);", false)]
+    public void The_scan_tells_a_worktree_read_from_another_file_check(string statement, bool read)
+        => Assert.Equal(read, WorktreeReadOffsets(Redact(statement)).Any());
 
     [Fact]
     public void A_spawn_named_only_in_a_message_is_not_a_spawn()
     {
-        // Every CLI adapter carries `throw new InvalidOperationException("Process.Start
-        // returned null")`, so a scan that reads string literals reports six phantom
-        // sites and gets muted.
+        // Every CLI adapter once carried `throw new InvalidOperationException("Process.Start
+        // returned null")`, so a scan that reads string literals reports phantom sites and gets muted.
         Assert.DoesNotMatch(SpawnSite, Redact("""
             var p = proc ?? throw new InvalidOperationException("Process.Start returned null");
             """));
@@ -132,84 +134,26 @@ public class AgentIsolationSpawnSiteTests
     [InlineData("var c = '\"'; // Process.Start(x)")]
     public void Redaction_hides_a_literal_without_swallowing_the_code_after_it(string literal)
     {
-        var source = Redact(literal + "\nProcess.Start(AgentIsolation.Route(psi));");
-        var sites = SpawnSite.Matches(source);
+        var source = Redact(literal + "\nProcess.Start(psi);");
 
         // One site and not two, because a spawn named inside a literal is not one.
         // One site and not zero, because a redactor that runs past a literal's end
         // blanks the real code after it — and this scan cannot report a site it has
         // already erased, which is the one way it fails silently.
-        Assert.Single(sites);
-        Assert.True(IsWrapped(Statement(source, sites[0].Index), Array.Empty<string>()));
+        Assert.Single(SpawnSite.Matches(source));
     }
 
-    private static bool IsWrapped(string statement, IReadOnlyCollection<string> launchers) =>
-        WrapCalls.Any(w => statement.Contains(w, StringComparison.Ordinal))
-        || launchers.Any(name => Regex.IsMatch(statement, $@"\b{Regex.Escape(name)}\s*\("));
-
-    /// <summary>
-    /// Methods that return a wrapped spawn — the builders and launchers a spawn
-    /// statement may legitimately delegate to. A launcher that also spawns
-    /// unwrapped launders nothing: that spawn is still reported at its own
-    /// statement, which is where the fix belongs.
-    /// </summary>
-    private static HashSet<string> LauncherNames(IEnumerable<string> redactedSources)
+    private static IEnumerable<string> SourceFiles()
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var source in redactedSources)
-        {
-            foreach (Match m in ExpressionBodied.Matches(source))
-            {
-                if (Wraps(m.Groups["body"].Value)) names.Add(m.Groups["name"].Value);
-            }
-            foreach (Match m in BlockBodied.Matches(source))
-            {
-                if (Wraps(Block(source, m.Index + m.Length - 1))) names.Add(m.Groups["name"].Value);
-            }
-        }
-        return names;
-
-        static bool Wraps(string body) => WrapCalls.Any(w => body.Contains(w, StringComparison.Ordinal));
-    }
-
-    /// <summary>The braced block opening at <paramref name="open"/>.</summary>
-    private static string Block(string source, int open)
-    {
-        var depth = 0;
-        for (var i = open; i < source.Length; i++)
-        {
-            if (source[i] == '{') depth++;
-            else if (source[i] == '}' && --depth == 0) return source[open..i];
-        }
-        return source[open..];
-    }
-
-    /// <summary>
-    /// The spawn's own statement: from the construction to the semicolon that ends
-    /// it, so an argument, an object initializer and a trailing `?? throw` all count
-    /// as part of the spawn, while a wrap left behind in an earlier statement does not.
-    /// </summary>
-    private static string Statement(string source, int start)
-    {
-        var depth = 0;
-        for (var i = start; i < source.Length; i++)
-        {
-            if (source[i] is '(' or '{' or '[') depth++;
-            else if (source[i] is ')' or '}' or ']') depth--;
-            else if (source[i] == ';' && depth <= 0) return source[start..i];
-        }
-        return source[start..];
+        var root = RepositoryRoot();
+        return new[] { "ILD.Core", "ILD.Api" }
+            .SelectMany(project => Directory.EnumerateFiles(Path.Combine(root, project), "*.cs", SearchOption.AllDirectories))
+            .Where(f => !f.Split(Path.DirectorySeparatorChar).Any(part => part is "obj" or "bin"))
+            .Where(f => !f.Replace(Path.DirectorySeparatorChar, '/').Contains("/RunHosts/Local/", StringComparison.Ordinal))
+            .OrderBy(f => f, StringComparer.Ordinal);
     }
 
     private static int LineOf(string source, int index) => source.Take(index).Count(c => c == '\n') + 1;
-
-    private static IEnumerable<string> CoreSourceFiles()
-    {
-        var core = Path.Combine(RepositoryRoot(), "ILD.Core");
-        return Directory.EnumerateFiles(core, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Split(Path.DirectorySeparatorChar).Any(part => part is "obj" or "bin"))
-            .OrderBy(f => f, StringComparer.Ordinal);
-    }
 
     private static string RepositoryRoot()
     {

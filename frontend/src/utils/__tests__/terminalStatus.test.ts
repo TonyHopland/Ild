@@ -39,4 +39,17 @@ describe("describeTerminalClose", () => {
       }
     }
   });
+  test("a reason the server gave is shown, opened or not, instead of any guess", () => {
+    const reason = "The terminal opens once the run stops executing: it is parked, done or failed.";
+    expect(describeTerminalClose(1008, true, "hint", reason)).toBe(reason);
+    expect(describeTerminalClose(1008, false, "hint", reason)).toBe(reason);
+  });
+
+  test("a blank reason is no reason", () => {
+    expect(describeTerminalClose(1006, false, "hint", "  ")).toBe("hint");
+  });
+
+  test("a clean close says nothing even with a reason", () => {
+    expect(describeTerminalClose(1000, true, "hint", "session ended")).toBeNull();
+  });
 });

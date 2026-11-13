@@ -1,3 +1,5 @@
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -9,7 +11,7 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
-/// The git commands ILD runs in a chat's clone run as the agent, from outside
+/// The git commands ILD runs in a chat's clone run from outside
 /// the clone, and inherit none of the orchestrator's credentials. The
 /// orchestrator's own environment is seeded with them here, because what this
 /// proves is that a command does not inherit them.
@@ -23,10 +25,8 @@ public sealed class ChatRepositoryClonerStartInfoTests
         "ILD_DB_CONNECTION_STRING", "ILD_SECRET_KEY", "ILD_API_TOKEN", "ILD_AGENT_TOKEN",
     ];
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void Git_in_the_clone_runs_as_the_agent_from_outside_it_with_no_credentials_in_its_environment(bool isolation)
+    [Fact]
+    public void Git_in_the_clone_runs_from_outside_it_with_no_credentials_in_its_environment()
     {
         var saved = Inherited.ToDictionary(n => n, Environment.GetEnvironmentVariable);
         try
@@ -35,22 +35,16 @@ public sealed class ChatRepositoryClonerStartInfoTests
                 Environment.SetEnvironmentVariable(name, "orchestrator-only-" + name);
 
             var psi = ChatRepositoryCloner.BuildStartInfo(
-                ["-C", "/scratch/chat/repos/widgets", "fetch", "--no-tags", "/data/repos/base"],
-                isolation ? "agent" : null, isolation ? "agent" : null, isolation ? "/home/agent" : null);
+                ["-C", "/scratch/chat/repos/widgets", "fetch", "--no-tags", "/data/repos/base"]);
 
-            if (isolation)
-            {
-                Assert.Equal("/usr/bin/setpriv", psi.FileName);
-                Assert.Contains(psi.ArgumentList, a => Path.GetFileName(a) == "git");
-            }
-            else
-            {
-                Assert.Equal("git", Path.GetFileName(psi.FileName));
-            }
+            Assert.Equal("git", Path.GetFileName(psi.FileName));
             Assert.Contains("/scratch/chat/repos/widgets", psi.ArgumentList);
             Assert.Equal("/", psi.WorkingDirectory);
+            var launched = LocalRunHost.Launch(RunCommand.Prepared(psi, environment: ChatRepositoryCloner.GitEnvironment("/scratch/chat")), EgressProxyTests.Creds);
             foreach (var name in Inherited)
-                Assert.False(psi.Environment.ContainsKey(name), $"{name} reaches git in the agent's clone");
+                Assert.False(launched.Environment.ContainsKey(name), $"{name} reaches git in the agent's clone");
+            Assert.Equal("0", launched.Environment["GIT_TERMINAL_PROMPT"]);
+            Assert.Equal("/scratch/chat", launched.Environment["GIT_CEILING_DIRECTORIES"]);
         }
         finally
         {

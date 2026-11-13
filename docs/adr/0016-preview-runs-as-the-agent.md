@@ -1,5 +1,7 @@
 # ADR-0016: A Worktree Preview runs as the agent, with an environment ILD constructs
 
+> **Status: superseded by [ADR-0036](./0036-runs-always-in-containers.md).** Agents no longer run in ILD's container, so there is no second user.
+
 A **Worktree Preview** executes the commands in the worktree's `ild.config.json`
 — a file the coding agent writes, and can trigger through the ILD MCP tools
 whenever it likes. Those commands used to run as the **orchestrator** uid with the

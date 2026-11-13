@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Files;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using Microsoft.Extensions.Configuration;
@@ -70,7 +71,7 @@ internal static class BaseRepoClone
         }
 
         var path = BaseRepoPath.Fallback(repo.Id, config);
-        // Looked at as the agent, which can write the repos folder (ADR-0014).
+        // Looked at without following links: the agent can write the repos folder.
         var ours = await AgentWritableFiles.IsMissingOrEmptyDirectoryAsync(path, ct);
         (bool Success, string? Error) clone;
         try
@@ -92,8 +93,8 @@ internal static class BaseRepoClone
         return (false, null, error);
     }
 
-    // The repos folder is shared with the agent uid (ADR-0014), so the partial
-    // clone is deleted as the agent, never followed through a link it planted.
+    // The agent can write the repos folder, so the partial clone is deleted
+    // without following a link it planted.
     // A killed git may still be writing as it dies, hence the later attempts.
     private static async Task<bool> DeletePartialCloneAsync(string path, ILogger? log)
     {

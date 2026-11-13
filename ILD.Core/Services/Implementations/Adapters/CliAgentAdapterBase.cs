@@ -1,8 +1,14 @@
+using ILD.Core.Services.Implementations.Files;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,6 +44,10 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// root, <c>HOME</c>): the process environment unless a test supplies its own.
     /// </summary>
     protected IProcessEnvironment EnvironmentVariables { get; }
+
+    /// <summary>The environment as the launch of <paramref name="ctx"/> sees ILD: for the config files that point the agent's MCP server at ILD.</summary>
+    protected IProcessEnvironment RunFacingEnvironmentFor(AgentExecutionContext ctx)
+        => new RunFacingEnvironment(EnvironmentVariables, RunHost, ctx.RunContext.WorktreePath, ctx.AgentApiToken);
 
     protected CliAgentAdapterBase(IProcessEnvironment? environment = null)
     {
@@ -103,74 +113,106 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             + "Set the model with the Model field, not here; other flags ILD already sets can't be used either. "
             + "Open the provider terminal after saving to check that the CLI accepts them. "
             + "Don't put secrets here: the arguments are visible in the process list. "
-            + "Use the API key or environment settings for secrets (ADR-0014).");
+            + "Use the API key or environment settings for secrets.");
 
     public abstract Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);
 
+    public virtual CredentialPath? CredentialPathFor(AiProvider provider) => null;
+
     /// <summary>
-    /// Start a coding-agent CLI. Every agent launch goes through here so that
-    /// "a CLI launch crosses to the lower-trust agent uid" (ADR-0014) is owned by
-    /// one place instead of being remembered at each call site — a missed call
-    /// would silently run the agent as the orchestrator again.
+    /// Opens the execution's right to use the model gateway (ADR-0031): the CLI is then given the lease's
+    /// URL and placeholder in place of the provider's credential. Null without DI, where nothing runs for real.
+    /// The caller disposes it when the execution ends, which is what ends the token.
+    /// </summary>
+    protected ModelGatewayLease? OpenGateway(AgentExecutionContext ctx)
+    {
+        if (ScopeFactory is null) return null;
+        using var scope = ScopeFactory.CreateScope();
+        var registry = scope.ServiceProvider.GetService<IModelGatewayRegistry>();
+        var apiUrl = RunHost.GatewayApiUrl(EnvironmentVariables.Get("ILD_API_URL"), ctx.RunContext.WorktreePath);
+        // The agent reaches the gateway at ILD's own address, which no block may close.
+        var ildHost = Uri.TryCreate(apiUrl, UriKind.Absolute, out var ild) ? ild.Host : null;
+        return registry?.Open(
+            ctx.Provider.Id,
+            OwnerOf(ctx),
+            apiUrl,
+            GatewayRoutes.ModelHosts(ctx.Provider).Where(host => !string.Equals(host, ildHost, StringComparison.OrdinalIgnoreCase)).ToList());
+    }
+
+    /// <summary>
+    /// Start a coding-agent CLI. Every agent launch goes through here so that the
+    /// run host decides where and how it runs, rather than each call site.
     /// </summary>
     /// <param name="psi">The launch.</param>
+    /// <param name="environment">What the adapter sets for this launch (a null value unsets); the launch's whole environment with the execution's, as nothing of <paramref name="psi"/>'s own is read.</param>
+    /// <param name="agentFiles">The files in the agent read root that the adapter wrote for this launch and that <paramref name="psi"/> points at; a host that cannot share them stages exactly these.</param>
     /// <param name="ctx">
     /// The execution the launch belongs to, so no launch of it can leave out what it
     /// carries: the provider (the egress proxy applies that provider's scoped
     /// whitelist/blacklist entries to the child's connections), the
-    /// <see cref="AgentExecutionContext.Environment"/> set over what <paramref name="psi"/>
-    /// already carries, and the <see cref="AgentExecutionContext.NetworkMode"/> that
+    /// <see cref="AgentExecutionContext.Environment"/> set over <paramref name="environment"/>, and the <see cref="AgentExecutionContext.NetworkMode"/> that
     /// decides whether the child is proxied (ADR-0019).
     /// </param>
-    protected static Process? StartAgentProcess(ProcessStartInfo psi, AgentExecutionContext ctx)
-        => Process.Start(RouteForExecution(psi, ctx));
+    protected async Task<IRunProcess> StartAgentProcessAsync(
+        ProcessStartInfo psi, AgentExecutionContext ctx, IReadOnlyDictionary<string, string?>? environment = null, IEnumerable<string?>? agentFiles = null)
+        => new OutputCappedRunProcess(
+            await RunHost.StartCommandAsync(
+                RunCommand.Agent(
+                    psi, OwnerOf(ctx), ctx.Provider.Id, ctx.NetworkMode, WithExecutionEnvironment(environment, ctx),
+                    (ctx.AgentFiles ?? []).Concat(agentFiles ?? []).Where(file => !string.IsNullOrEmpty(file)).Select(file => file!).ToList()) with { RunIn = RunPaths.HolderOf(psi.WorkingDirectory) ?? OwnerOf(ctx) },
+                ctx.Cancel),
+            AgentOutputLimit);
 
-    /// <summary>The launch <see cref="StartAgentProcess"/> starts: <paramref name="psi"/> with the execution's environment, crossed to the agent uid.</summary>
-    internal static ProcessStartInfo RouteForExecution(ProcessStartInfo psi, AgentExecutionContext ctx)
+    /// <summary>The most one launch's CLI may write to either of its output streams before it is killed.</summary>
+    internal long AgentOutputLimit { get; init; } = RunReadLimits.FromEnvironment().MaxAgentOutputBytes;
+
+    // The execution's environment is set over the adapter's.
+    private static Dictionary<string, string?> WithExecutionEnvironment(IReadOnlyDictionary<string, string?>? adapter, AgentExecutionContext ctx)
     {
+        var merged = new Dictionary<string, string?>(adapter ?? new Dictionary<string, string?>(), StringComparer.Ordinal);
         foreach (var (name, value) in ctx.Environment ?? new Dictionary<string, string>())
-            psi.Environment[name] = value;
-        return AgentIsolation.Route(psi, ctx.Provider.Id, ctx.NetworkMode);
+            merged[name] = value;
+        return merged;
     }
+
+    /// <summary>The run or chat an execution belongs to: whose processes <see cref="IRunHost.KillAllAsync"/> ends.</summary>
+    protected static Guid OwnerOf(AgentExecutionContext ctx) => ctx.ChatSessionId ?? ctx.RunContext.LoopRunId;
+
+    private IRunHost? _runHost;
+
+    /// <summary>
+    /// Where the agent's processes and files live: the run host registered with DI, which an adapter built with
+    /// services must find. Only one built without services (a unit test's) runs on the local host.
+    /// </summary>
+    protected IRunHost RunHost => _runHost ??= ResolveRunHost();
+
+    private IRunHost ResolveRunHost()
+    {
+        if (ScopeFactory is null) return LocalRunHost.Shared;
+        using var scope = ScopeFactory.CreateScope();
+        return scope.ServiceProvider.GetRequiredService<IRunHost>();
+    }
+
 
     /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind
-    /// best-effort kill it reports whether the kill actually took effect:
-    /// under uid isolation (ADR-0014) the agent runs with a different real
-    /// <em>and saved</em> uid, so <c>kill(2)</c> fails with <c>EPERM</c> unless
-    /// the orchestrator holds <c>CAP_KILL</c>. Silently swallowing that leaves an
-    /// orphaned agent writing the worktree after a Halt or a node timeout while
-    /// the engine moves on, so callers surface the failure instead.
+    /// best-effort kill it reports whether the kill actually took effect.
+    /// Silently swallowing a failed kill leaves an orphaned agent writing the
+    /// worktree after a Halt or a node timeout while the engine moves on, so
+    /// callers surface the failure instead.
     /// </summary>
     /// <returns><c>true</c> when the process is gone (killed, or already exited).</returns>
-    protected static bool KillProcessTree(Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-            return true;
-        }
-        catch (InvalidOperationException)
-        {
-            // Already exited — that is the outcome we wanted anyway.
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    protected static bool KillProcessTree(IRunProcess process) => process.TryKill();
 
     /// <summary>
     /// Kill the agent process tree and build the node's failure message, adding a
     /// diagnostic when the kill did not take (see <see cref="KillProcessTree"/>)
     /// so an un-killable agent is visible in the run instead of silent.
     /// </summary>
-    protected static string KillAndDescribe(Process process, string message)
+    protected static string KillAndDescribe(IRunProcess process, string message)
         => KillProcessTree(process)
             ? message
-            : message + " — WARNING: the agent process could not be killed and may still be running. "
-                + "Under uid isolation the orchestrator needs CAP_KILL for the agent uid (see ADR-0014).";
+            : message + " — WARNING: the agent process could not be killed and may still be running.";
 
     /// <summary>
     /// Hand the freshly-captured session id to the run's <c>OnSessionId</c>
@@ -229,13 +271,13 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     }
 
     /// <summary>True once the file is saved or there was nothing to save; false when an append lost a race and the save should be decided again.</summary>
-    private static async Task<bool> SaveSessionFileAsync(
+    private async Task<bool> SaveSessionFileAsync(
         IAdapterSessionSnapshotStore store, SessionSnapshotKey key, string path, string format, CancellationToken ct)
     {
         // The session file sits where the agent can write, so it is only measured and
-        // read as the agent (see AgentWritableFiles), never through a link.
+        // read through the run host (see AgentWritableFiles), never through a link.
         // An empty file holds nothing to keep, and must not replace a history stored earlier.
-        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not ({ } length and > 0)) return true;
+        if (await RunHost.GetFileLengthAsync(path, ct) is not ({ } length and > 0)) return true;
 
         var stored = await store.GetMetadataAsync(key, ct);
         if (stored is not null
@@ -247,21 +289,21 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
             var tailHash = await TailHashAsync(path, length, ct);
             var result = SessionSnapshotAppendResult.Conflict;
-            await AgentWritableFiles.ReadFileRangeAsync(path, stored.ByteLength, length - stored.ByteLength,
+            await RunHost.ReadFileRangeAsync(path, stored.ByteLength, length - stored.ByteLength,
                 async added => result = await store.AppendAsync(key, format, added, stored.ByteLength, tailHash, ct));
             return result == SessionSnapshotAppendResult.Appended;
         }
 
-        await AgentWritableFiles.ReadFileRangeAsync(path, 0, length, whole => store.ReplaceAsync(key, format, whole, ct));
+        await RunHost.ReadFileRangeAsync(path, 0, length, whole => store.ReplaceAsync(key, format, whole, ct));
         return true;
     }
 
     /// <summary>The <see cref="SessionSnapshotFormats.TailHash"/> of the file's bytes just before <paramref name="end"/>.</summary>
-    private static async Task<string> TailHashAsync(string path, long end, CancellationToken ct)
+    private async Task<string> TailHashAsync(string path, long end, CancellationToken ct)
     {
         var length = Math.Min(end, SessionSnapshotFormats.TailWindow);
         using var tail = new MemoryStream((int)length);
-        await AgentWritableFiles.ReadFileRangeAsync(path, end - length, length, content => content.CopyToAsync(tail, ct));
+        await RunHost.ReadFileRangeAsync(path, end - length, length, content => content.CopyToAsync(tail, ct));
         return SessionSnapshotFormats.TailHash(tail.GetBuffer().AsSpan(0, (int)tail.Length));
     }
 
@@ -281,21 +323,21 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
         await using var content = await store.OpenReadAsync(key, 0, ctx.Cancel);
         if (content is null) return false;
-        await AgentWritableFiles.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
-        await AgentWritableFiles.WriteFileAsync(path, content, ctx.Cancel);
+        await RunHost.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
+        await RunHost.WriteFileAsync(path, content, ctx.Cancel);
         return true;
     }
 
     /// <summary>
     /// What <paramref name="parse"/> makes of the session file at <paramref name="path"/>,
-    /// read line by line as the agent without holding the file whole; the default when
+    /// read line by line through the run host without holding the file whole; the default when
     /// there is no regular file there.
     /// </summary>
-    protected static async Task<T?> ParseSessionFileAsync<T>(string path, Func<TextReader, T> parse, CancellationToken ct)
+    protected async Task<T?> ParseSessionFileAsync<T>(string path, Func<TextReader, T> parse, CancellationToken ct)
     {
-        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not { } length) return default;
+        if (await RunHost.GetFileLengthAsync(path, ct) is not { } length) return default;
         T? result = default;
-        await AgentWritableFiles.ReadFileRangeAsync(path, 0, length, content =>
+        await RunHost.ReadFileRangeAsync(path, 0, length, content =>
         {
             using var reader = new StreamReader(content, Encoding.UTF8);
             result = parse(reader);

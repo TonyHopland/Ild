@@ -41,7 +41,10 @@ public class StartNodeExecutorTests : IDisposable
         string? previewEnv = null,
         string? worktreesPath = null,
         Repository? itemRepointedTo = null,
-        bool keepPreviewData = false)
+        bool keepPreviewData = false,
+        Fakes.FakeRunHost? host = null,
+        RunPreparations? preparations = null,
+        IWorkItemNotifier? notifier = null)
     {
         var repoId = Guid.NewGuid();
         var workItem = itemRepointedTo is null
@@ -72,6 +75,9 @@ public class StartNodeExecutorTests : IDisposable
         services.AddSingleton(workItems.Object);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(repoManager.Object);
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(host ?? new Fakes.FakeRunHost(repoManager.Object));
+        if (preparations is not null) services.AddSingleton(preparations);
+        if (notifier is not null) services.AddSingleton(notifier);
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataPath })
             .Build());
@@ -199,6 +205,65 @@ public class StartNodeExecutorTests : IDisposable
         Assert.False(BaseRepoClone.IsTracked(repoId));
     }
 
+    private static async Task<List<NodeOutcome>> RunAsync(IServiceProvider sp, LoopRun run, LoopNode node)
+    {
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new StartNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+        return outcomes;
+    }
+
+    [Fact]
+    public async Task A_container_host_marks_the_item_preparing_only_while_it_makes_the_environment()
+    {
+        var repoManager = HappyRepoManager();
+        var preparations = new RunPreparations();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var seen = new List<bool>();
+        var host = new Fakes.FakeRunHost(repoManager.Object) { Kind = ILD.Core.Services.RunHosts.RunHostKind.Container };
+        host.OnCreate = () => { seen.Add(preparations.IsPreparing("WI-1")); return Task.CompletedTask; };
+        var (_, sp, run, node) = BuildContext(repoManager, host: host, preparations: preparations, notifier: notifier.Object);
+
+        var outcomes = await RunAsync(sp, run, node);
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.Success);
+        Assert.Equal([true], seen);
+        Assert.False(preparations.IsPreparing("WI-1"));
+        // Once when it starts and once when it ends, so the board and the page re-read it.
+        notifier.Verify(n => n.RunProgressedAsync("WI-1"), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task A_failed_environment_clears_the_preparing_mark_and_fails_the_node()
+    {
+        var repoManager = HappyRepoManager();
+        var preparations = new RunPreparations();
+        var host = new Fakes.FakeRunHost(repoManager.Object) { Kind = ILD.Core.Services.RunHosts.RunHostKind.Kubernetes };
+        host.OnCreate = () => throw new IOException("image pull failed");
+        var (_, sp, run, node) = BuildContext(repoManager, host: host, preparations: preparations);
+
+        var outcomes = new List<NodeOutcome>();
+        try { outcomes = await RunAsync(sp, run, node); }
+        catch (IOException ex) { Assert.Equal("image pull failed", ex.Message); }
+
+        Assert.False(preparations.IsPreparing("WI-1"));
+    }
+
+    [Fact]
+    public async Task The_local_host_never_marks_the_item_preparing()
+    {
+        var repoManager = HappyRepoManager();
+        var preparations = new RunPreparations();
+        var seen = new List<bool>();
+        var host = new Fakes.FakeRunHost(repoManager.Object);
+        host.OnCreate = () => { seen.Add(preparations.IsPreparing("WI-1")); return Task.CompletedTask; };
+        var (_, sp, run, node) = BuildContext(repoManager, host: host, preparations: preparations);
+
+        await RunAsync(sp, run, node);
+
+        Assert.Equal([false], seen);
+    }
+
     /// <summary>A repo manager that prepares a worktree at <c>/tmp/worktree</c> on the happy path.</summary>
     private Mock<IRepositoryManager> HappyRepoManager()
     {
@@ -223,7 +288,7 @@ public class StartNodeExecutorTests : IDisposable
         var repoManager = new Mock<IRepositoryManager>();
         repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
-        repoManager.Setup(m => m.RemoteBranchExistsAsync(_baseRepo, "release/1.0")).ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(_baseRepo, "release/1.0")).ReturnsAsync(true);
         repoManager.Setup(m => m.ResetHardAsync(_baseRepo, "origin/release/1.0", It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         repoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()))
@@ -256,7 +321,7 @@ public class StartNodeExecutorTests : IDisposable
         var repoManager = new Mock<IRepositoryManager>();
         repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
-        repoManager.Setup(m => m.RemoteBranchExistsAsync(_baseRepo, "no/such/branch")).ReturnsAsync(false);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(_baseRepo, "no/such/branch")).ReturnsAsync(false);
 
         var (mgr, sp, run, node) = BuildContext(repoManager);
         run.BaseBranchOverride = "no/such/branch";
@@ -289,7 +354,7 @@ public class StartNodeExecutorTests : IDisposable
             .ReturnsAsync((true, (string?)null));
         repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
-        repoManager.Setup(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), "release/1.0")).ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(It.IsAny<string>(), "release/1.0")).ReturnsAsync(true);
         repoManager.Setup(m => m.ResetHardAsync(It.IsAny<string>(), "origin/release/1.0", It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         repoManager.Setup(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()))
@@ -320,7 +385,7 @@ public class StartNodeExecutorTests : IDisposable
         var repoManager = new Mock<IRepositoryManager>();
         repoManager.Setup(m => m.CloneAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((true, (string?)null));
-        repoManager.Setup(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), "no/such/branch")).ReturnsAsync(false);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(It.IsAny<string>(), "no/such/branch")).ReturnsAsync(false);
 
         var (mgr, sp, run, node) = BuildContext(repoManager, worktreesPath: string.Empty);
         run.BaseBranchOverride = "no/such/branch";
@@ -388,7 +453,7 @@ public class StartNodeExecutorTests : IDisposable
 
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
         mgr.Verify(m => m.ResetHardAsync(_baseRepo, "origin/main", It.IsAny<CancellationToken>()), Times.Once);
-        mgr.Verify(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        mgr.Verify(m => m.RemoteBranchExistsInBaseRepoAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
     [Fact]

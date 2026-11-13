@@ -3,8 +3,11 @@ using System.Net.Sockets;
 using System.Text;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Migrations;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,9 +56,37 @@ public sealed class EgressProxyTests : IAsyncLifetime
         _upstreamPort = ((IPEndPoint)_upstream.LocalEndpoint).Port;
         _ = ServeUpstreamAsync(_upstream);
 
-        _proxy = new EgressProxy(new EgressProxyOptions(true, 0), _policy, _log, NullLogger<EgressProxy>.Instance);
+        _proxy = new EgressProxy(new EgressProxyOptions(true, 0), Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
         await _proxy.StartAsync(CancellationToken.None);
         _proxyPort = await _proxy.BoundPort.WaitAsync(Timeout);
+    }
+
+    internal static readonly EgressCredentials Creds = new(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray());
+
+    /// <summary>The <c>Proxy-Authorization</c> header value a launch with <paramref name="scope"/> sends.</summary>
+    internal static string Header(LaunchScope scope)
+        => "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{EgressCredentials.User}:{Creds.Mint(scope)}"));
+
+    /// <summary>A request head with the valid credential of a launch with no scope added after its request line.</summary>
+    internal static string Authed(string head)
+        => head.Contains("Proxy-Authorization", StringComparison.OrdinalIgnoreCase)
+            ? head
+            : head.Insert(head.IndexOf("\r\n", StringComparison.Ordinal) + 2, $"Proxy-Authorization: {Header(default)}\r\n");
+
+    private static readonly IPAddress TestNet = IPAddress.Parse("203.0.113.9");
+
+    /// <summary>An IP literal stands for itself, any name resolves to a public address: the listeners of these tests sit on loopback, which the proxy refuses, so the dial seam reaches them.</summary>
+    private static Task<IPAddress[]> PublicResolve(string host, CancellationToken ct)
+        => Task.FromResult(IPAddress.TryParse(host.Trim('[', ']'), out var literal) ? new[] { literal } : new[] { TestNet });
+
+    private int _dials;
+
+    private async Task<TcpClient> DialUpstream(IPAddress[] addresses, int port, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _dials);
+        var client = new TcpClient { NoDelay = true };
+        await client.ConnectAsync(IPAddress.Loopback, port, ct);
+        return client;
     }
 
     public async ValueTask DisposeAsync()
@@ -117,14 +148,12 @@ public sealed class EgressProxyTests : IAsyncLifetime
         return entry;
     }
 
-    private async Task<(TcpClient Client, string StatusLine)> ConnectAsync(string host, Guid? provider = null)
+    private async Task<(TcpClient Client, string StatusLine)> ConnectAsync(string host, Guid? provider = null, string? installer = null)
     {
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, _proxyPort);
         var stream = client.GetStream();
-        var auth = provider is { } id
-            ? $"Proxy-Authorization: Basic {Convert.ToBase64String(Encoding.UTF8.GetBytes($"provider:{id}"))}\r\n"
-            : string.Empty;
+        var auth = $"Proxy-Authorization: {Header(new LaunchScope(Provider: provider, Installer: installer))}\r\n";
         var request = $"CONNECT {host}:{_upstreamPort} HTTP/1.1\r\nHost: {host}:{_upstreamPort}\r\n{auth}\r\n";
         await stream.WriteAsync(Encoding.ASCII.GetBytes(request));
         var status = await ReadLineAsync(stream);
@@ -228,6 +257,68 @@ public sealed class EgressProxyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task In_whitelist_mode_an_installer_reaches_the_seeded_hosts_and_no_others_and_is_logged_under_its_zone()
+    {
+        await InstallerNetworkDefaultsMigrator.MigrateAsync(_db.Context, TestContext.Current.CancellationToken);
+        await SetModeAsync(NetworkMode.Whitelist);
+
+        var (listed, listedStatus) = await ConnectAsync("registry.npmjs.org", installer: "repo-0123");
+        using (listed)
+            Assert.Equal("ping", await EchoAsync(listed, "ping"));
+        var (unlisted, unlistedStatus) = await ConnectAsync("evil.example", installer: "repo-0123");
+        unlisted.Dispose();
+        // The installers' scope is theirs alone: an agent launch is judged by the global lists.
+        var (agent, agentStatus) = await ConnectAsync("registry.npmjs.org");
+        agent.Dispose();
+
+        Assert.StartsWith("HTTP/1.1 200", listedStatus);
+        Assert.StartsWith("HTTP/1.1 403", unlistedStatus);
+        Assert.StartsWith("HTTP/1.1 403", agentStatus);
+        Assert.Equal(
+            [("registry.npmjs.org", NetworkDecision.Allowed, "repo-0123"), ("evil.example", NetworkDecision.Blocked, "repo-0123"), ("registry.npmjs.org", NetworkDecision.Blocked, null)],
+            _log.Entries.Zip(_log.Installers, (e, i) => (e.Host, e.Decision, i)).ToArray());
+    }
+
+    [Fact]
+    public async Task A_global_entry_also_admits_an_installer_and_an_installers_entry_blocks_in_blacklist_mode()
+    {
+        await SetModeAsync(NetworkMode.Whitelist);
+        await ListAsync("global.example", NetworkListKind.Whitelist);
+        var (global, globalStatus) = await ConnectAsync("global.example", installer: "agents");
+        global.Dispose();
+        Assert.StartsWith("HTTP/1.1 200", globalStatus);
+
+        await SetModeAsync(NetworkMode.Blacklist);
+        await _db.Network.AddEntryAsync(new NetworkPolicyEntry { Host = "bad.example", ListKind = NetworkListKind.Blacklist, Installers = true }, TestContext.Current.CancellationToken);
+        _policy.Invalidate();
+        var (installer, installerStatus) = await ConnectAsync("bad.example", installer: "toolchains");
+        installer.Dispose();
+        var (agent, agentStatus) = await ConnectAsync("bad.example");
+        agent.Dispose();
+
+        Assert.StartsWith("HTTP/1.1 403", installerStatus);
+        Assert.StartsWith("HTTP/1.1 200", agentStatus);
+    }
+
+    [Fact]
+    public async Task What_the_proxy_refused_an_installer_is_kept_for_the_length_of_its_install()
+    {
+        var refusals = new InstallerRefusals();
+        var recorder = new NetworkLogRecorder(_services.GetRequiredService<IServiceScopeFactory>(), new Moq.Mock<INetworkNotifier>().Object, NullLogger<NetworkLogRecorder>.Instance, refusals);
+
+        recorder.Record("early.example", 443, NetworkDecision.Blocked, null, installer: "agents");
+        refusals.Begin("agents");
+        recorder.Record("registry.example", 443, NetworkDecision.Blocked, null, installer: "agents");
+        recorder.Record("registry.example", 443, NetworkDecision.Blocked, null, installer: "agents");
+        recorder.Record("fine.example", 443, NetworkDecision.Allowed, null, installer: "agents");
+        recorder.Record("other.example", 443, NetworkDecision.Blocked, null, installer: "toolchains");
+
+        Assert.Equal(["registry.example:443"], refusals.Refused("agents"));
+        refusals.End("agents");
+        Assert.Empty(refusals.Refused("agents"));
+    }
+
+    [Fact]
     public async Task A_provider_scoped_whitelist_entry_admits_only_that_provider()
     {
         var mine = Guid.NewGuid();
@@ -318,14 +409,32 @@ public sealed class EgressProxyTests : IAsyncLifetime
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
         var stream = client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(
-            $"GET http://localhost:{_upstreamPort}/things?x=1 HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\nProxy-Connection: keep-alive\r\n\r\n"), TestContext.Current.CancellationToken);
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed(
+            $"GET http://localhost:{_upstreamPort}/things?x=1 HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\nProxy-Connection: keep-alive\r\n\r\n")), TestContext.Current.CancellationToken);
         var response = await ReadToEndAsync(stream);
 
         Assert.StartsWith("HTTP/1.1 200", response);
         Assert.Contains("X-Saw: GET /things?x=1 HTTP/1.1", response);
         Assert.EndsWith("hello from upstream", response);
         Assert.Equal(("localhost", _upstreamPort, NetworkDecision.Allowed, (Guid?)null), Assert.Single(_log.Entries));
+    }
+
+    [Fact]
+    public async Task An_allowed_connection_that_cannot_be_logged_is_refused_with_503_and_reaches_nothing()
+    {
+        await SetModeAsync(NetworkMode.Whitelist);
+        await ListAsync("localhost", NetworkListKind.Whitelist);
+        _log.Full = true;
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed(
+            $"GET http://localhost:{_upstreamPort}/things HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\n\r\n")), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream);
+
+        Assert.StartsWith("HTTP/1.1 503", response);
+        Assert.DoesNotContain("X-Saw", response);
     }
 
     [Fact]
@@ -337,28 +446,9 @@ public sealed class EgressProxyTests : IAsyncLifetime
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
         var stream = client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes($"GET http://localhost:{_upstreamPort}/ HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\n\r\n"), TestContext.Current.CancellationToken);
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed($"GET http://localhost:{_upstreamPort}/ HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\n\r\n")), TestContext.Current.CancellationToken);
 
         Assert.StartsWith("HTTP/1.1 403", await ReadToEndAsync(stream));
-    }
-
-    [Fact]
-    public async Task A_redirected_tls_flow_is_judged_by_its_sni_and_refused_with_an_alert()
-    {
-        await SetModeAsync(NetworkMode.Blacklist);
-        await ListAsync(".blocked.example", NetworkListKind.Blacklist);
-
-        using var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
-        var stream = client.GetStream();
-        await stream.WriteAsync(TlsClientHelloTests.Build("api.blocked.example"), TestContext.Current.CancellationToken);
-
-        using var cts = new CancellationTokenSource(Timeout);
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms, cts.Token);
-
-        Assert.Equal(new byte[] { 0x15, 0x03, 0x01, 0x00, 0x02, 0x02, 0x31 }, ms.ToArray());
-        Assert.Equal(("api.blocked.example", 443, NetworkDecision.Blocked, (Guid?)null), Assert.Single(_log.Entries));
     }
 
     [Fact]
@@ -456,7 +546,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
         });
 
         using var client = await OpenAsync();
-        await SendAsync(client, $"GET http://localhost:{upstream.Port}/ HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n");
+        await SendAsync(client, Authed($"GET http://localhost:{upstream.Port}/ HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n"));
         var response = await ReadUntilClosedAsync(client.GetStream());
 
         Assert.Equal("ok", AssertClosingHead(response, "HTTP/1.1 200 OK", "X-Keep: 1", "Content-Length: 2", "X-Hopper: 3"));
@@ -507,7 +597,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
         using var client = await OpenAsync();
         var stream = client.GetStream();
-        await SendAsync(client, $"GET http://localhost:{upstream.Port}/socket HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\nUpgrade: echo\r\n\r\n");
+        await SendAsync(client, Authed($"GET http://localhost:{upstream.Port}/socket HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\nUpgrade: echo\r\n\r\n"));
         Assert.Equal(switching, await ReadUntilAsync(stream, text => text.Contains("\r\n\r\n", StringComparison.Ordinal)));
 
         await SendAsync(client, "ping");
@@ -681,7 +771,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
         });
 
         using var client = await OpenAsync();
-        await SendAsync(client, $"GET http://localhost:{upstream.Port}/ HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n");
+        await SendAsync(client, Authed($"GET http://localhost:{upstream.Port}/ HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n"));
         var response = await ReadUntilClosedAsync(client.GetStream());
 
         Assert.StartsWith("HTTP/1.1 502", response);
@@ -703,7 +793,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
         using (var client = await OpenAsync())
         {
-            await SendAsync(client, $"GET http://localhost:{upstream.Port}/events HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n");
+            await SendAsync(client, Authed($"GET http://localhost:{upstream.Port}/events HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n"));
             await ReadUntilAsync(client.GetStream(), text => text.Contains(first, StringComparison.Ordinal));
             Assert.Equal(1, _proxy!.OpenTunnelCount);
 
@@ -733,9 +823,8 @@ public sealed class EgressProxyTests : IAsyncLifetime
     /// <summary>An absolute-form POST carrying proxy credentials, the way a proxied HTTP client sends it.</summary>
     private static string PostHead(int port, string framing, Guid? provider = null)
     {
-        var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"provider:{provider ?? Guid.NewGuid()}"));
         return $"POST http://localhost:{port}/v1/chat/completions HTTP/1.1\r\nHost: localhost:{port}\r\n"
-            + $"Proxy-Authorization: Basic {auth}\r\nContent-Type: application/json\r\n"
+            + $"Proxy-Authorization: {Header(new LaunchScope(Provider: provider ?? Guid.NewGuid()))}\r\nContent-Type: application/json\r\n"
             + (framing.Length > 0 ? framing + "\r\n" : string.Empty) + "\r\n";
     }
 
@@ -796,6 +885,266 @@ public sealed class EgressProxyTests : IAsyncLifetime
         Assert.Equal("close", Value(Assert.Single(lines, l => Name(l).Equals("Proxy-Connection", StringComparison.OrdinalIgnoreCase))), ignoreCase: true);
         Assert.DoesNotContain(lines, l => Name(l).Equals("Keep-Alive", StringComparison.OrdinalIgnoreCase));
         return response[(end + 4)..];
+    }
+
+    // -- Bounds on what a client can hold open ------------------------------------
+
+    private async Task<(EgressProxy Proxy, int Port)> StartBoundedProxyAsync(EgressLimits limits, Action<EgressProxy>? configure = null)
+    {
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { Limits = limits }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+        configure?.Invoke(proxy);
+        _extraProxies.Add(proxy);
+        await proxy.StartAsync(CancellationToken.None);
+        return (proxy, await proxy.BoundPort.WaitAsync(Timeout, TestContext.Current.CancellationToken));
+    }
+
+    private static async Task<TcpClient> OpenSilentAsync(int port)
+    {
+        var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
+        return client;
+    }
+
+    /// <summary>Whether the server has closed (or reset) the connection within <paramref name="within"/>, sending nothing first.</summary>
+    private static async Task<bool> ClosesWithinAsync(TcpClient client, TimeSpan within)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cts.CancelAfter(within);
+        try
+        {
+            return await client.GetStream().ReadAsync(new byte[1], cts.Token) == 0;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    [Theory]
+    [InlineData(SocketError.TooManyOpenSockets)]
+    [InlineData(SocketError.ConnectionReset)]
+    public async Task A_failed_accept_does_not_end_the_proxy(SocketError error)
+    {
+        var failures = 2;
+        var (proxy, port) = await StartBoundedProxyAsync(new EgressLimits(), p =>
+        {
+            p.AcceptRetryDelay = TimeSpan.FromMilliseconds(20);
+            p.AcceptClient = (listener, ct) => Interlocked.Decrement(ref failures) >= 0
+                ? ValueTask.FromException<TcpClient>(new SocketException((int)error))
+                : listener.AcceptTcpClientAsync(ct);
+        });
+
+        var (client, status) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            Assert.True(Volatile.Read(ref failures) < 0, "the failed accepts were never staged");
+            Assert.False(proxy.ExecuteTask!.IsCompleted);
+        }
+    }
+
+    [Fact]
+    public async Task A_connection_that_sends_no_head_is_closed_after_the_head_timeout()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromMilliseconds(200), TimeSpan.FromMinutes(1), 10, 10));
+
+        using var silent = await OpenSilentAsync(port);
+
+        Assert.True(await ClosesWithinAsync(silent, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task A_connection_over_the_per_source_cap_is_refused_until_one_closes()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), 2, 100));
+        using var first = await OpenSilentAsync(port);
+        using var second = await OpenSilentAsync(port);
+        using var third = await OpenSilentAsync(port);
+
+        Assert.True(await ClosesWithinAsync(third, TimeSpan.FromSeconds(2)));
+        Assert.False(await ClosesWithinAsync(first, TimeSpan.FromMilliseconds(300)));
+        Assert.False(await ClosesWithinAsync(second, TimeSpan.FromMilliseconds(300)));
+
+        first.Dispose();
+        // The slot frees when the proxy notices the close; try until a connection is served.
+        var deadline = DateTime.UtcNow + Timeout;
+        while (true)
+        {
+            var served = false;
+            try
+            {
+                var (client, status) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+                using (client) served = status.StartsWith("HTTP/1.1 200");
+            }
+            catch (IOException) { }
+            if (served) break;
+            Assert.True(DateTime.UtcNow < deadline, "a slot never freed after a connection closed");
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task A_source_past_its_budget_of_log_rows_is_refused_without_a_row_until_the_budget_refills()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits { LogRowBurst = 2, LogRowsPerSecond = 0 });
+
+        for (var i = 0; i < 2; i++)
+        {
+            var (client, status) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+            using (client) Assert.StartsWith("HTTP/1.1 200", status);
+        }
+        var rows = _log.Entries.Count;
+
+        var (refused, refusal) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+        using (refused) Assert.StartsWith("HTTP/1.1 429", refusal);
+        Assert.Equal(rows, _log.Entries.Count);
+    }
+
+    [Fact]
+    public void A_log_row_budget_is_per_source_and_refills_over_time()
+    {
+        long now = 0;
+        var budget = new LogRowBudget<IPAddress>(new EgressLimits { LogRowBurst = 2, LogRowsPerSecond = 1 }, () => now);
+        var (a, b) = (IPAddress.Parse("10.0.0.1"), IPAddress.Parse("10.0.0.2"));
+
+        Assert.True(budget.TryTake(a));
+        Assert.True(budget.TryTake(a));
+        Assert.False(budget.TryTake(a));
+        Assert.True(budget.TryTake(b));
+
+        now = 1000;
+        Assert.True(budget.TryTake(a));
+        Assert.False(budget.TryTake(a));
+    }
+
+    [Fact]
+    public async Task A_connection_over_the_total_cap_is_refused_whatever_its_source()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), 100, 2));
+        using var first = await OpenSilentAsync(port);
+        using var second = await OpenSilentAsync(port);
+        using var third = await OpenSilentAsync(port);
+
+        Assert.True(await ClosesWithinAsync(third, TimeSpan.FromSeconds(2)));
+        Assert.False(await ClosesWithinAsync(first, TimeSpan.FromMilliseconds(300)));
+    }
+
+    [Fact]
+    public async Task A_tunnel_with_no_traffic_is_reset_after_the_idle_timeout_and_one_with_traffic_is_not()
+    {
+        var (_, port) = await StartBoundedProxyAsync(new EgressLimits(TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(600), 10, 10));
+        var (busy, busyStatus) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+        var (idle, idleStatus) = await ConnectViaAsync(port, "api.example", _upstreamPort);
+        using (busy)
+        using (idle)
+        {
+            Assert.StartsWith("HTTP/1.1 200", busyStatus);
+            Assert.StartsWith("HTTP/1.1 200", idleStatus);
+
+            // Well past the idle timeout in total, but never idle for that long.
+            for (var i = 0; i < 10; i++)
+            {
+                Assert.Equal("ping", await EchoAsync(busy, "ping"));
+                await Task.Delay(150, TestContext.Current.CancellationToken);
+            }
+
+            Assert.True(await ClosesWithinAsync(idle, TimeSpan.FromSeconds(3)));
+            Assert.Equal("still here", await EchoAsync(busy, "still here"));
+        }
+    }
+
+    // -- Agents' preview hostnames ------------------------------------------------
+
+    /// <summary>A proxy whose web port, ILD's own, is the test's upstream.</summary>
+    private async Task<int> StartProxyWithWebPortAsync()
+    {
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { WebPort = _upstreamPort, PreviewsEnabled = true }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+        _extraProxies.Add(proxy);
+        await proxy.StartAsync(CancellationToken.None);
+        return await proxy.BoundPort.WaitAsync(Timeout);
+    }
+
+    [Fact]
+    public async Task A_preview_hostname_goes_to_ilds_web_port_whatever_the_network_policy_blocks()
+    {
+        await SetModeAsync(NetworkMode.Whitelist);
+        var port = await StartProxyWithWebPortAsync();
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed("GET http://wi-12.preview.ild/page?x=1 HTTP/1.1\r\nHost: wi-12.preview.ild\r\n\r\n")), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 200 OK", response);
+        Assert.Contains("X-Saw: GET /page?x=1 HTTP/1.1", response);
+        Assert.DoesNotContain(_log.Entries, e => e.Host.Contains("preview.ild", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_preview_hostname_over_https_is_refused_saying_to_use_http()
+    {
+        var port = await StartProxyWithWebPortAsync();
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed("CONNECT wi-12.preview.ild:443 HTTP/1.1\r\nHost: wi-12.preview.ild:443\r\n\r\n")), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 400", response);
+        Assert.Contains("plain http://", response);
+    }
+
+    [Fact]
+    public async Task A_preview_hostname_with_no_web_port_is_refused_and_never_resolved()
+    {
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { PreviewsEnabled = true }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+        _extraProxies.Add(proxy);
+        await proxy.StartAsync(CancellationToken.None);
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, await proxy.BoundPort.WaitAsync(Timeout, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed("GET http://wi-12.preview.ild/ HTTP/1.1\r\nHost: wi-12.preview.ild\r\n\r\n")), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 400", response);
+        Assert.Contains("no plain-HTTP port", response);
+    }
+
+    [Theory]
+    [InlineData(".example.com")]
+    [InlineData("*.com")]
+    public async Task A_host_written_as_a_pattern_is_refused_and_logged_as_blocked(string host)
+    {
+        var (client, status) = await ConnectAsync(host);
+        using var _ = client;
+
+        Assert.Contains("400", status);
+        var entry = Assert.Single(_log.Entries, e => e.Host == host);
+        Assert.Equal(NetworkDecision.Blocked, entry.Decision);
+        Assert.Equal("malformed host name", Assert.Single(_log.Reasons));
+    }
+
+    [Fact]
+    public async Task A_preview_hostname_is_a_404_and_reaches_nothing_when_previews_are_off()
+    {
+        var proxy = new EgressProxy(new EgressProxyOptions(true, 0) { WebPort = _upstreamPort }, Creds, _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+        _extraProxies.Add(proxy);
+        await proxy.StartAsync(CancellationToken.None);
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, await proxy.BoundPort.WaitAsync(Timeout, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed("GET http://wi-12.preview.ild/api/v1/auth/me HTTP/1.1\r\nHost: wi-12.preview.ild\r\n\r\n")), TestContext.Current.CancellationToken);
+        var response = await ReadToEndAsync(stream).WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 404", response);
+        Assert.DoesNotContain("X-Saw", response);
     }
 
     /// <summary>
@@ -926,8 +1275,8 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
     private async Task<int> StartProxyAsync(CountingResolver? resolver, EgressProxyOptions? options = null)
     {
-        var proxy = new EgressProxy(options ?? new EgressProxyOptions(true, 0), _policy, _log, NullLogger<EgressProxy>.Instance,
-            resolver is null ? null : resolver.ResolveAsync);
+        var proxy = new EgressProxy(options ?? new EgressProxyOptions(true, 0), Creds, _policy, _log, NullLogger<EgressProxy>.Instance,
+            resolver is null ? PublicResolve : resolver.ResolveAsync, DialUpstream);
         await proxy.StartAsync(CancellationToken.None);
         _extraProxies.Add(proxy);
         return await proxy.BoundPort.WaitAsync(Timeout);
@@ -939,10 +1288,157 @@ public sealed class EgressProxyTests : IAsyncLifetime
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, proxyPort);
         var stream = client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes($"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"));
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(Authed($"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n")));
         var status = await ReadLineAsync(stream);
         while ((await ReadLineAsync(stream)).Length > 0) { }
         return (client, status);
+    }
+
+    private async Task<string> ConnectWithAsync(int proxyPort, string? authorization)
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, proxyPort, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        var header = authorization is null ? string.Empty : $"Proxy-Authorization: {authorization}\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"CONNECT api.example:{_upstreamPort} HTTP/1.1\r\nHost: api.example:{_upstreamPort}\r\n{header}\r\n"), TestContext.Current.CancellationToken);
+        return await ReadToEndAsync(stream);
+    }
+
+    [Fact]
+    public async Task A_client_without_a_credential_is_refused_and_nothing_is_dialled()
+    {
+        var response = await ConnectWithAsync(_proxyPort, authorization: null);
+
+        Assert.StartsWith("HTTP/1.1 407", response);
+        Assert.Contains("Proxy-Authenticate: Basic", response);
+        Assert.Equal(0, _dials);
+        // No launch asked, so the log every run shares gets no row for a host anyone can make up.
+        Assert.Empty(_log.Entries);
+    }
+
+    [Fact]
+    public async Task A_plain_request_without_a_credential_and_a_tls_flow_are_refused_too()
+    {
+        using (var client = await OpenAsync())
+        {
+            await SendAsync(client, $"GET http://localhost:{_upstreamPort}/ HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\n\r\n");
+            Assert.StartsWith("HTTP/1.1 407", await ReadToEndAsync(client.GetStream()));
+        }
+
+        // A redirected flow has no header to carry a credential in, so it is told access_denied.
+        using (var client = await OpenAsync())
+        {
+            await client.GetStream().WriteAsync(TlsClientHelloTests.Build("api.example"), TestContext.Current.CancellationToken);
+            Assert.Equal([0x15, 0x03, 0x01, 0x00, 0x02, 0x02, 0x31], Encoding.Latin1.GetBytes(await ReadToEndAsync(client.GetStream())));
+        }
+        Assert.Equal(0, _dials);
+    }
+
+    [Theory]
+    [InlineData("provider")]
+    [InlineData("installer")]
+    public async Task A_scope_the_client_wrote_itself_is_refused(string kind)
+    {
+        // What the proxy used to believe: the provider's id or an installer zone, in the clear.
+        var victim = Guid.NewGuid();
+        await _db.Providers.CreateAiProviderAsync(new AiProvider { Id = victim, Name = "victim", Type = "claude-code", BaseUrl = "", Model = "" });
+        var claim = kind == "provider" ? $"provider:{victim}" : "installer:agents";
+        await ListAsync("api.example", NetworkListKind.Whitelist, kind == "provider" ? victim : null);
+
+        var response = await ConnectWithAsync(_proxyPort, "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(claim)));
+
+        Assert.StartsWith("HTTP/1.1 407", response);
+        Assert.Equal(0, _dials);
+    }
+
+    [Fact]
+    public async Task A_token_signed_with_another_key_is_refused()
+    {
+        var other = new EgressCredentials(new byte[32]);
+        var token = other.Mint(new LaunchScope(Installer: "agents"));
+
+        var response = await ConnectWithAsync(_proxyPort, "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"ild:{token}")));
+
+        Assert.StartsWith("HTTP/1.1 407", response);
+    }
+
+    [Fact]
+    public async Task A_launchs_scope_comes_from_its_token_and_survives_a_restart()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "ild-egress-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var keyFile = Path.Combine(directory, "proxy.key");
+            var provider = Guid.NewGuid();
+            await SetModeAsync(NetworkMode.Whitelist);
+            await _db.Providers.CreateAiProviderAsync(new AiProvider { Id = provider, Name = "mine", Type = "claude-code", BaseUrl = "", Model = "" });
+            await ListAsync("api.example", NetworkListKind.Whitelist, provider);
+
+            var token = EgressCredentials.Load(keyFile).Mint(new LaunchScope(Provider: provider));
+            var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"ild:{token}"));
+
+            // ILD restarts: a new credentials object over the same key file, and a new proxy.
+            var restarted = new EgressProxy(new EgressProxyOptions(true, 0), EgressCredentials.Load(keyFile), _policy, _log, NullLogger<EgressProxy>.Instance, PublicResolve, DialUpstream);
+            _extraProxies.Add(restarted);
+            await restarted.StartAsync(CancellationToken.None);
+            var port = await restarted.BoundPort.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+            Assert.StartsWith("HTTP/1.1 200", await ConnectStatusAsync(port, header));
+            // The provider's entry applied, though the client never said which provider it was.
+            Assert.Equal(("api.example", _upstreamPort, NetworkDecision.Allowed, (Guid?)provider), Assert.Single(_log.Entries));
+            // Without the token, the same host under the same whitelist is not reached.
+            Assert.StartsWith("HTTP/1.1 407", await ConnectWithAsync(port, authorization: null));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private async Task<string> ConnectStatusAsync(int proxyPort, string authorization)
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, proxyPort, TestContext.Current.CancellationToken);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"CONNECT api.example:{_upstreamPort} HTTP/1.1\r\nHost: api.example:{_upstreamPort}\r\nProxy-Authorization: {authorization}\r\n\r\n"), TestContext.Current.CancellationToken);
+        return await ReadLineAsync(stream);
+    }
+
+    [Fact]
+    public async Task A_client_the_options_do_not_accept_is_dropped_before_it_is_read()
+    {
+        var port = await StartProxyAsync(null, new EgressProxyOptions(true, 0) { AcceptsClient = _ => false });
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
+        await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(Authed($"CONNECT api.example:{_upstreamPort} HTTP/1.1\r\nHost: x\r\n\r\n")), TestContext.Current.CancellationToken);
+
+        Assert.Equal(string.Empty, await ReadToEndAsync(client.GetStream()));
+        Assert.Empty(_log.Entries);
+    }
+
+    [Theory]
+    [InlineData(RunHostKind.Local, "127.0.0.1", true)]
+    [InlineData(RunHostKind.Kubernetes, "203.0.113.5", true)]
+    [InlineData(RunHostKind.Container, "127.0.0.1", true)]
+    [InlineData(RunHostKind.Container, "10.213.7.2", true)]
+    [InlineData(RunHostKind.Container, "10.214.0.2", false)]
+    [InlineData(RunHostKind.Container, "192.168.1.50", false)]
+    [InlineData(RunHostKind.Container, "172.18.0.3", false)]
+    public void On_the_container_host_only_loopback_and_the_subnet_pool_are_served(RunHostKind kind, string client, bool served)
+    {
+        var accepts = EgressProxyOptions.ClientFilterFor(kind, _ => null);
+
+        Assert.Equal(served, accepts?.Invoke(IPAddress.Parse(client)) ?? true);
+    }
+
+    [Fact]
+    public void The_container_filter_follows_the_configured_pool()
+    {
+        var accepts = EgressProxyOptions.ClientFilterFor(RunHostKind.Container, name => name == ContainerRunHostOptions.SubnetPoolSetting ? "172.30.0.0/20" : null)!;
+
+        Assert.True(accepts(IPAddress.Parse("172.30.15.9")));
+        Assert.False(accepts(IPAddress.Parse("10.213.0.9")));
     }
 
     private static readonly IPAddress[] Private10 = { IPAddress.Parse("10.1.2.3") };
@@ -956,7 +1452,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     {
         await SetModeAsync(mode);
         if (listed) await ListAsync("status.lan.example", whitelist ? NetworkListKind.Whitelist : NetworkListKind.Blacklist);
-        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
+        var resolver = new CountingResolver(_ => Private10);
         var port = await StartProxyAsync(resolver);
 
         var (client, status) = await ConnectViaAsync(port, "status.lan.example", _upstreamPort);
@@ -994,9 +1490,11 @@ public sealed class EgressProxyTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("127.0.0.1")]
-    [InlineData("[::1]")]
-    public async Task A_private_address_literal_is_judged_only_by_the_mode(string literal)
+    [InlineData("10.1.2.3")]
+    [InlineData("192.168.1.5")]
+    [InlineData("169.254.169.254")]
+    [InlineData("[fd00::1]")]
+    public async Task A_private_address_literal_is_judged_only_by_the_mode_without_protected_destinations(string literal)
     {
         var port = await StartProxyAsync(null);
 
@@ -1013,7 +1511,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     [Fact]
     public async Task A_name_is_resolved_once_and_the_resolved_address_is_dialled()
     {
-        var resolver = new CountingResolver(_ => new[] { IPAddress.Loopback });
+        var resolver = new CountingResolver(_ => Private10);
         var port = await StartProxyAsync(resolver);
 
         var (client, status) = await ConnectViaAsync(port, "no-such-host.invalid", _upstreamPort);
@@ -1042,15 +1540,37 @@ public sealed class EgressProxyTests : IAsyncLifetime
     private sealed class RecordingLog : INetworkLogRecorder
     {
         private readonly List<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> _entries = new();
+        private readonly List<string?> _reasons = new();
+        private readonly List<string?> _installers = new();
 
         public IReadOnlyList<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> Entries
         {
             get { lock (_entries) return _entries.ToList(); }
         }
 
-        public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId)
+        public IReadOnlyList<string?> Reasons
         {
-            lock (_entries) _entries.Add((host, port, decision, aiProviderId));
+            get { lock (_entries) return _reasons.ToList(); }
+        }
+
+        public IReadOnlyList<string?> Installers
+        {
+            get { lock (_entries) return _installers.ToList(); }
+        }
+
+        /// <summary>The queue is full: entries are refused, as a recorder that cannot take another does.</summary>
+        public bool Full { get; set; }
+
+        public bool Record(string host, int port, NetworkDecision decision, Guid? aiProviderId, string? reason = null, string? installer = null, string? via = null)
+        {
+            if (Full) return false;
+            lock (_entries)
+            {
+                _entries.Add((host, port, decision, aiProviderId));
+                _reasons.Add(reason);
+                _installers.Add(installer);
+            }
+            return true;
         }
     }
 
@@ -1100,6 +1620,40 @@ public sealed class NetworkLogRecorderTests : IDisposable
         Assert.Equal(NetworkDecision.Allowed, anthropic.Decision);
         Assert.Equal(providerId, anthropic.AiProviderId);
         Assert.Contains(notifier.Appended, e => e.Host == "evil.example" && e.Decision == NetworkDecision.Blocked);
+    }
+
+    [Fact]
+    public void A_full_queue_keeps_the_earlier_entries_refuses_the_new_ones_and_counts_them()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<INetworkPolicyStore>(_db.Network);
+        using var provider = services.BuildServiceProvider();
+        var log = new ListLogger<NetworkLogRecorder>();
+        var recorder = new NetworkLogRecorder(provider.GetRequiredService<IServiceScopeFactory>(), new RecordingNotifier(), log);
+
+        var accepted = 0;
+        while (recorder.Record("first.example", 443, NetworkDecision.Blocked, null)) accepted++;
+        Assert.True(accepted > 0);
+        Assert.False(recorder.Record("later.example", 443, NetworkDecision.Allowed, null));
+        Assert.False(recorder.Record("later.example", 443, NetworkDecision.Blocked, null));
+
+        recorder.ReportDropped();
+        recorder.ReportDropped();
+
+        var warning = Assert.Single(log.Messages);
+        Assert.Contains("3 connection entries", warning);
+    }
+
+    private sealed class ListLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<string> Messages { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Messages.Add(formatter(state, exception));
     }
 
     private sealed class RecordingNotifier : INetworkNotifier
@@ -1191,7 +1745,7 @@ public sealed class EgressPolicyInvalidationTests
 
         public void Release() => _gate.TrySetResult();
 
-        public Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default)
+        public Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default, bool installers = false)
             => throw new NotSupportedException();
 
         public async Task<IReadOnlyList<NetworkPolicyEntry>> GetEntriesAsync(CancellationToken ct = default)
@@ -1206,7 +1760,7 @@ public sealed class EgressPolicyInvalidationTests
         }
 
         public Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default, bool installers = false) => throw new NotSupportedException();
         public Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<NetworkLogEntry>> GetLogAsync(int take, CancellationToken ct = default) => throw new NotSupportedException();
@@ -1245,11 +1799,45 @@ public sealed class EgressProxyParseTests
         Assert.EndsWith("Connection: close\r\n\r\n", head);
     }
 
+    [Theory]
+    [InlineData("PUT /api/v1/logging/level HTTP/1.1\nHost: ild\nContent-Length: 0\n\nGET / HTTP/1.1\r\nHost: wi-1.preview.ild\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nX-A: b\nHost: other.example\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nX-A: b\rc\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nX-A: b\0c\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1 extra\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/2.0\r\n\r\n")]
+    [InlineData("G=T http://api.example.com/ HTTP/1.1\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nTransfer-Encoding : chunked\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nX-A: b\r\n folded: value\r\n\r\n")]
+    [InlineData("GET http://api.example.com/ HTTP/1.1\r\nno colon here\r\n\r\n")]
+    public void A_head_another_server_could_read_differently_is_refused(string request)
+    {
+        Assert.Null(EgressProxy.ParseRequest(Head(request)));
+    }
+
     [Fact]
     public void A_default_port_target_yields_a_bare_Host()
     {
         Assert.Contains("\r\nHost: api.example.com\r\n", Forwarded("GET http://api.example.com/ HTTP/1.1\r\n\r\n"));
     }
+
+    [Fact]
+    public void A_Host_that_names_another_host_than_the_target_is_replaced_by_the_targets()
+    {
+        var head = Forwarded("GET http://api.example.com:8080/x HTTP/1.1\r\nHost: admin.internal\r\n\r\n");
+
+        Assert.StartsWith("GET /x HTTP/1.1\r\nHost: api.example.com:8080\r\n", head);
+        Assert.DoesNotContain("admin.internal", head);
+    }
+
+    [Theory]
+    [InlineData(".example.com", true)]
+    [InlineData("*.com", true)]
+    [InlineData("*", true)]
+    [InlineData("example.com", false)]
+    [InlineData("a.example.com", false)]
+    public void Only_a_host_written_as_a_pattern_is_a_pattern(string host, bool pattern)
+        => Assert.Equal(pattern, EgressRules.LooksLikePattern(host));
 
     [Fact]
     public void A_client_supplied_Host_is_kept_and_not_doubled()
@@ -1264,10 +1852,12 @@ public sealed class EgressProxyParseTests
     public void Proxy_credentials_are_read_and_never_forwarded()
     {
         var id = Guid.NewGuid();
-        var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"provider:{id}"));
-        var request = EgressProxy.ParseRequest(Head($"GET http://api.example.com/ HTTP/1.1\r\nProxy-Authorization: Basic {auth}\r\n\r\n"))!;
+        var request = EgressProxy.ParseRequest(Head($"GET http://api.example.com/ HTTP/1.1\r\nProxy-Authorization: {EgressProxyTests.Header(new LaunchScope(Provider: id))}\r\n\r\n"))!;
 
-        Assert.Equal(id, request.AiProviderId);
+        // The parse only carries the credential; the scope is read from it once the proxy has verified it.
+        Assert.Null(request.AiProviderId);
+        Assert.True(EgressProxyTests.Creds.TryRead(request.Credential, out var scope));
+        Assert.Equal(id, scope.Provider);
         Assert.DoesNotContain("Proxy-Authorization", Encoding.ASCII.GetString(request.ForwardedHead));
     }
 }

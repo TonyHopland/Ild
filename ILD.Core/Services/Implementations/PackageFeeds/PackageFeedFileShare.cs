@@ -25,21 +25,26 @@ public sealed class PackageFeedFileShare
         _logger = logger;
     }
 
-    /// <summary>A hold on the file for one holder; disposing it more than once is harmless.</summary>
+    /// <summary>A hold on the file for one holder; disposing it more than once is harmless, and every call returns only once the release is done.</summary>
     public Lease Acquire()
     {
         lock (_lock)
         {
             _current ??= PackageFeedCredentialFiles.Materialize(_feeds, _prefix, _logger);
             _holders++;
-            return new Lease(this, _current.Environment);
+            return new Lease(this, _current.Environment, _current.FilePath);
         }
     }
 
-    private void Release()
+    // Under the share's lock, so a second call for a lease already being released waits for the first to
+    // finish: a stop that returns has seen the file go even when the service's exit let go of its lease first.
+    private void Release(Lease lease)
     {
         lock (_lock)
         {
+            if (lease.Released)
+                return;
+            lease.Released = true;
             if (--_holders > 0)
                 return;
             _current!.Dispose();
@@ -50,21 +55,23 @@ public sealed class PackageFeedFileShare
     public sealed class Lease : IDisposable
     {
         private readonly PackageFeedFileShare _share;
-        private int _released;
 
-        internal Lease(PackageFeedFileShare share, IReadOnlyDictionary<string, string> environment)
+        internal Lease(PackageFeedFileShare share, IReadOnlyDictionary<string, string> environment, string? path)
         {
             _share = share;
             Environment = environment;
+            Path = path;
         }
+
+        /// <summary>The npm config file the lease holds, or null when no feed is selected.</summary>
+        public string? Path { get; }
 
         /// <summary>The feed variables for the process this lease is held for.</summary>
         public IReadOnlyDictionary<string, string> Environment { get; }
 
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _released, 1) == 0)
-                _share.Release();
-        }
+        /// <summary>Guarded by the share's lock.</summary>
+        internal bool Released { get; set; }
+
+        public void Dispose() => _share.Release(this);
     }
 }

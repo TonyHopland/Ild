@@ -7,6 +7,7 @@ import type {
   NetworkForward,
   NetworkLogEntry,
   NetworkPolicyEntry,
+  NetworkProtectedDestination,
   NetworkStatus,
 } from "../../../types";
 import { WorkItemHubProvider } from "../../../hooks/useWorkItemHub";
@@ -18,16 +19,18 @@ const emit = hub.dispatch;
 const enforced: NetworkStatus = {
   enforcement: "enforced",
   reason: "nftables rules drop everything uid 10002 sends except loopback and DNS.",
+  contained: true,
   proxyEnabled: true,
   proxyPort: 3128,
-  offAvailable: true,
+  directRoutes: [],
 };
 const advisory: NetworkStatus = {
   enforcement: "advisory",
   reason: "NET_ADMIN is not granted to the container.",
+  contained: false,
   proxyEnabled: true,
   proxyPort: 3128,
-  offAvailable: true,
+  directRoutes: [],
 };
 
 const github: NetworkPolicyEntry = {
@@ -53,6 +56,15 @@ const npmLine: NetworkLogEntry = {
   aiProviderId: "p1",
 };
 
+const database: NetworkProtectedDestination = {
+  id: "database",
+  name: "ILD database",
+  hosts: ["db.example"],
+  addresses: ["10.0.0.7"],
+  ranges: [],
+  enabled: true,
+};
+
 const postgres: NetworkForward = {
   id: "f1",
   name: "postgres",
@@ -68,11 +80,14 @@ function mockServices(
   status: NetworkStatus = enforced,
   mode = "monitor",
   forwards: NetworkForward[] = [postgres],
+  runHost: "local" | "container" | "kubernetes" = "container",
 ) {
+  vi.spyOn(services.settingsService, "getRunHost").mockResolvedValue({ kind: runHost });
   routeHubs(signalRHook, { "/hubs/work-item": hub });
   vi.spyOn(services.networkService, "getStatus").mockResolvedValue(status);
   vi.spyOn(services.networkService, "getEntries").mockResolvedValue([github, evil]);
   vi.spyOn(services.networkService, "getForwards").mockResolvedValue(forwards);
+  vi.spyOn(services.networkService, "getProtected").mockResolvedValue([database]);
   vi.spyOn(services.networkService, "getLog").mockResolvedValue([npmLine]);
   vi.spyOn(services.settingsService, "get").mockImplementation(async (key: string) => ({
     key,
@@ -137,6 +152,86 @@ describe("Network settings", () => {
     expect(banner.textContent).toContain("NET_ADMIN is not granted");
   });
 
+  test("says the limits are unverified rather than enforced before a probe has run", async () => {
+    mockServices({ ...enforced, enforcement: "unverified", reason: "No run has checked yet." });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const banner = await screen.findByRole("status");
+    expect(banner.textContent).toMatch(/not verified/i);
+  });
+
+  test("lists the protected destinations and switches one off only after a confirmation", async () => {
+    mockServices();
+    const setProtected = vi
+      .spyOn(services.networkService, "setProtected")
+      .mockResolvedValue({ ...database, enabled: false });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = (await screen.findByText("ILD database")).closest("tr")!;
+    expect(within(row).getByText("10.0.0.7")).toBeTruthy();
+
+    fireEvent.click(within(row).getByLabelText("Protect ILD database"));
+    expect(setProtected).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Switch off" }));
+
+    await waitFor(() => expect(setProtected).toHaveBeenCalledWith("database", false));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/ILD.s database/);
+  });
+
+  test("a protected destination with only ranges lists them, and one with nothing shows a dash", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getProtected").mockResolvedValue([
+      {
+        id: "link-local",
+        name: "Link-local and cloud metadata addresses",
+        hosts: [],
+        addresses: [],
+        ranges: ["169.254.0.0/16", "fe80::/10", "fd00:ec2::254"],
+        enabled: true,
+      },
+      { id: "empty", name: "Nothing yet", hosts: [], addresses: [], ranges: [], enabled: true },
+    ]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = (await screen.findByText("Link-local and cloud metadata addresses")).closest("tr")!;
+    expect(within(row).getByText("169.254.0.0/16, fe80::/10, fd00:ec2::254")).toBeTruthy();
+    const empty = screen.getByText("Nothing yet").closest("tr")!;
+    expect(within(empty).getByText("—")).toBeTruthy();
+  });
+
+  test("a protected refusal in the log links to the protections instead of offering a rule", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([
+      { ...npmLine, host: "db.example", port: 5432, reason: "protected: ILD database" },
+    ]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const log = within(await screen.findByLabelText("Traffic log"));
+    const row = (await log.findByText("db.example")).closest("tr")!;
+    expect(within(row).getByText("protected: ILD database")).toBeTruthy();
+    expect(within(row).getByRole("link", { name: "Protected destinations" })).toBeTruthy();
+    expect(within(row).queryByText("Allow")).toBeNull();
+  });
+
+  test("a private-address refusal in the log links to the protections", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([
+      {
+        ...npmLine,
+        host: "10.1.2.3",
+        port: 5432,
+        reason: "protected: Private and cluster-internal addresses",
+      },
+    ]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = (
+      await within(await screen.findByLabelText("Traffic log")).findByText("10.1.2.3")
+    ).closest("tr")!;
+    expect(within(row).getByRole("link", { name: "Protected destinations" })).toBeTruthy();
+    expect(within(row).queryByText("Allow")).toBeNull();
+  });
+
   test("saves the mode and reverts when the save fails", async () => {
     mockServices(enforced, "monitor");
     const put = vi
@@ -188,6 +283,93 @@ describe("Network settings", () => {
     );
     const rules = within(screen.getByLabelText("Network rules"));
     expect(await rules.findByText("api.anthropic.com")).toBeTruthy();
+  });
+
+  test("adds a rule to the installers' scope and shows it as such", async () => {
+    mockServices();
+    const created: NetworkPolicyEntry = {
+      id: "e5",
+      host: "binaries.example",
+      listKind: "Whitelist",
+      aiProviderId: null,
+      installers: true,
+      createdAt: "2026-09-02T12:00:00Z",
+    };
+    const add = vi.spyOn(services.networkService, "addEntry").mockResolvedValue(created);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    fireEvent.change(await screen.findByLabelText("Host pattern"), {
+      target: { value: "binaries.example" },
+    });
+    fireEvent.change(screen.getByLabelText("Scope for the new rule"), {
+      target: { value: "installers" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add rule" }));
+
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith({
+        host: "binaries.example",
+        listKind: "Whitelist",
+        aiProviderId: null,
+        installers: true,
+      }),
+    );
+    const row = (
+      await within(screen.getByLabelText("Network rules")).findByText("binaries.example")
+    ).closest("tr")!;
+    expect(within(row).getByText("Installers")).toBeTruthy();
+  });
+
+  test("names the zone of an installer's connection and promotes it to the installers' scope", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([
+      {
+        id: "l2",
+        host: "binaries.example",
+        port: 443,
+        timestamp: "2026-09-02T12:00:00Z",
+        decision: "Blocked",
+        aiProviderId: null,
+        installer: "repo-0123",
+      },
+    ]);
+    const promoted: NetworkPolicyEntry = {
+      id: "e6",
+      host: "binaries.example",
+      listKind: "Whitelist",
+      aiProviderId: null,
+      installers: true,
+      createdAt: "2026-09-02T12:00:00Z",
+    };
+    const promote = vi
+      .spyOn(services.networkService, "addLogEntryToList")
+      .mockResolvedValue(promoted);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    expect(await screen.findByText("Installer: repo-0123")).toBeTruthy();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add binaries.example to whitelist" }),
+    );
+
+    await waitFor(() => expect(promote).toHaveBeenCalledWith("l2", "Whitelist", false, true));
+  });
+
+  test("marks a model call made through the gateway and keeps it apart from a proxied connection to the same host", async () => {
+    mockServices();
+    const row = {
+      port: 443,
+      timestamp: "2026-09-02T12:00:00Z",
+      decision: "Allowed",
+      aiProviderId: null,
+    } as const;
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([
+      { ...row, id: "g1", host: "api.example", via: "gateway" },
+      { ...row, id: "g2", host: "api.example" },
+    ]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    expect(await screen.findAllByText(/via model gateway/)).toHaveLength(1);
+    expect(screen.getAllByText("api.example")).toHaveLength(2);
   });
 
   test("spells out what the pattern being typed will match", async () => {
@@ -361,10 +543,47 @@ describe("Network settings", () => {
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
 
     const row = await forwardRow("postgres");
-    expect(row.getByText(":5432")).toBeTruthy();
+    expect(await row.findByText(/Preferred: a TLS client/)).toBeTruthy();
+    // The destination column and the preferred real-name form both show host:port.
+    expect(row.getAllByText(":5432")).toHaveLength(2);
     expect(row.getByText("127.0.0.1")).toBeTruthy();
     expect(row.getByText(":15432")).toBeTruthy();
+    expect(row.getByText(/Preferred: a TLS client/)).toBeTruthy();
     expect(row.getByText("Listening")).toBeTruthy();
+  });
+
+  test("a forward to an IP address says it has the loopback form only", async () => {
+    mockServices(enforced, "monitor", [{ ...postgres, host: "10.0.0.5" }]);
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = await forwardRow("postgres");
+    expect(await row.findByText(/loopback only/)).toBeTruthy();
+    expect(row.queryByText(/Preferred:/)).toBeNull();
+  });
+
+  test.each(["local", "kubernetes"] as const)(
+    "a forward under the %s run host shows the loopback form only",
+    async (kind) => {
+      mockServices(enforced, "monitor", [postgres], kind);
+      render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+      const row = await forwardRow("postgres");
+      await waitFor(() => expect(services.settingsService.getRunHost).toHaveBeenCalled());
+      expect(row.queryByText(/Preferred:/)).toBeNull();
+      expect(row.getAllByText(":5432")).toHaveLength(1);
+      expect(row.getByText("Point a client at 127.0.0.1:15432.")).toBeTruthy();
+    },
+  );
+
+  test("a forward shows no real-name form while the run host is unknown", async () => {
+    mockServices();
+    vi.spyOn(services.settingsService, "getRunHost").mockRejectedValue(new Error("down"));
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const row = await forwardRow("postgres");
+    await waitFor(() => expect(services.settingsService.getRunHost).toHaveBeenCalled());
+    expect(row.getByText("Point a client at 127.0.0.1:15432.")).toBeTruthy();
+    expect(row.queryByText(/Preferred:/)).toBeNull();
   });
 
   test("a forward whose local port will not bind says so on its own row", async () => {
@@ -766,40 +985,6 @@ describe("Network modes", () => {
 
   const pressed = (name: string) => modeButton(name).getAttribute("aria-pressed") === "true";
 
-  const offUnavailable: NetworkStatus = {
-    ...enforced,
-    offAvailable: false,
-    reason:
-      "nftables rules drop everything uid 10002 sends except loopback, and its DNS is blocked. Network mode Off is unavailable: the group 'ild-net-open' does not exist; agents launched in it have no network.",
-  };
-  const times = (text: string, part: string) => text.split(part).length - 1;
-
-  test("Off cannot be chosen where it is unavailable, and says why once", async () => {
-    mockServices(offUnavailable, "monitor");
-    const put = vi.spyOn(services.settingsService, "put");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Monitor")).toBe(true));
-
-    expect(modeButton("Off").hasAttribute("disabled")).toBe(true);
-    const card = modeCard().textContent!;
-    expect(card).toContain("the group 'ild-net-open' does not exist");
-    expect(times(card, "Off is unavailable")).toBe(1);
-    fireEvent.click(modeButton("Off"));
-    expect(confirmation()).toBeNull();
-    expect(put).not.toHaveBeenCalled();
-  });
-
-  test("a stored Off that is unavailable warns, once, that its agents have no network", async () => {
-    mockServices(offUnavailable, "off");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Off")).toBe(true));
-
-    expect(times(document.body.textContent!, "have no network")).toBe(1);
-    expect(screen.getByText(/switch to Monitor/i)).toBeTruthy();
-    expect(offWarning()).toHaveLength(0);
-    expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
-  });
-
   test("offers Off, Monitor, Whitelist and Blacklist", async () => {
     mockServices();
     render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
@@ -836,7 +1021,10 @@ describe("Network modes", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain(
-      "agents can reach any host, including your LAN and cloud metadata, and only connections through a forward are logged",
+      "they connect directly and can reach any host, including your LAN and cloud metadata",
+    );
+    expect(dialog.textContent).toContain(
+      "ILD's database, the WorkItem Server and the Kubernetes API",
     );
     expect(put).not.toHaveBeenCalled();
 
@@ -924,19 +1112,6 @@ describe("Network modes", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  test("the Off warning carries the firewall's own word on whether Off can reach the network", async () => {
-    const offUnavailable = {
-      ...enforced,
-      reason:
-        "Network mode Off is unavailable: it needs no-new-privileges; agents launched in it have no network.",
-    };
-    mockServices(offUnavailable, "off");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-
-    const banner = (await screen.findByText(/Network mode is Off/)).closest("div")!;
-    expect(banner.textContent).toMatch(/Off is unavailable/);
-  });
-
   test.each(["OFF", " Off "])(
     "a mode stored as %j is read as Off, as the backend reads it",
     async (stored) => {
@@ -967,19 +1142,6 @@ describe("Network modes", () => {
     expect(card).toMatch(/next connection/i);
   });
 
-  test("without the firewall it says Off and Monitor differ only in logging", async () => {
-    mockServices(advisory, "monitor");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Monitor")).toBe(true));
-    expect(modeCard().textContent).toMatch(/differ only in logging/i);
-    cleanup();
-
-    mockServices(enforced, "monitor");
-    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
-    await waitFor(() => expect(pressed("Monitor")).toBe(true));
-    expect(modeCard().textContent).not.toMatch(/differ only in logging/i);
-  });
-
   test.each(["monitor", "off"])(
     "%s shows no rule in effect and no rule marked as ignored",
     async (mode) => {
@@ -993,9 +1155,60 @@ describe("Network modes", () => {
       expect(modeCard().textContent).not.toMatch(/\d+ rules? (is|are) in effect/i);
       const note = screen.getByText("Rules", { selector: "h3" }).closest("section")!.textContent!;
       expect(note).toMatch(/no rule is in effect/i);
-      expect(note).toMatch(mode === "off" ? /only forwards are logged/i : /logged/i);
+      expect(note).toMatch(/logged/i);
     },
   );
+
+  test("Off says agents connect directly, and in a container that the route is the run's and protected destinations do not apply", async () => {
+    mockServices(enforced, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    const contained = (await screen.findByText(/Network mode is Off/)).closest("div")!;
+    expect(contained.textContent).toMatch(/connect directly/i);
+    expect(contained.textContent).toMatch(/every process of that run/i);
+    expect(contained.textContent).toMatch(/database, the WorkItem Server and the Kubernetes API/);
+    expect(modeButton("Off").hasAttribute("disabled")).toBe(false);
+    cleanup();
+
+    mockServices({ ...enforced, enforcement: "unverified" }, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    const unverified = (await screen.findByText(/Network mode is Off/)).closest("div")!;
+    expect(unverified.textContent).toMatch(/database, the WorkItem Server and the Kubernetes API/);
+    cleanup();
+
+    mockServices(advisory, "off");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    const local = (await screen.findByText(/Network mode is Off/)).closest("div")!;
+    expect(local.textContent).toMatch(/connect directly/i);
+    expect(screen.getByText(/only forwards are logged/i)).toBeTruthy();
+  });
+});
+
+describe("Direct routes", () => {
+  test("lists the runs and the chats that have a direct route, whatever the mode is now", async () => {
+    mockServices(
+      {
+        ...enforced,
+        directRoutes: [
+          { ownerId: "0123456789abcdef0123456789abcdef", chat: false },
+          { ownerId: "00000000-0000-0000-0000-000000000000", chat: true },
+        ],
+      },
+      "monitor",
+    );
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    const banner = (await screen.findByText(/Direct route:/)).closest("div")!;
+    expect(banner.textContent).toContain("run 01234567");
+    expect(banner.textContent).toContain("all chats");
+  });
+
+  test("says nothing when no run has one", async () => {
+    mockServices(enforced, "monitor");
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+    await screen.findByLabelText("Network rules");
+
+    expect(screen.queryByText(/Direct route:/)).toBeNull();
+  });
 });
 
 describe("Editing a network forward", () => {
@@ -1052,7 +1265,7 @@ describe("Editing a network forward", () => {
     );
     const table = await forwardTable();
     expect(await table.findByText("primary")).toBeTruthy();
-    expect(table.getByText("db.example")).toBeTruthy();
+    expect(table.getAllByText("db.example")[0]).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Save the / })).toBeNull();
     expect(screen.getByRole("button", { name: "Edit the primary forward" })).toBeTruthy();
     // The other row is untouched.

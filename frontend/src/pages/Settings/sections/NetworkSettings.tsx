@@ -14,19 +14,21 @@ import type {
   NetworkLogEntry,
   NetworkMode,
   NetworkPolicyEntry,
+  NetworkProtectedDestination,
   NetworkStatus,
 } from "../../../types";
 import ConfirmModal from "../../../components/ConfirmModal";
 import { NumericSettingField, Segmented, SettingRow, Switch } from "../controls";
 import { AddForwardRow, ForwardTable } from "./NetworkForwards";
-import { AddRuleRow, RuleTable } from "./NetworkRules";
+import { AddRuleRow, RuleTable, scopeFields } from "./NetworkRules";
+import { PROTECTED_ANCHOR, ProtectedDestinations } from "./NetworkProtected";
 import { describeError } from "./networkShared";
 
 const MODES: { value: NetworkMode; label: string; help: string }[] = [
   {
     value: "off",
     label: "Off",
-    help: "Agents connect directly to any host and port, with no proxy. Only connections through a forward are logged, and neither list is in effect.",
+    help: "Neither list is in effect. Agents connect directly, to any host, any port and any protocol (SSH, UDP and raw TCP too), with no proxy, and nothing is logged except what goes through a forward.",
   },
   {
     value: "monitor",
@@ -91,7 +93,7 @@ interface LogGroup {
 export function groupConsecutive(entries: NetworkLogEntry[]): LogGroup[] {
   const groups: LogGroup[] = [];
   for (const entry of entries) {
-    const signature = `${entry.host}:${entry.port}:${entry.decision}:${entry.aiProviderId ?? ""}`;
+    const signature = `${entry.host}:${entry.port}:${entry.decision}:${entry.aiProviderId ?? ""}:${entry.installer ?? ""}:${entry.reason ?? ""}:${entry.via ?? ""}`;
     const last = groups[groups.length - 1];
     if (last && last.key === signature) {
       last.count += 1;
@@ -170,6 +172,18 @@ export default function NetworkSettings() {
   const [modeError, setModeError] = useState<string | null>(null);
   const [entries, setEntries] = useState<NetworkPolicyEntry[]>([]);
   const [forwards, setForwards] = useState<NetworkForward[]>([]);
+  // Only a container host maps a forward's name; nothing is claimed while the host is unknown.
+  const [answersRealName, setAnswersRealName] = useState(false);
+  useEffect(() => {
+    void settingsService
+      .getRunHost()
+      .then((host) => setAnswersRealName(host.kind === "container"))
+      .catch(() => {});
+  }, []);
+  const [protectedDestinations, setProtectedDestinations] = useState<NetworkProtectedDestination[]>(
+    [],
+  );
+  const [protectedError, setProtectedError] = useState<string | null>(null);
   const [log, setLog] = useState<NetworkLogEntry[]>([]);
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [listError, setListError] = useState<string | null>(null);
@@ -198,6 +212,28 @@ export default function NetworkSettings() {
     setForwards,
     setForwardError,
     "Failed to load the forwards.",
+  );
+  const refreshProtected = useCallback(async () => {
+    try {
+      setProtectedDestinations(await networkService.getProtected());
+      setProtectedError(null);
+    } catch (err) {
+      setProtectedError(describeError(err, "Failed to load the protected destinations."));
+    }
+  }, []);
+
+  const toggleProtected = useCallback(
+    async (id: string, enabled: boolean) => {
+      try {
+        const updated = await networkService.setProtected(id, enabled);
+        setProtectedDestinations((prev) => prev.map((d) => (d.id === id ? updated : d)));
+        setProtectedError(null);
+      } catch (err) {
+        setProtectedError(describeError(err, "Failed to change the protection."));
+        await refreshProtected();
+      }
+    },
+    [refreshProtected],
   );
   const refreshEntries = entryList.refresh;
   const refreshForwards = forwardList.refresh;
@@ -229,8 +265,9 @@ export default function NetworkSettings() {
       .catch(() => {});
     void refreshEntries();
     void refreshForwards();
+    void refreshProtected();
     void refreshLog();
-  }, [refreshEntries, refreshForwards, refreshLog]);
+  }, [refreshEntries, refreshForwards, refreshProtected, refreshLog]);
 
   useEffect(() => {
     // The forwards ride on the same event: their listener set and the verdict on
@@ -238,6 +275,7 @@ export default function NetworkSettings() {
     const onPolicyChanged = () => {
       void refreshEntries();
       void refreshForwards();
+      void refreshProtected();
       void settingsService
         .get(NetworkSettingKeys.Mode)
         .then((s) => {
@@ -262,7 +300,12 @@ export default function NetworkSettings() {
       off("NetworkLogAppended", onLogAppended);
       off("NetworkLogCleared", onLogCleared);
     };
-  }, [on, off, refreshEntries, refreshForwards, refreshLog]);
+  }, [on, off, refreshEntries, refreshForwards, refreshProtected, refreshLog]);
+
+  const showProtected = (event: React.MouseEvent) => {
+    event.preventDefault();
+    document.getElementById(PROTECTED_ANCHOR)?.scrollIntoView?.({ behavior: "smooth" });
+  };
 
   const changeMode = async (next: NetworkMode) => {
     const previous = mode;
@@ -281,18 +324,17 @@ export default function NetworkSettings() {
     else void changeMode(next);
   };
 
-  const addEntry = async (host: string, kind: NetworkListKind, aiProviderId: string | null) => {
-    const created = await networkService.addEntry({ host, listKind: kind, aiProviderId });
+  const addEntry = async (host: string, kind: NetworkListKind, scope: string) => {
+    const created = await networkService.addEntry({ host, listKind: kind, ...scopeFields(scope) });
     entryList.add(created);
   };
 
-  const updateEntry = async (
-    id: string,
-    host: string,
-    kind: NetworkListKind,
-    aiProviderId: string | null,
-  ) => {
-    const updated = await networkService.updateEntry(id, { host, listKind: kind, aiProviderId });
+  const updateEntry = async (id: string, host: string, kind: NetworkListKind, scope: string) => {
+    const updated = await networkService.updateEntry(id, {
+      host,
+      listKind: kind,
+      ...scopeFields(scope),
+    });
     entryList.replace(updated);
   };
 
@@ -347,7 +389,7 @@ export default function NetworkSettings() {
    */
   const whitelistForwardHost = async (host: string) => {
     try {
-      await addEntry(host, "Whitelist", null);
+      await addEntry(host, "Whitelist", "");
       await refreshForwards();
     } catch (err) {
       setForwardError(describeError(err, "Failed to add the host to the whitelist."));
@@ -357,7 +399,9 @@ export default function NetworkSettings() {
   /** Take a host straight off the log onto a list, without retyping it. */
   const promote = async (entry: NetworkLogEntry, kind: NetworkListKind) => {
     try {
-      const created = await networkService.addLogEntryToList(entry.id, kind);
+      const created = entry.installer
+        ? await networkService.addLogEntryToList(entry.id, kind, false, true)
+        : await networkService.addLogEntryToList(entry.id, kind);
       entryList.add(created);
     } catch (err) {
       setListError(describeError(err, "Failed to add the host to the list."));
@@ -402,10 +446,15 @@ export default function NetworkSettings() {
         }));
   }, [log, logFilter, decisionFilter, grouped]);
 
-  const ruleFor = (host: string) => entries.find((e) => coversHost(e.host, host));
+  // An installer's connection is judged by the global and the installers' rules, any other by the global and its provider's.
+  const ruleFor = (host: string, installer?: string | null) =>
+    entries.find(
+      (e) => (installer ? e.aiProviderId === null : !e.installers) && coversHost(e.host, host),
+    );
 
   const activeMode = MODES.find((m) => m.value === mode);
-  const offUnavailable = status?.offAvailable === false;
+  const contained = status?.contained === true;
+  const routes = status?.directRoutes ?? [];
   const filtering = mode === "whitelist" || mode === "blacklist";
   const inEffect = entries.filter(
     (e) => (e.listKind === "Whitelist" ? "whitelist" : "blacklist") === mode,
@@ -420,21 +469,35 @@ export default function NetworkSettings() {
 
       {status && status.enforcement !== "enforced" && (
         <div className="net-banner" role="status">
-          <strong>Advisory mode — agent network limits are not enforced.</strong> {status.reason}
+          <strong>
+            {status.enforcement === "unverified"
+              ? "Agent network limits are not verified."
+              : "Advisory mode — agent network limits are not enforced."}
+          </strong>{" "}
+          {status.reason}
         </div>
       )}
       {mode === "off" && (
         <div className="net-banner">
-          <strong>Network mode is Off.</strong>{" "}
-          {offUnavailable ? (
-            <>{status.reason} Switch to Monitor to give agents the proxy back.</>
-          ) : (
+          <strong>Network mode is Off.</strong> Agents launched in it connect directly and can reach
+          any host, with no proxy, and only their connections through a forward are logged.
+          {contained && (
             <>
-              Agents launched in it can reach any host, including your LAN and cloud metadata, and
-              only their connections through a forward are logged.
-              {status?.enforcement === "enforced" && <> {status.reason}</>}
+              {" "}
+              In a run's container or pod that is a route out of the run itself, so every process of
+              that run can use it while it is attached, and the Protected destinations do not apply:
+              agents can reach ILD's database, the WorkItem Server and the Kubernetes API directly.
             </>
           )}
+        </div>
+      )}
+      {routes.length > 0 && (
+        <div className="net-banner" role="status">
+          <strong>Direct route:</strong>{" "}
+          {routes.map((r) => (r.chat ? "all chats" : `run ${r.ownerId.slice(0, 8)}`)).join(", ")}. A
+          run keeps its direct route until the next agent launch after Off, and then only once no
+          process launched in Off is still running in it. Chats share one container, so one chat
+          launched in Off opens it for all of them.
         </div>
       )}
       {listError && <div className="settings-error">{listError}</div>}
@@ -450,10 +513,6 @@ export default function NetworkSettings() {
               {activeMode?.help} Switching to or from Off applies to the next agent launch; running
               agents keep the network they started with. A change between Monitor, Whitelist and
               Blacklist, or to a list, applies to the next connection; nothing needs a restart.
-              {status && status.enforcement !== "enforced" && (
-                <> Without the firewall, Off and Monitor differ only in logging.</>
-              )}
-              {offUnavailable && mode !== "off" && <> {status.reason}</>}
               {filtering && (
                 <>
                   {" "}
@@ -471,7 +530,6 @@ export default function NetworkSettings() {
             options={MODES.map((m) => ({
               value: m.value,
               label: m.label,
-              disabled: m.value === "off" && offUnavailable && mode !== "off",
             }))}
           />
         </SettingRow>
@@ -480,7 +538,7 @@ export default function NetworkSettings() {
       <ConfirmModal
         isOpen={confirmingOff}
         title="Turn the network proxy off?"
-        message="Agents launched from now on connect directly: agents can reach any host, including your LAN and cloud metadata, and only connections through a forward are logged. Agents already running keep the network they started with."
+        message="Agents launched from now on are not filtered: they connect directly and can reach any host, including your LAN and cloud metadata. Protected destinations do not apply to a direct connection, so they can also reach ILD's database, the WorkItem Server and the Kubernetes API. In a container or pod the route belongs to the whole run, not just the agent. Agents already running keep the network they started with."
         confirmText="Turn off"
         onCancel={() => setConfirmingOff(false)}
         onConfirm={() => {
@@ -489,10 +547,21 @@ export default function NetworkSettings() {
         }}
       />
 
+      <ProtectedDestinations
+        destinations={protectedDestinations}
+        onToggle={toggleProtected}
+        error={protectedError}
+      />
+
       <section className="settings-card">
         <div className="settings-card-header">
           <h3 className="settings-card-title">Rules</h3>
         </div>
+        <p className="settings-card-note">
+          The Installers scope covers what a toolchain installer downloads while it installs a run's
+          tools, which no provider's rules apply to; its default allow list names the hosts mise,
+          npm, pip, cargo and the NuGet credential provider fetch from. Edit it like any other rule.
+        </p>
         {mode === "monitor" && (
           <p className="settings-card-note">
             Monitor blocks nothing, so no rule is in effect. Every destination is logged.
@@ -541,9 +610,11 @@ export default function NetworkSettings() {
         <p className="settings-card-note">
           A named destination the orchestrator relays on loopback, for clients that cannot be
           pointed at a proxy — databases, caches, mail. Point the client at{" "}
-          <code>127.0.0.1:&lt;local port&gt;</code>; the rules above still decide whether the
-          connection is made, and the log below still records it under the destination&apos;s host
-          name.
+          <code>127.0.0.1:&lt;local port&gt;</code>. In a run&apos;s container the
+          destination&apos;s own name and port also answer, so a TLS client can verify the host
+          name; in a Kubernetes pod, under <code>dotnet run</code> and for an IP address only the
+          loopback form exists. The rules above still decide whether the connection is made, and the
+          log below still records it under the destination&apos;s host name.
         </p>
         {forwardError && <div className="settings-error">{forwardError}</div>}
         <ForwardTable
@@ -551,6 +622,7 @@ export default function NetworkSettings() {
           onUpdate={updateForward}
           onRemove={removeForward}
           onWhitelist={whitelistForwardHost}
+          answersRealName={answersRealName}
         />
         <AddForwardRow onAdd={addForward} />
       </section>
@@ -602,13 +674,13 @@ export default function NetworkSettings() {
                 <th>When</th>
                 <th>Destination</th>
                 <th>Decision</th>
-                <th>Provider</th>
+                <th>Provider or installer</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {visibleLog.map((group) => {
-                const rule = ruleFor(group.entry.host);
+                const rule = ruleFor(group.entry.host, group.entry.installer);
                 return (
                   <tr key={group.key + group.lastAt}>
                     <td className="net-sub">
@@ -632,14 +704,26 @@ export default function NetworkSettings() {
                       >
                         {group.entry.decision}
                       </span>
+                      {group.entry.reason && <span className="net-sub"> {group.entry.reason}</span>}
                     </td>
                     <td className="net-sub">
-                      {group.entry.aiProviderId
-                        ? (providers.find((p) => p.id === group.entry.aiProviderId)?.name ?? "—")
-                        : "—"}
+                      {group.entry.installer
+                        ? `Installer: ${group.entry.installer}`
+                        : group.entry.aiProviderId
+                          ? (providers.find((p) => p.id === group.entry.aiProviderId)?.name ?? "—")
+                          : "—"}
+                      {group.entry.via === "gateway" && (
+                        <span className="net-sub"> · via model gateway</span>
+                      )}
                     </td>
                     <td className="net-actions">
-                      {rule ? (
+                      {group.entry.reason ? (
+                        group.entry.reason.startsWith("protected") ? (
+                          <a href={`#${PROTECTED_ANCHOR}`} onClick={showProtected}>
+                            Protected destinations
+                          </a>
+                        ) : null
+                      ) : rule ? (
                         <span className="net-sub">
                           covered by <span className="net-host">{rule.host}</span>
                         </span>

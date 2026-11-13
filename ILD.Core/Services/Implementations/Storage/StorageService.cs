@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.Backup;
 using ILD.Core.Services.Backup;
 using ILD.Core.Services.Implementations.Adapters;
@@ -77,10 +78,7 @@ public sealed class StorageService : IStorageService
         scan.Add(Path.Combine(_dataRoot, ManagedAgentInstall.InstallsDirectory), agents.Entry("all", agents.Label), agents.Shared);
 
         scan.Add(AgentIsolation.PrivateRoot, temp.Entry("private", "Orchestrator private"), temp.Shared);
-        if (AgentReadRoot() is { } agentReadRoot)
-            scan.Add(agentReadRoot, temp.Entry("agent-read", "Agent read-only"), temp.Shared);
-        else
-            temp.NotMeasured("agent-read", "Agent read-only");
+        scan.Add(AgentIsolation.AgentReadRoot, temp.Entry("agent-read", "Agent read-only"), temp.Shared);
         // Unset, the scratch root is the process temp directory, which is not ILD's alone.
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar)))
             scan.Add(AgentIsolation.ScratchRoot, temp.Entry("scratch", "Agent scratch"), temp.Shared);
@@ -130,19 +128,6 @@ public sealed class StorageService : IStorageService
     /// <summary>A path the host sets at startup (Program); there is no default to fall back on here.</summary>
     private static string HostPath(IConfiguration config, string key)
         => config[key] is { } path && !string.IsNullOrWhiteSpace(path) ? path : throw new InvalidOperationException($"{key} is not set.");
-
-    private static string? AgentReadRoot()
-    {
-        try
-        {
-            return AgentIsolation.AgentReadRoot;
-        }
-        catch (InvalidOperationException)
-        {
-            // Isolation on without the root configured: there is no root to measure.
-            return null;
-        }
-    }
 
     private static IReadOnlyList<string> Subdirectories(string path, UsageTally onUnreadable)
     {

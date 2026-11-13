@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -18,9 +19,7 @@ namespace ILD.Tests;
 /// precisely the leak: the install runner and a long-running service are each real
 /// preview processes dumping their own <c>env</c> to a marker file, with the
 /// orchestrator's variables seeded on the test host first. The psi-level scrub is
-/// pinned separately in <c>AgentIsolationTests</c>, which can also cover
-/// <c>ILD_AGENT_USER</c> — the one variable that cannot be set process-wide here
-/// without turning uid isolation on for the whole suite.
+/// pinned separately in <c>AgentIsolationTests</c>.
 /// </para>
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
@@ -29,7 +28,6 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
     private const string SeededSecret = "ILD_DB_CONNECTION_STRING";
 
     private readonly string _worktree;
-    private readonly string _outerRoot;
     private readonly EnvironmentScope _environment = new();
     private WorktreePreviewService? _service;
 
@@ -37,19 +35,15 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
     {
         var id = Guid.NewGuid().ToString("N");
         _worktree = Path.Combine(Path.GetTempPath(), "ild-envisolation-tests-" + id);
-        _outerRoot = Path.Combine(Path.GetTempPath(), "ild-envisolation-outer-" + id);
         Directory.CreateDirectory(_worktree);
-        Directory.CreateDirectory(_outerRoot);
     }
 
     public void Dispose()
     {
         try { _service?.StopAsync(_worktree).GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { _service?.Dispose(); } catch { /* best effort */ }
-        // Restore before deleting: the topology variables point into _outerRoot.
         _environment.Dispose();
         try { Directory.Delete(_worktree, recursive: true); } catch { /* best effort */ }
-        try { Directory.Delete(_outerRoot, recursive: true); } catch { /* best effort */ }
         GC.SuppressFinalize(this);
     }
 
@@ -61,14 +55,13 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         var configuration = new ConfigurationBuilder().Build();
         _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
         return _service;
     }
 
     /// <summary>
-    /// Stand the test host up as an orchestrator: every secret seeded, and every
-    /// topology variable a single-uid host can carry pointed at directories this
-    /// process owns. Returns the names that must not reach a preview child.
+    /// Stand the test host up as an orchestrator: every secret seeded. Returns the
+    /// names that must not reach a preview child.
     /// </summary>
     private IReadOnlyList<string> SeedOrchestratorEnvironment()
     {
@@ -77,21 +70,6 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
         foreach (var key in AgentIsolation.SecretEnvironmentKeys)
         {
             _environment.Set(key, "orchestrator-" + key);
-            seeded.Add(key);
-        }
-
-        foreach (var key in AgentIsolation.OrchestratorTopologyEnvKeys
-                     .Where(key => key != AgentIsolation.AgentUserEnvVar))
-        {
-            // The roots move this preview's own state directory while they are set,
-            // which is why they point somewhere real that the scope puts back.
-            var value = key == AgentIsolation.AgentGroupEnvVar || key == AgentIsolation.SharedGroupEnvVar
-                ? "outer-group"
-                : Path.Combine(_outerRoot, key);
-            if (!(key == AgentIsolation.AgentGroupEnvVar || key == AgentIsolation.SharedGroupEnvVar))
-                Directory.CreateDirectory(value);
-
-            _environment.Set(key, value);
             seeded.Add(key);
         }
 
@@ -134,7 +112,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
     }
 
     [Fact]
-    public async Task Install_steps_inherit_no_orchestrator_secret_or_topology_variable()
+    public async Task Install_steps_inherit_no_orchestrator_secret()
     {
         var seeded = SeedOrchestratorEnvironment();
         WriteInstallConfig();
@@ -146,7 +124,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
     }
 
     [Fact]
-    public async Task Services_inherit_no_orchestrator_secret_or_topology_variable()
+    public async Task Services_inherit_no_orchestrator_secret()
     {
         var seeded = SeedOrchestratorEnvironment();
         WriteServiceConfig(FindFreePort());
@@ -204,8 +182,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
 
         // Kill(entireProcessTree) has to reach the node process behind the shell,
         // not just the shell — that is what the Preview tab's stop button relies
-        // on, and under uid isolation it is what the orchestrator retains CAP_KILL
-        // for.
+        // on.
         foreach (var pid in pids)
             Assert.True(await WaitForExitAsync(pid), $"service pid {pid} should be gone after stop");
     }

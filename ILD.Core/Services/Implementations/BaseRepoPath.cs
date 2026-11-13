@@ -34,6 +34,18 @@ internal static class BaseRepoPath
     }
 
     /// <summary>
+    /// Whether <paramref name="path"/> is where a repository's base clone lives: a fallback clone's folder, or a
+    /// repository's own <c>WorktreesPath</c>. Decided by the path and the rows alone, never by what is in the folder.
+    /// </summary>
+    public static bool IsBaseClone(string path, IConfiguration? config, IEnumerable<Repository> repositories)
+    {
+        var full = Path.GetFullPath(path);
+        if (Path.GetDirectoryName(full) == StoreRoot(config) && Guid.TryParseExact(Path.GetFileName(full), "N", out _))
+            return true;
+        return repositories.Any(r => !string.IsNullOrWhiteSpace(r.WorktreesPath) && Path.GetFullPath(r.WorktreesPath) == full);
+    }
+
+    /// <summary>
     /// The base clone that actually exists on disk for <paramref name="repo"/>,
     /// or null when it has not been cloned yet — which callers must read as
     /// "nothing local to inspect", not as an error.

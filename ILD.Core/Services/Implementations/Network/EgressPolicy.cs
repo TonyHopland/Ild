@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -7,12 +8,44 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ILD.Core.Services.Implementations.Network;
 
 /// <summary>The mode and lists in force at one moment, ready to judge a destination.</summary>
-public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<NetworkPolicyEntry> Entries)
+public sealed record EgressPolicySnapshot(NetworkMode Mode, IReadOnlyList<NetworkPolicyEntry> Entries, IModelGatewayRegistry? Gateway = null)
 {
     public static readonly EgressPolicySnapshot Monitor = new(NetworkMode.Monitor, Array.Empty<NetworkPolicyEntry>());
 
-    public NetworkDecision Decide(string host, Guid? aiProviderId)
+    /// <summary>ILD's own infrastructure, each with the operator's switch; empty where ILD derives none (a test, a host that runs no proxy).</summary>
+    public IReadOnlyList<ProtectedDestination> Protected { get; init; } = Array.Empty<ProtectedDestination>();
+
+    /// <summary>ILD's run networks and pods, which no run may reach through the proxy, switch or no switch.</summary>
+    public IReadOnlyList<IpRange> Isolated { get; init; } = Array.Empty<IpRange>();
+
+    /// <summary>The declared forwards' destinations: a connection to exactly one is the operator's own decision (ADR-0020), exempt from the protected destinations.</summary>
+    public IReadOnlyList<(string Host, int Port)> Forwards { get; init; } = Array.Empty<(string, int)>();
+
+    public bool IsForward(string host, int port)
+    {
+        var normalized = EgressRules.NormalizeHost(host);
+        return Forwards.Any(f => f.Port == port && EgressRules.NormalizeHost(f.Host) == normalized);
+    }
+
+    public DestinationRefusal? CheckAddresses(IEnumerable<System.Net.IPAddress> resolved, bool isForward)
+        => EgressDestinationGuard.Check(resolved, Protected, isForward, Isolated);
+
+    /// <summary>
+    /// Judges where the model gateway forwards a run's model call, by the mode and lists with the lease's provider as the scope. Unlike
+    /// <see cref="Decide"/> it does not close the provider's model hosts (the gateway is how the run reaches them), and the address is
+    /// not checked against the protected destinations: the upstream is the operator's own provider configuration, as a declared forward is.
+    /// </summary>
+    public NetworkDecision DecideUpstream(string host, Guid aiProviderId)
         => EgressRules.Decide(Mode, Entries, host, aiProviderId);
+
+    /// <summary>
+    /// While an agent holds a model gateway lease for its provider, that provider's model hosts are closed
+    /// to it in every mode: the gateway is the only way to the model (ADR-0031).
+    /// </summary>
+    public NetworkDecision Decide(string host, Guid? aiProviderId, string? installer = null)
+        => Gateway?.BlocksHost(aiProviderId, EgressRules.NormalizeHost(host)) == true
+            ? NetworkDecision.Blocked
+            : EgressRules.Decide(Mode, Entries, host, aiProviderId, installer);
 }
 
 /// <summary>
@@ -50,14 +83,18 @@ public sealed class EgressPolicy : IEgressPolicy
 
     private readonly IServiceScopeFactory _scopes;
     private readonly TimeProvider _clock;
+    private readonly IModelGatewayRegistry? _gateway;
+    private readonly IProtectedDestinationSource? _protected;
     private readonly SemaphoreSlim _reload = new(1, 1);
     private Cached? _cached;
     private int _generation;
 
-    public EgressPolicy(IServiceScopeFactory scopes, TimeProvider clock)
+    public EgressPolicy(IServiceScopeFactory scopes, TimeProvider clock, IModelGatewayRegistry? gateway = null, IProtectedDestinationSource? protectedSource = null)
     {
+        _protected = protectedSource;
         _scopes = scopes;
         _clock = clock;
+        _gateway = gateway;
     }
 
     public event Action? Changed;
@@ -113,7 +150,19 @@ public sealed class EgressPolicy : IEgressPolicy
         var modeSetting = await settings.GetByKeyAsync(AppSettingKeys.NetworkMode, ct);
         EgressRules.TryParseMode(modeSetting?.Value ?? AppSettingKeys.DefaultNetworkMode, out var mode);
         var entries = await store.GetEntriesAsync(ct);
-        return new EgressPolicySnapshot(mode, entries);
+        var forwards = await (scope.ServiceProvider.GetService<INetworkForwardStore>()?.GetForwardsAsync(ct) ?? Task.FromResult<IReadOnlyList<NetworkForwardEntry>>([]));
+        var protectedDestinations = new List<ProtectedDestination>();
+        foreach (var destination in _protected is null ? [] : await _protected.GetAsync(ct))
+        {
+            var setting = await settings.GetByKeyAsync(ProtectedDestination.SettingKey(destination.Id), ct);
+            protectedDestinations.Add(destination with { Enabled = !string.Equals(setting?.Value, "false", StringComparison.OrdinalIgnoreCase) });
+        }
+        return new EgressPolicySnapshot(mode, entries, _gateway)
+        {
+            Protected = protectedDestinations,
+            Isolated = _protected is null ? [] : await _protected.GetIsolatedRangesAsync(ct),
+            Forwards = forwards.Select(f => (f.Host, f.Port)).ToList(),
+        };
     }
 
     private EgressPolicySnapshot? Fresh()

@@ -2,36 +2,42 @@
 
 Short records of architectural decisions that are **hard to reverse, surprising without context, and the result of a real trade-off**. Each captures _that_ a decision was made and _why_ — not implementation detail (that lives in [CONTEXT.md](../../CONTEXT.md)).
 
-| ADR                                                            | Decision                                                                              |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| [0001](./0001-standalone-workitem-server.md)                   | Standalone WorkItem Server as the work-item source of truth                           |
-| [0002](./0002-manual-api-versioning.md)                        | Manual `/api/v1` prefix instead of `Asp.Versioning`                                   |
-| [0003](./0003-per-edge-traversal-limits.md)                    | Runaway-graph safety net is per-edge, not per-node _(superseded by 0018)_             |
-| [0004](./0004-pr-lifecycle-as-graph-node.md)                   | PR lifecycle is an explicit graph node, not implicit engine behavior                  |
-| [0005](./0005-template-resolved-per-run-from-tags.md)          | Loop template is resolved per-run from WorkItem tags                                  |
-| [0006](./0006-run-isolation-clean-origin-base.md)              | Every run starts from a clean `origin/<default>` base                                 |
-| [0007](./0007-ai-execution-delegated-to-adapters.md)           | AI execution is delegated wholesale to pluggable CLI adapters                         |
-| [0008](./0008-worktree-and-branch-per-run.md)                  | One worktree and branch per run, reclaimed by retention                               |
-| [0009](./0009-adapter-feature-parity.md)                       | Every agent adapter stays feature-complete (incl. session fork)                       |
-| [0011](./0011-context-aware-chat.md)                           | Context-aware chat: fixed scratch cwd, worktree by add-dir, client-applied loop edits |
-| [0012](./0012-ghcr-image-tagging-strategy.md)                  | GHCR image tagging: `latest` is the newest release, not `main`                        |
-| [0013](./0013-retained-chat-history.md)                        | Retained chat history: many chats per user, deleted only on demand                    |
-| [0014](./0014-agent-uid-isolation.md)                          | The coding agent runs under a separate OS user from the orchestrator                  |
-| [0015](./0015-wildcard-subdomain-preview-routing.md)           | Worktree previews are routed by wildcard subdomain, not by path prefix                |
-| [0016](./0016-preview-runs-as-the-agent.md)                    | A Worktree Preview runs as the agent, with an environment ILD constructs              |
-| [0017](./0017-shutdown-halts-the-in-flight-ai-node.md)         | A shutdown halts the in-flight AI node rather than letting it finish                  |
-| [0018](./0018-global-ai-traversal-cap.md)                      | Runaway-graph safety net counts AI steps between human interactions                   |
-| [0019](./0019-agent-egress-through-in-container-proxy.md)      | Agent egress is funnelled through an in-container proxy keyed on the agent uid        |
-| [0020](./0020-raw-tcp-egress-through-declared-forwards.md)     | Raw-TCP egress is served by a declared, judged relay, not a hole in the firewall      |
-| [0021](./0021-client-state-scoped-to-its-entity.md)            | Client state is scoped per entity; every in-flight request and event carries identity |
-| [0022](./0022-agent-edits-are-human-approved-proposals.md)     | Agents edit items they did not create only through proposals a human approves         |
-| [0023](./0023-node-outputs-declared-once.md)                   | A node declares each of its outputs once, in config                                   |
-| [0024](./0024-pi-ild-tools-through-native-mcp.md)              | Pi gets ILD tools from its own MCP client, registered by a generated extension        |
-| [0025](./0025-workitem-server-contract-is-tracker-mappable.md) | The WorkItem Server API is a contract an external tracker can implement               |
-| [0026](./0026-scheduled-jobs-are-chats-that-only-check.md)     | Scheduled jobs are chats that only check                                              |
-| [0027](./0027-agents-suggest-global-variable-changes.md)       | Global variables are human-owned; agents only suggest whole-value changes             |
-| [0028](./0028-agents-propose-loop-template-changes.md)         | Loop templates are human-owned; agents propose whole-document changes                 |
-| [0029](./0029-backup-and-restore.md)                           | Backup and restore are two passphrase-encrypted app-level exports                     |
-| [0030](./0030-agents-suggest-human-input.md)                   | A human answers a parked Human node; agents only suggest the answer                   |
+| ADR                                                            | Decision                                                                                  |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [0001](./0001-standalone-workitem-server.md)                   | Standalone WorkItem Server as the work-item source of truth                               |
+| [0002](./0002-manual-api-versioning.md)                        | Manual `/api/v1` prefix instead of `Asp.Versioning`                                       |
+| [0003](./0003-per-edge-traversal-limits.md)                    | Runaway-graph safety net is per-edge, not per-node _(superseded by 0018)_                 |
+| [0004](./0004-pr-lifecycle-as-graph-node.md)                   | PR lifecycle is an explicit graph node, not implicit engine behavior                      |
+| [0005](./0005-template-resolved-per-run-from-tags.md)          | Loop template is resolved per-run from WorkItem tags                                      |
+| [0006](./0006-run-isolation-clean-origin-base.md)              | Every run starts from a clean `origin/<default>` base                                     |
+| [0007](./0007-ai-execution-delegated-to-adapters.md)           | AI execution is delegated wholesale to pluggable CLI adapters                             |
+| [0008](./0008-worktree-and-branch-per-run.md)                  | One worktree and branch per run, reclaimed by retention                                   |
+| [0009](./0009-adapter-feature-parity.md)                       | Every agent adapter stays feature-complete (incl. session fork)                           |
+| [0011](./0011-context-aware-chat.md)                           | Context-aware chat: fixed scratch cwd, worktree by add-dir, client-applied loop edits     |
+| [0012](./0012-ghcr-image-tagging-strategy.md)                  | GHCR image tagging: `latest` is the newest release, not `main`                            |
+| [0013](./0013-retained-chat-history.md)                        | Retained chat history: many chats per user, deleted only on demand                        |
+| [0014](./0014-agent-uid-isolation.md)                          | The coding agent runs under a separate OS user from the orchestrator                      |
+| [0015](./0015-wildcard-subdomain-preview-routing.md)           | Worktree previews are routed by wildcard subdomain, not by path prefix                    |
+| [0016](./0016-preview-runs-as-the-agent.md)                    | A Worktree Preview runs as the agent, with an environment ILD constructs                  |
+| [0017](./0017-shutdown-halts-the-in-flight-ai-node.md)         | A shutdown halts the in-flight AI node rather than letting it finish                      |
+| [0018](./0018-global-ai-traversal-cap.md)                      | Runaway-graph safety net counts AI steps between human interactions                       |
+| [0019](./0019-agent-egress-through-in-container-proxy.md)      | Agent egress is funnelled through an in-container proxy keyed on the agent uid            |
+| [0020](./0020-raw-tcp-egress-through-declared-forwards.md)     | Raw-TCP egress is served by a declared, judged relay, not a hole in the firewall          |
+| [0021](./0021-client-state-scoped-to-its-entity.md)            | Client state is scoped per entity; every in-flight request and event carries identity     |
+| [0022](./0022-agent-edits-are-human-approved-proposals.md)     | Agents edit items they did not create only through proposals a human approves             |
+| [0023](./0023-node-outputs-declared-once.md)                   | A node declares each of its outputs once, in config                                       |
+| [0024](./0024-pi-ild-tools-through-native-mcp.md)              | Pi gets ILD tools from its own MCP client, registered by a generated extension            |
+| [0025](./0025-workitem-server-contract-is-tracker-mappable.md) | The WorkItem Server API is a contract an external tracker can implement                   |
+| [0026](./0026-scheduled-jobs-are-chats-that-only-check.md)     | Scheduled jobs are chats that only check                                                  |
+| [0027](./0027-agents-suggest-global-variable-changes.md)       | Global variables are human-owned; agents only suggest whole-value changes                 |
+| [0028](./0028-agents-propose-loop-template-changes.md)         | Loop templates are human-owned; agents propose whole-document changes                     |
+| [0029](./0029-backup-and-restore.md)                           | Backup and restore are two passphrase-encrypted app-level exports                         |
+| [0030](./0030-agents-suggest-human-input.md)                   | A human answers a parked Human node; agents only suggest the answer                       |
+| [0031](./0031-model-gateway.md)                                | The agent holds a placeholder; the ILD model gateway adds the real credential             |
+| [0032](./0032-run-host-interface.md)                           | Where a run's processes and files live is one interface, the run host                     |
+| [0033](./0033-kubernetes-run-host.md)                          | A loop run is a pod, owned by one object and swept by label                               |
+| [0034](./0034-container-run-host.md)                           | A loop run can be a container, with a volume and a network, swept by label                |
+| [0035](./0035-run-toolchains.md)                               | A run gets its repository's toolchains and ILD's agents from a shared, read-only store    |
+| [0036](./0036-runs-always-in-containers.md)                    | ILD from its image always runs agents in containers; local runs are for `dotnet run` only |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

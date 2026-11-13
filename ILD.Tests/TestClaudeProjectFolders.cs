@@ -24,6 +24,6 @@ internal static class TestClaudeProjectFolders
 
     /// <summary>An instance rooted at <paramref name="root"/>: HOME is <c>root/home</c>, the temp root <c>root/tmp</c>.</summary>
     public static ClaudeProjectFolders Under(string root)
-        => new(agentUser: null, agentHome: null, new TestProcessEnvironment { { "HOME", Path.Combine(root, "home") } },
+        => new(new TestProcessEnvironment { { "HOME", Path.Combine(root, "home") } },
             tempRoot: Path.Combine(root, "tmp"));
 }

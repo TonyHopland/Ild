@@ -290,11 +290,11 @@ public class GlobalVariableProposalApiTests
     public async Task A_suggestion_needs_a_session_that_exists(SessionHeader header, HttpStatusCode expected)
     {
         await using var host = await StartHostAsync();
-        var agent = host.Agent(
-            runId: header == SessionHeader.UnknownRun ? Guid.NewGuid() : null,
-            chatSessionId: header == SessionHeader.UnknownChat ? Guid.NewGuid() : null);
-        if (header == SessionHeader.Unparseable)
-            agent.DefaultRequestHeaders.Add(Host.RunHeader, "not-a-guid");
+        var agent = header is SessionHeader.None or SessionHeader.Unparseable
+            ? host.Human
+            : host.Agent(
+                runId: header == SessionHeader.UnknownRun ? Guid.NewGuid() : null,
+                chatSessionId: header == SessionHeader.UnknownChat ? Guid.NewGuid() : null);
 
         var resp = await ProposeAsync(agent, "rules", "x");
 

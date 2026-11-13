@@ -1,3 +1,7 @@
+using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Isolated;
+using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Interfaces;
@@ -14,12 +18,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// <see cref="IChatRepositoryCloner"/>. The work splits along the uid boundary
-/// (ADR-0014): the orchestrator clones or fetches ILD's own base clone of the
-/// repository with the remote provider's credentials, exactly as a run's Start
-/// node does, and never touches the chat's folder; everything in the chat's
-/// scratch folder is git running as the agent, with no credentials, filling the
-/// chat's clone from that base clone over the local disk.
+/// <see cref="IChatRepositoryCloner"/>. The orchestrator clones or fetches ILD's
+/// own base clone of the repository with the remote provider's credentials,
+/// exactly as a run's Start node does, and never touches the chat's folder;
+/// everything in the chat's scratch folder is git with no credentials, filling the
+/// chat's clone from that base clone over the local disk. A chat that lives in the
+/// chat container (<see cref="RunPaths.ChatsRoot"/>) cannot see that disk: its
+/// branch goes in as a git bundle, as a run's code does.
 /// </summary>
 public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 {
@@ -45,6 +50,8 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private readonly IConfiguration _config;
     private readonly IShutdownState _shutdown;
     private readonly ILogger<ChatRepositoryCloner> _log;
+    private readonly IRunHost _host;
+    private readonly IProcessRunner _runner;
 
     public ChatRepositoryCloner(
         AppDbContext db,
@@ -54,8 +61,12 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         IRepositoryManager git,
         IConfiguration config,
         IShutdownState shutdown,
-        ILogger<ChatRepositoryCloner>? log = null)
+        IRunHost host,
+        ILogger<ChatRepositoryCloner>? log = null,
+        IProcessRunner? runner = null)
     {
+        _host = host;
+        _runner = runner ?? new ProcessRunner();
         _db = db;
         _scopes = scopes;
         _chats = chats;
@@ -140,6 +151,9 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         if (!await ChatExistsAsync(job.ChatSessionId, ct))
             return ChatDeleted();
 
+        if (PredatesContainersException.Applies(_host, job.ScratchPath))
+            return Refused(ChatRepositoryCloneOutcome.CloneFailed, PredatesContainersException.Text);
+
         string basePath;
         using (await BaseRepoClone.LockAsync(job.Repo.Id, ct))
         {
@@ -147,12 +161,13 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
             if (!ok)
                 return Refused(ChatRepositoryCloneOutcome.FetchFailed,
                     $"ILD could not fetch the repository '{job.Repo.Name}' from its remote: {error}");
-            if (!await _git.RemoteBranchExistsAsync(path!, job.Branch))
+            if (!await _git.RemoteBranchExistsInBaseRepoAsync(path!, job.Branch))
                 return Refused(ChatRepositoryCloneOutcome.BranchNotFound,
                     $"The repository '{job.Repo.Name}' has no branch '{job.Branch}' on its remote.");
             basePath = path!;
         }
 
+        using var hold = _host.HoldChat(job.ScratchPath);
         try
         {
             return await FillChatCloneAsync(job, basePath, ct);
@@ -160,6 +175,11 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         catch (CloneFailedException e)
         {
             return Refused(ChatRepositoryCloneOutcome.CloneFailed, e.Message);
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException)
+        {
+            // The chat container could not be reached.
+            return Refused(ChatRepositoryCloneOutcome.CloneFailed, $"Could not work in the chat's folder: {e.Message}");
         }
     }
 
@@ -173,23 +193,24 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private static ChatRepositoryCloneResult ChatDeleted()
         => Refused(ChatRepositoryCloneOutcome.UnknownChat, "The chat was deleted.");
 
-    /// <summary>Clone into, or update, the chat's folder for the repository, as the agent.</summary>
-    private static async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)
+    /// <summary>Clone into, or update, the chat's folder for the repository.</summary>
+    private async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)
     {
         var reposDir = Path.Combine(job.ScratchPath, ReposFolder);
-        var (folderName, exists) = await FindFolderAsync(reposDir, job.Repo.Id, Clean(job.Repo.Name), ct);
+        var inChatContainer = RunPaths.ChatOf(job.ScratchPath) is not null;
+        var (folderName, exists) = await FindFolderAsync(reposDir, job.Repo.Id, Clean(job.Repo.Name), job.ChatSessionId, inChatContainer, ct);
         var folder = Path.Combine(reposDir, folderName);
         var relativePath = $"{ReposFolder}/{folderName}";
         var branch = job.Branch;
         var remoteRef = $"refs/remotes/origin/{branch}";
 
-        Task<AgentProcessResult> Git(params string[] args) => RunGitAsync(folder, reposDir, args, ct);
+        Task<AgentProcessResult> Git(params string[] args) => RunGitAsync(folder, reposDir, args, job.ChatSessionId, inChatContainer, ct);
 
         if (!exists)
         {
             try
             {
-                await AgentWritableFiles.CreateDirectoryAsync(folder, ct);
+                await _host.CreateDirectoryAsync(folder, ct);
             }
             catch (IOException e)
             {
@@ -206,7 +227,9 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         await CheckedAsync(Git("config", "--local", "remote.origin.url", RepositoryManager.WithoutUserInfo(job.Repo.CloneUrl)), relativePath);
         await CheckedAsync(Git("config", "--local", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"), relativePath);
 
-        var fetch = await Git("fetch", "-q", "--no-tags", basePath, $"+{remoteRef}:{remoteRef}");
+        var fetch = inChatContainer
+            ? await FetchIntoChatContainerAsync(basePath, job.ScratchPath, remoteRef, Git, ct)
+            : await Git("fetch", "-q", "--no-tags", basePath, $"+{remoteRef}:{remoteRef}");
         if (fetch.ExitCode != 0)
             throw new CloneFailedException(
                 $"Could not fetch '{branch}' into {relativePath} from ILD's own copy of the repository: {fetch.Stderr.Trim()}");
@@ -216,6 +239,16 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
             return Refused(ChatRepositoryCloneOutcome.UpdateRefused,
                 $"git refused to bring {relativePath} to origin/{branch}, so nothing in it was changed:\n{update.Stderr.Trim()}\n"
                 + "Revert the local work git names (git checkout, git reset, git clean), then call clone_repository again.");
+
+        try
+        {
+            await _host.AddChatToolsAsync(job.ScratchPath, basePath, ct);
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException)
+        {
+            // The clone is done; the chat's next command says again what it lacks.
+            _log.LogWarning(e, "Could not install the toolchains of {Repository} for chat {ChatSessionId}", job.Repo.Name, job.ChatSessionId);
+        }
 
         var commit = (await CheckedAsync(Git("rev-parse", "HEAD"), relativePath)).Stdout.Trim();
         var previousCommit = fresh ? null : previous.Stdout.Trim();
@@ -231,6 +264,35 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     }
 
     /// <summary>
+    /// Bring the branch of ILD's own clone into the chat's clone in the chat container, which cannot see this disk: the
+    /// remote-tracking ref is bundled as it is (nothing is written into the base clone, which runs bundle whole), the
+    /// bundle is put in the chat's folder, and git there fetches from it with an explicit refspec.
+    /// </summary>
+    private async Task<AgentProcessResult> FetchIntoChatContainerAsync(
+        string basePath, string scratchPath, string remoteRef, Func<string[], Task<AgentProcessResult>> git, CancellationToken ct)
+    {
+        using var bundleFile = PrivateTempFile.Create("ild-chat-");
+        var inChat = $"{scratchPath}/.ild/sync-{Guid.NewGuid():N}.bundle";
+        try
+        {
+            await using (var sink = bundleFile.OpenWrite())
+            {
+                var created = await _runner.RunAsync(
+                    "git", ["-C", basePath, "bundle", "create", "--quiet", "-", remoteRef], "/", ct, null, new ProcessRunOptions(StandardOutputTo: sink));
+                if (!created.Success)
+                    return new AgentProcessResult(created.ExitCode, created.StdOut, created.StdErr);
+            }
+
+            await using (var bundle = bundleFile.OpenRead())
+                await _host.WriteFileAsync(inChat, bundle, ct);
+            return await git(["fetch", "-q", "--no-tags", inChat, $"+{remoteRef}:{remoteRef}"]);
+        }
+        finally
+        {
+            await _host.DeleteAsync([inChat], CancellationToken.None);
+        }
+    }
+    /// <summary>
     /// Switch to <paramref name="branch"/>, creating it at its remote head or
     /// moving it forward to that head; a local branch is never moved back or
     /// sideways, so one already at or ahead of its remote head is checked out as
@@ -238,7 +300,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// Every step either does all it says or nothing, so a refusal leaves HEAD,
     /// the branches, the index and the working tree as they were.
     /// </summary>
-    private static async Task<AgentProcessResult> SwitchOrFastForwardAsync(
+    private async Task<AgentProcessResult> SwitchOrFastForwardAsync(
         Func<string[], Task<AgentProcessResult>> git, string branch, string remoteRef)
     {
         var local = await git(["rev-parse", "--verify", "-q", $"refs/heads/{branch}"]);
@@ -271,20 +333,25 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// repository may have been renamed since. Failing that, the first of those
     /// names that is free.
     /// </summary>
-    private static async Task<(string Name, bool Exists)> FindFolderAsync(
-        string reposDir, Guid repositoryId, string name, CancellationToken ct)
+    private async Task<(string Name, bool Exists)> FindFolderAsync(
+        string reposDir, Guid repositoryId, string name, Guid chatId, bool inChatContainer, CancellationToken ct)
     {
         string[] candidates = [name, $"{name}-{repositoryId:N}"];
-        var others = (await AgentWritableFiles.ListDirectoriesAsync(reposDir, ct))
+        var others = (await _host.ListDirectoriesAsync(reposDir, ct))
             .Except(candidates, StringComparer.Ordinal)
             .Order(StringComparer.Ordinal);
-        foreach (var folder in candidates.Where(c => AgentWritableFiles.EntryExists(Path.Combine(reposDir, c))).Concat(others))
+        var taken = new List<string>();
+        foreach (var candidate in candidates)
+            if (await _host.EntryExistsAsync(Path.Combine(reposDir, candidate), ct))
+                taken.Add(candidate);
+
+        foreach (var folder in taken.Concat(others))
         {
-            if (await IsCloneOfAsync(Path.Combine(reposDir, folder), reposDir, repositoryId, ct))
+            if (await IsCloneOfAsync(Path.Combine(reposDir, folder), reposDir, repositoryId, chatId, inChatContainer, ct))
                 return (folder, true);
         }
 
-        return candidates.FirstOrDefault(c => !AgentWritableFiles.EntryExists(Path.Combine(reposDir, c))) is { } free
+        return candidates.Except(taken).FirstOrDefault() is { } free
             ? (free, false)
             : throw new CloneFailedException(
                 $"{ReposFolder}/{name}-{repositoryId:N} is taken by something that is not this repository's clone; move it away and call again.");
@@ -295,13 +362,13 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// marker in a repository of its own: a worktree the agent added to the clone
     /// reads the same marker, but is not the clone.
     /// </summary>
-    private static async Task<bool> IsCloneOfAsync(string folder, string reposDir, Guid repositoryId, CancellationToken ct)
+    private async Task<bool> IsCloneOfAsync(string folder, string reposDir, Guid repositoryId, Guid chatId, bool inChatContainer, CancellationToken ct)
     {
-        var marker = await RunGitAsync(folder, reposDir, ["config", "--local", "--get", MarkerKey], ct);
+        var marker = await RunGitAsync(folder, reposDir, ["config", "--local", "--get", MarkerKey], chatId, inChatContainer, ct);
         if (marker.ExitCode != 0 || !Guid.TryParse(marker.Stdout.Trim(), out var id) || id != repositoryId)
             return false;
 
-        var dirs = await RunGitAsync(folder, reposDir, ["rev-parse", "--git-dir", "--git-common-dir"], ct);
+        var dirs = await RunGitAsync(folder, reposDir, ["rev-parse", "--git-dir", "--git-common-dir"], chatId, inChatContainer, ct);
         var lines = dirs.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         return dirs.ExitCode == 0 && lines.Length == 2 && lines[0] == lines[1];
     }
@@ -342,14 +409,14 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     }
 
     /// <summary>
-    /// The git command <paramref name="arguments"/> as the agent: from <c>/</c>,
+    /// The git command <paramref name="arguments"/> in a chat's clone: from <c>/</c>,
     /// addressing the clone with <c>-C</c> (the orchestrator never enters a folder
     /// the agent owns), with none of the orchestrator's secrets or git
     /// credentials in its environment, and never looking for a repository above
-    /// <paramref name="ceilingDirectory"/>.
+    /// <paramref name="ceilingDirectory"/>. Its environment is <see cref="GitEnvironment"/>, which the host applies.
     /// </summary>
     internal static ProcessStartInfo BuildStartInfo(
-        IReadOnlyList<string> arguments, string? agentUser, string? agentGroup, string? agentHome, string? ceilingDirectory = null)
+        IReadOnlyList<string> arguments, string? ceilingDirectory = null, string workingDirectory = "/")
     {
         var psi = new ProcessStartInfo("git")
         {
@@ -357,31 +424,36 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            WorkingDirectory = "/",
+            WorkingDirectory = workingDirectory,
         };
         foreach (var argument in arguments)
             psi.ArgumentList.Add(argument);
 
-        AgentIsolation.StripOrchestratorEnvironment(psi);
-        foreach (var key in GitEnvironmentKeys)
-            psi.Environment.Remove(key);
-        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        if (ceilingDirectory is not null)
-            psi.Environment["GIT_CEILING_DIRECTORIES"] = ceilingDirectory;
+        return psi;
+    }
 
-        return AgentIsolation.Route(psi, agentUser, agentGroup, agentHome);
+    /// <summary>What git in a chat's clone is set and unset: the git credentials and repository pointers of ILD's own are unset, and it never prompts.</summary>
+    internal static Dictionary<string, string?> GitEnvironment(string? ceilingDirectory = null)
+    {
+        var environment = GitEnvironmentKeys.ToDictionary(key => key, _ => (string?)null, StringComparer.Ordinal);
+        environment["GIT_TERMINAL_PROMPT"] = "0";
+        if (ceilingDirectory is not null)
+            environment["GIT_CEILING_DIRECTORIES"] = ceilingDirectory;
+        return environment;
     }
 
     // Hooks in the clone are off, so a failing post-checkout or post-merge hook
     // cannot make a switch that has already happened look refused; so are
     // automatic gc and maintenance, which detach from git and would go on
     // writing in the clone after it is killed, e.g. as the chat is deleted.
-    private static async Task<AgentProcessResult> RunGitAsync(
-        string folder, string ceilingDirectory, IReadOnlyList<string> arguments, CancellationToken ct)
+    private async Task<AgentProcessResult> RunGitAsync(
+        string folder, string ceilingDirectory, IReadOnlyList<string> arguments, Guid chatId, bool inChatContainer, CancellationToken ct)
     {
-        using var process = Process.Start(BuildStartInfo(
-                [.. QuietGitOptions, "-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory))
-            ?? throw new IOException("could not start git");
+        // In the chat container the clone is the working directory, which is what routes the command there; on this disk
+        // the orchestrator never enters it.
+        var start = BuildStartInfo([.. QuietGitOptions, "-C", folder, .. arguments], ceilingDirectory, inChatContainer ? folder : "/");
+        using var process = await _host.StartCommandAsync(
+            RunCommand.Prepared(start, inChatContainer ? chatId : default, GitEnvironment(ceilingDirectory)), ct);
         return await AgentProcess.RunAsync(process, stdin: null, ct);
     }
 }

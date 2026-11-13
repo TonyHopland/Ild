@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Collections.Concurrent;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -736,7 +737,7 @@ public sealed class ChatTurnRunnerTests
             new ChatOptions { ScratchRoot = Path.Combine(Path.GetTempPath(), "ild-chat-lifecycle-tests") },
             db.LoopRuns,
             new ChatLoopScratchpad(),
-            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance));
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared));
 
         await h.Runner.SubmitAsync(Guid.NewGuid(), "hello");
         await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);

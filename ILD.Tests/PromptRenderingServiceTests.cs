@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -28,7 +29,7 @@ public class PromptRenderingServiceTests
             _events = new EventLogService(_db.EventLogs, new NoopRunNotifier());
             _versionId = RunTimeline.SeedVersion(_db);
             Id = RunTimeline.SeedRun(_db, "WI-1", _versionId, LoopRunStatus.Running).Id;
-            Renderer = new PromptRenderingService(new PromptTemplateResolver(), _db.EventLogs,
+            Renderer = new PromptRenderingService(new PromptTemplateResolver(host: LocalRunHost.Shared), _db.EventLogs,
                 new RunConversationService(_db.EventLogs, _db.LoopRuns), _db.LoopRuns, _db.GlobalVariables);
         }
 

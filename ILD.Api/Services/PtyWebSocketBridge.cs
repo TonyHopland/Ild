@@ -2,6 +2,8 @@ using System.Buffers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using Porta.Pty;
 
 namespace ILD.Api.Services;
@@ -29,8 +31,11 @@ public static class PtyWebSocketBridge
     /// code before closing, so a CLI that rejects its arguments and exits at once
     /// leaves something to read.
     /// </param>
+    /// <param name="onOutput">Called with each chunk the child writes, before it is sent on.</param>
     /// <param name="timeProvider">Clock for the bounded teardown waits; <see cref="TimeProvider.System"/> when null.</param>
-    /// <param name="spawn">Starts the child; <see cref="PtyProvider.SpawnAsync"/> when null.</param>
+    /// <param name="spawn">Starts the child; <paramref name="host"/>'s terminal when null.</param>
+    /// <param name="host">Where the terminal opens; the local run host when null.</param>
+    /// <param name="networkMode">The network mode <paramref name="host"/>'s terminal is opened under.</param>
     public static async Task RunAsync(
         WebSocket socket,
         PtyOptions options,
@@ -38,7 +43,10 @@ public static class PtyWebSocketBridge
         CancellationToken cancellationToken,
         bool reportExit = false,
         TimeProvider? timeProvider = null,
-        Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? spawn = null)
+        Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? spawn = null,
+        Action<ReadOnlySpan<byte>>? onOutput = null,
+        IRunHost? host = null,
+        ILD.Data.Enums.NetworkMode networkMode = ILD.Data.Enums.NetworkMode.Monitor)
     {
         var clock = timeProvider ?? TimeProvider.System;
         IPtyConnection? pty = null;
@@ -46,7 +54,9 @@ public static class PtyWebSocketBridge
         {
             try
             {
-                pty = await (spawn ?? PtyProvider.SpawnAsync)(options, cancellationToken);
+                pty = spawn is not null
+                    ? await spawn(options, cancellationToken)
+                    : await (host ?? LocalRunHost.Shared).OpenTerminalAsync(options, networkMode, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -85,7 +95,7 @@ public static class PtyWebSocketBridge
             // the socket takes this. Not disposed: a pump that outlives the bounded
             // waits below may still release it.
             var sendLock = new SemaphoreSlim(1, 1);
-            var ptyToSocket = PumpPtyToSocketAsync(pty, socket, sendLock, cancellationToken);
+            var ptyToSocket = PumpPtyToSocketAsync(pty, socket, sendLock, cancellationToken, onOutput);
             var socketToPty = PumpSocketToPtyAsync(socket, pty, cancellationToken);
             var childExited = AwaitCancellationAsync(ptyExited.Token);
 
@@ -169,6 +179,31 @@ public static class PtyWebSocketBridge
     }
 
     /// <summary>
+    /// Turns a terminal down with its reason, on a socket that was accepted only to say it. A request refused before
+    /// the upgrade reaches the browser as nothing but a failed connection, so the reason goes in the close frame,
+    /// which the terminal panel shows, and as a line of output.
+    /// </summary>
+    public static async Task RefuseAsync(WebSocket socket, string reason, CancellationToken ct)
+    {
+        await SendNoticeAsync(socket, reason, ct);
+        await CloseSocketAsync(socket, WebSocketCloseStatus.PolicyViolation, reason, ct);
+    }
+
+    /// <summary>
+    /// A close frame's reason may hold at most 123 bytes of UTF-8, and a longer one makes the close throw, which would
+    /// leave the socket to be dropped instead. Cut at a character boundary.
+    /// </summary>
+    internal static string CloseDescription(string description)
+    {
+        const int MaxBytes = 123;
+        if (Encoding.UTF8.GetByteCount(description) <= MaxBytes) return description;
+        var cut = description;
+        while (Encoding.UTF8.GetByteCount(cut + "…") > MaxBytes) cut = cut[..^1];
+        if (cut.Length > 0 && char.IsHighSurrogate(cut[^1])) cut = cut[..^1];
+        return cut + "…";
+    }
+
+    /// <summary>
     /// Show ILD's own <paramref name="message"/> as a line of terminal output. Never
     /// throws; a socket that is no longer open gets nothing. Must not overlap a
     /// running <see cref="RunAsync"/>'s output pump.
@@ -210,7 +245,7 @@ public static class PtyWebSocketBridge
 
     /// <returns>Whether the pump ended because the PTY output came to its end.</returns>
     private static async Task<bool> PumpPtyToSocketAsync(
-        IPtyConnection pty, WebSocket socket, SemaphoreSlim sendLock, CancellationToken requestCt)
+        IPtyConnection pty, WebSocket socket, SemaphoreSlim sendLock, CancellationToken requestCt, Action<ReadOnlySpan<byte>>? onOutput = null)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(ReadBufferSize);
         try
@@ -230,6 +265,7 @@ public static class PtyWebSocketBridge
                 // reader doesn't observe a token, so the end of the output (not
                 // ptyExited) is the real signal that ends the pump.
                 if (read <= 0) return true;
+                onOutput?.Invoke(buffer.AsSpan(0, read));
 
                 try
                 {
@@ -332,7 +368,7 @@ public static class PtyWebSocketBridge
         {
             try
             {
-                await socket.CloseAsync(status, description, ct);
+                await socket.CloseAsync(status, CloseDescription(description), ct);
             }
             catch { }
         }

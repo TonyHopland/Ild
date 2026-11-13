@@ -83,6 +83,18 @@ public class OpenCodeOutputParsingTests
     }
 
     [Fact]
+    public void What_a_tool_wrote_is_not_part_of_the_reply()
+    {
+        var (text, _, _, _) = OpenCodeAdapter.ExtractTextAndSessionIdFromJsonEvents(Events(
+            StepStart,
+            "{\"type\":\"tool_use\",\"sessionID\":\"ses_x\",\"part\":{\"type\":\"tool\",\"tool\":\"write\",\"state\":{\"status\":\"completed\",\"input\":{\"filePath\":\"hello.txt\",\"content\":\"hi\"},\"output\":\"Wrote file\"}}}",
+            TextEvent,
+            StepFinish));
+
+        Assert.Equal("final answer", text);
+    }
+
+    [Fact]
     public void Stdout_that_is_not_typed_events_is_not_taken_for_a_json_stream()
     {
         var (_, _, _, sawJsonEvents) = OpenCodeAdapter.ExtractTextAndSessionIdFromJsonEvents(
@@ -188,6 +200,21 @@ public class OpenCodeOutputParsingTests
 
         Assert.True(result.Success, result.Error);
         Assert.Equal("from the export", result.Output);
+    }
+
+    [Fact]
+    public void Narration_in_the_stdout_tail_of_a_genuine_failure_is_not_read_as_a_throttle()
+    {
+        var result = Assemble("the test got 503 Service Unavailable from staging", exitCode: 1);
+        Assert.NotEqual(ILD.Core.Services.Interfaces.FailureKind.Interrupted, ILD.Core.Services.Implementations.AiFailureClassifier.Classify(null, result.Error));
+    }
+
+    [Fact]
+    public void A_non_zero_exit_with_empty_stderr_puts_the_stdout_tail_in_the_error()
+    {
+        var result = Assemble("the cli printed this and died", exitCode: 1);
+        Assert.False(result.Success);
+        Assert.Contains("the cli printed this and died", result.Error);
     }
 }
 

@@ -20,11 +20,13 @@ public class ChatController : ControllerBase
 {
     private readonly IChatService _chat;
     private readonly IChatTurnRunner _runner;
+    private readonly ChatPreparations _preparations;
 
-    public ChatController(IChatService chat, IChatTurnRunner runner)
+    public ChatController(IChatService chat, IChatTurnRunner runner, ChatPreparations preparations)
     {
         _chat = chat;
         _runner = runner;
+        _preparations = preparations;
     }
 
     [HttpGet("history")]
@@ -46,7 +48,7 @@ public class ChatController : ControllerBase
         // that has just loaded or just reconnected has no other way to learn this
         // chat is mid-turn. Read after the ownership check, so an answer about a
         // turn is only ever given about a chat the caller owns.
-        return Ok(session with { ActiveTurnId = _runner.ActiveTurnId(id) });
+        return Ok(session with { ActiveTurnId = _runner.ActiveTurnId(id), Preparing = _preparations.IsPreparing(id), PreparationError = _preparations.FailureOf(id) });
     }
 
     [HttpPost]
@@ -59,7 +61,7 @@ public class ChatController : ControllerBase
         try
         {
             var session = await _chat.StartAsync(userId, providerId, request.Tools, ct);
-            return Ok(session);
+            return Ok(session with { Preparing = _preparations.IsPreparing(session.Id), PreparationError = _preparations.FailureOf(session.Id) });
         }
         catch (InvalidOperationException ex)
         {

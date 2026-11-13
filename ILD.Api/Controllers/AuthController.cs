@@ -1,3 +1,5 @@
+using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -10,10 +12,16 @@ namespace ILD.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly LoginThrottle _throttle;
+    private readonly IProtectedDestinationSource _protected;
+    private readonly TrustedProxies _proxies;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, LoginThrottle throttle, IProtectedDestinationSource protectedSource, TrustedProxies proxies)
     {
+        _protected = protectedSource;
+        _proxies = proxies;
         _authService = authService;
+        _throttle = throttle;
     }
 
     // The one endpoint that mints the token everything else demands.
@@ -24,6 +32,18 @@ public class AuthController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
+        // A run container can reach this port, so guessing is slowed per caller address, and per user name for a caller in a run
+        // network: a user-name wait for everyone would let a run keep the operator out.
+        // A run is judged by the address it connects from, whatever it writes into a header.
+        var remote = HttpContext.Connection.RemoteIpAddress;
+        var fromRun = await _protected.IsInRunNetworkAsync(remote, HttpContext.RequestAborted);
+        var address = (fromRun ? remote : _proxies.ClientOf(remote, Request.Headers["X-Forwarded-For"]))?.ToString();
+        if (_throttle.TryBegin(address, request.Username, fromRun) is { } wait)
+        {
+            Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = "Too many failed sign-ins; try again later" });
+        }
+
         try
         {
             // The user agent and caller address are labels for the
@@ -33,12 +53,13 @@ public class AuthController : ControllerBase
                 request.Username,
                 request.Password,
                 Request.Headers.UserAgent.ToString(),
-                HttpContext.Connection.RemoteIpAddress?.ToString());
+                address);
 
             if (!result.Success || string.IsNullOrEmpty(result.SessionToken))
             {
                 return Unauthorized(new { error = result.ErrorMessage ?? "Invalid username or password" });
             }
+            _throttle.Succeeded(address, request.Username, fromRun);
             return Ok(new LoginResponse(result.SessionToken, result.Username, result.ExpiresAt));
         }
         catch

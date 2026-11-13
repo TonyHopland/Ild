@@ -1,3 +1,5 @@
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using System.Net;
 using System.Text;
 using ILD.Core.Services.Interfaces;
@@ -110,10 +112,23 @@ public sealed class PreviewProxyMiddleware
         // responses. Buffering any of those turns a live page into a hang.
         context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
+        var host = context.RequestServices.GetRequiredService<IRunHost>();
+        Uri previewTarget;
+        try
+        {
+            previewTarget = await host.PreviewTargetAsync(target.WorktreePath, target.Port, context.RequestAborted);
+        }
+        catch (Exception ex) when (!context.RequestAborted.IsCancellationRequested)
+        {
+            // A stopped or starting run has no address yet; that is "not served", not a fault.
+            _logger.LogWarning(ex, "Preview {HostLabel} ({Service}) has no reachable target", hostLabel, target.ServiceName);
+            await WriteNotFoundAsync(context);
+            return;
+        }
         var transformer = new PreviewProxyTransformer(target.Port, target.RewriteHost, _proxyBase.Scheme);
         var error = await _forwarder.SendAsync(
             context,
-            $"http://127.0.0.1:{target.Port}",
+            previewTarget.GetLeftPart(UriPartial.Authority),
             Client,
             RequestConfig,
             transformer);
@@ -122,8 +137,8 @@ public sealed class PreviewProxyMiddleware
         {
             _logger.LogWarning(
                 context.GetForwarderErrorFeature()?.Exception,
-                "Preview {HostLabel} -> 127.0.0.1:{Port} ({Service}) did not answer: {Error}",
-                hostLabel, target.Port, target.ServiceName, error);
+                "Preview {HostLabel} -> {Target} ({Service}) did not answer: {Error}",
+                hostLabel, previewTarget, target.ServiceName, error);
 
             await WriteNotFoundAsync(context);
         }

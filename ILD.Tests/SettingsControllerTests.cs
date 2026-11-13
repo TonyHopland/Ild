@@ -1,7 +1,11 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Container;
+using ILD.Tests.Fakes;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 
@@ -16,14 +20,47 @@ public sealed class SettingsControllerTests : IDisposable
     private readonly Mock<IPrStatusPoller> _prPoller = new();
     private readonly Mock<IEgressPolicy> _policy = new();
     private readonly Mock<INetworkNotifier> _networkNotifier = new();
-    private NetworkEnforcementStatus _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null, "agent-open");
+    private IRunHost _runHost = new FakeRunHost();
 
     public void Dispose() => _db.Dispose();
 
     private SettingsController Build()
         => new(_db.Settings, _notifier.Object, _scheduler.Object, _schedulerSettings.Object,
             _prPoller.Object, _policy.Object, _networkNotifier.Object,
-            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _enforcement);
+            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _runHost);
+
+    private static string RunHostJson(IActionResult result)
+        => System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(result).Value!);
+
+    [Fact]
+    public async Task The_local_run_host_is_reported_with_no_warning()
+    {
+        var json = RunHostJson(await Build().GetRunHost(TestContext.Current.CancellationToken));
+
+        Assert.Equal("{\"kind\":\"local\",\"warning\":null}", json);
+    }
+
+    [Fact]
+    public async Task A_container_run_host_on_a_rootful_socket_is_reported_with_its_warning()
+    {
+        await using var engine = FakeDockerApi.Start();
+        engine.LibpodInfo = System.Text.Json.Nodes.JsonNode.Parse("""{"host":{"security":{"rootless":false}}}""");
+        using var container = new ContainerRunHost(
+            ContainerRunHostOptions.From(name => name switch
+            {
+                "ILD_API_URL" => "http://ild:8080",
+                "ILD_CONTAINER_SOCKET" => engine.SocketPath,
+                "ILD_CONTAINER_RUNNER_IMAGE" => "img",
+                _ => null,
+            }),
+            new ILD.Core.Services.RunHosts.Local.ProcessRunner());
+        _runHost = new RoutingRunHost(new FakeRunHost(), container);
+
+        var json = System.Text.Json.Nodes.JsonNode.Parse(RunHostJson(await Build().GetRunHost(TestContext.Current.CancellationToken)))!;
+
+        Assert.Equal("container", json["kind"]!.GetValue<string>());
+        Assert.Contains("not rootless", json["warning"]!.GetValue<string>());
+    }
 
     private Task<IActionResult> Put(string key, string value)
         => Build().Put(key, new SettingsController.UpdateSettingRequest { Value = value }, default);
@@ -205,6 +242,19 @@ public sealed class SettingsControllerTests : IDisposable
         Assert.DoesNotContain("disabled", error);
     }
 
+    [Fact]
+    public async Task The_list_holds_only_the_settings_it_lets_a_caller_read_one_by_one()
+    {
+        await _db.Settings.UpsertAsync(AppSettingKeys.WorkItemServerApiKey, "a-secret-key", TestContext.Current.CancellationToken);
+        await _db.Settings.UpsertAsync(AppSettingKeys.SchedulerMaxConcurrent, "7", TestContext.Current.CancellationToken);
+
+        var all = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await Build().GetAll(TestContext.Current.CancellationToken)).Value);
+
+        Assert.DoesNotContain("a-secret-key", all);
+        Assert.DoesNotContain(AppSettingKeys.WorkItemServerApiKey, all);
+        Assert.Contains("\"7\"", all);
+    }
+
     [Theory]
     [InlineData(AppSettingKeys.ChatTitleMaxAttempts, "3")]
     [InlineData(AppSettingKeys.RunRetentionDays, "14")]
@@ -265,24 +315,6 @@ public sealed class SettingsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Off_is_refused_and_nothing_stored_when_the_firewall_would_leave_an_off_agent_without_network()
-    {
-        _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", "no open group");
-
-        var result = await Put(AppSettingKeys.NetworkMode, "off");
-
-        var json = System.Text.Json.JsonSerializer.Serialize(Assert.IsType<BadRequestObjectResult>(result).Value);
-        Assert.Contains("no open group", json);
-        Assert.Null(await Stored(AppSettingKeys.NetworkMode));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
-        Assert.Equal("monitor", StatedValue(await Put(AppSettingKeys.NetworkMode, "monitor")));
-    }
-
-    [Fact]
-    public async Task Off_is_accepted_without_an_open_group_when_the_firewall_is_not_enforced()
-    {
-        _enforcement = NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "advisory", null);
-
-        Assert.Equal("off", StatedValue(await Put(AppSettingKeys.NetworkMode, "off")));
-    }
+    public async Task Off_is_accepted()
+        => Assert.Equal("off", StatedValue(await Put(AppSettingKeys.NetworkMode, "off")));
 }

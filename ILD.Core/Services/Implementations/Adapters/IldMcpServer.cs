@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text.Json;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
@@ -22,8 +23,7 @@ public static class IldMcpServer
     /// <c>null</c> when it cannot be written, in which case the agent runs without
     /// its MCP servers and <paramref name="logger"/> gets a warning naming the path
     /// and the reason. The config carries the ILD API token,
-    /// so it goes into <see cref="AgentIsolation.AgentReadRoot"/>: readable by the
-    /// agent group, changeable by the orchestrator only. The caller deletes it once
+    /// so it goes into <see cref="AgentIsolation.AgentReadRoot"/>, owner-only. The caller deletes it once
     /// the CLI exits; its name carries <paramref name="loopRunId"/> (the session id
     /// for a chat turn) so <see cref="DeleteConfigFiles"/> can clear a run's files,
     /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, ILogger, CancellationToken)"/>
@@ -32,6 +32,14 @@ public static class IldMcpServer
     /// <param name="environment">Where the agent read root is configured; the process environment by default.</param>
     public static string? TryWriteConfigFile(
         string namePrefix, Guid loopRunId, object config, ILogger logger, IProcessEnvironment? environment = null)
+        => TryWriteFile(namePrefix, loopRunId, JsonSerializer.SerializeToUtf8Bytes(config), ".json", logger, environment);
+
+    /// <summary>
+    /// Write any file an agent CLI reads (the certificate Copilot trusts) beside the MCP configs, under the same
+    /// naming, deletion and sweep rules as <see cref="TryWriteConfigFile"/>. Null when it cannot be written.
+    /// </summary>
+    public static string? TryWriteFile(
+        string namePrefix, Guid loopRunId, byte[] content, string extension, ILogger logger, IProcessEnvironment? environment = null)
     {
         environment ??= ProcessEnvironment.Current;
         var root = AgentReadRoot(environment);
@@ -39,10 +47,9 @@ public static class IldMcpServer
         try
         {
             path = Path.Combine(
-                AgentIsolation.CreateAgentReadDirectoryUnder(
-                    root, environment.Get(AgentIsolation.AgentUserEnvVar), ConfigDirectorySegment),
-                $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}.json");
-            AgentIsolation.WriteAgentReadableFile(path, JsonSerializer.SerializeToUtf8Bytes(config));
+                AgentIsolation.CreateAgentReadDirectoryUnder(root, ConfigDirectorySegment),
+                $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}{extension}");
+            AgentIsolation.WriteAgentReadableFile(path, content);
             return path;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -65,7 +72,7 @@ public static class IldMcpServer
         var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
         if (!Directory.Exists(directory))
             return;
-        foreach (var file in Directory.EnumerateFiles(directory, $"*-{loopRunId:N}-*.json"))
+        foreach (var file in Directory.EnumerateFiles(directory, $"*-{loopRunId:N}-*").Where(f => f.EndsWith(".json") || f.EndsWith(".pem")))
             File.Delete(file);
     }
 
@@ -91,7 +98,7 @@ public static class IldMcpServer
     /// current loop-run id. Returned as a loosely-typed dictionary so each adapter
     /// can splice it directly into its CLI config JSON.
     /// </summary>
-    /// <param name="environment">Where the URL and token come from; the process environment by default.</param>
+    /// <param name="environment">Where the URL and token come from; the process environment by default. A launch passes its <see cref="Adapters.RunFacingEnvironment"/>, whose token is the one ILD issued for that launch.</param>
     public static Dictionary<string, object?> BuildEnvironment(
         LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null)
     {
@@ -155,10 +162,23 @@ public static class IldMcpServer
     }
 
     /// <summary>
+    /// How to start the server published at <paramref name="dllPath"/>: its native apphost when one sits next to it,
+    /// otherwise <c>dotnet &lt;dll&gt;</c>. The apphost is what a run's pod or container has at the same path, built
+    /// self-contained, so the server starts there without a .NET of the project's on <c>PATH</c>, which may be one
+    /// too old to run it, or none.
+    /// </summary>
+    public static (string Command, IReadOnlyList<string> Arguments) LaunchFor(string dllPath)
+    {
+        var apphost = Path.Combine(Path.GetDirectoryName(dllPath) ?? string.Empty, Path.GetFileNameWithoutExtension(dllPath));
+        return !OperatingSystem.IsWindows() && File.Exists(apphost)
+            ? (apphost, [])
+            : ("dotnet", [dllPath]);
+    }
+
+    /// <summary>
     /// <see cref="AgentIsolation.AgentReadRoot"/>, read from <paramref name="environment"/>
     /// rather than from the process.
     /// </summary>
     private static string AgentReadRoot(IProcessEnvironment environment)
-        => AgentIsolation.ResolveAgentReadRoot(
-            environment.Get(AgentIsolation.AgentReadRootEnvVar), environment.Get(AgentIsolation.AgentUserEnvVar));
+        => AgentIsolation.ResolveAgentReadRoot(environment.Get(AgentIsolation.AgentReadRootEnvVar));
 }

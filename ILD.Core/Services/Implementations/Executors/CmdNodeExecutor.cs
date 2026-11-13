@@ -1,7 +1,9 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Data.Enums;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
@@ -11,6 +13,12 @@ namespace ILD.Core.Services.Implementations.Executors;
 
 public sealed class CmdNodeExecutor : INodeExecutor
 {
+    private readonly RunReadLimits _limits;
+
+    public CmdNodeExecutor() : this(RunReadLimits.FromEnvironment()) { }
+
+    internal CmdNodeExecutor(RunReadLimits limits) => _limits = limits;
+
     public NodeType NodeType => NodeType.Cmd;
 
     public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
@@ -26,8 +34,9 @@ public sealed class CmdNodeExecutor : INodeExecutor
             yield break;
         }
 
+        var host = ctx.Services.GetRunHost();
         var worktree = ctx.Run.WorktreePath;
-        if (string.IsNullOrEmpty(worktree) || !Directory.Exists(worktree))
+        if (string.IsNullOrEmpty(worktree) || !await host.DirectoryExistsAsync(worktree, ctx.CancellationToken))
         {
             yield return new NodeOutcome.NodeStarting(command);
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, "No worktree available for Cmd node");
@@ -38,7 +47,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
 
         var feeds = await ctx.Services.GetRequiredService<IPackageFeedResolver>()
             .ResolveAsync(await RunRepository.IdOfAsync(ctx.Run, workItems), ctx.CancellationToken);
-        var (ok, output, error) = await RunProcessAsync(command, worktree, feeds.Feeds, ctx);
+        var (ok, output, error) = await RunProcessAsync(host, command, worktree, feeds.Feeds, ctx);
         if (!ok)
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "command failed", output);
@@ -47,56 +56,54 @@ public sealed class CmdNodeExecutor : INodeExecutor
         yield return new NodeOutcome.Success(EdgeType.OnSuccess, output);
     }
 
-    private static async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
-        string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
+    private async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
+        IRunHost host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
         var err = new StringBuilder();
         using var feeds = PackageFeedCredentialFiles.Materialize(
             packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
         var mode = await ctx.Services.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken);
-        var (proxy, regid) = AgentIsolation.ResolveLaunchNetwork(mode, aiProviderId: null);
-        using var p = new Process
+        var psi = ShellStartInfo(command, workingDirectory);
+        // The pumps append to each buffer under its own lock, so a read takes both.
+        string Combined()
         {
-            StartInfo = IsolateCommand(
-                ShellStartInfo(command, workingDirectory),
-                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, proxy, regid),
-            EnableRaisingEvents = true,
-        };
-        foreach (var (name, value) in feeds.Environment)
-            p.StartInfo.Environment[name] = value;
+            lock (sb)
+            lock (err)
+                return sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
+        }
+
+        IRunProcess p;
+        try
+        {
+            p = await host.StartCommandAsync(
+                RunCommand.Prepared(psi, ctx.Run.Id, CommandEnvironment.Of(feeds.Environment), feeds.FilePath is null ? null : [feeds.FilePath], mode)
+                    with { RunIn = ctx.Run.Id, EgressProxy = ctx.Services.GetService<EgressCredentials>() is { } credentials ? AgentIsolation.LaunchProxy(credentials, mode, new LaunchScope(LaunchKind.Run, ctx.Run.Id)) : null },
+                ctx.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return (false, Combined(), ex.Message);
+        }
+
+        using var _ = p;
         // Forward the full stdout+stderr stream verbatim (newline included, ANSI
         // preserved) so the live view captures the complete output rather than
         // newline-stripped fragments.
-        p.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data is null) return;
-            sb.AppendLine(e.Data);
-            try { ctx.ProgressCallback?.Invoke(e.Data + "\n"); } catch { }
-        };
-        p.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data is null) return;
-            err.AppendLine(e.Data);
-            try { ctx.ProgressCallback?.Invoke(e.Data + "\n"); } catch { }
-        };
-        string Combined() => sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
+        var readers = Task.WhenAll(
+            PumpAsync(p.StandardOutput, sb, ctx.ProgressCallback),
+            PumpAsync(p.StandardError, err, ctx.ProgressCallback));
         try
         {
-            p.Start();
-            p.BeginOutputReadLine();
-            p.BeginErrorReadLine();
             await p.WaitForExitAsync(ctx.CancellationToken);
+            await readers.WaitAsync(ctx.CancellationToken);
         }
         catch (OperationCanceledException ex)
         {
             // Waiting stops; the shell does not. Without this reap a cancelled or
             // timed-out node leaves /bin/sh and its children running over the
-            // worktree the engine is about to commit and delete. setpriv execs the
-            // shell in place, so p is the tree's root. Under uid isolation the tree
-            // is the agent uid's and the kill relies on the orchestrator's ambient
-            // CAP_KILL across uids, so a failure means something worth reading,
-            // not something to swallow.
+            // worktree the engine is about to commit and delete. A failed kill
+            // means something worth reading, not something to swallow.
             var reaped = await ReapAsync(p);
             return (false, Combined(), ex.Message + reaped);
         }
@@ -108,6 +115,14 @@ public sealed class CmdNodeExecutor : INodeExecutor
             return (false, Combined(), $"exit code {p.ExitCode}");
         return (true, Combined(), null);
     }
+
+    private Task PumpAsync(StreamReader reader, StringBuilder into, Func<string, Task>? progress)
+        => BoundedOutput.PumpAsync(reader, _limits.MaxOutputBytes, text =>
+        {
+            lock (into) into.Append(text);
+            try { progress?.Invoke(text); } catch { }
+            return Task.CompletedTask;
+        });
 
     internal static ProcessStartInfo ShellStartInfo(string command, string workingDirectory)
     {
@@ -123,39 +138,16 @@ public sealed class CmdNodeExecutor : INodeExecutor
         return psi;
     }
 
-    /// <summary>
-    /// The command is loop-authored, but it runs in a worktree the agent just
-    /// wrote — its builds, test suites and scripts — so it runs with exactly the
-    /// agent's privileges (ADR-0014, ADR-0016). The orchestrator's secrets and
-    /// topology are stripped in every mode. Under uid isolation it also crosses
-    /// to the agent uid, HOME and egress rules with no capabilities. In
-    /// single-uid mode it stays a plain shell as the orchestrator uid, which can
-    /// still read the orchestrator's <c>/proc/&lt;pid&gt;/environ</c>.
-    /// </summary>
-    internal static ProcessStartInfo IsolateCommand(
-        ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy, string? regidOverride = null)
-        => AgentIsolation.Route(AgentIsolation.StripOrchestratorEnvironment(psi), agentUser, agentGroup, agentHome, egressProxy, regidOverride);
-
     // Long enough that only a tree genuinely stuck in the kernel — an
     // uninterruptible write to a slow mount — reaches the timeout, short enough
     // that a run being cancelled still ends promptly.
     private static readonly TimeSpan ReapGrace = TimeSpan.FromSeconds(5);
 
     /// <returns>Empty once the tree is gone; otherwise a clause naming why it is not.</returns>
-    private static async Task<string> ReapAsync(Process p)
+    private static async Task<string> ReapAsync(IRunProcess p)
     {
-        try
-        {
-            p.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException)
-        {
-            return "";
-        }
-        catch (Exception ex)
-        {
-            return $"; failed to kill the command's process tree: {ex.Message}";
-        }
+        if (!p.TryKill(out var failure))
+            return $"; failed to kill the command's process tree: {failure}";
 
         // Kill only signals. Returning before the tree is actually gone would hand
         // the caller a node that reads finished while the command is still holding

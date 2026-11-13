@@ -490,6 +490,20 @@ public class LoopRunStore : ILoopRunStore
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.CurrentAiSessionId, sessionId));
 
+    public async Task SetRunNodeAiSessionIdAsync(Guid runId, Guid loopNodeId, string sessionId)
+    {
+        // The visit being executed is the newest Running one of this node in this run.
+        var visitId = await _db.LoopRunNodes
+            .Where(rn => rn.LoopRunId == runId && rn.LoopNodeId == loopNodeId && rn.Status == LoopRunNodeStatus.Running)
+            .OrderByDescending(rn => rn.CreatedAt)
+            .Select(rn => (Guid?)rn.Id)
+            .FirstOrDefaultAsync();
+        if (visitId is null) return;
+        await _db.LoopRunNodes
+            .Where(rn => rn.Id == visitId)
+            .ExecuteUpdateAsync(s => s.SetProperty(rn => rn.AiSessionId, sessionId));
+    }
+
     public async Task ClearSteeringNoteAsync(Guid runId)
         => await _db.LoopRuns
             .Where(r => r.Id == runId)

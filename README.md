@@ -11,25 +11,27 @@ A loop is a versioned, visual template made of `Start`, `Cmd`, `AI`, `Human`, `P
 - **A shared board.** Work items from Backlog to Done, with dependencies, tags and linked pull requests, on a WorkItem Server that lets several ILD instances claim work without stepping on each other.
 - **Loops you design.** Versioned templates with retries, failure routing, human gates and pull request handling, built by hand or with the AI chat. A run survives a crash or restart.
 - **The agents you choose.** Each AI node picks its provider by tag, so one loop can plan with one model and review with another.
-- **A worktree per run.** Every run gets its own branch against a GitHub, Forgejo or Azure DevOps repository, and a live preview of the project's own services to test before merging.
+- **A container per run.** Every run gets its own container (a pod on Kubernetes) and its own branch against a GitHub, Forgejo or Azure DevOps repository, and a live preview of the project's own services to test before merging.
 - **An AI chat on every page**, which knows the work item you have open, plus scheduled chats for retros and recurring checks.
 - **Guardrails and numbers.** Agents reach the network through an allow/block list with a traffic log; analytics show what each provider, loop and chat costs.
 - **Hands off or hands on.** Items start themselves from the Work queue or by hand, the UI updates live, and it works on a phone.
 
 ## Quickstart
 
-The supported deployment path is the checked-in Docker Compose stack:
+The supported deployment path is the checked-in Docker Compose stack, on Docker or Podman. ILD runs every agent in a container of its own on that engine, so it needs the engine's socket:
 
 ```bash
 git clone <this repo> ild && cd ild
 cp .env.example .env
-# fill in the required secrets before continuing
-docker compose up --build
+# fill in the required secrets and ILD_CONTAINER_SOCKET_HOST before continuing
+docker compose up -d --build    # or: podman compose up -d --build
 ```
 
 Compose refuses to start until `.env` supplies the five secrets it treats as required: `WORKITEM_API_KEYS`, `ILD_SESSION_TOKEN_PEPPER`, and the three database passwords. Generate each with `openssl rand -hex 32`. Set `ILD_PASSWORD` as well — compose does not enforce that one, but without it the first login has no account to create. `ILD_SECRET_KEY` is optional but strongly recommended: without it, provider API keys and repository `.env` files are stored in the database in plain text.
 
-This starts `postgres` (compose network only), `workitem-server` (8081), and `ild` (8080). Open <http://localhost:8080> and log in with `admin` (or your `ILD_USERNAME`) and the `ILD_PASSWORD` you supplied.
+It also needs `ILD_CONTAINER_SOCKET_HOST`, the path of your Docker or Podman socket on the machine the engine runs on; `.env.example` leaves it empty and lists the usual paths in a comment (rootless Podman is the recommended engine). A socket of the host's `root` group, as rootful Podman on Linux has, also needs `ILD_CONTAINER_SOCKET_GRANT=1` (the socket goes to the gid `ILD_CONTAINER_SOCKET_GID`, default 10099), which makes ILD root-equivalent on that host. See [Which socket](docs/deployment.md#which-socket).
+
+This starts `postgres` (compose network only), `workitem-server` (8081), and `ild` (8080), and builds the runner image agents run in. Keep ILD on port 8080 outside its container too. Open <http://localhost:8080> and log in with `admin` (or your `ILD_USERNAME`) and the `ILD_PASSWORD` you supplied.
 
 See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first-startup behavior, and [docs/development.md](docs/development.md) to run from source.
 

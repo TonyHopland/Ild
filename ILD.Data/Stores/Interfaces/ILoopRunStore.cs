@@ -199,6 +199,13 @@ public interface ILoopRunStore
     Task SetCurrentAiSessionIdAsync(Guid runId, string sessionId);
 
     /// <summary>
+    /// Record the session id on the AI node visit now executing (the newest Running
+    /// visit of <paramref name="loopNodeId"/> in the run), touching only that column,
+    /// so a failed attempt keeps the session Resume continues from.
+    /// </summary>
+    Task SetRunNodeAiSessionIdAsync(Guid runId, Guid loopNodeId, string sessionId);
+
+    /// <summary>
     /// Atomically clear the one-shot steering note after the AI node has
     /// consumed it, touching only that column so a concurrent control-plane
     /// write is not lost.

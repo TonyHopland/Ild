@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -78,7 +79,7 @@ public sealed class RunConversationPromptVariablesTests : IDisposable
         Event(run, EventType.HumanFeedbackReceived, "second message from a human", rnHuman);
         Event(run, EventType.RunParked, "Run Halted", rnRev);
         Event(run, EventType.NodeCompleted, "third message, also AI", rnRev);
-        var renderer = new PromptRenderingService(new PromptTemplateResolver(), _db.EventLogs,
+        var renderer = new PromptRenderingService(new PromptTemplateResolver(host: LocalRunHost.Shared), _db.EventLogs,
             new RunConversationService(_db.EventLogs, _db.LoopRuns), _db.LoopRuns, _db.GlobalVariables);
 
         var rendered = await renderer.RenderAsync(

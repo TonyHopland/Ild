@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
@@ -122,7 +123,7 @@ public sealed class PackageFeedCredentialFilesTests : IDisposable
     }
 
     [Fact]
-    public void The_credential_file_is_group_readable_only_in_a_directory_the_agent_cannot_write_and_outside_the_home()
+    public void The_credential_file_is_owner_only_and_outside_the_home()
     {
         if (OperatingSystem.IsWindows()) return;
 
@@ -130,13 +131,12 @@ public sealed class PackageFeedCredentialFilesTests : IDisposable
         var path = env.FilePath!;
 
         Assert.Equal(
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
             File.GetUnixFileMode(path));
         var directory = Path.GetDirectoryName(path)!;
         Assert.Equal(0, (int)(File.GetUnixFileMode(directory) & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)));
 
-        // Single-uid mode: the agent read root's per-user fallback, which this
-        // process created and owns.
+        // The agent read root's per-user fallback, which this process created and owns.
         Assert.StartsWith(AgentIsolation.AgentReadRoot + Path.DirectorySeparatorChar, path);
         var home = Environment.GetEnvironmentVariable("HOME");
         if (!string.IsNullOrEmpty(home))

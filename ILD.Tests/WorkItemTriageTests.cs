@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -28,7 +29,7 @@ public sealed class WorkItemTriageTests : IDisposable
             new Mock<IEventLogService>().Object,
             _db.LoopRuns,
             _db.ServerClient,
-            _db.ServerOptions, TestActors.Instance);
+            _db.ServerOptions, TestActors.Instance, runHost: LocalRunHost.Shared);
     }
 
     public void Dispose() => _db.Dispose();

@@ -32,8 +32,8 @@ public class AgentWorkItemCreateRequest
     public List<string>? Dependencies { get; set; }
 
     /// <summary>
-    /// Optional originating LoopRun id. Falls back to the X-ILD-Run-Id request
-    /// header if not provided in the body.
+    /// Optional originating LoopRun id. It must be the calling run's own, which is
+    /// what the item is stamped with whether or not it is sent.
     /// </summary>
     public string? CreatedByLoopRunId { get; set; }
 

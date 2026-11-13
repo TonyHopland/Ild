@@ -1,0 +1,785 @@
+using System.Buffers.Binary;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace ILD.Tests.Fakes;
+
+/// <summary>
+/// A Docker-compatible API on a unix socket: the volumes, networks and containers a run host makes, lists and removes, and the
+/// exec endpoints with a hijacked stream and scripted commands. A hand-written HTTP/1.1 server, because the exec start request
+/// carries a body and asks for an upgrade, which Kestrel refuses. The real client talks to it.
+/// </summary>
+internal sealed class FakeDockerApi : IAsyncDisposable
+{
+    private readonly object _gate = new();
+    private readonly Socket _listener;
+    private readonly CancellationTokenSource _stopping = new();
+    private readonly List<Task> _connections = [];
+    private readonly Dictionary<string, FakeVolume> _volumes = new();
+    private readonly Dictionary<string, FakeNetwork> _networks = new();
+    private readonly Dictionary<string, FakeContainer> _containers = new();
+    private readonly Dictionary<string, FakeDockerExec> _execs = new();
+    private int _nextNetwork = 10;
+    private int _nextExec;
+
+    private FakeDockerApi(string path, Socket listener)
+    {
+        SocketPath = path;
+        _listener = listener;
+    }
+
+    public string SocketPath { get; }
+
+    /// <summary>Every create, as <c>kind/name</c>, in order.</summary>
+    public List<string> Created { get; } = [];
+
+    /// <summary>The bodies of the network connect calls, in order.</summary>
+    public List<JsonNode> Connects { get; } = [];
+
+    /// <summary>How many networks without a user-given subnet the engine can address from its default pools (Docker's is about 31); null for no limit.</summary>
+    public int? DefaultPoolNetworkLimit { get; set; }
+
+    /// <summary>Every delete a client asked for, as <c>kind/name</c>, in order.</summary>
+    public List<string> Deleted { get; } = [];
+
+    public List<FakeDockerExec> Execs { get; } = [];
+
+    /// <summary>Every request, as <c>METHOD path</c>, in order.</summary>
+    public List<string> Requests { get; } = [];
+
+    /// <summary>Awaited, with "METHOD path", before the engine answers a request; a test holds one back with it.</summary>
+    public Func<string, Task>? BeforeRequest { get; set; }
+
+    /// <summary>What a command does; every command ends at once with code 0 until this is set.</summary>
+    public Func<FakeDockerExec, Task> OnExec { get; set; } = exec => exec.ExitAsync(0);
+
+    /// <summary>How many times a container reads as <c>created</c> before it is running.</summary>
+    public int ContainerReadsBeforeRunning { get; set; }
+
+    /// <summary>Whether the runner image is on the machine; a create without it answers 404.</summary>
+    public bool ImagePresent { get; set; } = true;
+
+    /// <summary>The id <c>/images/&lt;name&gt;/json</c> answers for each image name; a name not here answers 404.</summary>
+    public Dictionary<string, string> ImageIds { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Whether a container was stopped (and not started since): an exec into it is refused with 409, as an engine refuses it.</summary>
+    public bool IsStopped(string name) { lock (_gate) return _containers.TryGetValue(name, out var c) && c.Stopped; }
+
+    /// <summary>
+    /// What an exec into a stopped container answers: Podman's 500 (the default) or Docker's 409. The two engines word it differently,
+    /// and a client must treat both as "the container is not running".
+    /// </summary>
+    public int StoppedExecStatus { get; set; } = 500;
+
+    /// <summary>What starting an exec answers before the raw stream: Docker's 101 (the default) or Podman's 200.</summary>
+    public int HijackStatus { get; set; } = 101;
+
+    /// <summary>What <c>/info</c> answers; null answers 404.</summary>
+    public JsonNode? Info { get; set; }
+
+    /// <summary>What Podman's <c>/libpod/info</c> answers; null answers 404.</summary>
+    public JsonNode? LibpodInfo { get; set; }
+
+    private readonly HashSet<string> _checkedOut = [];
+
+    /// <summary>A status <c>/libpod/info</c> answers with instead of its usual answer (a 503, or a socket proxy's 403).</summary>
+    public int? LibpodInfoStatus { get; set; }
+
+    /// <summary>What <c>/version</c> answers; null answers 404.</summary>
+    public JsonNode? Version { get; set; }
+
+    /// <summary>The oldest API version the engine serves, as Docker 29's 1.44: an older one is refused, and the unversioned <c>/version</c> names it.</summary>
+    public string? MinApiVersion { get; set; }
+
+    /// <summary>The version prefixes requests came with.</summary>
+    public HashSet<string> VersionsAsked { get; } = [];
+
+    /// <summary>A status the container listing answers with instead of the list, and the raw body it answers with when that is 200.</summary>
+    public int? ContainerListStatus { get; set; }
+
+    public string? ContainerListBody { get; set; }
+
+    /// <summary>Whether the engine refuses every request, as one that has gone away would.</summary>
+    public bool Down { get; set; }
+
+    public static FakeDockerApi Start()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"fd-{Guid.NewGuid():N}.sock");
+        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(path));
+        listener.Listen(64);
+        var api = new FakeDockerApi(path, listener);
+        _ = Task.Run(api.AcceptAsync);
+        return api;
+    }
+
+    public IReadOnlyList<string> Volumes() { lock (_gate) return _volumes.Keys.Order().ToList(); }
+
+    public IReadOnlyList<string> Networks() { lock (_gate) return _networks.Keys.Order().ToList(); }
+
+    public IReadOnlyList<string> Containers() { lock (_gate) return _containers.Keys.Order().ToList(); }
+
+    public JsonObject? Container(string name) { lock (_gate) return _containers.GetValueOrDefault(name)?.Config; }
+
+    public JsonObject? Network(string name) { lock (_gate) return _networks.GetValueOrDefault(name)?.Config; }
+
+    /// <summary>The subnet the engine addresses a network from, whether it was given one or took one from its pool; null when there is no such network.</summary>
+    public string? SubnetOf(string name) { lock (_gate) return _networks.GetValueOrDefault(name) is { } n ? SubnetOf(n) : null; }
+
+    /// <summary>Makes a network look as one made before ILD gave networks subnets: the engine addressed it from its pool.</summary>
+    public void ForgetUserSubnet(string name)
+    {
+        lock (_gate) _networks[name].Config.Remove("IPAM");
+    }
+
+    /// <summary>Puts a network in the engine that someone else made, on the given subnet.</summary>
+    public void SeedForeignNetwork(string name, string subnet)
+    {
+        lock (_gate)
+            _networks[name] = new FakeNetwork(name, NextSubnet(), [], new JsonObject
+            {
+                ["Name"] = name,
+                ["IPAM"] = new JsonObject { ["Config"] = new JsonArray(new JsonObject { ["Subnet"] = subnet }) },
+            });
+    }
+
+    /// <summary>ILD's own container, which the host connects to the network of each run.</summary>
+    public void SeedIldContainer(string name)
+    {
+        lock (_gate) _containers[name] = new FakeContainer(name, new JsonObject(), new Dictionary<string, string>()) { Running = true };
+    }
+
+    /// <summary>Gives a container another address on a network it is on, as Podman does when it restarts one that was connected without a fixed address.</summary>
+    public void Readdress(string container, string network, string address)
+    {
+        lock (_gate) _containers[container].FixedAddresses[network] = address;
+    }
+
+    public string? AddressOf(string container, string network)
+    {
+        lock (_gate) return _containers[container].FixedAddresses.GetValueOrDefault(network);
+    }
+
+    /// <summary>Stops a container as if the engine or the machine had: it stays, not running.</summary>
+    public void Stop(string name)
+    {
+        lock (_gate)
+        {
+            var container = _containers[name];
+            container.Running = false;
+            container.Started = false;
+            container.Stopped = true;
+        }
+    }
+
+    /// <summary>The networks a container is connected to.</summary>
+    public IReadOnlyList<string> NetworksOf(string container)
+    {
+        lock (_gate) return _containers.TryGetValue(container, out var c) ? c.Networks.Order().ToList() : [];
+    }
+
+    /// <summary>Puts the objects of a run in the engine as if a run host had made them.</summary>
+    public void Seed(string kind, string name, string instance, Guid run, string managedBy = "ild")
+    {
+        var labels = new Dictionary<string, string>
+        {
+            ["app.kubernetes.io/managed-by"] = managedBy,
+            ["ild/instance"] = instance,
+            ["ild/run"] = run.ToString("N"),
+        };
+        lock (_gate)
+        {
+            switch (kind)
+            {
+                case "volumes": _volumes[name] = new FakeVolume(name, labels); break;
+                case "networks": _networks[name] = new FakeNetwork(name, NextSubnet(), labels, new JsonObject()); break;
+                default: _containers[name] = new FakeContainer(name, new JsonObject(), labels) { Running = true }; break;
+            }
+        }
+    }
+
+    /// <summary>Puts a sign-in container in the engine as if a run host had made it: no run label, the sign-in role.</summary>
+    public void SeedSignIn(string name, string instance, string role = "signin")
+    {
+        var labels = new Dictionary<string, string>
+        {
+            ["app.kubernetes.io/managed-by"] = "ild",
+            ["ild/instance"] = instance,
+            ["ild/role"] = role,
+        };
+        lock (_gate) _containers[name] = new FakeContainer(name, new JsonObject(), labels) { Running = true };
+    }
+
+    /// <summary>Puts an installer's network in the engine as if a run host had made it: no run label, the tools role.</summary>
+    public void SeedToolsNetwork(string name, string instance)
+    {
+        var labels = new Dictionary<string, string>
+        {
+            ["app.kubernetes.io/managed-by"] = "ild",
+            ["ild/instance"] = instance,
+            ["ild/role"] = "tools",
+        };
+        lock (_gate) _networks[name] = new FakeNetwork(name, NextSubnet(), labels, new JsonObject());
+    }
+
+    /// <summary>Puts a network of the open role in the engine as an older ILD made it, with a container attached when one is named.</summary>
+    public void SeedOpenNetwork(string name, string instance, string? attached = null)
+    {
+        var labels = new Dictionary<string, string>
+        {
+            ["app.kubernetes.io/managed-by"] = "ild",
+            ["ild/instance"] = instance,
+            ["ild/role"] = "open",
+        };
+        lock (_gate)
+        {
+            _networks[name] = new FakeNetwork(name, NextSubnet(), labels, new JsonObject());
+            if (attached is not null) _containers[attached].Networks.Add(name);
+        }
+    }
+
+    private int NextSubnet() => _nextNetwork++;
+
+    // A network nobody gave a subnet takes 10.89.N.0/24 from the engine's pool, as a network does on Docker and Podman.
+    private static string? UserSubnetOf(FakeNetwork network)
+        => network.Config["IPAM"]?["Config"]?.AsArray().Select(c => c?["Subnet"]?.GetValue<string>()).FirstOrDefault(s => !string.IsNullOrEmpty(s));
+
+    private static string SubnetOf(FakeNetwork network) => UserSubnetOf(network) ?? $"10.89.{network.Index}.0/24";
+
+    private static string AddressAt(string subnet, int offset)
+    {
+        var value = Range(subnet).Start + (uint)offset;
+        return $"{value >> 24}.{(value >> 16) & 255}.{(value >> 8) & 255}.{value & 255}";
+    }
+
+    private static (uint Start, uint End) Range(string subnet)
+    {
+        var parts = subnet.Split('/');
+        var bytes = System.Net.IPAddress.Parse(parts[0]).GetAddressBytes();
+        var address = ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | bytes[3];
+        var size = 1UL << (32 - int.Parse(parts[1]));
+        var start = (uint)(address & ~(size - 1));
+        return (start, (uint)(start + size - 1));
+    }
+
+    private static bool Overlap(string a, string b)
+    {
+        var (a0, a1) = Range(a);
+        var (b0, b1) = Range(b);
+        return a0 <= b1 && b0 <= a1;
+    }
+
+    // -- Server ------------------------------------------------------------------
+
+    private async Task AcceptAsync()
+    {
+        while (!_stopping.IsCancellationRequested)
+        {
+            Socket client;
+            try { client = await _listener.AcceptAsync(_stopping.Token); }
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException) { return; }
+            var connection = Task.Run(() => ServeAsync(client));
+            lock (_gate) _connections.Add(connection);
+        }
+    }
+
+    private async Task ServeAsync(Socket socket)
+    {
+        using var network = new NetworkStream(socket, ownsSocket: true);
+        var reader = new BufferedStream(network, 16 * 1024);
+        try
+        {
+            while (true)
+            {
+                var request = await ReadRequestAsync(reader);
+                if (request is null) return;
+                lock (_gate) Requests.Add($"{request.Method} {request.Path}");
+                if (BeforeRequest is { } before) await before($"{request.Method} {request.Path}");
+
+                if (Down)
+                {
+                    await RespondAsync(network, 500, new { message = "the engine is down" });
+                    return;
+                }
+                if (request.Method == "POST" && request.Path.StartsWith($"/v{MinApiVersion ?? "1.41"}/exec/", StringComparison.Ordinal) && request.Path.Contains("/start"))
+                {
+                    await HijackAsync(network, reader, socket, request);
+                    return;
+                }
+                var (status, body) = Route(request);
+                await RespondAsync(network, status, body);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException) { }
+    }
+
+    private sealed record Request(string Method, string Path, string Query, string Body)
+    {
+        public string Param(string name)
+            => Query.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(p => p.Split('=', 2))
+                .Where(p => p[0] == name).Select(p => Uri.UnescapeDataString(p.ElementAtOrDefault(1) ?? string.Empty)).FirstOrDefault() ?? string.Empty;
+    }
+
+    private static async Task<Request?> ReadRequestAsync(Stream reader)
+    {
+        var head = new StringBuilder();
+        var one = new byte[1];
+        while (!head.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
+        {
+            if (await reader.ReadAsync(one) == 0) return null;
+            head.Append((char)one[0]);
+        }
+        var lines = head.ToString().Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        var first = lines[0].Split(' ');
+        var length = lines.Skip(1).Select(l => l.Split(':', 2)).Where(p => p[0].Equals("content-length", StringComparison.OrdinalIgnoreCase))
+            .Select(p => int.Parse(p[1])).FirstOrDefault();
+        var body = new byte[length];
+        await reader.ReadExactlyAsync(body);
+        var target = first[1].Split('?', 2);
+        return new Request(first[0], target[0], target.ElementAtOrDefault(1) ?? string.Empty, Encoding.UTF8.GetString(body));
+    }
+
+    private static async Task RespondAsync(Stream stream, int status, object? body)
+    {
+        var payload = body switch
+        {
+            null => [],
+            PlainText p => Encoding.UTF8.GetBytes(p.Text),
+            string s => Encoding.UTF8.GetBytes(s),
+            _ => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(body)),
+        };
+        var contentType = body is PlainText ? "text/plain; charset=us-ascii" : "application/json";
+        var head = $"HTTP/1.1 {status} X\r\nContent-Type: {contentType}\r\nContent-Length: {payload.Length}\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
+        await stream.WriteAsync(payload);
+        await stream.FlushAsync();
+    }
+
+    private static (int, object?) Failure(int status, string message) => (status, new { message });
+
+    /// <summary>A body sent as <c>text/plain</c>, not JSON.</summary>
+    private sealed record PlainText(string Text);
+
+    // -- Routes ------------------------------------------------------------------
+
+    private (int Status, object? Body) Route(Request request)
+    {
+        lock (_gate)
+        {
+            var path = request.Path;
+            if (path == "/version" && MinApiVersion is not null)
+                return (200, new JsonObject { ["ApiVersion"] = "1.53", ["MinAPIVersion"] = MinApiVersion }.ToJsonString());
+            if (path.Length > 2 && path[1] == 'v' && path.IndexOf('/', 1) is > 0 and var slash)
+            {
+                var asked = path[2..slash];
+                VersionsAsked.Add(asked);
+                if (MinApiVersion is not null && System.Version.Parse(asked) < System.Version.Parse(MinApiVersion))
+                    return Failure(400, $"client version {asked} is too old. Minimum supported API version is {MinApiVersion}, please upgrade your client to a newer version");
+                path = "/v1.41" + path[slash..];
+            }
+            // Like Podman: its own API only under a version prefix.
+            if (path == "/v1.41/libpod/info" && LibpodInfoStatus is { } failing)
+                return Failure(failing, "unavailable");
+            if (path == "/v1.41/libpod/info")
+                return LibpodInfo is null ? Failure(404, "page not found") : (200, LibpodInfo.ToJsonString());
+            if (!path.StartsWith("/v1.41/", StringComparison.Ordinal)) return Failure(404, "page not found");
+            var parts = path["/v1.41/".Length..].Split('/');
+
+            return (request.Method, parts) switch
+            {
+                ("GET", ["version"]) => Version is null ? Failure(404, "page not found") : (200, Version.ToJsonString()),
+                ("GET", ["containers", "json"]) when ContainerListStatus is { } status => Failure(status, "listing failed"),
+                ("GET", ["containers", "json"]) when ContainerListBody is { } raw => (200, raw),
+                ("GET", ["info"]) => Info is null ? Failure(404, "page not found") : (200, Info.ToJsonString()),
+
+                ("POST", ["volumes", "create"]) => CreateVolume(request),
+                ("GET", ["volumes"]) => (200, new { Volumes = _volumes.Values.Where(v => Matches(request, v.Labels)).Select(v => new { v.Name, v.Labels }).ToList() }),
+                ("DELETE", ["volumes", var name]) => DeleteVolume(name),
+
+                ("POST", ["networks", "create"]) => CreateNetwork(request),
+                ("GET", ["networks"]) => (200, _networks.Values.Where(n => Matches(request, n.Labels)).Select(n => new { n.Name, n.Labels, IPAM = new { Config = new[] { new { Subnet = SubnetOf(n) } } } }).ToList()),
+                ("GET", ["networks", var name]) => InspectNetwork(name),
+                ("DELETE", ["networks", var name]) => DeleteNetwork(name),
+                ("POST", ["networks", var name, "connect"]) => Connect(name, request, connect: true),
+                ("POST", ["networks", var name, "disconnect"]) => Connect(name, request, connect: false),
+
+                ("POST", ["containers", "create"]) => CreateContainer(request),
+                ("GET", ["containers", "json"]) => (200, _containers.Values.Where(c => (request.Param("all") is "true" or "1" || c.Running || c.Started) && Matches(request, c.Labels)).Select(c => new { Names = new[] { "/" + c.Name }, c.Labels }).ToList()),
+                ("GET", ["containers", var name, "json"]) => InspectContainer(name),
+                ("POST", ["containers", var name, "start"]) => StartContainer(name),
+                ("POST", ["containers", var name, "stop"]) => StopContainer(name),
+                ("GET", ["images", .. var image, "json"]) => ImageIds.TryGetValue(string.Join('/', image), out var imageId)
+                    ? (200, new { Id = imageId })
+                    : Failure(404, $"no such image: {string.Join('/', image)}"),
+                ("DELETE", ["containers", var name]) => DeleteContainer(name),
+                ("POST", ["containers", var name, "exec"]) => CreateExec(name, request),
+
+                ("GET", ["exec", var id, "json"]) => InspectExec(id),
+                ("POST", ["exec", var id, "resize"]) => Resize(id, request),
+                _ => Failure(404, $"no route for {request.Method} {path}"),
+            };
+        }
+    }
+
+    private static bool Matches(Request request, IReadOnlyDictionary<string, string> labels)
+    {
+        var filters = JsonNode.Parse(request.Param("filters") is { Length: > 0 } f ? f : "{}")!;
+        return (filters["label"]?.AsArray() ?? []).All(l =>
+        {
+            var pair = l!.GetValue<string>().Split('=', 2);
+            return labels.TryGetValue(pair[0], out var value) && value == pair[1];
+        });
+    }
+
+    private static Dictionary<string, string> LabelsOf(JsonNode? node)
+        => (node as JsonObject)?.ToDictionary(p => p.Key, p => p.Value!.GetValue<string>()) ?? [];
+
+    private (int, object?) CreateVolume(Request request)
+    {
+        var body = JsonNode.Parse(request.Body)!;
+        var name = body["Name"]!.GetValue<string>();
+        if (!_volumes.ContainsKey(name))
+        {
+            _volumes[name] = new FakeVolume(name, LabelsOf(body["Labels"]));
+            Created.Add($"volumes/{name}");
+        }
+        return (201, new { Name = name });
+    }
+
+    private (int, object?) DeleteVolume(string name)
+    {
+        if (!_volumes.ContainsKey(name)) return Failure(404, $"no such volume: {name}");
+        if (_containers.Values.Any(c => c.Config["HostConfig"]?["Binds"]?.AsArray().Any(b => b!.GetValue<string>().StartsWith(name + ":", StringComparison.Ordinal)) == true))
+            return Failure(409, $"volume {name} is in use");
+        _volumes.Remove(name);
+        Deleted.Add($"volumes/{name}");
+        return (204, null);
+    }
+
+    private (int, object?) CreateNetwork(Request request)
+    {
+        var body = JsonNode.Parse(request.Body)!.AsObject();
+        var name = body["Name"]!.GetValue<string>();
+        if (_networks.ContainsKey(name)) return Failure(409, $"network with name {name} already exists");
+        var network = new FakeNetwork(name, NextSubnet(), LabelsOf(body["Labels"]), body);
+        if (UserSubnetOf(network) is { } given)
+        {
+            if (_networks.Values.Any(n => Overlap(SubnetOf(n), given))) return Failure(403, "Pool overlaps with other one on this address space");
+        }
+        else if (DefaultPoolNetworkLimit is { } limit && _networks.Values.Count(n => UserSubnetOf(n) is null) >= limit)
+            return Failure(500, "could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network");
+        _networks[name] = network;
+        Created.Add($"networks/{name}");
+        return (201, new { Id = name });
+    }
+
+    private (int, object?) InspectNetwork(string name)
+    {
+        if (!_networks.TryGetValue(name, out var network)) return Failure(404, $"network {name} not found");
+        var attached = _containers.Values.Where(c => c.Networks.Contains(name)).ToDictionary(c => c.Name, c => new { Name = c.Name });
+        return (200, new
+        {
+            network.Name,
+            Internal = network.Config["Internal"]?.GetValue<bool>() ?? false,
+            Labels = network.Labels,
+            Containers = attached,
+            IPAM = new { Config = new[] { new { Subnet = SubnetOf(network), Gateway = AddressAt(SubnetOf(network), 1) } } },
+        });
+    }
+
+    private (int, object?) DeleteNetwork(string name)
+    {
+        if (!_networks.ContainsKey(name)) return Failure(404, $"network {name} not found");
+        if (_containers.Values.Any(c => c.Networks.Contains(name))) return Failure(403, $"network {name} has active endpoints");
+        _networks.Remove(name);
+        Deleted.Add($"networks/{name}");
+        return (204, null);
+    }
+
+    private (int, object?) Connect(string network, Request request, bool connect)
+    {
+        var body = JsonNode.Parse(request.Body)!;
+        var container = body["Container"]!.GetValue<string>();
+        if (!_networks.TryGetValue(network, out var target)) return Failure(404, $"network {network} not found");
+        if (!_containers.TryGetValue(container, out var found)) return Failure(404, $"no such container: {container}");
+        if (connect && found.Networks.Contains(network)) return Failure(403, $"endpoint with name {container} already exists in network {network}");
+        var fixedIp = body["EndpointConfig"]?["IPAMConfig"]?["IPv4Address"]?.GetValue<string>();
+        if (connect && fixedIp is not null)
+        {
+            // Docker accepts a fixed address only on a network whose subnet the user chose.
+            if (UserSubnetOf(target) is not { } subnet)
+                return Failure(400, "user specified IP address is supported only when connecting to networks with user configured subnets");
+            if (!Overlap(subnet, fixedIp + "/32")) return Failure(400, $"no configured subnet or ip-range contain the IP address {fixedIp}");
+            found.FixedAddresses[network] = fixedIp;
+        }
+        if (connect) { found.Networks.Add(network); Connects.Add(body); }
+        else { found.Networks.Remove(network); found.FixedAddresses.Remove(network); }
+        // Podman answers both with a plain-text "OK", not an empty body.
+        return (200, new PlainText("OK"));
+    }
+
+    private (int, object?) CreateContainer(Request request)
+    {
+        var name = Uri.UnescapeDataString(request.Param("name"));
+        if (!ImagePresent) return Failure(404, "No such image: " + JsonNode.Parse(request.Body)!["Image"]);
+        if (_containers.ContainsKey(name)) return Failure(409, $"container name {name} is already in use");
+        var config = JsonNode.Parse(request.Body)!.AsObject();
+        // Podman refuses tmpfs options it does not know, uid= and gid= among them; Docker passes them to the kernel.
+        if (LibpodInfo is not null && config["HostConfig"]?["Tmpfs"] is JsonObject tmpfs)
+            foreach (var option in tmpfs.SelectMany(t => t.Value!.GetValue<string>().Split(',')))
+                if (option.StartsWith("uid=", StringComparison.Ordinal) || option.StartsWith("gid=", StringComparison.Ordinal))
+                    return Failure(500, $"container create: unknown mount option \"{option}\": invalid mount option");
+        var container = new FakeContainer(name, config, LabelsOf(config["Labels"]));
+        var mode = config["HostConfig"]?["NetworkMode"]?.GetValue<string>();
+        if (mode is not null)
+        {
+            if (!_networks.ContainsKey(mode)) return Failure(404, $"network {mode} not found");
+            container.Networks.Add(mode);
+        }
+        _containers[name] = container;
+        Created.Add($"containers/{name}");
+        return (201, new { Id = name });
+    }
+
+    private (int, object?) StartContainer(string name)
+    {
+        if (!_containers.TryGetValue(name, out var container)) return Failure(404, $"no such container: {name}");
+        if (container.Running) return (304, null);
+        container.Started = true;
+        container.Stopped = false;
+        return (204, null);
+    }
+
+    private (int, object?) StopContainer(string name)
+    {
+        if (!_containers.TryGetValue(name, out var container)) return Failure(404, $"no such container: {name}");
+        if (container.Stopped) return (304, null);
+        container.Running = false;
+        container.Started = false;
+        container.Stopped = true;
+        return (204, null);
+    }
+
+    private (int, object?) InspectContainer(string name)
+    {
+        if (!_containers.TryGetValue(name, out var container)) return Failure(404, $"no such container: {name}");
+        if (container is { Started: true, Running: false } && container.Reads++ >= ContainerReadsBeforeRunning)
+            container.Running = true;
+        var networks = container.Networks.ToDictionary(
+            n => n,
+            n => new { IPAddress = container.FixedAddresses.GetValueOrDefault(n) ?? AddressAt(SubnetOf(_networks[n]), container.Config.Count == 0 ? 5 : 2) });
+        return (200, new
+        {
+            Name = "/" + name,
+            State = new { Running = container.Running, Status = container.Running ? "running" : container.Stopped ? "exited" : "created", ExitCode = 0, Error = "" },
+            NetworkSettings = new { Networks = networks },
+            Config = new { Labels = container.Labels },
+            HostConfig = container.Config["HostConfig"]?.DeepClone(),
+        });
+    }
+
+    private (int, object?) DeleteContainer(string name)
+    {
+        if (!_containers.Remove(name)) return Failure(404, $"no such container: {name}");
+        Deleted.Add($"containers/{name}");
+        return (204, null);
+    }
+
+    private (int, object?) CreateExec(string container, Request request)
+    {
+        if (!_containers.TryGetValue(container, out var target)) return Failure(404, $"no such container: {container}");
+        if (target.Stopped)
+            return StoppedExecStatus == 409
+                ? Failure(409, $"container {target.Name} is not running")
+                : Failure(StoppedExecStatus, "can only create exec sessions on running containers: container state improper");
+        var body = JsonNode.Parse(request.Body)!;
+        var id = $"exec-{++_nextExec}";
+        var exec = new FakeDockerExec(
+            container, body["Cmd"]!.AsArray().Select(c => c!.GetValue<string>()).ToList(),
+            body["AttachStdin"]!.GetValue<bool>(), body["Tty"]!.GetValue<bool>())
+        {
+            User = body["User"]?.GetValue<string>(),
+            Env = body["Env"]?.AsArray().Select(e => e!.GetValue<string>()).ToList() ?? [],
+        };
+        _execs[id] = exec;
+        Execs.Add(exec);
+        return (201, new { Id = id });
+    }
+
+    private (int, object?) InspectExec(string id)
+    {
+        if (!_execs.TryGetValue(id, out var exec)) return Failure(404, $"no such exec instance: {id}");
+        return (200, new { Running = !exec.HasExited, ExitCode = exec.ExitCode });
+    }
+
+    private (int, object?) Resize(string id, Request request)
+    {
+        if (!_execs.TryGetValue(id, out var exec)) return Failure(404, $"no such exec instance: {id}");
+        exec.Resizes.Add($"{request.Param("w")}x{request.Param("h")}");
+        return (201, null);
+    }
+
+    // -- Exec stream -------------------------------------------------------------
+
+    private async Task HijackAsync(NetworkStream network, Stream reader, Socket socket, Request request)
+    {
+        var id = request.Path.Split('/')[3];
+        FakeDockerExec? exec;
+        lock (_gate) _execs.TryGetValue(id, out exec);
+        if (exec is null)
+        {
+            await RespondAsync(network, 404, new { message = $"no such exec instance: {id}" });
+            return;
+        }
+
+        // Docker switches protocols; Podman answers a plain 200 and then streams.
+        var head = HijackStatus == 200
+            ? "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n"
+            : "HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n";
+        await network.WriteAsync(Encoding.ASCII.GetBytes(head));
+        exec.Attach(network, reader, socket);
+        try
+        {
+            // A real container has a checkout once a clone has run in it, and not before.
+            if (exec.Command.Any(c => c.Contains("$1/.git", StringComparison.Ordinal)))
+                await exec.ExitAsync(_checkedOut.Contains(exec.Container) ? 0 : 1);
+            else
+            {
+                await OnExec(exec);
+                if (exec.ExitCode == 0 && exec.Command.Any(c => c.Contains("git clone", StringComparison.Ordinal)))
+                    lock (_gate) _checkedOut.Add(exec.Container);
+            }
+        }
+        finally { exec.End(); }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _stopping.Cancel();
+        _listener.Dispose();
+        Task[] connections;
+        lock (_gate) connections = [.. _connections];
+        foreach (var exec in Execs.ToList()) exec.End();
+        await Task.WhenAny(Task.WhenAll(connections), Task.Delay(TimeSpan.FromSeconds(2)));
+        if (File.Exists(SocketPath)) File.Delete(SocketPath);
+    }
+
+    private sealed record FakeVolume(string Name, Dictionary<string, string> Labels);
+
+    private sealed record FakeNetwork(string Name, int Index, Dictionary<string, string> Labels, JsonObject Config);
+
+    private sealed class FakeContainer(string name, JsonObject config, Dictionary<string, string> labels)
+    {
+        public string Name { get; } = name;
+        public JsonObject Config { get; } = config;
+        public Dictionary<string, string> Labels { get; } = labels;
+        public HashSet<string> Networks { get; } = [];
+        public Dictionary<string, string> FixedAddresses { get; } = [];
+        public bool Started { get; set; }
+        public bool Running { get; set; }
+        public bool Stopped { get; set; }
+        public int Reads { get; set; }
+    }
+}
+
+/// <summary>One command exec'd in a fake container, from the engine's side of the hijacked connection.</summary>
+internal sealed class FakeDockerExec(string container, IReadOnlyList<string> command, bool wantsStdin, bool tty)
+{
+    private readonly MemoryStream _stdin = new();
+    private readonly TaskCompletionSource _stdinClosed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly SemaphoreSlim _send = new(1, 1);
+    private NetworkStream? _network;
+    private Task? _receive;
+
+    public string Container { get; } = container;
+    public IReadOnlyList<string> Command { get; } = command;
+    public bool WantsStdin { get; } = wantsStdin;
+    public bool Tty { get; } = tty;
+    public string Joined => string.Join(' ', Command);
+
+    /// <summary>The user the exec was asked to run as; null for the container's own.</summary>
+    public string? User { get; init; }
+
+    /// <summary>The environment the exec was created with (its <c>Env</c> field), as <c>NAME=value</c>; empty for none.</summary>
+    public IReadOnlyList<string> Env { get; init; } = [];
+    public List<string> Resizes { get; } = [];
+    public bool HasExited { get; private set; }
+    public int ExitCode { get; private set; }
+
+    internal void Attach(NetworkStream network, Stream reader, Socket socket)
+    {
+        _network = network;
+        _receive = Task.Run(async () =>
+        {
+            var buffer = new byte[16 * 1024];
+            try
+            {
+                int read;
+                while ((read = await reader.ReadAsync(buffer)) > 0)
+                    lock (_stdin) _stdin.Write(buffer, 0, read);
+            }
+            catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException) { }
+            finally { _stdinClosed.TrySetResult(); }
+        });
+    }
+
+    /// <summary>Everything the client sent on stdin until it half-closed the connection.</summary>
+    public async Task<byte[]> ReadStdinToEndAsync()
+    {
+        await _stdinClosed.Task;
+        lock (_stdin) return _stdin.ToArray();
+    }
+
+    public string StdinSoFar()
+    {
+        lock (_stdin) return Encoding.UTF8.GetString(_stdin.ToArray());
+    }
+
+    public Task WriteStdoutAsync(string text) => SendAsync(1, Encoding.UTF8.GetBytes(text));
+
+    public Task WriteStdoutAsync(byte[] bytes) => SendAsync(1, bytes);
+
+    public Task WriteStderrAsync(string text) => SendAsync(2, Encoding.UTF8.GetBytes(text));
+
+    /// <summary>Reports the exit code to the engine's state, then ends the stream, in the order the real engine does.</summary>
+    public Task ExitAsync(int code)
+    {
+        ExitCode = code;
+        HasExited = true;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Ends the connection with the command still running: the stream is dropped.</summary>
+    public Task DropAsync() => Task.CompletedTask;
+
+    internal void End()
+    {
+        try { _network?.Socket.Shutdown(SocketShutdown.Both); }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException) { }
+    }
+
+    private async Task SendAsync(byte stream, byte[] payload)
+    {
+        byte[] frame;
+        if (Tty)
+        {
+            frame = payload;
+        }
+        else
+        {
+            frame = new byte[8 + payload.Length];
+            frame[0] = stream;
+            BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(4), (uint)payload.Length);
+            payload.CopyTo(frame, 8);
+        }
+        await _send.WaitAsync();
+        try
+        {
+            await _network!.WriteAsync(frame);
+            await _network.FlushAsync();
+        }
+        finally { _send.Release(); }
+    }
+}

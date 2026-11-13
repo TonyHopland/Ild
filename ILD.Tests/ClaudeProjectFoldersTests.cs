@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text.Json;
 using ILD.Api.Controllers;
 using ILD.Api.Services;
@@ -28,7 +29,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
     private readonly TestDb _db = new();
     private readonly string _root = Directory.CreateTempSubdirectory("ild-claude-projects-").FullName;
     private readonly ClaudeProjectFolders _folders;
-    private string _agentUid = null!;
+    private string _uid = null!;
     private Guid _versionId;
 
     public ClaudeProjectFoldersTests()
@@ -38,7 +39,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _agentUid = (await AgentWritableFiles.GetUidAsync(TestContext.Current.CancellationToken))!;
+        _uid = OwnUid();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         _db.Context.LoopTemplates.Add(template);
@@ -56,7 +57,17 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
 
     private string ProjectFolder(string cwd) => Path.Combine(_folders.ProjectsRoot!, ClaudeCodeAdapter.EncodeWorktreePath(cwd));
 
-    private string TempFolder(string cwd) => Path.Combine(_root, "tmp", $"claude-{_agentUid}", ClaudeCodeAdapter.EncodeWorktreePath(cwd));
+    private string TempFolder(string cwd) => Path.Combine(_root, "tmp", $"claude-{_uid}", ClaudeCodeAdapter.EncodeWorktreePath(cwd));
+
+    private static string OwnUid()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("id") { RedirectStandardOutput = true, UseShellExecute = false };
+        psi.ArgumentList.Add("-u");
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var uid = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return uid;
+    }
 
     /// <summary>A session started in <paramref name="cwd"/>, whose later lines carry <paramref name="laterCwds"/>.</summary>
     private void WriteTranscript(string cwd, bool old = true, params string[] laterCwds)
@@ -125,7 +136,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
     private ChatService NewChatService(AppDbContext ctx)
         => new(ctx, new ProviderStore(ctx), Mock.Of<IAgentAdapterRegistry>(), Mock.Of<IChatNotifier>(),
             new ChatOptions { ScratchRoot = Path.Combine(_root, "chat-sessions") }, new LoopRunStore(ctx),
-            new ChatLoopScratchpad(), new ChatCloneCoordinator(), claudeProjects: _folders);
+            new ChatLoopScratchpad(), new ChatCloneCoordinator(), claudeProjects: _folders, runHost: LocalRunHost.Shared);
 
     private ClaudeProjectFolderSweeper NewSweeper()
     {
@@ -161,7 +172,7 @@ public sealed class ClaudeProjectFoldersTests : IAsyncLifetime
         var reclaimer = new Mock<IRunReclaimer>();
         reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(true);
         var controller = new LoopRunsController(Mock.Of<ILoopEngine>(), Mock.Of<IEventLogService>(), _db.LoopRuns,
-            new AdapterSessionSnapshotStore(_db.Context), new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
+            new AdapterSessionSnapshotStore(_db.Context), new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance, host: LocalRunHost.Shared),
             reclaimer.Object, Mock.Of<IWorkItemManager>(), NoPackageFeeds.Resolver, Mock.Of<IRunConversationService>(),
             Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>(), Mock.Of<ISchedulerSettingsService>(), _folders);
 

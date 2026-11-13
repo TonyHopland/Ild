@@ -1,5 +1,7 @@
 # ADR-0019: Agent egress is funnelled through an in-container proxy keyed on the agent uid
 
+> **Status: superseded in part by [ADR-0036](./0036-runs-always-in-containers.md).** The uid-keyed firewall, the agent uid and `NET_ADMIN` are gone; the egress proxy, its lists and its log remain, and a run's or chat's network, which reaches only ILD, is what makes the proxy the only way out.
+
 The operator can limit which hosts the coding agent may reach — a whitelist, a
 blacklist, a mode toggle (`off` / `monitor` / `whitelist` / `blacklist`, default
 `monitor`) and a log of every destination — and that limit is enforced **inside the container,
@@ -64,6 +66,15 @@ Two parts, deliberately separate.
 
 ## Off: no proxy, no log
 
+> **In a container or pod** (ADR-0036) there is no uid firewall or open group: `off` instead
+> gives the run's container or pod a direct route to the network (a second, non-internal
+> network on Docker and Podman; a second, allow-all egress NetworkPolicy on Kubernetes) and
+> its launches no proxy variables, so the sentence below holds there too. The route belongs to
+> the whole container or pod, not to the process: every process in the run can use it while
+> it is attached, one in a proxied mode launched earlier included. It is removed at the first
+> launch in a proxied mode once no process launched in `off` is still running; chats share one
+> container, so one chat in `off` opens it for all. Protected destinations do not apply to it.
+
 Some tools cannot use the funnel: those that ignore `HTTP(S)_PROXY`, and
 anything that is not HTTP (SSH, gRPC, UDP, QUIC). `off` lets them out. Its
 agents connect directly, to any host and any port, and nothing is logged. Before
@@ -94,8 +105,8 @@ where it installed the rule, and the topology variables stripped from agent
 processes include it.
 
 Which launches follow the mode: the agent CLIs (runs, chats, chat titles), the
-provider terminal, Codex custom MCP servers, Cmd nodes, and Worktree Preview
-install steps and services (a start resolves the mode once). Git as the agent
+provider terminal, a run's worktree terminal, Codex custom MCP servers, Cmd nodes,
+and Worktree Preview install steps and services (a start resolves the mode once). Git as the agent
 (`ProcessRunner`, `RepositoryManager`), `ChatRepositoryCloner` and
 `AgentWritableFiles` stay on the primary group with no proxy in every mode: they
 only talk to the local mirror. A mode change applies to the _next launch_;
@@ -142,22 +153,22 @@ change; one that is now blocked is reset rather than allowed to finish.
 This is the opposite of baking resolved IPs into firewall rules, which would
 need a reload per edit and break on rotating addresses.
 
-## Per-provider scope, and why per-run is not here
+## Launch credentials, and what scope they carry
 
-A launch made for an AI provider gets a proxy URL of the form
-`http://provider:<providerId>@127.0.0.1:<port>`; the client sends that as
-`Proxy-Authorization`, and the proxy reads the provider back out to apply its
-scoped entries. A connection that carries no credentials is judged by the
-global entries alone. This is the only attribution the proxy has: all runs
-share one agent uid, so it cannot tell one run's connection from another's.
-And it is attribution, not authentication: the credentials sit in the agent's
-own environment, so a launch can present another provider's id and inherit its
-scoped entries. Provider scope is a convenience for keeping lists tidy per tool,
-not a boundary between agents — anything that must hold against a hostile agent
-belongs on the global lists.
-Per-run or per-repository lists need either the per-run-uid follow-up from
-ADR-0014 or a per-run credential the agent's client presents, and are a later
-layer.
+Every launch (a run's agent or command, a chat, a toolchain installer, a provider sign-in) gets a proxy URL of the form
+`http://ild:<token>@127.0.0.1:<port>`, and the client sends the token as `Proxy-Authorization`. The proxy **requires** it: a connection with no token, or one ILD did not sign, is refused with `407` (an `access_denied` alert for a redirected TLS flow, which has no header to carry one). It gets no row in the network log, which every run shares and anyone who reaches the port could otherwise fill with hosts of their choosing; ILD's own log says, at most once a minute per source, that it refused one. For the same reason each source has a budget of rows of its own, and past it a request is refused with `429` and no row. This also keeps everything else that can reach the proxy's port off it: other compose containers, other pods in a cluster, the LAN.
+
+The token is signed, not stored: `base64url(scope).base64url(HMAC-SHA256(scope))`, with a 32-byte key ILD keeps at `<data path>/egress/proxy.key` (mode 0600, made on first start). The payload names the launch: its kind (run, chat, installer, sign-in or preview), the run or chat it was made for, the provider whose scoped entries apply, and for an installer its zone. Every run and chat gets a token of its own, so a token copied out of one run is not another run's, and the proxy knows whose launch a connection came from (the Network Log does not record it yet). Launches of one run share the run's token, and an installer's is its zone's, since installers are shared by every run. The proxy takes a launch's scope **only from a token it verified**, never from what the client claims, so an agent that sends `installer:agents` or another provider's id gets `407`, not that scope. Nothing is kept per launch, so a parked run or the chat container, reconnected after an ILD restart with the environment it was made with, still holds a token that verifies. Rotating the key (delete the file) invalidates every token at once.
+
+A launch with no provider is judged by the global entries alone. A toolchain installer (ADR-0035) gets a token whose scope is its zone: its connections are judged by the global entries and the single **Installers** scope, and the log records the zone.
+
+The key is held by the run host and the other launch sites that mint (ILD's services hold one instance of the credentials, passed in, not a process-wide global). What this is not: the token sits in the launch's own environment, so it is that launch's to use, and it lives as long as the key does; ending a run does not revoke it. A leaked token carries only its own launch's scope. Provider scope is still a convenience for keeping lists tidy per tool, not a boundary between agents on the same launch. Per-run or per-repository lists need a scope in the token other than the provider, and are a later layer. With runs as local processes (`dotnet run`, a developer's machine) the agent runs as ILD's user and can read the key file; that mode is unconfined anyway (ADR-0036).
+
+### Where the proxy listens
+
+- **Local runs:** loopback, which only the machine's own processes reach.
+- **Container runs:** ILD has a different address on every run's network, so no single narrow bind serves them all and dynamic rebinding as networks come and go is not worth its moving parts. The proxy binds every interface, but answers only loopback and the subnet pool the run networks are cut from (`ILD_CONTAINER_SUBNET_POOL`), and drops any other peer before reading a byte. Compose peers and the LAN are outside the pool.
+- **Kubernetes:** a pod reaches ILD at ILD's pod address, which a narrower bind would equal anyway, so the proxy binds every interface. The token, and the optional ingress NetworkPolicy, do the narrowing; the token is what stops another pod in the cluster.
 
 ## Graceful degradation
 
@@ -226,6 +237,20 @@ it was listed a second time, and the modes would no longer say what they do.
   the Network Log records the decision. `NO_PROXY` stays loopback-only and the
   firewall drops non-loopback agent traffic, so a LAN connection cannot skip the
   proxy.
-- **To keep agents off the LAN or cloud metadata (`169.254.169.254`),** use
-  `whitelist`. `monitor` and `blacklist` do not protect them: a blacklist entry blocks
-  only the names and literals it lists, not other names that resolve to the same address.
+- **To keep agents off the LAN,** use `whitelist`. `monitor` and `blacklist` do not
+  protect it: a blacklist entry blocks only the names and literals it lists, not other
+  names that resolve to the same address. Link-local and cloud metadata addresses
+  (`169.254.169.254`) are refused by default (ADR-0036), and so is every other run's
+  network.
+
+**Amendment (work item 633).** This section's decision no longer holds on isolated run hosts. A private block now exists:
+`private` is a protected destination, on by default for containers and Kubernetes, covering `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, `100.64.0.0/10` and `fc00::/7` (ADR-0036). In `monitor` a run could `CONNECT` to the database pod, an
+unrelated pod or a storage export by pod IP, and to the machine's LAN address, none of which a name-based protection can
+cover. The lists keep their plain meaning for everything else. The way for a run to reach a LAN or in-cluster service is now a
+declared forward (ADR-0020), one decision per host and port, which is exempt from the protection (for plain HTTP as well as
+`CONNECT`); the operator can also switch `network.protect.private` off.
+
+**Amendment (work item 634).** The model gateway (ADR-0031) is under this policy too: its upstream host is judged by the mode and
+lists with the provider as the scope, and logged in the Network Log, marked as gateway traffic. Like a declared forward, it is
+exempt from the protected destinations, since the host is the operator's own provider configuration.

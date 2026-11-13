@@ -1,6 +1,9 @@
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.RunHosts.Local;
 using Porta.Pty;
 
 namespace ILD.Api.Services;
@@ -17,10 +20,14 @@ namespace ILD.Api.Services;
 public sealed class InteractiveShellSessionService
 {
     private readonly ILogger<InteractiveShellSessionService> _logger;
+    private readonly IRunHost _host;
+    private readonly IEgressPolicy? _egressPolicy;
 
-    public InteractiveShellSessionService(ILogger<InteractiveShellSessionService> logger)
+    public InteractiveShellSessionService(ILogger<InteractiveShellSessionService> logger, IRunHost host, IEgressPolicy? egressPolicy = null)
     {
         _logger = logger;
+        _host = host;
+        _egressPolicy = egressPolicy;
     }
 
     /// <param name="sessionLabel">
@@ -41,7 +48,7 @@ public sealed class InteractiveShellSessionService
         IReadOnlyList<PackageFeedCredential> packageFeeds,
         CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(cwd))
+        if (!await _host.DirectoryExistsAsync(cwd, cancellationToken))
         {
             await PtyWebSocketBridge.SendErrorAndCloseAsync(
                 socket, $"Working directory does not exist: {cwd}", cancellationToken);
@@ -60,7 +67,9 @@ public sealed class InteractiveShellSessionService
             Environment = new Dictionary<string, string>(feeds.Environment),
         };
 
-        await PtyWebSocketBridge.RunAsync(socket, options, _logger, cancellationToken);
+        await PtyWebSocketBridge.RunAsync(
+            socket, options, _logger, cancellationToken, host: _host,
+            networkMode: await _egressPolicy.LaunchModeAsync(cancellationToken));
     }
 
     private static string ResolveShell()

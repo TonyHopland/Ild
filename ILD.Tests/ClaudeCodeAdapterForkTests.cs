@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -56,7 +57,7 @@ public class ClaudeCodeAdapterForkTests
             var expectedFork = sourceJsonl.Replace("source-sess", "fork-dest", StringComparison.Ordinal);
             Assert.Equal(expectedFork, await harness.WithStoreAsync(store => SessionSnapshotTestSupport.ReadAllTextAsync(store, destKey, ct)));
             var restoredPath = ClaudeCodeAdapter.GetSessionFilePath(
-                worktreeDir, "fork-dest", AgentIsolation.AgentUser, AgentIsolation.AgentHome, environment)!;
+                worktreeDir, "fork-dest", environment)!;
             Assert.Equal(expectedFork, File.ReadAllText(restoredPath));
 
             Assert.Equal(sourceJsonl, await harness.WithStoreAsync(store => SessionSnapshotTestSupport.ReadAllTextAsync(store, sourceKey, ct)));
@@ -156,6 +157,7 @@ public class ClaudeCodeAdapterForkTests
         await connection.OpenAsync();
 
         var services = new ServiceCollection();
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
         services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 

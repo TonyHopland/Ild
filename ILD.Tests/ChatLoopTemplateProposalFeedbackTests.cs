@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Local;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -170,5 +171,5 @@ public sealed class ChatLoopTemplateProposalFeedbackTests : IDisposable
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,
             new ChatLoopScratchpad(),
-            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance);
+            new ChatCloneCoordinator(), claudeProjects: TestClaudeProjectFolders.Instance, runHost: LocalRunHost.Shared);
 }

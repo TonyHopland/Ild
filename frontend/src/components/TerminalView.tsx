@@ -97,9 +97,11 @@ export default function TerminalView({
     };
     ws.onclose = (ev) => {
       setStatus("closed");
-      const message = describeTerminalClose(ev.code, openedRef.current, errorHint);
-      // Keep any message onerror already set; otherwise use the close message.
-      if (message) setErrorText((prev) => prev || message);
+      const message = describeTerminalClose(ev.code, openedRef.current, errorHint, ev.reason);
+      // The server's own reason replaces whatever onerror guessed; otherwise keep any
+      // message onerror already set.
+      if (ev.reason?.trim() && message) setErrorText(message);
+      else if (message) setErrorText((prev) => prev || message);
     };
 
     const dataDisposable = term.onData((data) => {

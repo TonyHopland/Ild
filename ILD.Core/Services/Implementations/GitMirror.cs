@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+using ILD.Core.Services.RunHosts.Local;
 using System.Security.Cryptography;
 using System.Text;
 using ILD.Core.Services.Implementations.Storage;
@@ -15,105 +15,36 @@ internal delegate Task<ProcessResult> OrchestratorGit(
 /// The per-remote bare repositories the orchestrator talks to remotes through
 /// (ADR-0014). The orchestrator runs git only in a mirror, never in a clone or
 /// worktree the agent can write, so nothing the agent plants in those can run with
-/// the repository token in its environment. Objects reach the remote only by way of
-/// the mirror: fetched from it, or handed to it as a bundle the agent wrote.
+/// the repository token in its environment. Objects travel between the remote and
+/// the agent only by way of the mirror, and only as bundles: the orchestrator writes
+/// a bundle from the mirror for the agent to clone or fetch from (<see cref="Session.BundleForAsync"/>),
+/// and the agent's bundle is imported into the mirror before anything is pushed.
 ///
 /// <para>
-/// A mirror belongs to the orchestrator: nothing in it is writable by the agent. It is
-/// closed to the agent while the orchestrator's git is writing to it, and opened again
-/// only once what git wrote has been made unwritable, so a file is never reachable by
-/// the agent with the mode git gave it. It keeps no remote and no credential, and a
-/// mirror that is lost costs a refetch.
-/// </para>
-///
-/// <para>
-/// The agent reads a mirror through the shared group (the one the orchestrator and the agent are both
-/// members of, never the agent's primary group), and the mirror does not rely on the deployment
-/// having set that up: it moves the store root (setgid, so new mirrors are born in the group) and every
-/// mirror and entry in it into the group itself, before the mirror is opened to the agent. Where
-/// the group cannot be set it says so, rather than leaving the agent to fail on a mirror it cannot see.
+/// A mirror belongs to the orchestrator alone: the store and every mirror in it are
+/// owner-only, so the agent has no access to it at all and needs none. It keeps no
+/// remote and no credential, and a mirror that is lost costs a refetch.
 /// </para>
 /// </summary>
 internal sealed class GitMirror
 {
     private const UnixFileMode Closed = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
-    private const UnixFileMode Readable = Closed | UnixFileMode.GroupRead | UnixFileMode.GroupExecute;
-    private const UnixFileMode FileCeiling = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
     private const string StagingRef = "refs/ild-push/staged";
 
     private static readonly SharedEntries<string, SemaphoreSlim> Locks = new(() => new SemaphoreSlim(1, 1));
 
     private readonly string _root;
-    private readonly string? _sharedGroup;
-    private readonly bool _sharedWithAgent;
     private readonly OrchestratorGit _git;
     private readonly ILogger? _logger;
 
-    /// <param name="sharedGroup">
-    /// The group, by name or number, the orchestrator and the agent share and the agent reads the mirrors through.
-    /// The store root and every mirror in it are moved into it, so a mirror reads the same wherever the store sits.
-    /// Never the agent's primary group: the orchestrator is not a member of that one and cannot move files into it.
-    /// Null when it is not configured: the store root must then already be setgid and group-readable, and its group is used.
-    /// </param>
-    /// <param name="sharedWithAgent">Whether the agent is another uid that reads the mirrors.</param>
-    public GitMirror(string root, string? sharedGroup, bool sharedWithAgent, OrchestratorGit git, ILogger? logger = null)
+    /// <summary>The largest bundle taken from a run: past it the bundle is refused before anything is indexed.</summary>
+    public long MaxBundleBytes { get; init; } = RunHosts.RunReadLimits.Default.MaxBundleBytes;
+
+    public GitMirror(string root, OrchestratorGit git, ILogger? logger = null)
     {
         _root = root;
-        _sharedGroup = sharedGroup;
-        _sharedWithAgent = sharedWithAgent;
         _git = git;
         _logger = logger;
-    }
-
-    [DllImport("libc", EntryPoint = "getgrnam")]
-    private static extern IntPtr GetGroupByName(string name);
-
-    [DllImport("libc", EntryPoint = "chown", SetLastError = true)]
-    private static extern int ChangeOwner(string path, uint owner, uint group);
-
-    private static readonly object GroupLookup = new();
-
-    /// <summary>The numeric id of <paramref name="group"/>, or null when there is no such group on this host.</summary>
-    private static uint? ResolveGroup(string group)
-    {
-        if (uint.TryParse(group, out var number)) return number;
-        lock (GroupLookup)
-        {
-            var entry = GetGroupByName(group);
-            // struct group { char *gr_name; char *gr_passwd; gid_t gr_gid; ... }
-            return entry == IntPtr.Zero ? null : (uint)Marshal.ReadInt32(entry, 2 * IntPtr.Size);
-        }
-    }
-
-    /// <summary>
-    /// The id of the group to hand the mirrors to, or null when they are not shared or the host does not know the
-    /// group (a host without the deployment's groups: nothing to hand them to, and the agent cannot cross to it either).
-    /// Without a configured group, the store root's own group, if it is setgid and group-readable; otherwise this throws.
-    /// </summary>
-    private uint? SharedGroupId()
-    {
-        if (!_sharedWithAgent || !OperatingSystem.IsLinux() || !FileStatus.IsSupported) return null;
-        if (_sharedGroup is null)
-        {
-            if (FileStatus.TryGet(_root, out var status) == 0
-                && File.GetUnixFileMode(_root).HasFlag(UnixFileMode.SetGroup | UnixFileMode.GroupRead | UnixFileMode.GroupExecute))
-                return status.Gid;
-            throw new IOException(
-                $"the shared group is not configured (SHARED_GROUP / {AgentIsolation.SharedGroupEnvVar}) and the mirror path {_root} is not setgid and group-readable, so the agent cannot be given the mirrors");
-        }
-        var id = ResolveGroup(_sharedGroup);
-        if (id is null)
-            _logger?.LogWarning("The shared group {Group} is not known on this host; the git mirrors are left in the group they were made in", _sharedGroup);
-        return id;
-    }
-
-    /// <summary>Put <paramref name="path"/> in group <paramref name="group"/>; the orchestrator is a member of it, so this needs no privilege.</summary>
-    private void MoveToGroup(string path, uint group)
-    {
-        if (FileStatus.TryGet(path, out var status) == 0 && status.Gid == group) return;
-        if (ChangeOwner(path, uint.MaxValue, group) != 0)
-            throw new IOException(
-                $"the mirror path {path} is not in group {_sharedGroup} and could not be moved to it: {new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()).Message}");
     }
 
     /// <summary>Where the mirror of <paramref name="cloneUrl"/> lives, keyed by the URL without credentials.</summary>
@@ -174,21 +105,14 @@ internal sealed class GitMirror
 
     private async Task<string?> EnsureAsync(string path, CancellationToken ct)
     {
+        // Closed every time it is opened, so a store an earlier version shared with the agent is closed on upgrade.
         if (!Directory.Exists(_root))
-            CreateDirectory(_root, _sharedWithAgent ? Readable : Closed);
-        var group = SharedGroupId();
-        if (group is { } root)
-        {
-            // The agent reaches a mirror through the store's group: the root is in it, and hands it down.
-            MoveToGroup(_root, root);
-            AddMode(_root, UnixFileMode.SetGroup | UnixFileMode.GroupExecute);
-        }
+            CreateDirectory(_root, Closed);
+        Close(_root);
 
         if (File.Exists(Path.Combine(path, "HEAD")))
         {
-            SetMode(path, Closed);
-            if (group is { } existing)
-                MoveToGroup(path, existing);
+            Close(path);
             return null;
         }
 
@@ -204,10 +128,8 @@ internal sealed class GitMirror
             CreateDirectory(building, Closed);
             var init = await _git(_root, ["init", "--quiet", "--bare", "--template=", "--initial-branch=main", building], null, ct);
             if (!init.Success)
-                return init.StdErr;
+                return RepositoryManager.RedactUserInfo(init.StdErr);
             Directory.Move(building, path);
-            if (group is { } created)
-                MoveToGroup(path, created);
         }
         finally
         {
@@ -226,52 +148,16 @@ internal sealed class GitMirror
             Directory.CreateDirectory(path, mode);
     }
 
-    private static void AddMode(string directory, UnixFileMode bits)
+    private static void Close(string directory)
     {
         if (OperatingSystem.IsWindows()) return;
-        File.SetUnixFileMode(directory, File.GetUnixFileMode(directory) | bits);
-    }
-
-    /// <summary>Set the permission bits of a directory without losing the setgid bit it inherited.</summary>
-    private static void SetMode(string directory, UnixFileMode mode)
-    {
-        if (OperatingSystem.IsWindows()) return;
-        File.SetUnixFileMode(directory, mode | (File.GetUnixFileMode(directory) & UnixFileMode.SetGroup));
-    }
-
-    /// <summary>Strip the mode of everything git wrote to what the agent may read, never write.</summary>
-    private void Sanitize(string path)
-    {
-        if (OperatingSystem.IsWindows()) return;
-        var group = SharedGroupId();
-        foreach (var entry in new DirectoryInfo(path).EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
-        {
-            try
-            {
-                if (entry.LinkTarget is not null) continue;
-                var directory = entry is DirectoryInfo;
-                var mode = File.GetUnixFileMode(entry.FullName);
-                var allowed = directory ? Readable : FileCeiling;
-                // What the agent is to read, it can: in its group, and group-readable.
-                var wanted = (mode & allowed) | (!_sharedWithAgent ? 0 : directory ? Readable : UnixFileMode.GroupRead);
-                if (wanted != mode)
-                    File.SetUnixFileMode(entry.FullName, wanted);
-                if (group is { } id)
-                    MoveToGroup(entry.FullName, id);
-            }
-            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-            {
-                // git removed it while we looked: a temporary file of an interrupted write.
-            }
-        }
+        File.SetUnixFileMode(directory, Closed);
     }
 
     internal sealed class Session : IDisposable
     {
         private readonly GitMirror _owner;
         private readonly SemaphoreSlim _gate;
-        private bool _dirty = true;
-        private bool _open;
 
         public Session(GitMirror owner, string path, SemaphoreSlim gate)
         {
@@ -284,12 +170,6 @@ internal sealed class GitMirror
 
         public async Task<ProcessResult> GitAsync(IReadOnlyList<string> args, GitAuthOptions? auth, CancellationToken ct, Stream? standardInput = null)
         {
-            _dirty = true;
-            if (_open)
-            {
-                SetMode(Path, Closed);
-                _open = false;
-            }
             return await _owner._git(Path, args, auth, ct, standardInput);
         }
 
@@ -299,7 +179,7 @@ internal sealed class GitMirror
             var fetch = await GitAsync(
                 ["fetch", "--quiet", "--no-write-fetch-head", "--prune", "--", auth.RemoteUrl, "+refs/heads/*:refs/heads/*"], auth, ct);
             if (!fetch.Success)
-                return (false, fetch.StdErr);
+                return (false, RepositoryManager.RedactUserInfo(fetch.StdErr));
 
             if (defaultBranch is not null)
                 await GitAsync(["symbolic-ref", "HEAD", $"refs/heads/{defaultBranch}"], null, ct);
@@ -331,11 +211,11 @@ internal sealed class GitMirror
             {
                 var track = await GitAsync(["update-ref", $"refs/heads/{branch}", sha], null, ct);
                 if (!track.Success)
-                    _owner._logger?.LogWarning("The mirror could not record {Branch} at {Sha}: {Error}", branch, sha, track.StdErr.Trim());
+                    _owner._logger?.LogWarning("The mirror could not record {Branch} at {Sha}: {Error}", branch, sha, RepositoryManager.RedactUserInfo(track.StdErr.Trim()));
             }
             if (imported)
                 await GitAsync(["update-ref", "-d", StagingRef], null, ct);
-            return push.Success ? (true, null) : (false, push.StdErr);
+            return push.Success ? (true, null) : (false, RepositoryManager.RedactUserInfo(push.StdErr));
         }
 
         private async Task<bool> HasCommitAsync(string sha, CancellationToken ct)
@@ -360,10 +240,14 @@ internal sealed class GitMirror
                         create.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
                     await using (var sink = new FileStream(file, create))
                     {
-                        written = await createBundle(incremental, sink);
+                        written = await createBundle(incremental, new RunHosts.CappedWriteStream(sink, _owner.MaxBundleBytes));
                     }
                     if (!written.Success)
-                        return (false, written.StdErr, null);
+                        return (false, RepositoryManager.RedactUserInfo(written.StdErr), null);
+                }
+                catch (RunHosts.ReadLimitExceededException)
+                {
+                    return (false, $"the bundle is larger than {_owner.MaxBundleBytes / RunHosts.RunReadLimits.Megabyte} MB", null);
                 }
                 catch (IOException ex)
                 {
@@ -384,10 +268,10 @@ internal sealed class GitMirror
 
                 var index = await GitAsync(["index-pack", "--stdin", "--fix-thin", "--fsck-objects"], null, ct, bundle);
                 if (!index.Success)
-                    return (false, index.StdErr, null);
+                    return (false, RepositoryManager.RedactUserInfo(index.StdErr), null);
 
                 var staged = await GitAsync(["update-ref", StagingRef, tip], null, ct);
-                return staged.Success ? (true, null, tip) : (false, staged.StdErr, null);
+                return staged.Success ? (true, null, tip) : (false, RepositoryManager.RedactUserInfo(staged.StdErr), null);
             }
             finally
             {
@@ -449,46 +333,104 @@ internal sealed class GitMirror
         }
 
         /// <summary>
-        /// Run <paramref name="body"/> with the mirror open to the agent for reading. Whatever git has written since
-        /// the agent last could look is first made unwritable; the mirror stays open until the orchestrator's git
-        /// next writes to it.
+        /// What the mirror holds, as a bundle the run can clone or fetch from. <paramref name="runHas"/> are commits the
+        /// run already has; they come from the agent, so only those the mirror really holds as commits are used. The
+        /// bundle covers only what the run lacks and falls back to everything when git cannot write that; when the run
+        /// lacks nothing there is no bundle at all, because git refuses an empty one. Branches whose tips the run has
+        /// are left out of a narrow bundle, so <see cref="MirrorBundle.Branches"/> is the whole truth about the mirror.
         /// </summary>
-        public async Task<T> ReadableByAgentAsync<T>(Func<string, Task<T>> body, CancellationToken ct)
+        public async Task<(MirrorBundle? Bundle, string? Error)> BundleForAsync(IReadOnlyCollection<string> runHas, CancellationToken ct)
         {
-            if (_dirty)
+            var list = await GitAsync(["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads"], null, ct);
+            if (!list.Success)
+                return (null, RepositoryManager.RedactUserInfo(list.StdErr));
+            var branches = new List<MirrorBranch>();
+            foreach (var line in list.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
-                _owner.Sanitize(Path);
-                _dirty = false;
+                var space = line.IndexOf(' ');
+                if (space > 0 && RepositoryManager.IsCommitSha(line[..space]) && line[(space + 1)..].StartsWith("refs/heads/", StringComparison.Ordinal))
+                    branches.Add(new MirrorBranch(line[(space + 1 + "refs/heads/".Length)..], line[..space]));
             }
 
-            if (_owner._sharedWithAgent)
-            {
-                SetMode(Path, Readable);
-                _open = true;
-            }
-            return await body(Path);
-        }
+            var head = await GitAsync(["symbolic-ref", "-q", "HEAD"], null, ct);
+            var headBranch = head.Success && head.StdOut.Trim() is var target && target.StartsWith("refs/heads/", StringComparison.Ordinal)
+                && branches.Any(b => b.Name == target["refs/heads/".Length..])
+                ? target["refs/heads/".Length..]
+                : null;
 
-        public void Dispose()
-        {
-            try
+            var haves = await HeldCommitsAsync(runHas, ct);
+            if (branches.Count == 0 || branches.All(b => haves.Contains(b.Sha)))
+                return (new MirrorBundle(branches, headBranch, null, false), null);
+
+            string? error = null;
+            foreach (var narrow in haves.Count > 0 ? new[] { true, false } : [false])
             {
-                if (_dirty)
-                    _owner.Sanitize(Path);
-                if (_owner._sharedWithAgent && !_open)
+                var file = System.IO.Path.Combine(AgentIsolation.CreatePrivateDirectory("git-bundles"), $"{Guid.NewGuid():N}.bundle");
+                try
                 {
-                    SetMode(Path, Readable);
-                    _open = true;
+                    await using var excluded = narrow
+                        ? new MemoryStream(Encoding.ASCII.GetBytes(string.Concat(haves.Select(h => $"^{h}\n"))))
+                        : null;
+                    var made = await GitAsync(["bundle", "create", "--quiet", file, .. headBranch is not null ? new[] { "HEAD" } : [], "--branches", .. narrow ? new[] { "--stdin" } : []], null, ct, excluded);
+                    if (made.Success)
+                    {
+                        if (!OperatingSystem.IsWindows())
+                            File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                        var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.DeleteOnClose | FileOptions.Asynchronous);
+                        return (new MirrorBundle(branches, headBranch, stream, narrow), null);
+                    }
+                    error = RepositoryManager.RedactUserInfo(made.StdErr);
                 }
+                catch
+                {
+                    File.Delete(file);
+                    throw;
+                }
+                File.Delete(file);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                _owner._logger?.LogWarning(ex, "Could not tighten the modes of the mirror {Mirror}; the next operation on it does", Path);
-            }
-            finally
-            {
-                Release(Path, _gate);
-            }
+
+            return (null, error);
         }
+
+        /// <summary>Those of <paramref name="candidates"/> that are well-formed commit ids the mirror holds as commits.</summary>
+        private async Task<HashSet<string>> HeldCommitsAsync(IReadOnlyCollection<string> candidates, CancellationToken ct)
+        {
+            var wanted = candidates.Where(RepositoryManager.IsCommitSha).Distinct().ToList();
+            var held = new HashSet<string>(StringComparer.Ordinal);
+            if (wanted.Count == 0)
+                return held;
+
+            await using var input = new MemoryStream(Encoding.ASCII.GetBytes(string.Concat(wanted.Select(w => $"{w}\n"))));
+            var check = await GitAsync(["cat-file", "--batch-check=%(objectname) %(objecttype)"], null, ct, input);
+            if (!check.Success)
+                return held;
+            foreach (var line in check.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var space = line.IndexOf(' ');
+                if (space > 0 && line[(space + 1)..].TrimEnd() == "commit")
+                    held.Add(line[..space]);
+            }
+            return held;
+        }
+
+        public void Dispose() => Release(Path, _gate);
     }
+}
+
+/// <summary>A branch of a mirror.</summary>
+internal sealed record MirrorBranch(string Name, string Sha);
+
+/// <summary>
+/// What a mirror holds for a run: its branches and the one HEAD names, and a bundle with the objects the run lacks
+/// (null when it lacks none). The bundle is a file of the orchestrator's, removed when this is disposed.
+/// </summary>
+internal sealed class MirrorBundle(IReadOnlyList<MirrorBranch> branches, string? headBranch, Stream? bundle, bool narrow) : IAsyncDisposable
+{
+    public IReadOnlyList<MirrorBranch> Branches { get; } = branches;
+    public string? HeadBranch { get; } = headBranch;
+    public Stream? Bundle { get; } = bundle;
+    /// <summary>Whether the bundle leaves out what the run was said to have.</summary>
+    public bool Narrow { get; } = narrow;
+
+    public ValueTask DisposeAsync() => Bundle?.DisposeAsync() ?? ValueTask.CompletedTask;
 }
