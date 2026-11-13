@@ -183,6 +183,23 @@ public class WorktreePreviewServiceStartProgressTests : IDisposable
     // --- queued / background ---
 
     [Fact]
+    public async Task A_single_service_start_announces_the_launched_service_before_its_health_check_passes()
+    {
+        var health = new GatedHealth();
+        var service = BuildService(health);
+        var worktree = Worktree("wt-single", [], [Web with { HealthPath = "/slow" }]);
+
+        var start = service.StartServiceAsync(worktree, "web", Options, Ct);
+        var status = await Until(service, worktree, s => Row(s, "web").ProcessId is not null);
+
+        Assert.False(start.IsCompleted);
+        _notifier.Verify(n => n.PreviewStateChangedAsync(WorkItemId), Times.Once);
+
+        health.Release("/slow");
+        await start;
+    }
+
+    [Fact]
     public async Task A_start_queued_behind_another_worktrees_install_reads_starting_with_every_service_pending()
     {
         var service = BuildService();

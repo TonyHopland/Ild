@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A preview starts again after ILD was stopped abruptly while it ran.**
+- **A preview service started on its own shows as running at once**, instead of only after a refresh.
 - **An OpenCode reply no longer includes the text of files the agent wrote.**
 - **A work item created through the API keeps the AI provider override it was sent.**
 - **A work item whose run was cancelled offers Clean up → Done and → Backlog.**

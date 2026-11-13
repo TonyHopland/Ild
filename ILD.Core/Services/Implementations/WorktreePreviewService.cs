@@ -608,6 +608,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 throw;
             }
 
+            await PublishAsync(options.WorkItemId);
             await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), runtime.WorktreePath, cancellationToken);
 
             return BuildResponse(loaded, runtime);
