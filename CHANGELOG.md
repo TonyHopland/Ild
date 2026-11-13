@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **BREAKING — a repository clone URL can no longer carry a credential.** Put the token in the remote provider's API key.
 - **An agent can no longer act as another run or chat, or reach another run's work item.**
 - **Runs can no longer reach ILD's database, the WorkItem Server, the Kubernetes API, or private, link-local and cloud metadata addresses**, unless you switch that protection off in Settings → Network or declare a forward.
 - **A run can no longer reach another run over the network.**
@@ -17,7 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A git host's webhook needs no ILD token.** Remove any `?access_token=` from the webhook URL in the git host's settings.
 - **The settings list no longer returns the WorkItem Server API key.**
 - **A run can no longer exhaust ILD's memory, disk or egress proxy with huge output, huge files or many connections.**
-- **BREAKING — a repository clone URL can no longer carry a credential.** Put the token in the remote provider's API key.
 - **A repository can no longer hang ILD or exhaust its memory through a linked, special or oversized config or version file.**
 - **A `{{WorkTree.File:...}}` placeholder reads only files inside the worktree.**
 - **A preview's health check only reaches the service's own address and never follows a redirect.**
