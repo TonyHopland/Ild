@@ -271,11 +271,11 @@ When ILD's image runs in a Kubernetes cluster, it runs each loop run in a pod of
    env:
      - { name: ILD_API_URL, value: "http://ild.ild.svc:8080" }
      - { name: ILD_K8S_NAMESPACE, value: ild-runs }
-     - { name: ILD_K8S_RUNNER_IMAGE, value: "ghcr.io/tonyhopland/ild-runner:latest" }
+     - { name: ILD_K8S_RUNNER_IMAGE, value: "ghcr.io/tonyhopland/ild-runner:X.Y.Z" }
      - { name: ILD_K8S_TOOLS_CLAIM, value: ild-tools }
    ```
 
-   The runner image is published with the same tags as the ILD image; pin the version ILD runs. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have (ILD refuses to start on an empty or malformed selector, since an empty one selects every pod). The runs' policies admit ILD's pods only from ILD's own namespace: ILD reads it from its service account, and `ILD_K8S_ILD_NAMESPACE` sets it (required with `ILD_K8S_KUBECONFIG`).
+   The runner image is published with the same tags as the ILD image: replace `X.Y.Z` with the version of the ILD image you run, and change both together when you upgrade. ILD's pods need the label `app.kubernetes.io/name=ild`, or set `ILD_K8S_ILD_POD_SELECTOR` to the labels they have (ILD refuses to start on an empty or malformed selector, since an empty one selects every pod). The runs' policies admit ILD's pods only from ILD's own namespace: ILD reads it from its service account, and `ILD_K8S_ILD_NAMESPACE` sets it (required with `ILD_K8S_KUBECONFIG`).
 
    `ild-tools` is a **ReadWriteMany** claim you create in the run namespace (NFS, CephFS, Longhorn's RWX volumes, a cloud file share). It holds the [toolchain store](configuration.md#run-toolchains), in folders (`ild`, `toolchains`, `repo-tools/<repository id>`) that pods mount as `subPath`s, so a run never mounts the claim's root: ILD fills it from a short-lived pod labelled `ild/role=tools`, which needs egress only to ILD's egress proxy port: ILD gives each such pod a NetworkPolicy for that, and a namespace that denies egress by default needs no rule for it. The provider sign-in terminal's short-lived pod, labelled `ild/role=signin`, needs to reach the internet for the OAuth flow: ILD gives it a NetworkPolicy that allows all egress and no ingress, made before the pod and deleted after it. Without a ReadWriteMany class, build a runner image of your own `FROM ghcr.io/tonyhopland/ild-runner` with the toolchains and agent CLIs your runs need, and set `ILD_RUN_TOOLCHAINS=off`.
 
