@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A git host's webhook needs no ILD token.** Remove any `?access_token=` from the webhook URL in the git host's settings.
 - **The settings list no longer returns the WorkItem Server API key.**
 - **A run can no longer exhaust ILD's memory, disk or egress proxy with huge output, huge files or many connections.**
-- **A repository clone URL can no longer carry a credential.** Put the token in the remote provider's API key.
+- **BREAKING — a repository clone URL can no longer carry a credential.** Put the token in the remote provider's API key.
 - **A repository can no longer hang ILD or exhaust its memory through a linked, special or oversized config or version file.**
 - **A `{{WorkTree.File:...}}` placeholder reads only files inside the worktree.**
 - **A preview's health check only reaches the service's own address and never follows a redirect.**
@@ -39,11 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` before you upgrade.
-- **`ILD_API_URL` must name ILD by a host name that is not localhost**, such as the compose service; ILD does not start otherwise.
-- **On Kubernetes, ILD runs every loop run and chat in a pod.** Set up the RBAC and the shared tools claim from the deployment guide before you upgrade.
-- **Chats and runs made before the upgrade can no longer be run again.** Reading and deleting them still work.
-- **Coding agents no longer hold your Claude, Codex, Copilot or API credentials.** Open each Claude subscription provider's terminal once after upgrading.
+- **BREAKING — Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` before you upgrade.
+- **BREAKING — `ILD_API_URL` must name ILD by a host name that is not localhost**, such as the compose service; ILD does not start otherwise.
+- **BREAKING — on Kubernetes, ILD runs every loop run and chat in a pod.** Set up the RBAC and the shared tools claim from the deployment guide before you upgrade.
+- **BREAKING — chats and runs made before the upgrade can no longer be run again.** Reading and deleting them still work.
+- **BREAKING — coding agents no longer hold your Claude, Codex, Copilot or API credentials.** Open each Claude subscription provider's terminal once after upgrading.
 - **ILD and the WorkItem Server run as uid 10001, as documented.**
 - **The ILD image is smaller.**
 - **The PR node retries a push or pull-request creation that fails because of a temporary forge error before parking.**

@@ -63,7 +63,9 @@ A stack from before agents always ran in containers needs `ILD_CONTAINER_SOCKET_
 in `.env` (and `ILD_CONTAINER_SOCKET_GRANT=1` for a socket of the host's `root` group),
 and is started with `docker-compose.yml`. On its first start ILD's entrypoint gives ILD
 back the files the old agent user left in `/data` and `/worktrees`, which can take a
-while on a large volume. After that upgrade:
+while on a large volume. `ILD_API_URL`, where it is set, must name ILD by a host name the
+runs can reach (the compose service, or ILD's Service on Kubernetes) and not localhost;
+ILD does not start otherwise. After that upgrade:
 
 - Runs and chats made before it can be read and deleted but not run again: a new turn,
   a resume, a retry or a terminal on one is refused. Start a new one.
