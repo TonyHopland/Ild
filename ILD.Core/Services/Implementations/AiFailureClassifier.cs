@@ -10,14 +10,15 @@ namespace ILD.Core.Services.Implementations;
 /// <em>when</em> it will let the work continue (<see cref="TryParseResetAt"/>).
 /// Both are the same job: reading provider prose nobody promised us a shape for,
 /// which is why they share the timeout and the precision-first bias below.
-/// Every CLI adapter reports a throttle the same way —
-/// as an ordinary failure whose text carries the whole signal — so one text
+/// Most CLI adapters report a throttle as an ordinary failure whose text
+/// carries the whole signal — so one text
 /// classifier buys all four adapters the same behaviour, and an adapter that
 /// never learns to classify precisely still gets it (ADR-0009).
 ///
 /// <para>
-/// Where the signal lives shapes the rules. All four adapters build a non-zero
-/// exit as <c>Fail($"exit={code} stderr={stderr}", response)</c>, so the two
+/// Where the signal lives shapes the rules. The adapters build a non-zero
+/// exit as <c>exit={code} stderr={stderr}</c> (plus the CLI's stdout result when
+/// stderr is empty), so the two
 /// texts have very different characters:
 /// </para>
 /// <list type="bullet">
@@ -91,8 +92,10 @@ public static class AiFailureClassifier
     {
         // "You've hit your session limit", "Claude usage limit reached",
         // "You have exceeded your weekly limit".
-        Rule(@"\b(?:hit|reached|exceeded|out of)\b[^.\n]{0,40}\b(?:usage|session|weekly|daily|monthly|message)[ _-]?limit\b"),
-        Rule(@"\b(?:usage|session|weekly|daily|monthly|message)[ _-]?limits?\b[^.\n]{0,30}\b(?:reached|exceeded|hit|resets?)\b"),
+        Rule(@"\b(?:hit|reached|exceeded|out of)\b[^.\n]{0,40}\b(?:usage|session|weekly|daily|monthly|message|5|five|opus|sonnet|haiku)[ _-]?(?:hour[ _-]?)?limit\b"),
+        Rule(@"\b(?:usage|session|weekly|daily|monthly|message|5|five|opus|sonnet|haiku)[ _-]?(?:hour[ _-]?)?limits?\b[^.\n]{0,30}\b(?:reached|exceeded|hit|resets?)\b"),
+        // "Claude AI usage limit reached|1762984800" - the epoch form.
+        Rule(@"\busage limit reached\|\d{9,11}\b"),
         // Wire tokens: these are the provider's own identifiers, quoted verbatim
         // out of an error payload rather than written by anyone.
         Rule(@"\brate_limit_error\b|\boverloaded_error\b"),
@@ -163,7 +166,7 @@ public static class AiFailureClassifier
 
     /// <summary>
     /// When the provider says its limit resets, e.g. the <c>"resets 9:40am
-    /// (UTC)"</c> a session limit ends with. Only a time the provider stamped
+    /// (UTC)"</c> a session limit ends with, or the epoch of <c>"usage limit reached|&lt;epoch&gt;"</c>. Only a time the provider stamped
     /// <b>UTC</b> is read, along with a relative "try again in 20 minutes";
     /// a bare "resets 3pm" is deliberately left alone, because the zone it means
     /// is the user's and guessing wrong parks the run for hours it did not have
@@ -185,7 +188,7 @@ public static class AiFailureClassifier
         resetAtUtc = default;
         if (string.IsNullOrWhiteSpace(text)) return false;
 
-        var at = MatchAbsolute(text, nowUtc) ?? MatchRelative(text, nowUtc);
+        var at = MatchAbsolute(text, nowUtc) ?? MatchRelative(text, nowUtc) ?? MatchEpoch(text);
         if (at is null || at <= nowUtc || at - nowUtc > MaxHonouredWait) return false;
 
         resetAtUtc = at.Value;
@@ -215,6 +218,14 @@ public static class AiFailureClassifier
         // The horizon above is what keeps a time that merely just elapsed from
         // buying a full day's wait.
         return today > nowUtc ? today : today.AddDays(1);
+    }
+
+    private static readonly Regex EpochResetRule = Rule(@"\busage limit reached\|(\d{9,11})\b");
+
+    private static DateTime? MatchEpoch(string text)
+    {
+        var m = Match(EpochResetRule, text);
+        return m is null ? null : DateTimeOffset.FromUnixTimeSeconds(long.Parse(m.Groups[1].Value)).UtcDateTime;
     }
 
     private static DateTime? MatchRelative(string text, DateTime nowUtc)

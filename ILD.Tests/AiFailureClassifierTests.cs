@@ -161,8 +161,8 @@ public class AiFailureClassifierTests
         string providerType, IAgentAdapter adapter)
     {
         // A CLI that prints the provider's notice and exits non-zero — the shape
-        // all four adapters share: Fail($"exit={code} stderr={stderr}", response),
-        // where the response (arg 2) is the Output.
+        // A CLI that prints the provider's notice and exits non-zero with empty stderr;
+        // the response (arg 2) is the Output.
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-throttle-{providerType}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "throttle.sh");
@@ -192,8 +192,9 @@ public class AiFailureClassifierTests
 
             Assert.False(result.Success);
             // The notice rides on Output; Error carries only the exit status.
+            // The notice rides on Output, and with stderr empty the error carries a tail of it too.
             Assert.Contains("session limit", result.Output ?? string.Empty);
-            Assert.DoesNotContain("session limit", result.Error ?? string.Empty);
+            Assert.StartsWith("exit=1 stderr=", result.Error);
             Assert.Equal(
                 FailureKind.Interrupted,
                 AiFailureClassifier.Classify(result.Output, result.Error));

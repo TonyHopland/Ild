@@ -177,4 +177,43 @@ public class ClaudeStreamParsingTests
         Assert.Equal("exit=2 stderr=boom", result.Error);
         Assert.Equal("partial", result.Output);
     }
+
+    [Theory]
+    [InlineData("You've hit your 5-hour limit · resets 9:40pm (UTC)")]
+    [InlineData("You've hit your session limit · resets 9:40pm (UTC)")]
+    [InlineData("You've hit your weekly limit · resets 9:40pm (UTC)")]
+    [InlineData("Claude AI usage limit reached|1762984800")]
+    public async Task A_limit_hit_in_the_result_event_with_empty_stderr_is_an_interruption_named_in_the_error(string notice)
+    {
+        var stdout = await ClaudeCodeAdapter.ReadStreamJsonAsync(
+            AdapterStreamReaders.Of(Init, Result("sess-abc", true, notice)),
+            null, onSessionId: null, TestContext.Current.CancellationToken);
+
+        var result = Assemble(stdout, exitCode: 1);
+
+        Assert.False(result.Success);
+        Assert.Equal(FailureKind.Interrupted, result.Failure);
+        Assert.Contains(notice, result.Error);
+    }
+
+    [Fact]
+    public async Task A_non_limit_failure_with_empty_stderr_still_fails_and_carries_the_stdout_tail()
+    {
+        var stdout = await ClaudeCodeAdapter.ReadStreamJsonAsync(
+            AdapterStreamReaders.Of(Init, Result("sess-abc", true, "Credit balance is too low")),
+            null, onSessionId: null, TestContext.Current.CancellationToken);
+
+        var result = Assemble(stdout, exitCode: 1);
+
+        Assert.False(result.Success);
+        Assert.NotEqual(FailureKind.Interrupted, result.Failure);
+        Assert.Contains("Credit balance is too low", result.Error);
+    }
+
+    [Fact]
+    public void A_failure_with_no_json_and_empty_stderr_puts_the_stdout_tail_in_the_error()
+    {
+        var stdout = new ClaudeCodeAdapter.ClaudeStreamOutput("boom from the cli", "", null, null, false);
+        Assert.Contains("boom from the cli", Assemble(stdout, exitCode: 1).Error);
+    }
 }

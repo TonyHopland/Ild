@@ -152,4 +152,12 @@ public class PiOutputParsingTests
         Assert.Equal(40, result.Usage.OutputTokens);
         Assert.Equal(0.75m, result.Usage.CostUsd);
     }
+
+    [Fact]
+    public void A_non_zero_exit_with_empty_stderr_puts_the_stdout_tail_in_the_error()
+    {
+        var result = Assemble(new PiAdapter.PiExecutionOutput("the cli printed this and died", "", null, false, false), exitCode: 1);
+        Assert.False(result.Success);
+        Assert.Contains("the cli printed this and died", result.Error);
+    }
 }

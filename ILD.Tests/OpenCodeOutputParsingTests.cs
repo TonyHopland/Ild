@@ -201,6 +201,14 @@ public class OpenCodeOutputParsingTests
         Assert.True(result.Success, result.Error);
         Assert.Equal("from the export", result.Output);
     }
+
+    [Fact]
+    public void A_non_zero_exit_with_empty_stderr_puts_the_stdout_tail_in_the_error()
+    {
+        var result = Assemble("the cli printed this and died", exitCode: 1);
+        Assert.False(result.Success);
+        Assert.Contains("the cli printed this and died", result.Error);
+    }
 }
 
 public class OpenCodeRunArgumentsTests

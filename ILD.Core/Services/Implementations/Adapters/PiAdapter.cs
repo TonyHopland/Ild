@@ -200,7 +200,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
         return exitCode == 0
             ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParsePi(stdout.RawStdout))
-            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
+            : NodeExecutionResult.Fail(AdapterFailureText.NonZeroExit(exitCode, stderr, null, response), response);
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
