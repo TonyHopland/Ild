@@ -25,7 +25,7 @@ public class RouteAuthorizationTableTests(RouteAuthorizationTableTests.Host host
         public async ValueTask DisposeAsync() => await Factory.DisposeAsync();
     }
 
-    private sealed record Probe(string Verb, string Path, bool AgentOrUser);
+    private sealed record Probe(string Verb, string Path, bool AgentOrUser, bool AgentSurface);
 
     private static string ValueFor(RoutePatternParameterPart part)
     {
@@ -50,17 +50,25 @@ public class RouteAuthorizationTableTests(RouteAuthorizationTableTests.Host host
                     RoutePatternParameterPart parameter => ValueFor(parameter),
                     _ => string.Empty,
                 }))));
-            var agentOrUser = endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>()
-                .Any(a => a.Policy == IldAuthentication.AgentOrUserPolicy);
+            var policies = endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>().Select(a => a.Policy).ToList();
+            var agentSurface = policies.Contains(IldAuthentication.AgentSurfacePolicy);
+            var agentOrUser = agentSurface || policies.Contains(IldAuthentication.AgentOrUserPolicy);
             var verbs = endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["GET"];
             foreach (var verb in verbs)
-                probes.Add(new Probe(verb, path, agentOrUser));
+                probes.Add(new Probe(verb, path, agentOrUser, agentSurface));
         }
         return probes;
     }
 
+    private static string IssueGrantToken(IServiceProvider services)
+    {
+        using var scope = services.CreateScope();
+        return scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IExternalAgentGrantService>()
+            .CreateAsync("route-table", TimeSpan.FromHours(1), ILD.Data.Entities.ExternalAgentGrantScope.Full, "admin").GetAwaiter().GetResult().Token;
+    }
+
     [Fact]
-    public async Task Every_user_facing_route_refuses_no_token_with_401_and_the_agent_token_with_403_unless_it_is_agent_or_user()
+    public async Task Every_user_facing_route_refuses_no_token_with_401_and_the_agent_and_grant_tokens_with_403_unless_they_are_admitted()
     {
         var probes = Probes(host.Factory.Services);
         Assert.True(probes.Count > 100, $"only {probes.Count} routes were enumerated");
@@ -69,12 +77,21 @@ public class RouteAuthorizationTableTests(RouteAuthorizationTableTests.Host host
         agent.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
             host.Factory.Services.IssueAgentToken());
 
+        var grant = host.Factory.CreateClient();
+        grant.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", IssueGrantToken(host.Factory.Services));
+
         var mismatches = new List<string>();
         foreach (var probe in probes)
         {
             using var noToken = await anonymous.SendAsync(new HttpRequestMessage(new HttpMethod(probe.Verb), probe.Path), TestContext.Current.CancellationToken);
             if (noToken.StatusCode != HttpStatusCode.Unauthorized)
                 mismatches.Add($"{probe.Verb} {probe.Path} (no token) → {(int)noToken.StatusCode}");
+            if (!probe.AgentSurface)
+            {
+                using var asGrant = await grant.SendAsync(new HttpRequestMessage(new HttpMethod(probe.Verb), probe.Path), TestContext.Current.CancellationToken);
+                if (asGrant.StatusCode != HttpStatusCode.Forbidden)
+                    mismatches.Add($"{probe.Verb} {probe.Path} (grant token) → {(int)asGrant.StatusCode}");
+            }
             if (probe.AgentOrUser) continue;
             using var asAgent = await agent.SendAsync(new HttpRequestMessage(new HttpMethod(probe.Verb), probe.Path), TestContext.Current.CancellationToken);
             if (asAgent.StatusCode != HttpStatusCode.Forbidden)

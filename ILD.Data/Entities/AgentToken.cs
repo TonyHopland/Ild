@@ -7,6 +7,7 @@ public enum AgentTokenSource
 {
     Run = 0,
     Chat = 1,
+    Grant = 2,
 }
 
 /// <summary>

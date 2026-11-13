@@ -39,7 +39,8 @@ public sealed record GlobalVariableProposalQuery(
     GlobalVariableProposalStatus? Status = null,
     Guid? CreatedByLoopRunId = null,
     Guid? CreatedByChatSessionId = null,
-    string? WorkItemId = null);
+    string? WorkItemId = null,
+    Guid? CreatedByExternalGrantId = null);
 
 /// <summary>
 /// A suggestion with what it is shown against: the variable as it is now (null

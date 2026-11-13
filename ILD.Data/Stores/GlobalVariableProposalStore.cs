@@ -36,7 +36,7 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
 
     public async Task<IReadOnlyList<GlobalVariableProposalEntry>> ListAsync(GlobalVariableProposalQuery query, CancellationToken ct)
     {
-        var matching = _proposals.Matching(query.Status, query.CreatedByLoopRunId, query.CreatedByChatSessionId, query.WorkItemId);
+        var matching = _proposals.Matching(query.Status, query.CreatedByLoopRunId, query.CreatedByChatSessionId, query.WorkItemId, query.CreatedByExternalGrantId);
         return await EntriesAsync(await _proposals.NewestFirstAsync(matching, ct), ct);
     }
 

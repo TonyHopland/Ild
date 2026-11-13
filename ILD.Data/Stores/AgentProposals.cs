@@ -82,12 +82,14 @@ internal sealed class AgentProposals<TProposal, TStatus>
     }
 
     /// <summary>The proposals every filter set narrows to; none set matches every proposal.</summary>
-    public IQueryable<TProposal> Matching(TStatus? status, Guid? createdByLoopRunId, Guid? createdByChatSessionId, string? workItemId)
+    public IQueryable<TProposal> Matching(
+        TStatus? status, Guid? createdByLoopRunId, Guid? createdByChatSessionId, string? workItemId, Guid? createdByExternalGrantId = null)
     {
         IQueryable<TProposal> q = _table.AsNoTracking();
         if (status is { } s) q = q.Where(HasStatus(s));
         if (createdByLoopRunId is { } runId) q = q.Where(p => p.CreatedByLoopRunId == runId);
         if (createdByChatSessionId is { } chatId) q = q.Where(p => p.CreatedByChatSessionId == chatId);
+        if (createdByExternalGrantId is { } grantId) q = q.Where(p => p.CreatedByExternalGrantId == grantId);
         if (workItemId is not null)
             q = q.Where(p => _db.LoopRuns.Any(r => r.Id == p.CreatedByLoopRunId && r.WorkItemId == workItemId));
         return q;
@@ -182,9 +184,10 @@ internal sealed class AgentProposals<TProposal, TStatus>
     {
         var runId = proposal.CreatedByLoopRunId;
         var chatId = proposal.CreatedByChatSessionId;
-        return runId is not null
-            ? p => p.CreatedByLoopRunId == runId
-            : p => p.CreatedByChatSessionId == chatId;
+        var grantId = proposal.CreatedByExternalGrantId;
+        return runId is not null ? p => p.CreatedByLoopRunId == runId
+            : chatId is not null ? p => p.CreatedByChatSessionId == chatId
+            : p => p.CreatedByExternalGrantId == grantId;
     }
 
     /// <summary><c>p =&gt; p.Status == status</c>, which C# cannot write over a generic enum.</summary>

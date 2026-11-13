@@ -69,6 +69,7 @@ public sealed class WorkItemView
 
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public string? WorktreePath { get; set; }

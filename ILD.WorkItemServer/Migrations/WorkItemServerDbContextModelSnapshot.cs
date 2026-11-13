@@ -17,7 +17,7 @@ namespace ILD.WorkItemServer.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.12")
+                .HasAnnotation("ProductVersion", "10.0.14")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -52,6 +52,9 @@ namespace ILD.WorkItemServer.Migrations
                         .HasColumnType("character varying(256)");
 
                     b.Property<Guid?>("CreatedByChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByExternalGrantId")
                         .HasColumnType("uuid");
 
                     b.Property<Guid?>("CreatedByLoopRunId")
@@ -164,6 +167,9 @@ namespace ILD.WorkItemServer.Migrations
                     b.Property<Guid?>("CreatedByChatSessionId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("CreatedByExternalGrantId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("CreatedByLoopRunId")
                         .HasColumnType("uuid");
 
@@ -240,6 +246,8 @@ namespace ILD.WorkItemServer.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedByChatSessionId");
+
+                    b.HasIndex("CreatedByExternalGrantId");
 
                     b.HasIndex("WorkItemId", "Status");
 

@@ -11,13 +11,13 @@ namespace ILD.Core.Services.Interfaces;
 public interface IHumanInputProposalService
 {
     /// <summary>
-    /// Store a suggestion from the given run or chat for the work item, if it is
+    /// Store a suggestion from the given run, chat or external-agent grant for the work item, if it is
     /// parked for human input and <paramref name="output"/> is one of the
     /// parked node's outputs.
     /// </summary>
     Task<HumanInputProposalResult> ProposeAsync(
         string workItemId, string output, string text, string rationale,
-        Guid? runId, Guid? chatSessionId, CancellationToken ct);
+        Guid? runId, Guid? chatSessionId, CancellationToken ct, Guid? externalGrantId = null);
 
     /// <summary>
     /// Deliver a pending suggestion's output and text to the visit it was made

@@ -46,6 +46,9 @@ public class HumanInputProposal : IAgentProposal<HumanInputProposalStatus>
 
     public Guid? CreatedByChatSessionId { get; set; }
 
+    /// <summary>The external-agent grant that made it. Mutually exclusive with the run and the chat session.</summary>
+    public Guid? CreatedByExternalGrantId { get; set; }
+
     public HumanInputProposalStatus Status { get; set; } = HumanInputProposalStatus.Pending;
 
     public static ProposalStatuses<HumanInputProposalStatus> Statuses { get; } = new()

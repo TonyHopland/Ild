@@ -215,6 +215,7 @@ public sealed class WorkItemServerDbContext : DbContext
             b.HasKey(p => p.Id);
             b.HasIndex(p => new { p.WorkItemId, p.Status });
             b.HasIndex(p => p.CreatedByChatSessionId);
+            b.HasIndex(p => p.CreatedByExternalGrantId);
             b.Property(p => p.Status).HasConversion<int>();
             b.Property(p => p.ProposedDescription).HasColumnType("text");
             b.Property(p => p.SnapshotDescription).HasColumnType("text");

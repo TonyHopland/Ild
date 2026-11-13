@@ -60,6 +60,9 @@ namespace ILD.Api.Controllers;
 ///    ADR-0028), and read back what became of the caller's own proposals.
 ///    Only a human saves or rejects one, on the human-only
 ///    <c>LoopTemplateProposalsController</c>,
+///  - serve an external-agent grant (ADR-0037) as a session of its own: it creates, edits and proposes like a run or chat, and reaches the
+///    worktree, preview, pull request and attachment routes only for the items it created. It has no run or chat, so the loop-variable,
+///    current-loop and chat-clone routes refuse it,
 ///  - read and write per-run loop variables (scoped by the run's token) so one node can hand off state to a later node — the values
 ///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>,
 ///  - pull commits pushed to their own run branch, which needs the
@@ -74,9 +77,9 @@ namespace ILD.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v1/agent")]
-// The one opt-out from the user-only fallback policy: this is the whole surface
-// the agent service token may reach. The UI calls it too, hence agent *or* user.
-[Authorize(Policy = IldAuthentication.AgentOrUserPolicy)]
+// An opt-out from the user-only fallback policy: this is the whole surface
+// agents may reach: ILD's own, and external-agent grants. The UI calls it too, hence agent *or* user.
+[Authorize(Policy = IldAuthentication.AgentSurfacePolicy)]
 public class AgentController : ControllerBase, IActionFilter
 {
     // What the MCP server used to send. The caller's run or chat comes from its token; a header that names another is refused.
@@ -90,6 +93,11 @@ public class AgentController : ControllerBase, IActionFilter
     [NonAction]
     public void OnActionExecuting(ActionExecutingContext context)
     {
+        if (User.IsInRole(IldAuthentication.ExternalAgentRole))
+        {
+            context.Result = RefuseGrantSessionHeaders() ?? RefuseGrantWrite();
+            return;
+        }
         if (!User.IsInRole(IldAuthentication.AgentRole))
             return;
         if (HeaderDisagrees(RunIdHeader, AgentTokenSource.Run) || HeaderDisagrees(ChatSessionIdHeader, AgentTokenSource.Chat))
@@ -100,6 +108,21 @@ public class AgentController : ControllerBase, IActionFilter
     public void OnActionExecuted(ActionExecutedContext context)
     {
     }
+
+    /// <summary>A grant is its own session: a header naming a run or a chat is refused, never honoured.</summary>
+    private IActionResult? RefuseGrantSessionHeaders()
+        => HasHeader(RunIdHeader) || HasHeader(ChatSessionIdHeader)
+            ? StatusCode(403, new { error = "An external-agent grant is its own session and cannot act as a run or a chat; remove the X-ILD-Run-Id and X-ILD-Chat-Session-Id headers." })
+            : null;
+
+    private IActionResult? RefuseGrantWrite()
+        => User.FindFirstValue(IldAuthentication.GrantScopeClaim) == nameof(ExternalAgentGrantScope.ReadOnly)
+           && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method)
+            ? StatusCode(403, new { error = "This grant is read-only: it can read but not create work items or make proposals." })
+            : null;
+
+    private bool HasHeader(string header)
+        => Request.Headers.TryGetValue(header, out var sent) && !string.IsNullOrWhiteSpace(sent.ToString());
 
     private bool HeaderDisagrees(string header, AgentTokenSource source)
         => Request.Headers.TryGetValue(header, out var sent)
@@ -180,6 +203,49 @@ public class AgentController : ControllerBase, IActionFilter
     // of dependencies can't bloat the (per-page) list payload.
     private const int MaxBlockedByIds = 50;
 
+    /// <summary>
+    /// What an AI handed a grant link reads first. Open to everyone and secret-free: it names the surface and how to
+    /// authenticate to it, and the operator's token is what opens the rest.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("_about")]
+    public IActionResult About()
+    {
+        var baseUrl = $"{Request.Scheme}://{Request.Host}{Request.PathBase}";
+        return Ok(new
+        {
+            name = "ILD agent API",
+            description = "ILD coordinates coding agents over a backlog of work items. A grant gives an AI session outside ILD temporary access to the same tools ILD's own agents use. It ends when it expires or the operator revokes it.",
+            authentication = "Send the grant token on every request as the header 'Authorization: Bearer <token>'. A token in a query string is refused. Without a valid token every route except this one answers 401.",
+            rest = new
+            {
+                baseUrl = $"{baseUrl}/api/v1/agent",
+                routes = new[]
+                {
+                    "GET workitems, GET workitems/{id}, GET workitems/summary",
+                    "POST workitems (creates into the Backlog), PUT workitems/{id} and DELETE workitems/{id} (only items this grant created)",
+                    "POST workitems/{id}/dependencies, DELETE workitems/{id}/dependencies/{dependsOnId} (only items this grant created)",
+                    "POST workitems/{id}/edit-proposals, GET workitems/{id}/edit-proposals (propose an edit to any item; a human decides)",
+                    "GET repositories, GET loop-templates, GET loop-runs, GET global-variables",
+                    "POST global-variables/proposals, POST loop-templates/proposals, POST workitems/{id}/human-input-proposals (a human decides)",
+                },
+            },
+            mcp = new
+            {
+                url = $"{baseUrl}{ILD.Api.Mcp.ExternalAgentMcp.Path}",
+                transport = "Streamable HTTP, stateless",
+                authentication = "The same Authorization: Bearer header.",
+            },
+            rules = new[]
+            {
+                "You are your own session: you edit and delete only the work items you created. Everything else is changed by proposing, and a human approves or rejects each proposal.",
+                "You cannot start, transition or merge work, and you have no loop run or chat: loop variables, the current loop and chat clones are not available.",
+                "A read-only grant can read but not create or propose.",
+                "Every request is audited under the grant, and each grant has a request budget per minute (429 when it is spent).",
+            },
+        });
+    }
+
     [HttpGet("workitems")]
     public async Task<IActionResult> ListWorkItems(
         [FromQuery] string? status = null,
@@ -240,6 +306,7 @@ public class AgentController : ControllerBase, IActionFilter
                 repositoryId = w.RepositoryId == Guid.Empty ? null : w.RepositoryId,
                 createdByLoopRunId = w.CreatedByLoopRunId,
                 createdByChatSessionId = w.CreatedByChatSessionId,
+                createdByExternalGrantId = w.CreatedByExternalGrantId,
                 createdAt = w.CreatedAt,
                 updatedAt = w.UpdatedAt,
                 descriptionPreview = BuildDescriptionPreview(w.Description),
@@ -339,6 +406,7 @@ public class AgentController : ControllerBase, IActionFilter
                 loopTemplateVersionId = (Guid?)null,
             createdByLoopRunId = wi.CreatedByLoopRunId,
             createdByChatSessionId = wi.CreatedByChatSessionId,
+            createdByExternalGrantId = wi.CreatedByExternalGrantId,
             // An agent that may set the custom branch name has to be able to
             // read back what stuck — the API normalises it and the value it
             // holds is what the item's next run will check out.
@@ -1303,7 +1371,7 @@ public class AgentController : ControllerBase, IActionFilter
     private bool TrySessionClaim(AgentTokenSource source, out Guid id)
     {
         id = Guid.Empty;
-        return User.IsInRole(IldAuthentication.AgentRole)
+        return (User.IsInRole(IldAuthentication.AgentRole) || User.IsInRole(IldAuthentication.ExternalAgentRole))
             && User.FindFirstValue(IldAuthentication.SessionSourceClaim) == source.ToString().ToLowerInvariant()
             && Guid.TryParse(User.FindFirstValue(IldAuthentication.SessionIdClaim), out id);
     }
@@ -1321,6 +1389,8 @@ public class AgentController : ControllerBase, IActionFilter
     /// </summary>
     private Guid? CallerChatSessionId() => TryResolveChatSessionId(out var chatSessionId) ? chatSessionId : null;
 
+    private Guid? CallerGrantId() => TrySessionClaim(AgentTokenSource.Grant, out var grantId) ? grantId : null;
+
     private bool TryResolveChatSessionId(out Guid chatSessionId)
     {
         chatSessionId = Guid.Empty;
@@ -1328,7 +1398,7 @@ public class AgentController : ControllerBase, IActionFilter
     }
 
     /// <summary>Who the changes this call makes are for, from the run or chat its token names.</summary>
-    private Task<WorkItemActor?> CallerActorAsync() => ActorAsync(CallerRunId(), CallerChatSessionId());
+    private Task<WorkItemActor?> CallerActorAsync() => ActorAsync(CallerRunId(), CallerChatSessionId(), CallerGrantId());
 
     /// <summary>
     /// Who a change is for: a loop run as this instance's user, named by the step
@@ -1337,7 +1407,7 @@ public class AgentController : ControllerBase, IActionFilter
     /// an agent token that names neither (none is issued today). Null for a signed-in session
     /// whose user can no longer be resolved.
     /// </summary>
-    private async Task<WorkItemActor?> ActorAsync(Guid? runId, Guid? chatSessionId)
+    private async Task<WorkItemActor?> ActorAsync(Guid? runId, Guid? chatSessionId, Guid? grantId = null)
     {
         if (runId is { } run && await _runs.GetByIdAsync(run) is { } loopRun)
         {
@@ -1349,6 +1419,9 @@ public class AgentController : ControllerBase, IActionFilter
         if (chatSessionId is { } chat
             && await _db.ChatSessions.AsNoTracking().Where(c => c.Id == chat).Select(c => c.UserId).FirstOrDefaultAsync() is { } chatUser)
             return WorkItemActor.Chat(chatUser, chat);
+        if (grantId is { } grant
+            && await _db.ExternalAgentGrants.AsNoTracking().Where(g => g.Id == grant).Select(g => g.Name).FirstOrDefaultAsync() is { } grantName)
+            return WorkItemActor.External(_instance.Username, grantName, grant);
         if (User.IsInRole(IldAuthentication.AgentRole))
             return WorkItemActor.System(_instance.Username, "agent with no run or chat");
         return User.Identity?.Name is { Length: > 0 } name ? WorkItemActor.Human(name) : null;
@@ -1596,6 +1669,7 @@ public class AgentController : ControllerBase, IActionFilter
         // A standalone Chat Session (ADR-0010) stamps through its own token.
         // It is never both: a token is for a run or a chat.
         var createdByChatSessionId = CallerChatSessionId();
+        var createdByExternalGrantId = CallerGrantId();
 
         // Validate dependencies up-front so we don't half-create.
         var dependencyIds = new List<string>();
@@ -1613,7 +1687,7 @@ public class AgentController : ControllerBase, IActionFilter
             }
         }
 
-        if (await ActorAsync(createdByLoopRunId, createdByChatSessionId) is not { } actor)
+        if (await ActorAsync(createdByLoopRunId, createdByChatSessionId, createdByExternalGrantId) is not { } actor)
             return Unauthorized();
 
         string id;
@@ -1628,6 +1702,7 @@ public class AgentController : ControllerBase, IActionFilter
                 forceBacklog: true,
                 tags: request.Tags,
                 createdByChatSessionId: createdByChatSessionId,
+                createdByExternalGrantId: createdByExternalGrantId,
                 branchNameOverride: branchNameOverride,
                 baseBranchOverride: baseBranchOverride);
         }
@@ -1649,6 +1724,7 @@ public class AgentController : ControllerBase, IActionFilter
             status = created?.Status.ToString(),
             createdByLoopRunId = created?.CreatedByLoopRunId,
             createdByChatSessionId = created?.CreatedByChatSessionId,
+            createdByExternalGrantId = created?.CreatedByExternalGrantId,
         });
     }
 
@@ -1796,7 +1872,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
@@ -1825,7 +1901,7 @@ public class AgentController : ControllerBase, IActionFilter
             if (await CheckProposedDependenciesAsync(id, addDependencies, removeDependencies) is { } dependencyError)
                 return dependencyError;
 
-            if (await ActorAsync(runId, chatSessionId) is not { } actor)
+            if (await ActorAsync(runId, chatSessionId, grantId) is not { } actor)
                 return Unauthorized();
             result = await _workItems.ProposeEditAsync(actor, id, new RemoteCreateEditProposalRequest
             {
@@ -1839,6 +1915,7 @@ public class AgentController : ControllerBase, IActionFilter
                 Rationale = request.Rationale,
                 CreatedByLoopRunId = runId,
                 CreatedByChatSessionId = chatSessionId,
+                CreatedByExternalGrantId = grantId,
                 CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
                 ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
             }, cancellationToken);
@@ -1939,7 +2016,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
@@ -1968,6 +2045,7 @@ public class AgentController : ControllerBase, IActionFilter
             Rationale = rationale,
             CreatedByLoopRunId = runId,
             CreatedByChatSessionId = chatSessionId,
+            CreatedByExternalGrantId = grantId,
             CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
             ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
         }, cancellationToken);
@@ -1991,12 +2069,12 @@ public class AgentController : ControllerBase, IActionFilter
     public async Task<IActionResult> ListGlobalVariableProposals(
         [FromServices] IGlobalVariableProposalStore proposals, CancellationToken cancellationToken)
     {
-        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
         var own = await proposals.ListAsync(
-            new GlobalVariableProposalQuery(CreatedByLoopRunId: runId, CreatedByChatSessionId: chatSessionId),
+            new GlobalVariableProposalQuery(CreatedByLoopRunId: runId, CreatedByChatSessionId: chatSessionId, CreatedByExternalGrantId: grantId),
             cancellationToken);
         return Ok(own.Select(e => new
         {
@@ -2023,7 +2101,7 @@ public class AgentController : ControllerBase, IActionFilter
         [FromServices] IHumanInputProposalService proposals,
         CancellationToken cancellationToken)
     {
-        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
@@ -2040,7 +2118,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (rationale.Length > HumanInputProposal.MaxRationaleLength)
             return BadRequest(new { error = $"The rationale is {rationale.Length:N0} / {HumanInputProposal.MaxRationaleLength:N0} characters; shorten it." });
 
-        var result = await proposals.ProposeAsync(id, output, text, rationale, runId, chatSessionId, cancellationToken);
+        var result = await proposals.ProposeAsync(id, output, text, rationale, runId, chatSessionId, cancellationToken, grantId);
         return result.Outcome switch
         {
             HumanInputProposalOutcome.Created => StatusCode(StatusCodes.Status201Created, new
@@ -2074,7 +2152,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
@@ -2144,6 +2222,7 @@ public class AgentController : ControllerBase, IActionFilter
             Rationale = rationale,
             CreatedByLoopRunId = runId,
             CreatedByChatSessionId = chatSessionId,
+            CreatedByExternalGrantId = grantId,
             CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
             ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
         }, cancellationToken);
@@ -2176,12 +2255,12 @@ public class AgentController : ControllerBase, IActionFilter
     public async Task<IActionResult> ListLoopTemplateProposals(
         [FromServices] ILoopTemplateProposalStore proposals, CancellationToken cancellationToken)
     {
-        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
         var own = await proposals.ListAsync(
-            new LoopTemplateProposalQuery(CreatedByLoopRunId: runId, CreatedByChatSessionId: chatSessionId),
+            new LoopTemplateProposalQuery(CreatedByLoopRunId: runId, CreatedByChatSessionId: chatSessionId, CreatedByExternalGrantId: grantId),
             cancellationToken);
         return Ok(own.Select(e => new
         {
@@ -2206,21 +2285,26 @@ public class AgentController : ControllerBase, IActionFilter
     /// the decision is fed back to that session, so a proposal from nowhere
     /// would have nowhere to go.
     /// </summary>
-    private async Task<(Guid? RunId, Guid? ChatSessionId, IActionResult? Error)> ResolveProposingSessionAsync()
+    private async Task<(Guid? RunId, Guid? ChatSessionId, Guid? GrantId, IActionResult? Error)> ResolveProposingSessionAsync()
     {
         if (TryResolveRunId(out var runId))
             return await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == runId)
-                ? (runId, null, null)
-                : (null, null, StatusCode(403, new { error = "Unknown loop run." }));
+                ? (runId, null, null, null)
+                : (null, null, null, StatusCode(403, new { error = "Unknown loop run." }));
 
         if (TryResolveChatSessionId(out var chatSessionId))
             return await _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == chatSessionId)
-                ? (null, chatSessionId, null)
-                : (null, null, StatusCode(403, new { error = "Unknown or inactive chat session." }));
+                ? (null, chatSessionId, null, null)
+                : (null, null, null, StatusCode(403, new { error = "Unknown or inactive chat session." }));
 
-        return (null, null, BadRequest(new
+        if (TrySessionClaim(AgentTokenSource.Grant, out var grantId))
+            return await _db.ExternalAgentGrants.AsNoTracking().AnyAsync(g => g.Id == grantId)
+                ? (null, null, grantId, null)
+                : (null, null, null, StatusCode(403, new { error = "Unknown external-agent grant." }));
+
+        return (null, null, null, BadRequest(new
         {
-            error = "A proposal needs the proposing session. Only an agent launched for a run or a chat has one.",
+            error = "A proposal needs the proposing session. Only an agent launched for a run or a chat, or an external-agent grant, has one.",
         }));
     }
 
@@ -2248,6 +2332,10 @@ public class AgentController : ControllerBase, IActionFilter
     /// </summary>
     private async Task<IActionResult?> CallerMayTouchAsync(string workItemId)
     {
+        if (CallerGrantId() is { } grantId)
+            return await _workItems.GetWorkItemAsync(workItemId) is { } own && own.CreatedByExternalGrantId != grantId
+                ? StatusCode(403, new { error = "A grant reaches only the work items it created for this route." })
+                : null;
         if (!TryResolveRunId(out var runId))
             return null;
         if (await _workItems.GetWorkItemAsync(workItemId) is not { } workItem)
@@ -2274,6 +2362,8 @@ public class AgentController : ControllerBase, IActionFilter
             return wi.CreatedByLoopRunId == runId;
         if (TryResolveChatSessionId(out var chatId))
             return wi.CreatedByChatSessionId == chatId;
+        if (TrySessionClaim(AgentTokenSource.Grant, out var grantId))
+            return wi.CreatedByExternalGrantId == grantId;
         return false;
     }
 }

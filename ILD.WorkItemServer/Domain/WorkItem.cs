@@ -70,6 +70,7 @@ public class WorkItem
     /// <see cref="CreatedByLoopRunId"/> after their run is reclaimed.
     /// </summary>
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
 
     /// <summary>
     /// The repository this work item is associated with. Stored on the server

@@ -192,7 +192,8 @@ public class WorkItemManager : IWorkItemManager
         IEnumerable<string>? tags = null,
         Guid? createdByChatSessionId = null,
         string? branchNameOverride = null,
-        string? baseBranchOverride = null)
+        string? baseBranchOverride = null,
+        Guid? createdByExternalGrantId = null)
     {
         var opts = await _options.ResolveForRepositoryAsync(repositoryId);
 
@@ -206,6 +207,7 @@ public class WorkItemManager : IWorkItemManager
 
         var createdBy = createdByLoopRunId.HasValue ? $"Agent-{createdByLoopRunId.Value}"
             : createdByChatSessionId.HasValue ? $"Chat-{createdByChatSessionId.Value}"
+            : createdByExternalGrantId.HasValue ? $"Grant-{createdByExternalGrantId.Value}"
             : null;
 
         var serverWi = await _server.CreateAsync(opts, new RemoteCreateWorkItemRequest
@@ -217,6 +219,7 @@ public class WorkItemManager : IWorkItemManager
             Tags = tags?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>(),
             CreatedByLoopRunId = createdByLoopRunId,
             CreatedByChatSessionId = createdByChatSessionId,
+            CreatedByExternalGrantId = createdByExternalGrantId,
             RepositoryId = repositoryId,
             BranchNameOverride = branchNameOverride,
             BaseBranchOverride = baseBranchOverride,
@@ -385,7 +388,8 @@ public class WorkItemManager : IWorkItemManager
                 w.UpdatedAt,
                 w.RepositoryId,
                 w.CreatedByLoopRunId,
-                w.CreatedByChatSessionId))
+                w.CreatedByChatSessionId,
+                w.CreatedByExternalGrantId))
             .ToList();
     }
 
@@ -520,6 +524,7 @@ public class WorkItemManager : IWorkItemManager
             RunRepositoryId = run?.RepositoryId,
             CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
             CreatedByChatSessionId = remote.CreatedByChatSessionId,
+            CreatedByExternalGrantId = remote.CreatedByExternalGrantId,
             StartedAt = timingRun?.StartedAt,
             CompletedAt = timingRun?.CompletedAt,
             WorktreePath = run?.WorktreePath,
@@ -1846,6 +1851,7 @@ public class WorkItemManager : IWorkItemManager
         if (proposal is null) return approver;
         var proposer = proposal.CreatedByLoopRunId is { } run ? $" by run {run}"
             : proposal.CreatedByChatSessionId is { } chat ? $" by chat {chat}"
+            : proposal.CreatedByExternalGrantId is { } grant ? $" by grant {grant}"
             : string.Empty;
         return approver with { Detail = $"edit proposal {proposal.Id}{proposer}", WorkItemId = proposal.RequestedByWorkItemId };
     }

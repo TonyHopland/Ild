@@ -1,17 +1,19 @@
 namespace ILD.Data.Entities;
 
 /// <summary>
-/// A change an agent proposes and a human decides, made by a loop run or by a
-/// chat (ADR-0027, ADR-0028).
+/// A change an agent proposes and a human decides, made by a loop run, a
+/// chat or an external-agent grant (ADR-0027, ADR-0028).
 /// </summary>
 public interface IAgentProposal
 {
     Guid Id { get; set; }
 
-    /// <summary>Mutually exclusive with <see cref="CreatedByChatSessionId"/>.</summary>
+    /// <summary>Exactly one of the run, the chat session and the grant is set.</summary>
     Guid? CreatedByLoopRunId { get; set; }
 
     Guid? CreatedByChatSessionId { get; set; }
+
+    Guid? CreatedByExternalGrantId { get; set; }
 
     string? RejectionReason { get; set; }
 

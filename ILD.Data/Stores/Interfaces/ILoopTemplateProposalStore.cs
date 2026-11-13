@@ -37,7 +37,8 @@ public sealed record LoopTemplateProposalQuery(
     Guid? TemplateId = null,
     Guid? CreatedByLoopRunId = null,
     Guid? CreatedByChatSessionId = null,
-    string? WorkItemId = null);
+    string? WorkItemId = null,
+    Guid? CreatedByExternalGrantId = null);
 
 public enum LoopTemplateProposeOutcome
 {

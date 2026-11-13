@@ -44,6 +44,9 @@ public class LoopTemplateProposal : IAgentProposal<LoopTemplateProposalStatus>
 
     public Guid? CreatedByChatSessionId { get; set; }
 
+    /// <summary>The external-agent grant that made it. Mutually exclusive with the run and the chat session.</summary>
+    public Guid? CreatedByExternalGrantId { get; set; }
+
     /// <summary>The sequence of the reply, in <see cref="CreatedByChatSessionId"/>, that the proposal follows.</summary>
     public int? ChatReplySequence { get; set; }
 
