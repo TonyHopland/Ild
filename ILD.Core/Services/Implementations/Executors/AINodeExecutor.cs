@@ -214,7 +214,7 @@ public sealed class AINodeExecutor : INodeExecutor
             // from the beginning instead, once, and say so in the run's events.
             if (!result.Success && isSteering && AiFailureClassifier.IsSessionNotFound(result.Error))
             {
-                fellBackReason = (result.Error ?? string.Empty).Trim().Split('\n')[0] is { Length: > 0 } why ? (why.Length > 200 ? why[..200] : why) : "session not found";
+                fellBackReason = AiFailureClassifier.FirstLine(result.Error, 200) is { Length: > 0 } why ? why : "session not found";
                 var fresh = rendering is null
                     ? cfg.Prompt ?? string.Empty
                     : await rendering.RenderAsync(cfg.Prompt ?? string.Empty, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput);

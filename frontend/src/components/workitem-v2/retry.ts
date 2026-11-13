@@ -70,8 +70,7 @@ export function nodeTakesRetry(
  * the server says whether it can work (a session was recorded and the agent
  * can resume), and `resumeDisabledReason` is what to show when it cannot.
  */
-export function nodeOffersResume(node: Pick<LoopRunNode, "status" | "nodeType">): boolean {| "nodeType">,
-): boolean {
+export function nodeOffersResume(node: Pick<LoopRunNode, "status" | "nodeType">): boolean {
   return (
     node.nodeType === NodeType.AI &&
     (node.status === LoopRunNodeStatus.Failed || node.status === LoopRunNodeStatus.Interrupted)

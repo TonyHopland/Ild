@@ -144,6 +144,13 @@ public static class AiFailureClassifier
             : ClassifyText(error, trustAmbiguous: true);
     }
 
+    /// <summary>The first line of <paramref name="text"/>, trimmed and cut to <paramref name="max"/> characters; empty when there is none.</summary>
+    public static string FirstLine(string? text, int max)
+    {
+        var line = (text ?? string.Empty).Trim().Split('\n')[0].Trim();
+        return line.Length > max ? line[..max] : line;
+    }
+
     private static readonly Regex[] SessionNotFoundRules =
     {
         Rule(@"\bno (?:conversation|session|rollout) found\b"),

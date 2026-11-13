@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace ILD.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20261113090000_AddLoopRunNodeAiSessionId")]
+    [Migration("20261113175611_AddLoopRunNodeAiSessionId")]
     partial class AddLoopRunNodeAiSessionId
     {
         /// <inheritdoc />

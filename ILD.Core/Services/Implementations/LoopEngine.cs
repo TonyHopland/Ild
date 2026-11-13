@@ -836,8 +836,7 @@ public sealed class LoopEngine : ILoopEngine
 
     private static string ResumeNote(string? error)
     {
-        var reason = (error ?? string.Empty).Trim().Split('\n')[0].Trim();
-        if (reason.Length > 300) reason = reason[..300];
+        var reason = AiFailureClassifier.FirstLine(error, 300);
         if (reason.Length == 0) reason = "unknown";
         return $"You were interrupted (reason: {reason}). Continue the task from where you left off.";
     }

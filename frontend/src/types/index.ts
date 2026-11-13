@@ -615,9 +615,6 @@ export interface LoopRunNode {
   resumeUnavailableReason?: string | null;
 }
 
-export interface LoopRunAvailableSession| null;
-}
-
 export interface LoopRunAvailableSession {
   adapterName: string;
   sessionId: string;

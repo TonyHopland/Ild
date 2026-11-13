@@ -81,9 +81,8 @@ describe("when an attempt offers Resume", () => {
 
   test("it is disabled with the server's reason, and enabled without one", () => {
     expect(resumeDisabledReason({ canResume: true })).toBeNull();
-    expect(resumeDisabledReason({ canResume: false, resumeUnavailableReason: "no session recorded" })).toBe(
-      "no session recorded",
-    );
+    const reason = resumeDisabledReason({ canResume: false, resumeUnavailableReason: "no session recorded" });
+    expect(reason).toBe("no session recorded");
     expect(resumeDisabledReason({})).toBe("Resume is not available for this attempt");
   });
 });
