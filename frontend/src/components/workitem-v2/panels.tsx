@@ -321,8 +321,8 @@ function FailedNodeCard({
       {canRetry && (
         <div className="wiv2-failed-meta">
           Retry runs “{node.nodeLabel}” again with the same input, in the same worktree. The run
-          keeps its history. Resume instead continues the
-          agent's earlier session, so it keeps what it had read and planned.
+          keeps its history. Resume instead continues the agent's earlier session, so it keeps what
+          it had read and planned.
         </div>
       )}
       {error && <div className="preview-message preview-error">{error}</div>}
