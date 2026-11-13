@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 
 namespace ILD.Core.Services.Implementations;
@@ -17,9 +18,7 @@ namespace ILD.Core.Services.Implementations;
 ///
 /// <para>
 /// Where the signal lives shapes the rules. The adapters build a non-zero
-/// exit as <c>exit={code} stderr={stderr}</c> (plus the CLI's stdout result when
-/// stderr is empty), so the two
-/// texts have very different characters:
+/// exit as <c>exit={code} stderr={stderr}</c>, so the two texts have very different characters:
 /// </para>
 /// <list type="bullet">
 ///   <item><b>Output</b> is whatever the agent produced. When the provider cuts
@@ -31,7 +30,9 @@ namespace ILD.Core.Services.Implementations;
 ///   connections and <c>file.cs:429</c> line numbers constantly.</item>
 ///   <item><b>Error</b> is machine text: the adapter's exit line, the CLI's
 ///   stderr, or a provider error message lifted out of a structured event.
-///   Nothing narrates there.</item>
+///   Nothing narrates there. (When stderr is empty an adapter also appends a
+///   <c>stdout=</c> tail so people can see what happened; that tail is the agent's
+///   narration, so it is cut off before this text is read.)</item>
 /// </list>
 /// <para>
 /// So the ambiguous vocabulary — bare status codes, 5xx phrases, connection
@@ -136,6 +137,7 @@ public static class AiFailureClassifier
     /// </summary>
     public static FailureKind Classify(string? output, string? error)
     {
+        error = AdapterFailureText.WithoutStdoutTail(error);
         var fromOutput = ClassifyText(output, trustAmbiguous: false);
         return fromOutput != FailureKind.Unknown
             ? fromOutput
@@ -175,7 +177,7 @@ public static class AiFailureClassifier
     /// </summary>
     public static bool TryParseResetAt(string? output, string? error, DateTime nowUtc, out DateTime resetAtUtc)
         => TryParseResetAt(output, nowUtc, out resetAtUtc)
-            || TryParseResetAt(error, nowUtc, out resetAtUtc);
+            || TryParseResetAt(AdapterFailureText.WithoutStdoutTail(error), nowUtc, out resetAtUtc);
 
     private static readonly Regex AbsoluteResetRule = Rule(
         @"\b(?:resets?|available again)\b(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*[\(\[]?\s*(?:utc|gmt)\b");

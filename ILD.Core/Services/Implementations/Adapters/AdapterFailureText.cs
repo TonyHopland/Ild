@@ -20,8 +20,24 @@ internal static class AdapterFailureText
         if (!string.IsNullOrWhiteSpace(providerError))
             return $"{text} result={Tail(providerError)}";
         if (string.IsNullOrWhiteSpace(stderr) && !string.IsNullOrWhiteSpace(stdout))
-            return $"{text} stdout={Tail(stdout)}";
+            return $"{text}{StdoutMarker}{Tail(stdout)}";
         return text;
+    }
+
+    private const string StdoutMarker = " stdout=";
+
+    /// <summary>
+    /// The error without the appended <c>stdout=</c> tail. That tail is the agent's own
+    /// narration, so it is shown to people but never read as machine text.
+    /// </summary>
+    public static string? WithoutStdoutTail(string? error)
+    {
+        if (error is null) return null;
+        var at = error.IndexOf(StdoutMarker, StringComparison.Ordinal);
+        if (at < 0 || !error.StartsWith("exit=", StringComparison.Ordinal)) return error;
+        var head = error[..at];
+        var stderrAt = head.IndexOf("stderr=", StringComparison.Ordinal);
+        return stderrAt >= 0 && string.IsNullOrWhiteSpace(head[(stderrAt + "stderr=".Length)..]) ? head : error;
     }
 
     private static string Tail(string text)

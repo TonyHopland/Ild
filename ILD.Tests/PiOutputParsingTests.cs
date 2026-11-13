@@ -160,4 +160,11 @@ public class PiOutputParsingTests
         Assert.False(result.Success);
         Assert.Contains("the cli printed this and died", result.Error);
     }
+
+    [Fact]
+    public void Narration_in_the_stdout_tail_of_a_genuine_failure_is_not_read_as_a_throttle()
+    {
+        var result = Assemble(new PiAdapter.PiExecutionOutput("the test got 503 Service Unavailable from staging", "", null, false, false), exitCode: 1);
+        Assert.NotEqual(FailureKind.Interrupted, ILD.Core.Services.Implementations.AiFailureClassifier.Classify(null, result.Error));
+    }
 }

@@ -216,4 +216,13 @@ public class ClaudeStreamParsingTests
         var stdout = new ClaudeCodeAdapter.ClaudeStreamOutput("boom from the cli", "", null, null, false);
         Assert.Contains("boom from the cli", Assemble(stdout, exitCode: 1).Error);
     }
+
+    [Fact]
+    public void Narration_in_the_stdout_tail_of_a_genuine_failure_is_not_read_as_a_throttle()
+    {
+        var stdout = new ClaudeCodeAdapter.ClaudeStreamOutput("x", "the test got 503 Service Unavailable from staging", null, null, true);
+        var result = Assemble(stdout, exitCode: 1);
+        Assert.Contains("503 Service Unavailable", result.Error);
+        Assert.NotEqual(FailureKind.Interrupted, ILD.Core.Services.Implementations.AiFailureClassifier.Classify(null, result.Error));
+    }
 }
