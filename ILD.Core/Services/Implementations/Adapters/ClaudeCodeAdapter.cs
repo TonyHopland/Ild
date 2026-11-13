@@ -213,7 +213,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         return exitCode == 0
             ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParseClaude(stdout.RawStdout, costBeforeThisRun))
-            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
+            : NodeExecutionResult.Fail(
+                AdapterFailureText.NonZeroExit(exitCode, stderr, stdout.ErrorMessage, stdout.Content.Length > 0 ? stdout.Content : stdout.RawStdout),
+                response,
+                AiFailureClassifier.ClassifyProviderMessage(stdout.ErrorMessage));
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>

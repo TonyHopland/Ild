@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Claude Code "5-hour limit" now parks the run until the limit resets, instead of failing the node.**
 - **A preview starts again after ILD was stopped abruptly while it ran.**
 - **A preview service started on its own shows as running at once**, instead of only after a refresh.
 - **An OpenCode reply no longer includes the text of files the agent wrote.**

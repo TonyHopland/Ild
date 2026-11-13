@@ -285,7 +285,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         return exitCode == 0
             ? NodeExecutionResult.Ok(response, prompt, sessionId, incomingSessionId, AdapterUsageParser.ParseOpenCode(stdout))
-            : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response);
+            : NodeExecutionResult.Fail(AdapterFailureText.NonZeroExit(exitCode, stderr, jsonError, response), response);
     }
 
     private async Task<ManagedSessionRestoreResult> RestoreManagedSessionAsync(
