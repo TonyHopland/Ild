@@ -677,7 +677,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             agentDirectory = runAgentDirectory;
             apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
             var baseUrl = provider.BaseUrl;
-            if (gateway is not null && !string.IsNullOrWhiteSpace(apiKey))
+            if (gateway is not null)
             {
                 baseUrl = gateway.UrlFor(GatewayRoutes.Upstream);
                 apiKey = gateway.Token;

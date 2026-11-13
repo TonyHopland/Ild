@@ -2280,6 +2280,54 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Warming_installs_ilds_agents_ahead_so_the_first_run_does_not()
+    {
+        using var host = NewHost(Options(), [Claude]);
+        var installs = AnswerInstaller(AgentNodeLine, ClaudeLine);
+
+        await host.WarmAgentToolsAsync(TestContext.Current.CancellationToken);
+        await host.WarmAgentToolsAsync(TestContext.Current.CancellationToken);
+        await CreateRunAsync(host, _run, MakeBaseRepository("base", ("README.md", "x")));
+
+        var install = Assert.Single(installs);
+        Assert.Equal(["agentnode=node@24", "agent=claude-code|@anthropic-ai/claude-code|2.1.0|claude"], install.TakeLast(2));
+        Assert.Contains("ild-tools-agents:/opt/ild-tools:ro", BindsOf(_api.Container(Name(_run))!));
+    }
+
+    [Fact]
+    public async Task Warming_does_not_try_a_set_of_agents_that_failed_again_until_it_changes()
+    {
+        var agents = new List<RunAgent> { Claude };
+        using var host = NewHost(Options(), agents);
+        var attempts = 0;
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal)) Interlocked.Increment(ref attempts);
+            await e.ExitAsync(1);
+        };
+
+        await host.WarmAgentToolsAsync(TestContext.Current.CancellationToken);
+        await host.WarmAgentToolsAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(1, attempts);
+
+        agents[0] = Claude with { Version = "2.2.0" };
+        await host.WarmAgentToolsAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task Warming_installs_nothing_when_runs_get_no_toolchains_from_the_store()
+    {
+        using var host = NewHost(Options() with { Toolchains = false }, [Claude]);
+        var installs = AnswerInstaller(AgentNodeLine, ClaudeLine);
+
+        await host.WarmAgentToolsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(installs);
+    }
+
+    [Fact]
     public async Task An_installers_network_left_without_its_container_is_a_leftover_and_deleted()
     {
         var ct = TestContext.Current.CancellationToken;

@@ -8,8 +8,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations.ModelGateway;
 
-/// <summary>Where the gateway sends a request and the real credential it carries.</summary>
-public sealed record ModelCredential(Uri Upstream, string Secret, IReadOnlyDictionary<string, string> Headers)
+/// <summary>Where the gateway sends a request and the real credential it carries; no <paramref name="Secret"/> for an endpoint that takes none.</summary>
+public sealed record ModelCredential(Uri Upstream, string? Secret, IReadOnlyDictionary<string, string> Headers)
 {
     public static readonly IReadOnlyDictionary<string, string> NoHeaders = new Dictionary<string, string>();
 }
@@ -17,7 +17,7 @@ public sealed record ModelCredential(Uri Upstream, string Secret, IReadOnlyDicti
 /// <summary>Finds the real credential for a provider. Only the orchestrator can read what this reads (ADR-0031).</summary>
 public interface IModelCredentialSource
 {
-    /// <returns>The credential, or null when the provider has none ILD can use.</returns>
+    /// <returns>The credential, or null when the provider has none ILD can use. A base-URL provider without a key has one with no secret.</returns>
     Task<ModelCredential?> ResolveAsync(AiProvider provider, string route, CancellationToken ct);
 
     /// <summary>The upstream refused the credential last handed out for the route, so the next resolve should renew it first if it can.</summary>
@@ -69,10 +69,9 @@ public sealed class ModelCredentialSource : IModelCredentialSource
             }
             case GatewayRoutes.Upstream:
             {
-                var key = UpstreamKey(provider);
-                return key is null || !Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var upstream)
-                    ? null
-                    : new ModelCredential(upstream, key, ModelCredential.NoHeaders);
+                return Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var upstream)
+                    ? new ModelCredential(upstream, UpstreamKey(provider), ModelCredential.NoHeaders)
+                    : null;
             }
             default:
                 return null;

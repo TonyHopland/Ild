@@ -323,6 +323,8 @@ public sealed class KubernetesRunHost : ExecRunHost, ISignInTerminalHost, IRunHo
     protected override async Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, Guid? repositoryId, CancellationToken ct)
         => _options.UsesToolStore ? await ToolZonesAsync(label, plan, Agents(), repositoryId, ct) : null;
 
+    protected override IReadOnlyList<RunAgent> StoreAgents() => _options.UsesToolStore ? Agents() : [];
+
     protected override string ToolZoneName(RunToolMount zone) => $"{_options.ToolsClaim}/{zone.SubPath}";
 
     protected override async Task<T> WithToolInstallerAsync<T>(ToolInstaller toolInstaller, Func<Guid, Task<T>> work, CancellationToken ct)

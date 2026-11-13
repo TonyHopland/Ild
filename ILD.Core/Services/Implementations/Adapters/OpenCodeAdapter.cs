@@ -782,7 +782,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         var baseUrl = provider.BaseUrl.TrimEnd('/');
         var apiKey = provider.ApiKey ?? string.Empty;
-        if (gateway is not null && HoldsCredential(provider))
+        if (gateway is not null && Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _))
         {
             baseUrl = gateway.UrlFor(GatewayRoutes.Upstream);
             apiKey = gateway.Token;
