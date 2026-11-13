@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-13
+
 ### Security
 
 - **BREAKING — a repository clone URL can no longer carry a credential.** Put the token in the remote provider's API key.
