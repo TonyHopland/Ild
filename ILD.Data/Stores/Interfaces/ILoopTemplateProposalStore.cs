@@ -66,7 +66,8 @@ public sealed record LoopTemplateProposalEntry(
     int? LatestVersion,
     TemplateGraph? BaseGraph,
     string? SourceWorkItemId,
-    string? SourceChatOwner);
+    string? SourceChatOwner,
+    string? SourceGrantName = null);
 
 public enum LoopTemplateProposalDecisionOutcome
 {

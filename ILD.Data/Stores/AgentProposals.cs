@@ -171,13 +171,17 @@ internal sealed class AgentProposals<TProposal, TStatus>
     {
         var runIds = rows.Select(p => p.CreatedByLoopRunId).OfType<Guid>().Distinct().ToList();
         var chatIds = rows.Select(p => p.CreatedByChatSessionId).OfType<Guid>().Distinct().ToList();
+        var grantIds = rows.Select(p => p.CreatedByExternalGrantId).OfType<Guid>().Distinct().ToList();
         var runs = await _db.LoopRuns.AsNoTracking()
             .Where(r => runIds.Contains(r.Id))
             .ToDictionaryAsync(r => r.Id, r => r.WorkItemId, ct);
         var chats = await _db.ChatSessions.AsNoTracking()
             .Where(c => chatIds.Contains(c.Id))
             .ToDictionaryAsync(c => c.Id, c => c.UserId, ct);
-        return new(runs, chats);
+        var grants = await _db.ExternalAgentGrants.AsNoTracking()
+            .Where(g => grantIds.Contains(g.Id))
+            .ToDictionaryAsync(g => g.Id, g => g.Name, ct);
+        return new(runs, chats, grants);
     }
 
     private static Expression<Func<TProposal, bool>> FromSourceOf(TProposal proposal)
@@ -204,13 +208,19 @@ internal sealed class AgentProposals<TProposal, TStatus>
 /// Where proposals came from, while that still exists: the work item of the run
 /// that made one, or the owner of the chat that made it. Null once deleted.
 /// </summary>
-internal sealed class ProposalSources(IReadOnlyDictionary<Guid, string> runWorkItems, IReadOnlyDictionary<Guid, string> chatOwners)
+internal sealed class ProposalSources(
+    IReadOnlyDictionary<Guid, string> runWorkItems,
+    IReadOnlyDictionary<Guid, string> chatOwners,
+    IReadOnlyDictionary<Guid, string> grantNames)
 {
     public string? WorkItemOf(IAgentProposal proposal)
         => proposal.CreatedByLoopRunId is { } run ? runWorkItems.GetValueOrDefault(run) : null;
 
     public string? ChatOwnerOf(IAgentProposal proposal)
         => proposal.CreatedByChatSessionId is { } chat ? chatOwners.GetValueOrDefault(chat) : null;
+
+    public string? GrantNameOf(IAgentProposal proposal)
+        => proposal.CreatedByExternalGrantId is { } grant ? grantNames.GetValueOrDefault(grant) : null;
 }
 
 internal static class AgentProposals

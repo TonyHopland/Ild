@@ -38,6 +38,8 @@ function SuggestionSource({ proposal }: { proposal: GlobalVariableProposal }) {
       </Link>
     );
   if (source.kind === "chat") return <>Suggested in another user&apos;s chat</>;
+  if (source.kind === "external")
+    return <>Suggested by external AI grant «{source.grantName ?? "unknown"}»</>;
   return <>Source deleted</>;
 }
 

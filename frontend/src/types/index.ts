@@ -913,6 +913,7 @@ export interface HumanInputProposal {
   decidedAt: string | null;
   createdByLoopRunId: string | null;
   createdByChatSessionId: string | null;
+  createdByExternalGrantId?: string | null;
 }
 
 export type GlobalVariableProposalStatus =
@@ -943,6 +944,7 @@ export interface GlobalVariableProposal {
   /** The loop run step that was running when it was made; places its card in the Action tab. */
   createdByRunNodeId: string | null;
   createdByChatSessionId: string | null;
+  createdByExternalGrantId?: string | null;
   /** The sequence of the chat reply its card follows. */
   chatReplySequence: number | null;
   /**
@@ -950,9 +952,12 @@ export interface GlobalVariableProposal {
    * chat; "deleted" once it does not. A chat is linkable only for its owner.
    */
   source: {
-    kind: "run" | "chat" | "deleted";
+    kind: "run" | "chat" | "external" | "deleted";
     workItemId: string | null;
     chatSessionId: string | null;
+    /** The external-agent grant, when kind is "external". */
+    grantId?: string | null;
+    grantName?: string | null;
     linkable: boolean;
   };
 }
@@ -1021,6 +1026,7 @@ export interface LoopTemplateProposal {
   /** The loop run step that was running when it was made; places its card in the Action tab. */
   createdByRunNodeId: string | null;
   createdByChatSessionId: string | null;
+  createdByExternalGrantId?: string | null;
   /** The sequence of the chat reply its card follows. */
   chatReplySequence: number | null;
   /**
@@ -1028,9 +1034,12 @@ export interface LoopTemplateProposal {
    * chat; "deleted" once it does not. A chat is linkable only for its owner.
    */
   source: {
-    kind: "run" | "chat" | "deleted";
+    kind: "run" | "chat" | "external" | "deleted";
     workItemId: string | null;
     chatSessionId: string | null;
+    /** The external-agent grant, when kind is "external". */
+    grantId?: string | null;
+    grantName?: string | null;
     linkable: boolean;
   };
   /** Against the base version; null once that version no longer exists. */

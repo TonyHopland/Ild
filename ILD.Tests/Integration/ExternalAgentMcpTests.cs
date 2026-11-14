@@ -103,6 +103,7 @@ public class ExternalAgentMcpTests(ExternalAgentMcpTests.Host host) : IClassFixt
         Assert.Contains("create_workitem", names);
         Assert.Contains("propose_workitem_edit", names);
         Assert.Contains("get_loop_authoring_guide", names);
+        Assert.Contains("list_repositories", names);
         Assert.DoesNotContain("get_loop_variables", names);
         Assert.DoesNotContain("set_loop_variable", names);
         Assert.DoesNotContain("get_current_loop", names);

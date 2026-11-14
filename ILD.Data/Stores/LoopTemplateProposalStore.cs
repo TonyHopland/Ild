@@ -117,6 +117,7 @@ public sealed class LoopTemplateProposalStore : ILoopTemplateProposalStore
             latest.TryGetValue(p.LoopTemplateId, out var number) ? number : null,
             graphs.GetValueOrDefault((p.LoopTemplateId, p.BaseVersion)),
             sources.WorkItemOf(p),
-            sources.ChatOwnerOf(p))).ToList();
+            sources.ChatOwnerOf(p),
+            sources.GrantNameOf(p))).ToList();
     }
 }

@@ -131,6 +131,7 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
             p,
             variables.GetValueOrDefault(p.NormalizedName),
             sources.WorkItemOf(p),
-            sources.ChatOwnerOf(p))).ToList();
+            sources.ChatOwnerOf(p),
+            sources.GrantNameOf(p))).ToList();
     }
 }

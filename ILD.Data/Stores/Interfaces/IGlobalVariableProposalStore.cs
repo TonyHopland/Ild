@@ -51,7 +51,8 @@ public sealed record GlobalVariableProposalEntry(
     GlobalVariableProposal Proposal,
     GlobalVariable? Variable,
     string? SourceWorkItemId,
-    string? SourceChatOwner);
+    string? SourceChatOwner,
+    string? SourceGrantName = null);
 
 public enum GlobalVariableProposalDecisionOutcome
 {

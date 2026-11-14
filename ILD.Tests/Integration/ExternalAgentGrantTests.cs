@@ -342,6 +342,45 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
     }
 
     [Fact]
+    public async Task The_pages_where_proposals_are_decided_name_the_grant_that_made_them()
+    {
+        var grant = await CreateGrantAsync("outside-ai");
+        var proposed = await SendAsync(grant, HttpMethod.Post, "/api/v1/agent/global-variables/proposals",
+            new { name = "tone", value = "kind", rationale = "why" });
+        Assert.Equal(HttpStatusCode.Created, proposed.StatusCode);
+        using (var scope = host.Factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.LoopTemplateProposals.Add(new LoopTemplateProposal
+            {
+                Id = Guid.NewGuid(),
+                LoopTemplateId = Guid.NewGuid(),
+                BaseVersion = 1,
+                Document = "{}",
+                Rationale = "why",
+                Status = LoopTemplateProposalStatus.Pending,
+                CreatedByExternalGrantId = grant.Id,
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync(Ct);
+        }
+
+        var globals = await ReadAsync(await host.Operator.GetAsync("/api/v1/global-variables/proposals?status=Pending", Ct));
+        var template = await ReadAsync(await host.Operator.GetAsync("/api/v1/loop-template-proposals?status=Pending", Ct));
+
+        foreach (var list in new[] { globals, template })
+        {
+            var mine = list.EnumerateArray().Single(p => p.GetProperty("createdByExternalGrantId").ValueKind == JsonValueKind.String
+                && p.GetProperty("createdByExternalGrantId").GetGuid() == grant.Id);
+            var source = mine.GetProperty("source");
+            Assert.Equal("external", source.GetProperty("kind").GetString());
+            Assert.Equal(grant.Id, source.GetProperty("grantId").GetGuid());
+            Assert.Equal("outside-ai", source.GetProperty("grantName").GetString());
+            Assert.False(source.GetProperty("linkable").GetBoolean());
+        }
+    }
+
+    [Fact]
     public async Task A_read_only_grant_reads_but_neither_creates_nor_proposes()
     {
         var grant = await CreateGrantAsync("reader", scope: "ReadOnly");

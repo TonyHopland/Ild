@@ -249,7 +249,10 @@ public class GlobalVariablesController : ControllerBase
     private object ProposalView(GlobalVariableProposalEntry entry)
     {
         var p = entry.Proposal;
-        var kind = entry.SourceWorkItemId is not null ? "run" : entry.SourceChatOwner is not null ? "chat" : "deleted";
+        var kind = entry.SourceWorkItemId is not null ? "run"
+            : entry.SourceChatOwner is not null ? "chat"
+            : p.CreatedByExternalGrantId is not null ? "external"
+            : "deleted";
         return new
         {
             id = p.Id,
@@ -266,12 +269,15 @@ public class GlobalVariablesController : ControllerBase
             createdByLoopRunId = p.CreatedByLoopRunId,
             createdByRunNodeId = p.CreatedByRunNodeId,
             createdByChatSessionId = p.CreatedByChatSessionId,
+            createdByExternalGrantId = p.CreatedByExternalGrantId,
             chatReplySequence = p.ChatReplySequence,
             source = new
             {
                 kind,
                 workItemId = entry.SourceWorkItemId,
                 chatSessionId = kind == "chat" ? p.CreatedByChatSessionId : null,
+                grantId = kind == "external" ? p.CreatedByExternalGrantId : null,
+                grantName = kind == "external" ? entry.SourceGrantName : null,
                 linkable = kind == "run" || (kind == "chat" && entry.SourceChatOwner == User.Identity?.Name),
             },
         };
