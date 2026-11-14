@@ -1,4 +1,3 @@
-using System.Text;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Local;
@@ -14,11 +13,11 @@ namespace ILD.Tests;
 /// </summary>
 public class IsolatedRunHostTests
 {
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan IdleTimeout = InMemoryRunHost.IdleTimeout;
 
     private readonly ManualTimeProvider _time = new();
 
-    private InMemoryHost Host() => new() { Time = _time };
+    private InMemoryRunHost Host() => new() { Time = _time };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -27,7 +26,7 @@ public class IsolatedRunHostTests
     {
         var host = Host();
         var run = Guid.NewGuid();
-        host.Answer = _ => new ScriptedExec("from the run");
+        host.OnExec = Prints("from the run");
 
         var output = await host.RunToolAsync(RunPaths.WorkingDirectory(run), "git", ["status"], ct: Ct);
 
@@ -41,7 +40,8 @@ public class IsolatedRunHostTests
     {
         var host = Host();
         var run = Guid.NewGuid();
-        host.Answer = _ => host.Revived.Count == 0 ? throw new IOException("the container is stopped") : new ScriptedExec("back");
+        host.RefuseExec = _ => host.Revived.Count == 0 ? new IOException("the container is stopped") : null;
+        host.OnExec = Prints("back");
         host.Revives = true;
 
         var output = await host.RunToolAsync(RunPaths.WorkingDirectory(run), "git", ["status"], ct: Ct);
@@ -56,7 +56,7 @@ public class IsolatedRunHostTests
     {
         var host = Host();
         var run = Guid.NewGuid();
-        host.Answer = _ => throw new IOException("no such container");
+        host.RefuseExec = _ => new IOException("no such container");
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(
             () => host.RunToolAsync(RunPaths.WorkingDirectory(run), "git", ["status"], ct: Ct));
@@ -75,7 +75,7 @@ public class IsolatedRunHostTests
         await host.RunToolAsync(RunPaths.ChatRoot(Guid.NewGuid()), "git", ["status"], ct: Ct);
 
         Assert.Equal(1, host.ChatsMade);
-        Assert.All(host.Execs, exec => Assert.Equal(InMemoryHost.ChatName, exec.Name));
+        Assert.All(host.Execs, exec => Assert.Equal(InMemoryRunHost.ChatName, exec.Name));
     }
 
     [Fact]
@@ -190,7 +190,7 @@ public class IsolatedRunHostTests
         {
             var host = Host();
             var run = Guid.NewGuid();
-            host.Answer = _ => new ScriptedExec("", "read-only file system", exitCode: 1);
+            host.OnExec = Prints("", "read-only file system", exitCode: 1);
 
             var failure = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => host.CreateAsync(new RunEnvironmentRequest(run, basePath.FullName, "main", Guid.NewGuid()), Ct));
@@ -226,135 +226,14 @@ public class IsolatedRunHostTests
 
         var target = await host.PreviewTargetAsync(RunPaths.WorkingDirectory(run), 5173, Ct);
 
-        Assert.Equal(new Uri("http://10.9.0.7:5173/"), target);
+        Assert.Equal(new Uri($"http://{InMemoryRunHost.Address}:5173/"), target);
         await Assert.ThrowsAsync<NotSupportedException>(() => host.PreviewTargetAsync(RunPaths.ChatRoot(Guid.NewGuid()), 5173, Ct));
     }
 
-    private sealed record Exec(string Name, IReadOnlyList<string> Command, bool Tty);
-
-    private sealed class ScriptedExec(string stdout = "", string stderr = "", int exitCode = 0) : IExecStream
+    private static Func<InMemoryExec, Task> Prints(string stdout, string stderr = "", int exitCode = 0) => async exec =>
     {
-        public Stream Stdout { get; } = new MemoryStream(Encoding.UTF8.GetBytes(stdout));
-        public Stream? Stderr { get; } = new MemoryStream(Encoding.UTF8.GetBytes(stderr));
-        public Task<int?> Status { get; } = Task.FromResult<int?>(exitCode);
-        public Task WriteStdinAsync(ReadOnlyMemory<byte> data, CancellationToken ct) => Task.CompletedTask;
-        public Task CloseStdinAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task ResizeAsync(int cols, int rows, CancellationToken ct = default) => Task.CompletedTask;
-        public void Dispose() { }
-    }
-
-    /// <summary>An engine that keeps what it was asked in lists and has no pod or container behind it.</summary>
-    private sealed class InMemoryHost() : ExecRunHost(new ProcessRunner(), null)
-    {
-        public const string ChatName = "chat";
-
-        private readonly Lock _gate = new();
-        private bool _chatUp;
-
-        public Func<Exec, IExecStream> Answer { get; set; } = _ => new ScriptedExec();
-        public bool Revives { get; set; }
-        public Exception? SignInFailure { get; set; }
-        public TaskCompletionSource? MakingChat { get; set; }
-
-        public List<Exec> Execs { get; } = [];
-        public List<Guid> Revived { get; } = [];
-        public HashSet<Guid> Ready { get; } = [];
-        public List<Guid> Made { get; } = [];
-        public List<Guid> Undone { get; } = [];
-        public List<Guid> Removed { get; } = [];
-        public List<string> SignInsStarted { get; } = [];
-        public List<string> SignInsRemoved { get; } = [];
-        public int ChatsMade { get; private set; }
-        public int ChatsRemoved { get; private set; }
-
-        public IEnumerable<string> Open => OpenSideEnvironments;
-
-        public string NameOf(Guid run) => RunEnvironmentName(run);
-
-        protected override Task<IExecStream> OpenExecInAsync(
-            string name, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct)
-        {
-            var exec = new Exec(name, command, tty);
-            lock (_gate) Execs.Add(exec);
-            return Task.FromResult(Answer(exec));
-        }
-
-        protected override string RunEnvironmentName(Guid run) => $"run-{run:N}";
-
-        protected override Task<bool> ReviveRunAsync(Guid run, Exception failure, CancellationToken ct)
-        {
-            if (Revives) Revived.Add(run);
-            return Task.FromResult(Revives);
-        }
-
-        protected override Task<bool> IsRunReadyAsync(Guid run, CancellationToken ct) => Task.FromResult(Ready.Contains(run));
-
-        protected override Task<Func<Task>> MakeRunAsync(RunEnvironmentRequest request, RunToolEnvironment? tools, CancellationToken ct)
-        {
-            Made.Add(request.OwnerId);
-            return Task.FromResult<Func<Task>>(() =>
-            {
-                Undone.Add(request.OwnerId);
-                return Task.CompletedTask;
-            });
-        }
-
-        protected override Task RemoveRunAsync(Guid run, CancellationToken ct)
-        {
-            Removed.Add(run);
-            return Task.CompletedTask;
-        }
-
-        protected override Task StartSignInAsync(string name, Guid id, RunToolEnvironment? tools, CancellationToken ct)
-        {
-            SignInsStarted.Add(name);
-            return SignInFailure is { } failure ? Task.FromException(failure) : Task.CompletedTask;
-        }
-
-        protected override Task RemoveSignInAsync(string name)
-        {
-            SignInsRemoved.Add(name);
-            return Task.CompletedTask;
-        }
-
-        public override bool HostsChats => true;
-        protected override TimeSpan ChatIdleTimeout => IdleTimeout;
-        protected override string ChatEnvironmentName => ChatName;
-        protected override Task<bool> ChatIsUpAsync(CancellationToken ct) => Task.FromResult(_chatUp);
-
-        protected override async Task MakeChatAsync(CancellationToken ct)
-        {
-            if (MakingChat is { } making) await making.Task.WaitAsync(ct);
-            ChatsMade++;
-            _chatUp = true;
-        }
-
-        protected override Task RemoveChatAsync(CancellationToken ct)
-        {
-            ChatsRemoved++;
-            _chatUp = false;
-            return Task.CompletedTask;
-        }
-
-        protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(!owner.Chat || _chatUp);
-        protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => Task.FromResult(true);
-        protected override Task<string> RunAddressAsync(Guid run, CancellationToken ct) => Task.FromResult("10.9.0.7");
-
-        public override RunHostKind Kind => RunHostKind.Container;
-        public override string LeftoverKind => "in-memory";
-        public override TimeSpan SweepInterval => TimeSpan.FromMinutes(1);
-        protected override string Noun => "pod";
-        protected override string IldUrl => "http://ild.test:8080";
-        protected override int EgressProxyPort => 0;
-        protected override bool UsesToolStore => false;
-        protected override string ToolZoneName(RunToolMount zone) => zone.Zone.ToString();
-        protected override Task StartToolInstallerAsync(string name, Guid id, ToolInstaller installer, CancellationToken ct) => Task.CompletedTask;
-        protected override Task RemoveToolInstallerAsync(string name) => Task.CompletedTask;
-        protected override Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
-        protected override Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
-        protected override Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(false);
-        public override Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<DirectRoute>>([]);
-        public override Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<RunLeftover>>([]);
-        public override Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default) => Task.FromResult(false);
-    }
+        await exec.WriteStdoutAsync(stdout);
+        await exec.WriteStderrAsync(stderr);
+        await exec.ExitAsync(exitCode);
+    };
 }
