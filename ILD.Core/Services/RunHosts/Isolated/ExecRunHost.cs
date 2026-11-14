@@ -59,7 +59,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>
     /// Puts a relay on the environment's own loopback between a launch and ILD's egress proxy, and points the launch's proxy variables at it.
     /// The relay adds the launch's proxy credential to each request, so a client that sends none (a browser, a JVM) is still the launch's
-    /// to the proxy. One relay per credential, kept for the next launch that holds the same one. Without socat or bash the variables stay
+    /// to the proxy. One relay per credential, kept for the next launch that holds the same one, so it carries no launch's
+    /// <see cref="AgentChildren.LaunchVariable"/> and is never a process an agent left running. Without socat or bash the variables stay
     /// as they are, naming the proxy with the credential.
     /// </summary>
     internal const string EgressRelayScript = $$"""
@@ -78,7 +79,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
                     relay_port=$(( 20000 + relay_key % 10000 )); relay_try=0; relay_up=
                     while [ -z "$relay_up" ] && [ "$relay_try" -lt 20 ]; do
                         if ! bash -c "exec 3<>/dev/tcp/127.0.0.1/$relay_port" 2>/dev/null; then
-                            ILD_RELAY_AUTH=$(printf %s "${relay_to%%@*}" | base64 -w0) ILD_RELAY_UPSTREAM="${relay_to#*@}" setsid socat "TCP-LISTEN:$relay_port,bind=127.0.0.1,reuseaddr,fork" "EXEC:bash $relay_dir/relay.sh,nofork" </dev/null >/dev/null 2>&1 9>&- &
+                            env -u {{AgentChildren.LaunchVariable}} "ILD_RELAY_AUTH=$(printf %s "${relay_to%%@*}" | base64 -w0)" "ILD_RELAY_UPSTREAM=${relay_to#*@}" setsid socat "TCP-LISTEN:$relay_port,bind=127.0.0.1,reuseaddr,fork" "EXEC:bash $relay_dir/relay.sh,nofork" </dev/null >/dev/null 2>&1 9>&- &
                             relay_pid=$!; relay_wait=0
                             while kill -0 "$relay_pid" 2>/dev/null && [ "$relay_wait" -lt 40 ]; do
                                 if bash -c "exec 3<>/dev/tcp/127.0.0.1/$relay_port" 2>/dev/null; then relay_up=1; break; fi
