@@ -20,7 +20,7 @@ namespace ILD.Core.Services.RunHosts.Container;
 /// its own that reaches only ILD, and all three carry the run's labels. There are no owner references: ending the
 /// run deletes the container, the volume and the network, and the sweeper deletes what a killed ILD left.
 /// </summary>
-public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHostShutdown, IDisposable
+public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposable
 {
     public const string RunLeftoverKind = "container-run";
 
@@ -31,21 +31,12 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     private readonly ConcurrentDictionary<Guid, string> _addresses = new();
     private bool? _podman;
 
-    private readonly SemaphoreSlim _chatGate = new(1, 1);
-    // Containers that are not a run's, exec'd into by an id of their own: the store's installers.
-    private readonly ConcurrentDictionary<Guid, string> _execNames = new();
-    // The sign-in terminals open now, which the sweep must not take for leftovers.
-    private readonly ConcurrentDictionary<string, byte> _signIns = new(StringComparer.Ordinal);
-
     public ContainerRunHost(ContainerRunHostOptions options, IProcessRunner runner, ILogger? logger = null)
         : base(runner, logger)
     {
         _options = options;
         _api = new DockerApiClient(options.Socket);
     }
-
-    /// <summary>The agent CLIs a run gets: those ILD has installed, at their versions. Replaced in tests.</summary>
-    internal Func<IReadOnlyList<RunAgent>> Agents { get; init; } = () => RunAgent.Installed(ManagedAgentInstall.ResolveDataRoot());
 
     /// <summary>How often a starting container is looked at.</summary>
     internal TimeSpan ReadyPollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
@@ -79,28 +70,26 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     // -- Lifecycle ---------------------------------------------------------------
 
-    public override async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
+    protected override string RunEnvironmentName(Guid run) => ObjectName(run);
+
+    protected override async Task<bool> IsRunReadyAsync(Guid run, CancellationToken ct)
+        => await IsHealthyAsync(run, ct) && InPool(_addresses.GetValueOrDefault(run));
+
+    protected override async Task<Func<Task>> MakeRunAsync(RunEnvironmentRequest request, RunToolEnvironment? tools, CancellationToken ct)
     {
         var owner = request.OwnerId;
-        var workingDirectory = RunPaths.WorkingDirectory(owner);
-        if (await IsHealthyAsync(owner, ct) && InPool(_addresses.GetValueOrDefault(owner)))
-            return new RunEnvironment(owner, workingDirectory);
-
         // Only what this call made is removed when it fails: an environment a retry reached keeps its run's checkout.
         var made = new Made();
         try
         {
             var name = ObjectName(owner);
             await RemoveNetworkOutsidePoolAsync(name, $"run {owner:N}", ct);
-            var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
             made.Volume = await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = name, Labels = Labels(owner) }, ct));
             made.Network = await TolerateConflictAsync(() => CreateInternalNetworkAsync(name, Labels(owner), ct));
             var ild = await IldAddressAsync(name, $"run {owner:N}", ct);
             made.Container = await CreateContainerAsync(owner, ild, tools, request.Dns, ct);
             await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
             _addresses[owner] = await WaitReadyAsync(name, $"run {owner:N}", ct);
-
-            await PrepareAsync(owner, request, ct);
         }
         catch
         {
@@ -108,14 +97,13 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             throw;
         }
 
-        return new RunEnvironment(owner, workingDirectory);
+        return () => DeleteQuietlyAsync(owner, made);
     }
 
-    public override async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
+    protected override async Task RemoveRunAsync(Guid run, CancellationToken ct)
     {
-        await SyncPreviewDataBackAsync(environment, ct);
-        _addresses.TryRemove(environment.OwnerId, out _);
-        await DeleteObjectsAsync(environment.OwnerId, ct);
+        _addresses.TryRemove(run, out _);
+        await DeleteObjectsAsync(run, ct);
     }
 
     /// <summary>Which of a run's objects one <see cref="CreateAsync"/> call made, as opposed to found.</summary>
@@ -380,20 +368,7 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         [RunPaths.RoleLabel] = RunPaths.ToolsRole,
     };
 
-    /// <summary>
-    /// What the run's commands get from the toolchain store: the toolchains its repository needs and the agents ILD has
-    /// installed, each zone installed first when it lacks them. Null when toolchains are off, so the run has only what
-    /// the runner image has.
-    /// </summary>
-    protected override Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, Guid? repositoryId, CancellationToken ct)
-        => ToolsForAsync(owner, plan, Agents(), repositoryId, ct);
-
-    protected override IReadOnlyList<RunAgent> StoreAgents() => _options.Toolchains ? Agents() : [];
-
-    protected override bool ChatToolchains => _options.Toolchains;
-
-    private async Task<RunToolEnvironment?> ToolsForAsync(string owner, RunToolPlan plan, IReadOnlyList<RunAgent> agents, Guid? repositoryId, CancellationToken ct)
-        => _options.Toolchains ? await ToolZonesAsync(owner, plan, agents, repositoryId, ct) : null;
+    protected override bool UsesToolStore => _options.Toolchains;
 
     // The zones every chat mounts: the agents' and the shared toolchains.
     private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];
@@ -409,43 +384,37 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     /// <summary>
     /// A short-lived container of the runner image with only the zone being installed mounted writable (and the shared
     /// toolchains read-only for a repository's) and a network of its own that is internal and reaches only ILD, so mise and npm download through
-    /// the egress proxy and nothing else; removed, with the network, when <paramref name="work"/> ends. It carries no run label, so the sweep never takes it for a run's.
+    /// the egress proxy and nothing else. It carries no run label, so the sweep never takes it for a run's.
     /// </summary>
-    protected override async Task<T> WithToolInstallerAsync<T>(ToolInstaller toolInstaller, Func<Guid, Task<T>> work, CancellationToken ct)
+    protected override async Task StartToolInstallerAsync(string name, Guid id, ToolInstaller toolInstaller, CancellationToken ct)
     {
-        var installer = Guid.NewGuid();
-        var name = $"ild-tools-{installer:N}";
-        _execNames[installer] = name;
         var labels = ToolsLabels();
         labels[RunPaths.InstanceLabel] = _options.Instance;
+        string[] binds =
+        [
+            $"{toolInstaller.Writable.VolumeName(_options.ToolsVolume)}:{toolInstaller.Writable.MountPath}:rw",
+            .. toolInstaller.ReadOnly is { } shared ? ToolBinds([shared]) : [],
+        ];
+        await CreateInternalNetworkAsync(name, labels, ct);
+        var ild = await IldAddressAsync(name, "the toolchain installer", ct);
+        await PostCreateAsync(
+            name, ContainerBody(toolInstaller.Environment, labels, binds, placement: new Placement(name, ild, Dns: false), limits: (_options.MemoryBytes ?? 0, _options.NanoCpus ?? 0)),
+            tolerateConflict: false, ct);
+        await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
+        await WaitRunningAsync(name, ct);
+    }
+
+    // With its network.
+    protected override async Task RemoveToolInstallerAsync(string name)
+    {
         try
         {
-            string[] binds =
-            [
-                $"{toolInstaller.Writable.VolumeName(_options.ToolsVolume)}:{toolInstaller.Writable.MountPath}:rw",
-                .. toolInstaller.ReadOnly is { } shared ? ToolBinds([shared]) : [],
-            ];
-            await CreateInternalNetworkAsync(name, labels, ct);
-            var ild = await IldAddressAsync(name, "the toolchain installer", ct);
-            await PostCreateAsync(
-                name, ContainerBody(toolInstaller.Environment, labels, binds, placement: new Placement(name, ild, Dns: false), limits: (_options.MemoryBytes ?? 0, _options.NanoCpus ?? 0)),
-                tolerateConflict: false, ct);
-            await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
-            await WaitRunningAsync(name, ct);
-            return await work(installer);
+            await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true", null, CancellationToken.None));
+            await RemoveNetworkAsync(Escaped(name), CancellationToken.None);
         }
-        finally
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
         {
-            _execNames.TryRemove(installer, out _);
-            try
-            {
-                await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true", null, CancellationToken.None));
-                await RemoveNetworkAsync(Escaped(name), CancellationToken.None);
-            }
-            catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
-            {
-                Logger?.LogWarning(ex, "Could not remove the toolchain installer {Name}; the next sweep removes it", name);
-            }
+            Logger?.LogWarning(ex, "Could not remove the toolchain installer {Name}; the next sweep removes it", name);
         }
     }
 
@@ -532,45 +501,21 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     // The engine's exec-create takes the environment in its own field, so it never travels in the command.
     protected override bool ExecTakesEnvironment => true;
 
-    protected override Task<IExecStream> OpenExecStreamAsync(
-        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct)
-        => OpenExecStreamAsync(owner, command, environment, stdin, tty, user: null, ct);
+    protected override async Task<IExecStream> OpenExecInAsync(
+        string name, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct)
+        => await DockerExec.OpenAsync(_api, name, command, stdin, tty, ExitStatusTimeout, ct, asRoot ? "0" : null, environment);
 
-    private async Task<IExecStream> OpenExecStreamAsync(
-        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, string? user, CancellationToken ct)
+    // Stopped when ILD shut down, or by a restart of the engine or machine: started again, with all it held. Engines
+    // refuse an exec into a stopped container with different statuses (Docker 409, Podman 500), so its state decides.
+    protected override async Task<bool> ReviveRunAsync(Guid run, Exception failure, CancellationToken ct)
     {
-        if (owner.Chat)
-            return await DockerExec.OpenAsync(_api, await EnsureChatContainerAsync(ct), command, stdin, tty, ExitStatusTimeout, ct, user, environment);
-        if (_execNames.TryGetValue(owner.Id, out var other))
-            return await DockerExec.OpenAsync(_api, other, command, stdin, tty, ExitStatusTimeout, ct, user, environment);
-        try
-        {
-            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct, user, environment);
-        }
-        catch (DockerApiException)
-        {
-            // Stopped when ILD shut down, or by a restart of the engine or machine: started again, with all it held. Engines
-            // refuse an exec into a stopped container with different statuses (Docker 409, Podman 500), so its state decides.
-            if (!await RunContainerStoppedAsync(owner.Id, ct)) throw;
-            await StartStoppedRunAsync(owner.Id, ct);
-            return await DockerExec.OpenAsync(_api, ObjectName(owner.Id), command, stdin, tty, ExitStatusTimeout, ct, user, environment);
-        }
+        if (failure is not DockerApiException || !await RunContainerStoppedAsync(run, ct)) return false;
+        await StartStoppedRunAsync(run, ct);
+        return true;
     }
 
-    // What ILD's own execs as root start with: the container's PATH has directories the agent writes, which root must not run from.
-    private static readonly IReadOnlyDictionary<string, string> RootEnvironment = new Dictionary<string, string> { ["PATH"] = FixedPath };
-
-    // Docker and Podman make the hosts file root's in each container, and root writes it without a capability, as it does
-    // resolv.conf: the container keeps its capabilities and its commands keep their user.
-    protected override async Task<RunHostOutput> RunHostsScriptAsync(ExecOwner owner, IReadOnlyList<string> arguments, CancellationToken ct)
-    {
-        using var exec = await OpenExecStreamAsync(owner, IldScript("/bin/bash", HostsScript, arguments.ToArray()), RootEnvironment, stdin: false, tty: false, user: "0", ct);
-        var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);
-        var error = new StreamReader(exec.Stderr!).ReadToEndAsync(ct);
-        var status = await exec.Status;
-        await Task.WhenAll(output, error);
-        return new RunHostOutput(status ?? -1, await output, await error);
-    }
+    // Docker and Podman make the hosts file root's in each container, and root writes it without a capability.
+    protected override bool HostsFileIsRoots => true;
 
     private async Task<bool> RunContainerStoppedAsync(Guid owner, CancellationToken ct)
     {
@@ -617,7 +562,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     protected override async Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct)
     {
-        if (owner.Chat) await EnsureChatContainerAsync(ct);
         var container = ContainerOf(owner);
         var network = OpenNetworkName(owner);
         await TolerateConflictAsync(() => _api.PostAsync("/networks/create", new { Name = network, Internal = false, CheckDuplicate = true, Labels = OpenLabels(owner) }, ct));
@@ -712,8 +656,8 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     public async Task ShutdownAsync(CancellationToken ct)
     {
         var work = new List<Task> { RemoveContainerAsync(ChatName, "the chat container", ct) };
-        work.AddRange(_signIns.Keys.Select(name => RemoveContainerAsync(name, "a sign-in container", ct)));
-        work.AddRange(_execNames.Values.Where(name => name.StartsWith("ild-tools-", StringComparison.Ordinal)).Select(name => RemoveContainerAsync(name, "a toolchain installer", ct)));
+        work.AddRange(OpenSideEnvironments.Select(name =>
+            RemoveContainerAsync(name, name.StartsWith(InstallerPrefix, StringComparison.Ordinal) ? "a toolchain installer" : "a sign-in container", ct)));
         try
         {
             var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
@@ -757,9 +701,11 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     protected override TimeSpan ChatIdleTimeout => _options.ChatIdleTimeout;
 
-    // By its name, never by what ILD manages: a run's container, parked or waiting for a human, is not the chat's to reap.
-    public override Task ReapIdleChatAsync(CancellationToken ct = default)
-        => ReapChatAsync(_chatGate, ChatName, token => RemoveContainerAsync(ChatName, "the chat container", token), ct);
+    protected override Task RemoveChatAsync(CancellationToken ct) => RemoveContainerAsync(ChatName, "the chat container", ct);
+
+    protected override string ChatEnvironmentName => ChatName;
+
+    protected override Task<bool> ChatIsUpAsync(CancellationToken ct) => ChatContainerRunningAsync(ct);
 
     /// <summary>The chat container, its volume and its network: one of each for the instance, kept running.</summary>
     internal string ChatName => $"ild-chat-{_options.Instance}";
@@ -774,35 +720,20 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         [RunPaths.RoleLabel] = RunPaths.ChatRole,
     };
 
-    /// <summary>The name of the chat container, made and started first when it is missing or stopped. The volume keeps the chats' folders through that.</summary>
-    private async Task<string> EnsureChatContainerAsync(CancellationToken ct)
+    // The chat container is made and started; a stopped one is replaced, and what it held is in the volume.
+    protected override async Task MakeChatAsync(CancellationToken ct)
     {
-        if (!ChatBeingRemoved && await ChatContainerRunningAsync(ct)) return ChatName;
-
-        await _chatGate.WaitAsync(ct);
-        try
-        {
-            if (await ChatContainerRunningAsync(ct)) return ChatName;
-
-            await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = ChatName, Labels = ChatLabels() }, ct));
-            if (_options.Toolchains)
-                foreach (var zone in ChatToolZones)
-                    await PrepareToolZoneAsync(zone, ct);
-            await RemoveNetworkOutsidePoolAsync(ChatName, "the chat container", ct);
-            await TolerateConflictAsync(() => CreateInternalNetworkAsync(ChatName, ChatLabels(), ct));
-            // A stopped one is replaced; what it held is in the volume.
-            await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(ChatName)}?force=true", null, ct));
-            var ild = await IldAddressAsync(ChatName, "the chat container", ct);
-            await CreateChatContainerAsync(ild, ct);
-            await _api.PostAsync($"/containers/{Escaped(ChatName)}/start", null, ct, HttpStatusCode.NotModified);
-            await WaitReadyAsync(ChatName, "the chats", ct);
-            if (TakeRemovedForIdle()) Logger?.LogInformation("The chat container {Name} is back, made for a chat after it was removed for idleness", ChatName);
-            return ChatName;
-        }
-        finally
-        {
-            _chatGate.Release();
-        }
+        await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = ChatName, Labels = ChatLabels() }, ct));
+        if (_options.Toolchains)
+            foreach (var zone in ChatToolZones)
+                await PrepareToolZoneAsync(zone, ct);
+        await RemoveNetworkOutsidePoolAsync(ChatName, "the chat container", ct);
+        await TolerateConflictAsync(() => CreateInternalNetworkAsync(ChatName, ChatLabels(), ct));
+        await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(ChatName)}?force=true", null, ct));
+        var ild = await IldAddressAsync(ChatName, "the chat container", ct);
+        await CreateChatContainerAsync(ild, ct);
+        await _api.PostAsync($"/containers/{Escaped(ChatName)}/start", null, ct, HttpStatusCode.NotModified);
+        await WaitReadyAsync(ChatName, "the chats", ct);
     }
 
     private async Task<bool> ChatContainerRunningAsync(CancellationToken ct)
@@ -875,8 +806,6 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
 
     private const string SignInRole = "signin";
 
-    private static string SignInName(Guid id) => $"ild-signin-{id:N}";
-
     // No run label: the sweep, which deletes what a run left, never takes it for a run's.
     private IDictionary<string, string> SignInLabels() => new Dictionary<string, string>
     {
@@ -885,71 +814,38 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
         [RunPaths.RoleLabel] = SignInRole,
     };
 
-    /// <summary>
-    /// A terminal for a provider's login in a short-lived container of the runner image of its own: the agent from the toolchain
-    /// store, mounted read-only (installed first if it is missing), the engine's default network for the OAuth flow, and
-    /// none of what a chat has. It writes the credentials that the model gateway keeps from agents, so no chat or run
-    /// shares it. The container goes when the result is disposed, or on a failure to start.
-    /// </summary>
-    public async Task<SignInTerminal> OpenSignInAsync(ManagedAgent? agent, string command, IReadOnlyList<string> arguments, int cols, int rows, CancellationToken ct)
+    // The engine's default network, for the OAuth flow; no volume of a run or chat, no ILD address.
+    protected override async Task StartSignInAsync(string name, Guid id, RunToolEnvironment? tools, CancellationToken ct)
     {
-        var id = Guid.NewGuid();
-        var name = SignInName(id);
-        _signIns[name] = 0;
-        _execNames[id] = name;
+        await PostCreateAsync(
+            name,
+            ContainerBody(new[] { $"HOME={SignInHome}" }.Concat(tools?.For(SignInHome) ?? []), SignInLabels(), ToolBinds(tools?.Zones ?? [])),
+            tolerateConflict: false,
+            ct);
+        await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
+        await WaitRunningAsync(name, ct);
+    }
 
-        async Task RemoveAsync()
+    protected override async Task RemoveSignInAsync(string name)
+    {
+        try { await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true&v=true", null, CancellationToken.None)); }
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
         {
-            _execNames.TryRemove(id, out _);
-            // Forgotten whether or not the delete works, so the sweep can remove a container that it did not.
-            _signIns.TryRemove(name, out _);
-            try { await IgnoreNotFoundAsync(() => _api.SendAsync(HttpMethod.Delete, $"/containers/{Escaped(name)}?force=true&v=true", null, CancellationToken.None)); }
-            catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException)
-            {
-                Logger?.LogWarning(ex, "Could not remove the sign-in container {Name}; the next sweep removes it", name);
-            }
-        }
-
-        try
-        {
-            var agents = agent is null ? (IReadOnlyList<RunAgent>)[] : Agents().Where(a => a.Agent.Key == agent.Key).ToList();
-            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), agents, null, ct);
-            // The engine's default network, for the OAuth flow; no volume of a run or chat, no ILD address.
-            await PostCreateAsync(
-                name,
-                ContainerBody(new[] { $"HOME={SignInHome}" }.Concat(tools?.For(SignInHome) ?? []), SignInLabels(), ToolBinds(tools?.Zones ?? [])),
-                tolerateConflict: false,
-                ct);
-            await _api.PostAsync($"/containers/{Escaped(name)}/start", null, ct, HttpStatusCode.NotModified);
-            await WaitRunningAsync(name, ct);
-
-            var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), environment: null, stdin: true, tty: true, ct);
-            var pty = new ExecPty(exec);
-            pty.Resize(cols, rows);
-
-            return new SignInTerminal(pty, (path, token) => ReadSignInFileAsync(id, path, token), RemoveAsync);
-        }
-        catch
-        {
-            await RemoveAsync();
-            throw;
+            Logger?.LogWarning(ex, "Could not remove the sign-in container {Name}; the next sweep removes it", name);
         }
     }
 
     // -- Preview -----------------------------------------------------------------
 
-    public override async Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
+    protected override async Task<string> RunAddressAsync(Guid owner, CancellationToken ct)
     {
-        var target = OwnerFor(workingDirectory);
-        if (target.Chat) throw new NotSupportedException("a service in a chat cannot be previewed");
-        var owner = target.Id;
         if (!_addresses.TryGetValue(owner, out var address))
         {
             var container = await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct);
             address = AddressIn(container, ObjectName(owner)) ?? throw new InvalidOperationException($"the container of run {owner:N} has no address yet");
             _addresses[owner] = address;
         }
-        return new UriBuilder(Uri.UriSchemeHttp, address, port).Uri;
+        return address;
     }
 
     // -- Sweep -------------------------------------------------------------------
@@ -974,13 +870,13 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
             var networks = await _api.GetAsync($"/networks?filters={filter}", ct);
             Collect(networks, n => n["Labels"]);
             var signIns = new List<string>();
-            var open = _execNames.Values.ToHashSet(StringComparer.Ordinal);
+            var open = OpenSideEnvironments;
             foreach (var listed in containers?.AsArray() ?? [])
             {
                 var role = listed?["Labels"]?[RunPaths.RoleLabel]?.GetValue<string>();
                 if (role is SignInRole or RunPaths.ToolsRole
                     && listed!["Names"]?.AsArray().FirstOrDefault()?.GetValue<string>()?.TrimStart('/') is { } name
-                    && !_signIns.ContainsKey(name) && !open.Contains(name))
+                    && !open.Contains(name))
                     signIns.Add(name);
             }
             // An installer's network is removed with it; one whose container is gone, or never came, is a leftover of its own.
@@ -1204,6 +1100,5 @@ public sealed class ContainerRunHost : ExecRunHost, ISignInTerminalHost, IRunHos
     public void Dispose()
     {
         _api.Dispose();
-        _chatGate.Dispose();
     }
 }

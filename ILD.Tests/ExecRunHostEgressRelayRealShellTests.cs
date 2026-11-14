@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Isolated;
 
 namespace ILD.Tests;
@@ -33,13 +34,14 @@ public sealed class ExecRunHostEgressRelayRealShellTests : IDisposable
     }
 
     /// <summary>Runs the relay script as a launch's wrapper does and returns the proxy the launch is left pointed at.</summary>
-    private string ProxyAfterRelay(string proxyUrl)
+    private string ProxyAfterRelay(string proxyUrl, string? launchId = null)
     {
         var psi = new ProcessStartInfo("sh") { RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in new[] { "-c", ExecRunHost.EgressRelayScript + "\nprintf '%s %s' \"$HTTP_PROXY\" \"$https_proxy\"" }) psi.ArgumentList.Add(a);
         psi.Environment["HTTP_PROXY"] = proxyUrl;
         psi.Environment["https_proxy"] = proxyUrl;
         psi.Environment["ILD_EGRESS_RELAY_DIR"] = _dir;
+        if (launchId is not null) psi.Environment[AgentChildren.LaunchVariable] = launchId;
         using var process = Process.Start(psi)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
@@ -78,6 +80,27 @@ public sealed class ExecRunHostEgressRelayRealShellTests : IDisposable
 
         proxy.Stop();
         await proxying.ContinueWith(_ => { }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task The_relay_an_agent_launch_starts_is_not_a_process_the_agent_left_running()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux() && Has("setsid") && Has("socat"), "needs Linux with bash, setsid and socat");
+        var ct = TestContext.Current.CancellationToken;
+        using var proxy = new TcpListener(IPAddress.Loopback, 0);
+        proxy.Start();
+        var launch = Guid.NewGuid().ToString("N");
+
+        ProxyAfterRelay($"http://ild:to-k_en.sig@127.0.0.1:{((IPEndPoint)proxy.LocalEndpoint).Port}", launch);
+
+        var relayPid = (await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(_dir, "*.pid")), ct)).Trim();
+        Assert.Contains("socat", await File.ReadAllTextAsync($"/proc/{relayPid}/cmdline", ct), StringComparison.Ordinal);
+        var listing = new ProcessStartInfo("sh") { RedirectStandardOutput = true };
+        foreach (var a in new[] { "-c", ExecRunHost.ListChildrenScript, "sh", launch }) listing.ArgumentList.Add(a);
+        using var listed = Process.Start(listing)!;
+        var children = await listed.StandardOutput.ReadToEndAsync(ct);
+        await listed.WaitForExitAsync(ct);
+        Assert.Equal(string.Empty, children);
     }
 
     [Fact]

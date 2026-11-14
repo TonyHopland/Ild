@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A node no longer shows "Waiting for ILD" when the agent left nothing running.**
+
 ## [0.25.0] - 2026-11-14
 
 ### Added
