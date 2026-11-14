@@ -497,6 +497,58 @@ public class AgentController : ControllerBase, IActionFilter
             await _workItems.PullBranchAsync(id, cancellationToken));
     }
 
+    // Read-only views of a work item's worktree, uncommitted changes included. A fixed set of git commands and one
+    // bounded file read, run through IWorktreeInspector (ADR-0038). Reads of a worktree are not for external-agent
+    // grants: a grant's read access covers the items it created, not their code.
+
+    [HttpGet("workitems/{id}/worktree/status")]
+    public Task<IActionResult> GetWorktreeStatus(string id, [FromServices] IWorktreeInspector inspector, CancellationToken ct)
+        => ReadWorktreeAsync(id, () => inspector.GetStatusAsync(id, ct));
+
+    [HttpGet("workitems/{id}/worktree/diff")]
+    public Task<IActionResult> GetWorktreeDiff(
+        string id, [FromServices] IWorktreeInspector inspector, CancellationToken ct,
+        [FromQuery] string? path = null, [FromQuery] bool statOnly = false)
+        => ReadWorktreeAsync(id, () => inspector.GetDiffAsync(id, path, statOnly, ct));
+
+    [HttpGet("workitems/{id}/worktree/file")]
+    public Task<IActionResult> GetWorktreeFile(
+        string id, [FromQuery] string path, [FromServices] IWorktreeInspector inspector, CancellationToken ct)
+        => ReadWorktreeAsync(id, () => inspector.ReadFileAsync(id, path, ct));
+
+    [HttpGet("workitems/{id}/worktree/search")]
+    public Task<IActionResult> SearchWorktree(
+        string id, [FromQuery] string pattern, [FromServices] IWorktreeInspector inspector, CancellationToken ct,
+        [FromQuery] bool regex = false, [FromQuery] string? path = null)
+        => ReadWorktreeAsync(id, () => inspector.SearchAsync(id, pattern, regex, path, ct));
+
+    [HttpGet("workitems/{id}/worktree/log")]
+    public Task<IActionResult> GetWorktreeLog(
+        string id, [FromServices] IWorktreeInspector inspector, CancellationToken ct, [FromQuery] int limit = 20)
+        => ReadWorktreeAsync(id, () => inspector.GetLogAsync(id, limit, ct));
+
+    [HttpGet("workitems/{id}/worktree/commits/{sha}")]
+    public Task<IActionResult> GetWorktreeCommit(string id, string sha, [FromServices] IWorktreeInspector inspector, CancellationToken ct)
+        => ReadWorktreeAsync(id, () => inspector.GetCommitAsync(id, sha, ct));
+
+    private async Task<IActionResult> ReadWorktreeAsync(string id, Func<Task<WorktreeReadResult>> read)
+    {
+        if (User.IsInRole(IldAuthentication.ExternalAgentRole))
+            return StatusCode(403, new { error = "An external-agent grant cannot read a worktree." });
+        if (await CallerMayTouchAsync(id) is { } forbidden)
+            return forbidden;
+
+        var result = await read();
+        return result.Outcome switch
+        {
+            WorktreeReadOutcome.Ok => Ok(new { text = result.Text, truncated = result.Truncated, omittedBytes = result.OmittedBytes }),
+            WorktreeReadOutcome.WorkItemNotFound or WorktreeReadOutcome.NotFound => NotFound(new { error = result.Message }),
+            WorktreeReadOutcome.NoWorktree => Conflict(new { error = result.Message }),
+            WorktreeReadOutcome.Invalid => BadRequest(new { error = result.Message }),
+            _ => StatusCode(500, new { error = result.Message }),
+        };
+    }
+
     /// <summary>
     /// Clone a repository into the calling scheduled chat's <c>repos/</c> folder,
     /// or update the clone made there before, if the schedule allows it. The git

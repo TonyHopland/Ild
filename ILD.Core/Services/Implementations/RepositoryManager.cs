@@ -690,6 +690,45 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
+    private static readonly string[] ReadOnlyGitGlobals =
+        ["--no-optional-locks", "--no-pager", "--literal-pathspecs", "-c", "core.fsmonitor=false", "-c", "core.pager=cat"];
+
+    public async Task<CappedGitOutput> ReadGitAsync(string worktreePath, IReadOnlyList<string> args, int maxBytes, CancellationToken ct = default)
+    {
+        var sink = new CappedStream(maxBytes);
+        var (code, _, stderr) = await RunAsync(worktreePath, [.. ReadOnlyGitGlobals, .. args], ct, stdoutTo: sink);
+        return new CappedGitOutput(code, sink.Text, sink.OmittedBytes, stderr);
+    }
+
+    public async Task<CappedFileRead?> ReadWorktreeFileCappedAsync(string worktreePath, string relativePath, int maxBytes)
+    {
+        var full = ResolveSafePath(worktreePath, relativePath);
+        if (full == null) return null;
+
+        var root = LocalWorktrees.ResolveLinks(Path.GetFullPath(worktreePath))!;
+        var firstSegment = Path.GetRelativePath(root, full).Split(Path.DirectorySeparatorChar)[0];
+        if (firstSegment.Equals(".git", StringComparison.OrdinalIgnoreCase)) return null;
+
+        await using var stream = await ReadOrExplainAsync(relativePath, () => _host.OpenFileForReadAsync(full));
+        if (stream is null) return null;
+
+        var head = new byte[maxBytes];
+        var read = 0;
+        int n;
+        while (read < head.Length && (n = await stream.ReadAsync(head.AsMemory(read))) > 0)
+            read += n;
+
+        var total = (long)read;
+        var buffer = new byte[8192];
+        while ((n = await stream.ReadAsync(buffer)) > 0)
+            total += n;
+
+        var bytes = head[..read];
+        return IsBinary(bytes)
+            ? new CappedFileRead(null, true, total)
+            : new CappedFileRead(Encoding.UTF8.GetString(bytes), false, total);
+    }
+
     private async Task<byte[]?> ReadFileBytesAsync(string full)
     {
         await using var stream = await _host.OpenFileForReadAsync(full);
