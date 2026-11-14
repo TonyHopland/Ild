@@ -79,10 +79,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     protected override ILogger Logger => _logger;
     protected override string? LaunchFingerprint => "--output-format stream-json";
 
-    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         => new Turn(this, ctx, worktreePath, gateway);
 
-    private sealed class Turn(ClaudeCodeAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway) : CliAgentTurn
+    private sealed class Turn(ClaudeCodeAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
     {
         private string? _mcpConfigPath;
         private decimal _sessionCostBefore;
@@ -120,7 +120,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         {
             var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, ctx.SessionId, _mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
             var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-            if (gateway is not null) ApplyGateway(environment, gateway, ctx.Provider);
+            if (gateway.Value is { } lease) ApplyGateway(environment, lease, ctx.Provider);
             return Task.FromResult(new AgentLaunch(psi, environment, [_mcpConfigPath]));
         }
 

@@ -130,8 +130,11 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// </summary>
     protected virtual string? LaunchFingerprint => null;
 
-    /// <summary>The turn of <paramref name="ctx"/>, with nothing done yet: it is disposed however the turn ends.</summary>
-    protected abstract CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway);
+    /// <summary>
+    /// The turn of <paramref name="ctx"/>, with nothing done yet: it is disposed however the turn ends. The lease on the model gateway
+    /// is opened when the turn first reads <paramref name="gateway"/>, so what it does before that (a fork, a restore) holds none.
+    /// </summary>
+    protected abstract CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway);
 
     public virtual async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -141,6 +144,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
                 $"[{CliName}-error] the {Traits.DisplayName} CLI cannot run without its tools, so it cannot take a call that must have none.");
 
         CliAgentTurn? turn = null;
+        var gateway = new Lazy<ModelGatewayLease?>(() => OpenGateway(ctx));
         try
         {
             var worktreePath = ctx.RunContext.WorktreePath;
@@ -148,7 +152,6 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
                 return NodeExecutionResult.Fail(
                     $"[{CliName}-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            using var gateway = OpenGateway(ctx);
             turn = CreateTurn(ctx, worktreePath, gateway);
             return await RunAsync(turn, ctx);
         }
@@ -162,6 +165,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         }
         finally
         {
+            if (gateway.IsValueCreated) gateway.Value?.Dispose();
             if (turn is not null) await turn.DisposeAsync();
         }
     }
@@ -221,10 +225,12 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             return NodeExecutionResult.Fail(KillAndDescribe(process, $"{CliName} stream read timed out"));
         }
 
+        // Before the turn is completed: saving its session takes time on the turn's own token, and the grace is counted from the CLI's exit.
+        var seenAtTheEnd = liveChildren.Count > 0;
+        if (seenAtTheEnd) liveChildren = await StillRunningAfterExitAsync(ctx, liveChildren);
+
         var result = await turn.CompleteAsync(stderr, process.ExitCode);
-        return result.Success && liveChildren.Count > 0
-            ? result with { LiveChildren = await StillRunningAfterExitAsync(ctx, liveChildren) }
-            : result;
+        return result.Success && seenAtTheEnd ? result with { LiveChildren = liveChildren } : result;
     }
 
     private Task<IRunProcess> StartAsync(AgentLaunch launch, AgentExecutionContext ctx, string? launchId)
@@ -299,7 +305,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// URL and placeholder in place of the provider's credential. Null without DI, where nothing runs for real.
     /// The caller disposes it when the execution ends, which is what ends the token.
     /// </summary>
-    protected ModelGatewayLease? OpenGateway(AgentExecutionContext ctx)
+    private ModelGatewayLease? OpenGateway(AgentExecutionContext ctx)
     {
         if (ScopeFactory is null) return null;
         using var scope = ScopeFactory.CreateScope();

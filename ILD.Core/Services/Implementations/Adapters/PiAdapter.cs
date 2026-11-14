@@ -59,7 +59,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     protected override string StartHelp => "install or update Pi from the AI Provider page, or make sure the pi binary is on PATH.";
     protected override ILogger Logger => _logger;
 
-    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         => new Turn(this, ctx, worktreePath, gateway);
 
     private sealed class Turn : CliAgentTurn
@@ -73,14 +73,14 @@ public sealed class PiAdapter : CliAgentAdapterBase
         private string? _sessionPathToUse;
         private PiExecutionOutput? _stdout;
 
-        public Turn(PiAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+        public Turn(PiAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         {
             _adapter = adapter;
             _ctx = ctx;
             _worktreePath = worktreePath;
             // A run in its own pod or container cannot see ILD's scratch directory: pi's files go to the run's home there.
             var runHome = adapter.RunHost.RunHomeFor(worktreePath);
-            _settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter.RunFacingEnvironmentFor(ctx), ctx.NoTools, gateway, runHome);
+            _settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter.RunFacingEnvironmentFor(ctx), ctx.NoTools, gateway.Value, runHome);
             _sessionDirectory = runHome is not null
                 ? Path.Combine(runHome, ".pi", "sessions")
                 : Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));

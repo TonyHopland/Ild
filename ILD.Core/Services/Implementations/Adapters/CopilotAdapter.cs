@@ -124,10 +124,10 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         => "install or update GitHub Copilot from the AI Provider page (or make sure the copilot CLI is on PATH), and make sure you are logged in (open the provider terminal and run '/login').";
     protected override ILogger Logger => _logger;
 
-    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         => new Turn(this, ctx, worktreePath, gateway);
 
-    private sealed class Turn(CopilotAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway) : CliAgentTurn
+    private sealed class Turn(CopilotAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
     {
         private string? _mcpConfigPath;
         private string? _caCopy;
@@ -146,11 +146,11 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         {
             var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
             var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, _mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
-            if (gateway is not null)
+            if (gateway.Value is { } lease)
             {
                 var tls = adapter.GatewayTls();
                 _caCopy = adapter.TryWriteCaCopy(ctx, tls);
-                if (_caCopy is null || !TryApplyGateway(psi, environment, gateway, tls?.Port, _caCopy))
+                if (_caCopy is null || !TryApplyGateway(psi, environment, lease, tls?.Port, _caCopy))
                     throw Failed(
                         $"[copilot-error] the model gateway's HTTPS listener, which the Copilot CLI needs, is switched off or its certificate could not be read: set {GatewayTlsEndpoint.PortVariable} to a free port other than 0.");
             }

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.RunHosts;
 using ILD.Data.DTOs;
@@ -19,12 +20,15 @@ public class CliAgentTurnLifecycleTests
 
     private readonly FakeRunHost _host = new FakeRunHost().WithDirectory(Worktree);
 
-    private ScriptedAdapter Adapter() => new(Services(_host));
+    private readonly CountingGateway _gateway = new();
 
-    private static IServiceScopeFactory Services(FakeRunHost host)
+    private ScriptedAdapter Adapter() => new(Services(_host, _gateway), _gateway);
+
+    private static IServiceScopeFactory Services(FakeRunHost host, IModelGatewayRegistry gateway)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IRunHost>(host);
+        services.AddSingleton(gateway);
         return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
     }
 
@@ -157,6 +161,28 @@ public class CliAgentTurnLifecycleTests
     }
 
     [Fact]
+    public async Task A_turn_that_ends_before_it_reads_the_gateway_opens_no_lease_on_it()
+    {
+        var adapter = Adapter();
+        adapter.PrepareFailure = "[scripted-error] nothing to run";
+
+        await adapter.ExecuteAsync(Context());
+
+        Assert.Equal(0, _gateway.Opened);
+    }
+
+    [Fact]
+    public async Task The_lease_a_turn_reads_is_opened_then_and_ended_with_the_turn()
+    {
+        var adapter = Adapter();
+
+        await adapter.ExecuteAsync(Context());
+
+        Assert.Equal(["prepare:0", "launch:1"], adapter.Turn!.LeasesOpened);
+        Assert.Equal((1, 1), (_gateway.Opened, _gateway.Ended));
+    }
+
+    [Fact]
     public async Task Anything_else_that_goes_wrong_fails_the_turn_under_the_clis_name()
     {
         var adapter = Adapter();
@@ -185,6 +211,21 @@ public class CliAgentTurnLifecycleTests
         Assert.Equal(ctx.RunContext.LoopRunId.ToString("N"), launch.Environment![AgentChildren.LaunchVariable]);
         Assert.Equal("1", launch.Environment["FROM_TURN"]);
         Assert.Equal(ctx.RunContext.LoopRunId.ToString("N"), Assert.Single(_host.ListChildrenCalls).LaunchId);
+    }
+
+    [Fact]
+    public async Task A_process_that_ended_with_the_cli_is_not_left_running_whatever_completing_the_turn_then_meets()
+    {
+        _host.LeaveRunning(4242, "language-server");
+        var adapter = Adapter();
+        adapter.Fingerprint = "--fingerprint";
+        adapter.AfterTurnEnded = () => _host.RunningPids.Remove(4242);
+        adapter.OnComplete = () => _host.StillRunningFailure = new OperationCanceledException();
+
+        var result = await adapter.ExecuteAsync(Context());
+
+        Assert.True(result.Success);
+        Assert.Empty(result.LiveChildren!);
     }
 
     [Fact]
@@ -218,14 +259,37 @@ public class CliAgentTurnLifecycleTests
         Assert.Null(chat.Turn!.TurnEnded);
     }
 
-    private sealed class ScriptedAdapter(IServiceScopeFactory scopes) : CliAgentAdapterBase(scopes)
+    private sealed class CountingGateway : IModelGatewayRegistry
     {
+        public int Opened { get; private set; }
+        public int Ended { get; private set; }
+
+        public ModelGatewayLease Open(Guid providerId, Guid ownerId, string apiUrl, IReadOnlyList<string> modelHosts)
+        {
+            Opened++;
+            return new ModelGatewayLease("token", apiUrl, () => Ended++);
+        }
+
+        public GatewayTokenState Lookup(string? presented, out GatewayGrant? grant)
+        {
+            grant = null;
+            return GatewayTokenState.Unknown;
+        }
+
+        public bool BlocksHost(Guid? providerId, string host) => false;
+    }
+
+    private sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGateway gateway) : CliAgentAdapterBase(scopes)
+    {
+        public CountingGateway Gateway => gateway;
         public bool SupportsNoTools { get; set; } = true;
         public bool OffersRetry { get; set; }
         public bool Succeeds { get; set; } = true;
         public string? Fingerprint { get; set; }
         public string? PrepareFailure { get; set; }
         public Exception? CompleteThrows { get; set; }
+        public Action? AfterTurnEnded { get; set; }
+        public Action? OnComplete { get; set; }
         public ScriptedTurn? Turn { get; private set; }
 
         public override string Name => "Scripted";
@@ -237,26 +301,32 @@ public class CliAgentTurnLifecycleTests
         protected override string StartHelp => "install it.";
         protected override string? LaunchFingerprint => Fingerprint;
 
-        protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
-            => Turn = new ScriptedTurn(this, worktreePath);
+        protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
+            => Turn = new ScriptedTurn(this, worktreePath, gateway);
 
-        public sealed class ScriptedTurn(ScriptedAdapter adapter, string worktreePath) : CliAgentTurn
+        public sealed class ScriptedTurn(ScriptedAdapter adapter, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
         {
             private string _stdout = string.Empty;
 
             public List<string> Steps { get; } = [];
+
+            /// <summary>How many leases the gateway had opened by the end of each step; this turn reads its own when it launches.</summary>
+            public List<string> LeasesOpened { get; } = [];
 
             public override string BinaryPath => "/bin/scripted";
 
             public override Task PrepareAsync()
             {
                 Steps.Add("prepare");
+                LeasesOpened.Add($"prepare:{adapter.Gateway.Opened}");
                 return adapter.PrepareFailure is { } failure ? throw Failed(failure) : Task.CompletedTask;
             }
 
             public override Task<AgentLaunch> LaunchAsync()
             {
                 Steps.Add("launch");
+                _ = gateway.Value;
+                LeasesOpened.Add($"launch:{adapter.Gateway.Opened}");
                 return Task.FromResult(Launch());
             }
 
@@ -281,6 +351,7 @@ public class CliAgentTurnLifecycleTests
                 Steps.Add("stdout");
                 _stdout = await stdout.ReadToEndAsync();
                 if (TurnEnded is not null) await TurnEnded();
+                adapter.AfterTurnEnded?.Invoke();
             }
 
             public override Task AfterTimeoutAsync(Task stdout)
@@ -292,6 +363,7 @@ public class CliAgentTurnLifecycleTests
             public override Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
             {
                 Steps.Add("complete");
+                adapter.OnComplete?.Invoke();
                 if (adapter.CompleteThrows is { } failure) throw failure;
                 var output = $"{_stdout}|{stderr}|{exitCode}";
                 return Task.FromResult(adapter.Succeeds ? NodeExecutionResult.Ok(output) : NodeExecutionResult.Fail("failed", output));

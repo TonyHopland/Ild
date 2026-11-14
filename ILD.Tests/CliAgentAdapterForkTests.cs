@@ -99,7 +99,7 @@ public class CliAgentAdapterForkTests
         public override AgentAdapterTraits Traits => throw new NotSupportedException();
         protected override string CliName => "claude-code";
         protected override string StartHelp => throw new NotSupportedException();
-        protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ILD.Data.DTOs.ModelGatewayLease? gateway)
+        protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ILD.Data.DTOs.ModelGatewayLease?> gateway)
             => throw new NotSupportedException();
 
         public Task<bool> ForkAsync(Guid runId, string source, string dest, CancellationToken ct)

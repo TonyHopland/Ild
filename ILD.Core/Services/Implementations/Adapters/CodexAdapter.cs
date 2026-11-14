@@ -146,10 +146,10 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         => "install or update Codex from the AI Provider page (or make sure the codex CLI is on PATH), and make sure you are signed in (open the provider terminal and sign in with ChatGPT).";
     protected override ILogger Logger => _logger;
 
-    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         => new Turn(this, ctx, worktreePath, gateway);
 
-    private sealed class Turn(CodexAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway) : CliAgentTurn
+    private sealed class Turn(CodexAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
     {
         private IReadOnlyList<CodexMcpServer> _mcpServers = [];
         private string? _codexHome;
@@ -166,7 +166,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
             _codexHome = adapter.RunHost.RunHomeFor(worktreePath) is { } runHome
                 ? Path.Combine(runHome, ".codex")
-                : gateway is null ? adapter.UserCodexHome() : RunCodexHome(OwnerOf(ctx));
+                : gateway.Value is null ? adapter.UserCodexHome() : RunCodexHome(OwnerOf(ctx));
             _sessionsDirectory = _codexHome is null ? null : Path.Combine(_codexHome, "sessions");
             if (ctx.ManageSession && adapter.ScopeFactory is not null && IsSessionId(ctx.SessionId))
             {
@@ -193,12 +193,12 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         {
             var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
             var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, _resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, _mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
-            if (gateway is not null && _codexHome is not null)
+            if (gateway.Value is { } lease && _codexHome is not null)
             {
                 await adapter.RunHost.CreateDirectoryAsync(_codexHome, ctx.Cancel);
                 await adapter.RunHost.WriteFileAsync(
-                    Path.Combine(_codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, gateway.Token), ctx.Cancel);
-                ApplyGateway(psi, environment, gateway, _codexHome);
+                    Path.Combine(_codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, lease.Token), ctx.Cancel);
+                ApplyGateway(psi, environment, lease, _codexHome);
             }
             return new AgentLaunch(psi, environment, _mcpServers.Select(server => server.ConfigFile));
         }

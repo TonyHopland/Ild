@@ -49,7 +49,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     protected override string StartHelp => "install or update OpenCode from the AI Provider page, or make sure the opencode binary is on PATH.";
     protected override ILogger Logger => _logger;
 
-    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         => new Turn(this, ctx, worktreePath, gateway);
 
     private async Task DeleteSessionAsync(AgentExecutionContext ctx, string sessionId)
@@ -78,7 +78,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         => AiProviderConfig.Parse(ctx.Provider.Config)
             .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode, EnvironmentVariables));
 
-    private sealed class Turn(OpenCodeAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway) : CliAgentTurn
+    private sealed class Turn(OpenCodeAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
     {
         private string? _sessionIdToUse = ctx.SessionId;
         private string _model = string.Empty;
@@ -106,7 +106,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 _sessionIdToUse = restored.SessionIdToUse;
             }
 
-            (_model, _configJson) = BuildOpenCodeConfig(ctx.Provider, adapter.RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway);
+            (_model, _configJson) = BuildOpenCodeConfig(ctx.Provider, adapter.RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway.Value);
             _extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger);
         }
 
@@ -139,11 +139,11 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     FireSessionId(ctx.OnSessionId, sid);
                 };
 
-            _stdout = await ReadAndStreamLinesAsync(stdout, [], new object(), ctx.ProgressCallback, reportSessionId, _drain?.Token ?? ctx.Cancel);
+            _stdout = await ReadAndStreamLinesAsync(stdout, ctx.ProgressCallback, reportSessionId, _drain?.Token ?? ctx.Cancel);
         }
 
         public override Task<string> ReadStderrAsync(StreamReader stderr, CancellationToken ct)
-            => ReadAndStreamLinesAsync(stderr, [], new object(), ctx.ProgressCallback, null, ct);
+            => ReadAndStreamLinesAsync(stderr, ctx.ProgressCallback, null, ct);
 
         public override async Task AfterTimeoutAsync(Task stdout)
         {
@@ -900,15 +900,14 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     private static async Task<string> ReadAndStreamLinesAsync(
         System.IO.StreamReader reader,
-        List<string> lines,
-        object lockObj,
         Func<string, Task>? progressCallback,
         Action<string>? onSessionId,
         CancellationToken ct)
     {
+        var lines = new List<string>();
         while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
         {
-            lock (lockObj) lines.Add(line);
+            lines.Add(line);
             if (onSessionId != null)
             {
                 var sid = ExtractSessionIdFromLine(line);
@@ -922,7 +921,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     await progressCallback(text).ConfigureAwait(false);
             }
         }
-        lock (lockObj) return string.Join("\n", lines);
+        return string.Join("\n", lines);
     }
 
     internal static string? ExtractSessionIdFromLine(string line)
