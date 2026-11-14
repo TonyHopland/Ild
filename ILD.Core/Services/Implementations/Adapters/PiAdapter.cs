@@ -55,73 +55,76 @@ public sealed class PiAdapter : CliAgentAdapterBase
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    protected override string CliName => "pi";
+    protected override string StartHelp => "install or update Pi from the AI Provider page, or make sure the pi binary is on PATH.";
+    protected override ILogger Logger => _logger;
+
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+        => new Turn(this, ctx, worktreePath, gateway);
+
+    private sealed class Turn : CliAgentTurn
     {
-        try
+        private readonly PiAdapter _adapter;
+        private readonly AgentExecutionContext _ctx;
+        private readonly string _worktreePath;
+        private readonly PiAdapterSettings _settings;
+        private readonly string _sessionDirectory;
+        private string? _sessionIdToUse;
+        private string? _sessionPathToUse;
+        private PiExecutionOutput? _stdout;
+
+        public Turn(PiAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
         {
-            using var gateway = OpenGateway(ctx);
+            _adapter = adapter;
+            _ctx = ctx;
+            _worktreePath = worktreePath;
             // A run in its own pod or container cannot see ILD's scratch directory: pi's files go to the run's home there.
-            var runHome = string.IsNullOrWhiteSpace(ctx.RunContext.WorktreePath) ? null : RunHost.RunHomeFor(ctx.RunContext.WorktreePath);
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, RunFacingEnvironmentFor(ctx), ctx.NoTools, gateway, runHome);
-
-            if (string.IsNullOrWhiteSpace(settings.BinaryPath))
-                return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
-
-            var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrWhiteSpace(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
-                return NodeExecutionResult.Fail(
-                    "[pi-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
-
-            // ADR-0011 parity note: claude/opencode sandbox file tools to their
-            // working directory and need an explicit grant (claude `--add-dir`,
-            // opencode `external_directory`) to reach an extra path like the Chat
-            // Context's open-work-item worktree. Pi's file tools take absolute
-            // paths and are not directory-sandboxed, so the path supplied in the
-            // turn's Chat Context preamble is already reachable — there is no
-            // per-directory config to set for ctx.AdditionalAllowedDirectories.
-
-            var sessionDirectory = runHome is not null
+            var runHome = adapter.RunHost.RunHomeFor(worktreePath);
+            _settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter.RunFacingEnvironmentFor(ctx), ctx.NoTools, gateway, runHome);
+            _sessionDirectory = runHome is not null
                 ? Path.Combine(runHome, ".pi", "sessions")
                 : Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
-            await RunHost.CreateDirectoryAsync(sessionDirectory, ctx.Cancel);
-            await PrepareRuntimeFilesAsync(settings, ctx.Cancel);
+            _sessionIdToUse = ctx.SessionId;
+        }
 
-            string? sessionIdToUse = ctx.SessionId;
-            string? sessionPathToUse = null;
-            // Fork: seed a copy of the source session under the destination id
-            // before restore, so the restore below rehydrates the copy and pi
-            // continues on the fork while the source stays frozen.
-            if (ctx.ManageSession && !string.IsNullOrWhiteSpace(sessionIdToUse) && !string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
-                await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, sessionIdToUse!, ctx.Cancel);
-            if (ctx.ManageSession && !string.IsNullOrWhiteSpace(sessionIdToUse))
+        public override string BinaryPath => _settings.BinaryPath;
+
+        // ADR-0011 parity note: claude/opencode sandbox file tools to their
+        // working directory and need an explicit grant (claude `--add-dir`,
+        // opencode `external_directory`) to reach an extra path like the Chat
+        // Context's open-work-item worktree. Pi's file tools take absolute
+        // paths and are not directory-sandboxed, so the path supplied in the
+        // turn's Chat Context preamble is already reachable — there is no
+        // per-directory config to set for ctx.AdditionalAllowedDirectories.
+        public override async Task PrepareAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_settings.BinaryPath))
+                throw Failed("[pi-error] binaryPath is not configured");
+
+            await _adapter.RunHost.CreateDirectoryAsync(_sessionDirectory, _ctx.Cancel);
+            await _adapter.PrepareRuntimeFilesAsync(_settings, _ctx.Cancel);
+
+            await _adapter.ForkManagedSessionAsync(_ctx);
+            if (_ctx.ManageSession && !string.IsNullOrWhiteSpace(_sessionIdToUse))
             {
-                var restoreResult = await RestoreManagedSessionAsync(sessionDirectory, ctx, sessionIdToUse);
-
-                sessionIdToUse = restoreResult.SessionIdToUse;
-                sessionPathToUse = restoreResult.SessionPathToUse;
+                var restored = await _adapter.RestoreManagedSessionAsync(_sessionDirectory, _ctx, _sessionIdToUse);
+                _sessionIdToUse = restored.SessionIdToUse;
+                _sessionPathToUse = restored.SessionPathToUse;
             }
+        }
 
-            IRunProcess? proc;
+        public override Task<AgentLaunch> LaunchAsync()
+            => Task.FromResult(new AgentLaunch(
+                BuildRunProcessStartInfo(_settings, _worktreePath, _sessionDirectory, _sessionIdToUse, _sessionPathToUse, ExtraCliArgs.ForLaunch(_ctx.Provider, _adapter._logger)),
+                BuildRunEnvironment(_settings, _sessionDirectory),
+                [_settings.IldExtensionPath]));
+
+        public override async Task SendInputAsync(IRunProcess process)
+        {
             try
             {
-                proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
-                    settings,
-                    worktreePath,
-                    sessionDirectory,
-                    sessionIdToUse,
-                    sessionPathToUse,
-                    ExtraCliArgs.ForLaunch(ctx.Provider, _logger)), ctx, BuildRunEnvironment(settings, sessionDirectory), [settings.IldExtensionPath]);
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException)
-            {
-                return NodeExecutionResult.Fail($"[pi-error] cannot start '{settings.BinaryPath}' — install or update Pi from the AI Provider page, or make sure the pi binary is on PATH. Details: {ex.Message}");
-            }
-
-            using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
-            try
-            {
-                await process.StandardInput.WriteAsync(ctx.Prompt.AsMemory(), ctx.Cancel);
-                await process.StandardInput.FlushAsync(ctx.Cancel);
+                await process.StandardInput.WriteAsync(_ctx.Prompt.AsMemory(), _ctx.Cancel);
+                await process.StandardInput.FlushAsync(_ctx.Cancel);
             }
             catch (IOException)
             {
@@ -130,39 +133,18 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 // exit code and parsed output decide success.
             }
             try { process.StandardInput.Close(); } catch (IOException) { }
-            var stdoutTask = ReadStdoutAsync(process.StandardOutput, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel);
-            var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
-
-            try
-            {
-                await process.WaitForExitAsync(ctx.Cancel);
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(process, "pi timed out"));
-            }
-
-            PiExecutionOutput stdout;
-            string stderr;
-            try
-            {
-                stdout = await stdoutTask;
-                stderr = await stderrTask;
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(process, "pi stream read timed out"));
-            }
-
-            var effectiveSessionId = stdout.SessionId ?? sessionIdToUse;
-            if (ctx.ManageSession && process.ExitCode == 0 && !string.IsNullOrWhiteSpace(effectiveSessionId))
-                await PersistManagedSessionAsync(sessionDirectory, effectiveSessionId!, ctx);
-
-            return AssembleResult(stdout, stderr, process.ExitCode, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId);
         }
-        catch (Exception ex)
+
+        public override async Task ReadStdoutAsync(StreamReader stdout)
+            => _stdout = await PiAdapter.ReadStdoutAsync(stdout, _ctx.ProgressCallback, _ctx.OnSessionId, _ctx.Cancel);
+
+        public override async Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
         {
-            return NodeExecutionResult.Fail($"[pi-error] {ex.Message}");
+            var effectiveSessionId = _stdout!.SessionId ?? _sessionIdToUse;
+            if (_ctx.ManageSession && exitCode == 0 && !string.IsNullOrWhiteSpace(effectiveSessionId))
+                await _adapter.PersistManagedSessionAsync(_sessionDirectory, effectiveSessionId!, _ctx);
+
+            return AssembleResult(_stdout, stderr, exitCode, _ctx.Prompt, effectiveSessionId, _ctx.IncomingSessionId);
         }
     }
 

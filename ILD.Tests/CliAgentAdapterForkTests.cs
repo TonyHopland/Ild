@@ -97,7 +97,10 @@ public class CliAgentAdapterForkTests
         public override string Name => "ClaudeCode";
         public override string[] SupportedProviderTypes => ["claude-code"];
         public override AgentAdapterTraits Traits => throw new NotSupportedException();
-        public override Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context) => throw new NotSupportedException();
+        protected override string CliName => "claude-code";
+        protected override string StartHelp => throw new NotSupportedException();
+        protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ILD.Data.DTOs.ModelGatewayLease? gateway)
+            => throw new NotSupportedException();
 
         public Task<bool> ForkAsync(Guid runId, string source, string dest, CancellationToken ct)
             => ForkSessionSnapshotAsync(runId, source, dest, ct);

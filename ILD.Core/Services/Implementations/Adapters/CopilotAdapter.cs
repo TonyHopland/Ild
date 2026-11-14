@@ -119,84 +119,60 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         }
     }
 
-    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    protected override string CliName => "copilot";
+    protected override string StartHelp
+        => "install or update GitHub Copilot from the AI Provider page (or make sure the copilot CLI is on PATH), and make sure you are logged in (open the provider terminal and run '/login').";
+    protected override ILogger Logger => _logger;
+
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+        => new Turn(this, ctx, worktreePath, gateway);
+
+    private sealed class Turn(CopilotAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway) : CliAgentTurn
     {
-        // See TypeTraits.SupportsNoTools: launching anyway would hand a caller
-        // that asked for no tools every tool the CLI has.
-        if (ctx.NoTools)
-            return NodeExecutionResult.Fail(
-                "[copilot-error] the Copilot CLI cannot run without its tools, so it cannot take a call that must have none.");
+        private string? _mcpConfigPath;
+        private string? _caCopy;
+        private string _stdout = string.Empty;
 
-        string? mcpConfigPath = null;
-        string? caCopy = null;
-        try
+        public override string BinaryPath { get; } = AiProviderConfig.Parse(ctx.Provider.Config)
+            .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Copilot, adapter.EnvironmentVariables));
+
+        public override Task PrepareAsync()
         {
-            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
-                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Copilot, EnvironmentVariables));
+            _mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx));
+            return Task.CompletedTask;
+        }
 
-            var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
-                return NodeExecutionResult.Fail(
-                    "[copilot-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
-
-            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx));
-
-            using var gateway = OpenGateway(ctx);
-            IRunProcess? proc;
-            try
+        public override Task<AgentLaunch> LaunchAsync()
+        {
+            var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, _mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
+            if (gateway is not null)
             {
-                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-                var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
-                if (gateway is not null)
-                {
-                    var tls = GatewayTls();
-                    caCopy = TryWriteCaCopy(ctx, tls);
-                    if (caCopy is null || !TryApplyGateway(psi, environment, gateway, tls?.Port, caCopy))
-                        return NodeExecutionResult.Fail(
-                            $"[copilot-error] the model gateway's HTTPS listener, which the Copilot CLI needs, is switched off or its certificate could not be read: set {GatewayTlsEndpoint.PortVariable} to a free port other than 0.");
-                }
-                proc = await StartAgentProcessAsync(psi, ctx, environment, [mcpConfigPath, caCopy]);
+                var tls = adapter.GatewayTls();
+                _caCopy = adapter.TryWriteCaCopy(ctx, tls);
+                if (_caCopy is null || !TryApplyGateway(psi, environment, gateway, tls?.Port, _caCopy))
+                    throw Failed(
+                        $"[copilot-error] the model gateway's HTTPS listener, which the Copilot CLI needs, is switched off or its certificate could not be read: set {GatewayTlsEndpoint.PortVariable} to a free port other than 0.");
             }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException)
-            {
-                return NodeExecutionResult.Fail(
-                    $"[copilot-error] cannot start '{binaryPath}' — install or update GitHub Copilot from the AI Provider page (or make sure the copilot CLI is on PATH), and make sure you are logged in (open the provider terminal and run '/login'). Details: {ex.Message}");
-            }
+            return Task.FromResult(new AgentLaunch(psi, environment, [_mcpConfigPath, _caCopy]));
+        }
 
-            using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
+        public override async Task ReadStdoutAsync(StreamReader stdout)
+            => _stdout = await ReadStreamAsync(stdout, ctx.ProgressCallback, ctx.Cancel);
 
-            var stdoutTask = ReadStreamAsync(process.StandardOutput, ctx.ProgressCallback, ctx.Cancel);
-            var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
-
-            try
-            {
-                await process.WaitForExitAsync(ctx.Cancel);
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(process, "copilot timed out"));
-            }
-
-            string stdout;
-            string stderr;
-            try
-            {
-                // Strip NUL bytes as the raw CLI stream is captured. Unlike the
-                // claude-code/opencode/pi adapters — which parse a JSON event
-                // stream and surface only clean assistant text — this adapter
-                // forwards copilot's raw terminal stdout/stderr verbatim, and a
-                // raw stream can carry a NUL (U+0000). A NUL cannot be stored in
-                // a PostgreSQL text/varchar column, so leaving it in the node's
-                // output/error makes the engine's persistence SaveChanges throw a
-                // DbUpdateException, crashing the run before its result is
-                // recorded. Removing it keeps every visible character intact.
-                stdout = StripNullChars(await stdoutTask);
-                stderr = StripNullChars(await stderrTask);
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(process, "copilot stream read timed out"));
-            }
+        public override Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
+        {
+            // Strip NUL bytes as the raw CLI stream is captured. Unlike the
+            // claude-code/opencode/pi adapters — which parse a JSON event
+            // stream and surface only clean assistant text — this adapter
+            // forwards copilot's raw terminal stdout/stderr verbatim, and a
+            // raw stream can carry a NUL (U+0000). A NUL cannot be stored in
+            // a PostgreSQL text/varchar column, so leaving it in the node's
+            // output/error makes the engine's persistence SaveChanges throw a
+            // DbUpdateException, crashing the run before its result is
+            // recorded. Removing it keeps every visible character intact.
+            var stdout = StripNullChars(_stdout);
+            stderr = StripNullChars(stderr);
 
             var response = stdout.Trim();
             if (string.IsNullOrWhiteSpace(response))
@@ -208,24 +184,19 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
             // Single-turn: no session id is bound (see class remarks), so the
             // result carries none and the run does not chain to a later --resume.
-            return process.ExitCode == 0
+            return Task.FromResult(exitCode == 0
                 ? NodeExecutionResult.Ok(response, ctx.Prompt)
-                : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
+                : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response));
         }
-        catch (Exception ex)
+
+        public override ValueTask DisposeAsync()
         {
-            return NodeExecutionResult.Fail($"[copilot-error] {ex.Message}");
-        }
-        finally
-        {
-            if (!string.IsNullOrEmpty(mcpConfigPath))
+            foreach (var file in new[] { _mcpConfigPath, _caCopy })
             {
-                try { File.Delete(mcpConfigPath); } catch { /* best effort */ }
+                if (string.IsNullOrEmpty(file)) continue;
+                try { File.Delete(file); } catch { /* best effort */ }
             }
-            if (!string.IsNullOrEmpty(caCopy))
-            {
-                try { File.Delete(caCopy); } catch { /* best effort */ }
-            }
+            return ValueTask.CompletedTask;
         }
     }
 

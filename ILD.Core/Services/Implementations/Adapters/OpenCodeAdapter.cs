@@ -45,23 +45,12 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     private static bool HoldsCredential(AiProvider provider)
         => ModelCredentialSource.UpstreamKey(provider) is not null && Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
 
-    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
-    {
-        if (!ctx.NoTools)
-            return await RunAsync(ctx, onSessionSeen: null);
+    protected override string CliName => "opencode";
+    protected override string StartHelp => "install or update OpenCode from the AI Provider page, or make sure the opencode binary is on PATH.";
+    protected override ILogger Logger => _logger;
 
-        // The id comes from the stream, so a call that timed out is cleaned up too.
-        string? sessionId = null;
-        try
-        {
-            return await RunAsync(ctx, sid => sessionId ??= sid);
-        }
-        finally
-        {
-            if (sessionId is not null)
-                await DeleteSessionAsync(ctx, sessionId);
-        }
-    }
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+        => new Turn(this, ctx, worktreePath, gateway);
 
     private async Task DeleteSessionAsync(AgentExecutionContext ctx, string sessionId)
     {
@@ -89,141 +78,102 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         => AiProviderConfig.Parse(ctx.Provider.Config)
             .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode, EnvironmentVariables));
 
-    private async Task<NodeExecutionResult> RunAsync(AgentExecutionContext ctx, Action<string>? onSessionSeen)
+    private sealed class Turn(OpenCodeAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway) : CliAgentTurn
     {
-        try
+        private string? _sessionIdToUse = ctx.SessionId;
+        private string _model = string.Empty;
+        private string _configJson = string.Empty;
+        private IReadOnlyList<string> _extraArgs = [];
+        private string _stdout = string.Empty;
+
+        // A call without tools leaves a session nobody resumes, which is deleted afterwards. Its id
+        // comes from the stream, so a call that timed out is cleaned up too.
+        private string? _sessionToDelete;
+
+        // That stream outlives the call's token: a session id printed before a timeout is still read.
+        private readonly CancellationTokenSource? _drain = ctx.NoTools ? new CancellationTokenSource() : null;
+
+        public override string BinaryPath { get; } = adapter.ResolveBinaryPath(ctx);
+
+        public override async Task PrepareAsync()
         {
-            var binaryPath = ResolveBinaryPath(ctx);
-
-            var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
-                return NodeExecutionResult.Fail(
-                    "[opencode-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
-
-            var sessionIdToUse = ctx.SessionId;
-            // Fork: seed a copy of the source session under the destination id
-            // before restore, so the import below brings up the copy and
-            // opencode continues on the fork while the source stays frozen.
-            if (ctx.ManageSession && !string.IsNullOrEmpty(sessionIdToUse) && !string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
-                await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, sessionIdToUse!, ctx.Cancel);
-            if (ctx.ManageSession && !string.IsNullOrEmpty(sessionIdToUse))
+            await adapter.ForkManagedSessionAsync(ctx);
+            if (ctx.ManageSession && !string.IsNullOrEmpty(_sessionIdToUse))
             {
-                var restoreResult = await RestoreManagedSessionAsync(binaryPath, worktreePath, ctx, sessionIdToUse);
-                if (!string.IsNullOrEmpty(restoreResult.Error))
-                    return NodeExecutionResult.Fail(restoreResult.Error);
-                sessionIdToUse = restoreResult.SessionIdToUse;
+                var restored = await adapter.RestoreManagedSessionAsync(BinaryPath, worktreePath, ctx, _sessionIdToUse);
+                if (!string.IsNullOrEmpty(restored.Error))
+                    throw Failed(restored.Error);
+                _sessionIdToUse = restored.SessionIdToUse;
             }
 
-            using var gateway = OpenGateway(ctx);
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway);
-            var extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, _logger);
+            (_model, _configJson) = BuildOpenCodeConfig(ctx.Provider, adapter.RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway);
+            _extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger);
+        }
 
-            IRunProcess? proc = null;
-            try
-            {
-                proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
-                    binaryPath,
-                    worktreePath,
-                    ctx.Prompt,
-                    opencodeModel,
-                    opencodeConfigJson,
-                    sessionIdToUse,
-                    extraArgs: extraArgs), ctx, BuildRunEnvironment(opencodeConfigJson));
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException)
-            {
-                if (await ShouldRetryWithoutWorkingDirectoryAsync(ex, worktreePath, ctx.Cancel))
-                {
-                    try
-                    {
-                        proc = await StartAgentProcessAsync(BuildRunProcessStartInfo(
-                            binaryPath,
-                            worktreePath,
-                            ctx.Prompt,
-                            opencodeModel,
-                            opencodeConfigJson,
-                            sessionIdToUse,
-                            useWorktreeAsWorkingDirectory: false,
-                            extraArgs: extraArgs), ctx, BuildRunEnvironment(opencodeConfigJson));
-                    }
-                    catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
-                    {
-                        return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — install or update OpenCode from the AI Provider page, or make sure the opencode binary is on PATH. Details: {retryEx.Message}");
-                    }
-                }
-                else
-                {
-                    return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — install or update OpenCode from the AI Provider page, or make sure the opencode binary is on PATH. Details: {ex.Message}");
-                }
-            }
-            using var p = proc ?? throw new InvalidOperationException("Process.Start returned null");
+        public override Task<AgentLaunch> LaunchAsync() => Task.FromResult(Launch(useWorktreeAsWorkingDirectory: true));
 
-            var stdoutLines = new List<string>();
-            var stderrLines = new List<string>();
-            var stdoutLock = new object();
-            var stderrLock = new object();
+        public override async Task<AgentLaunch?> RetryLaunchAsync(Exception failure)
+            => await adapter.ShouldRetryWithoutWorkingDirectoryAsync(failure, worktreePath, ctx.Cancel)
+                ? Launch(useWorktreeAsWorkingDirectory: false)
+                : null;
 
+        private AgentLaunch Launch(bool useWorktreeAsWorkingDirectory)
+            => new(
+                BuildRunProcessStartInfo(
+                    BinaryPath, worktreePath, ctx.Prompt, _model, _configJson, _sessionIdToUse,
+                    useWorktreeAsWorkingDirectory: useWorktreeAsWorkingDirectory, extraArgs: _extraArgs),
+                BuildRunEnvironment(_configJson));
+
+        public override async Task ReadStdoutAsync(StreamReader stdout)
+        {
             // Fire OnSessionId at most once, the first time the session id
             // surfaces on stdout, so the run can be halted/resumed mid-stream.
             var sessionIdReported = false;
-            Action<string>? reportSessionId = ctx.OnSessionId is null && onSessionSeen is null
+            Action<string>? reportSessionId = ctx.OnSessionId is null && !ctx.NoTools
                 ? null
                 : sid =>
                 {
-                    onSessionSeen?.Invoke(sid);
+                    if (ctx.NoTools) _sessionToDelete ??= sid;
                     if (sessionIdReported || ctx.OnSessionId is null) return;
                     sessionIdReported = true;
                     FireSessionId(ctx.OnSessionId, sid);
                 };
 
-            // A plain call's session is deleted afterwards, so its stdout outlives the
-            // call's token: a session id printed before a timeout is still read.
-            using var drain = onSessionSeen is null ? null : new CancellationTokenSource();
-            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, reportSessionId, drain?.Token ?? ctx.Cancel);
-            var stderrTask = ReadAndStreamLinesAsync(p.StandardError, stderrLines, stderrLock, ctx.ProgressCallback, null, ctx.Cancel);
+            _stdout = await ReadAndStreamLinesAsync(stdout, [], new object(), ctx.ProgressCallback, reportSessionId, _drain?.Token ?? ctx.Cancel);
+        }
 
-            try
-            {
-                await p.WaitForExitAsync(ctx.Cancel);
-            }
-            catch (OperationCanceledException)
-            {
-                var timedOut = KillAndDescribe(p, "opencode timed out");
-                if (drain is not null)
-                {
-                    drain.CancelAfter(StdoutDrainTimeout);
-                    try { await stdoutTask; }
-                    catch (OperationCanceledException) { }
-                }
-                return NodeExecutionResult.Fail(timedOut);
-            }
+        public override Task<string> ReadStderrAsync(StreamReader stderr, CancellationToken ct)
+            => ReadAndStreamLinesAsync(stderr, [], new object(), ctx.ProgressCallback, null, ct);
 
-            string stdout, stderr;
-            try
-            {
-                stdout = await stdoutTask;
-                stderr = await stderrTask;
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(p, "opencode stream read timed out"));
-            }
-            var events = ExtractTextAndSessionIdFromJsonEvents(stdout);
-            if (events.SessionId is not null) onSessionSeen?.Invoke(events.SessionId);
-            var effectiveSessionId = events.SessionId ?? sessionIdToUse;
+        public override async Task AfterTimeoutAsync(Task stdout)
+        {
+            if (_drain is null) return;
+            _drain.CancelAfter(StdoutDrainTimeout);
+            try { await stdout; }
+            catch (OperationCanceledException) { }
+        }
+
+        public override async Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
+        {
+            var events = ExtractTextAndSessionIdFromJsonEvents(_stdout);
+            if (ctx.NoTools && events.SessionId is not null) _sessionToDelete ??= events.SessionId;
+            var effectiveSessionId = events.SessionId ?? _sessionIdToUse;
             string? exportedSessionJson = null;
-            if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
+            if (ctx.ManageSession && exitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
             {
-                var (exportError, sessionJson) = await PersistManagedSessionAsync(binaryPath, worktreePath, ctx, effectiveSessionId);
+                var (exportError, sessionJson) = await adapter.PersistManagedSessionAsync(BinaryPath, worktreePath, ctx, effectiveSessionId);
                 if (string.IsNullOrEmpty(exportError))
                     exportedSessionJson = sessionJson;
             }
 
-            return AssembleResult(stdout, events, stderr, p.ExitCode, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, exportedSessionJson);
+            return AssembleResult(_stdout, events, stderr, exitCode, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, exportedSessionJson);
         }
-        catch (Exception ex)
+
+        public override async ValueTask DisposeAsync()
         {
-            return NodeExecutionResult.Fail($"[opencode-error] {ex.Message}");
+            _drain?.Dispose();
+            if (_sessionToDelete is not null)
+                await adapter.DeleteSessionAsync(ctx, _sessionToDelete);
         }
     }
 
