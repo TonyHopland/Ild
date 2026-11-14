@@ -69,6 +69,7 @@ public sealed class ConfigTools
         "services[].port": "Required. Port alias; ILD allocates a real free port for it and surfaces it as ${PORT}.",
         "services[].suggestedPort": "Optional but recommended. Preferred port (used when free); must be > 0.",
         "services[].healthUrl": "Required. URL polled until it responds; marks the service ready. Typically uses ${PORT}.",
+        "services[].healthTimeoutSeconds": "Optional, default 300. Seconds to wait for healthUrl to respond (1-3600). A service that exits sooner fails at once with its exit code. Compile in an install step rather than raising this for slow cold builds.",
         "services[].public": "Optional. Set true on the user-facing service whose URL is surfaced to the user.",
         "services[].publicUrl": "Optional. Override for the advertised public URL; may use ${PUBLIC_HOST} and ${PORT}.",
         "services[].rewriteHost": "Optional, default true. When ILD serves previews on wildcard subdomains, it replaces the Host header with the loopback address it forwards to, so host-checking dev servers (Vite, webpack-dev-server, Rails, Django) accept the request. Set false only for a service that must see the browser-facing hostname, and add the preview wildcard to that service's own allowed-hosts list instead.",
@@ -148,6 +149,7 @@ public sealed class ConfigTools
               "port": { "type": "string", "minLength": 1 },
               "suggestedPort": { "type": "integer", "minimum": 1 },
               "healthUrl": { "type": "string", "minLength": 1 },
+              "healthTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
               "public": { "type": "boolean" },
               "publicUrl": { "type": "string" },
               "rewriteHost": { "type": "boolean" }

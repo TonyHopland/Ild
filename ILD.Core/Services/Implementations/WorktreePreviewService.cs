@@ -467,7 +467,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         Exception? failure = null;
         try
         {
-            await WaitForHealthAsync(service.Name, healthUrl, worktreePath, cancellationToken, process);
+            await WaitForHealthAsync(service.Name, healthUrl, worktreePath, service.HealthTimeoutSeconds ?? DefaultHealthTimeoutSeconds, cancellationToken, process);
         }
         catch (InvalidOperationException ex)
         {
@@ -606,9 +606,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
                 EnsureServicePortAllocated(toStart, runtime, options.PortOverrides);
 
+                ManagedPreviewProcess launchedProcess;
                 try
                 {
-                    runtime.AddProcess(await LaunchServiceProcessAsync(toStart, runtime, mode, cancellationToken));
+                    launchedProcess = await LaunchServiceProcessAsync(toStart, runtime, mode, cancellationToken);
+                    runtime.AddProcess(launchedProcess);
                 }
                 catch
                 {
@@ -621,7 +623,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 }
 
                 await PublishAsync(options.WorkItemId);
-                await WaitForHealthAsync(toStart.Name, ResolveHealthUrl(toStart, runtime), runtime.WorktreePath, cancellationToken);
+                await WaitForHealthAsync(
+                    toStart.Name, ResolveHealthUrl(toStart, runtime), runtime.WorktreePath,
+                    toStart.HealthTimeoutSeconds ?? DefaultHealthTimeoutSeconds, cancellationToken, launchedProcess);
             }
 
             return BuildResponse(loaded, runtime);
@@ -1165,6 +1169,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException(HealthUrlNotLoopbackMessage(service.Name));
         if (service.SuggestedPort is <= 0)
             throw new InvalidOperationException($"Preview service '{service.Name}' has invalid suggestedPort '{service.SuggestedPort}'.");
+        if (service.HealthTimeoutSeconds is { } healthTimeout and (< 1 or > MaxHealthTimeoutSeconds))
+            throw new InvalidOperationException($"Preview service '{service.Name}' has invalid healthTimeoutSeconds '{healthTimeout}': it must be between 1 and {MaxHealthTimeoutSeconds}.");
     }
 
     /// <summary>
@@ -2029,16 +2035,30 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    /// <summary>Health wait for a service that sets no <c>healthTimeoutSeconds</c>; generous so a slow first build is not reported as a failure.</summary>
+    internal const int DefaultHealthTimeoutSeconds = 300;
+
+    /// <summary>The largest <c>healthTimeoutSeconds</c> a service may set.</summary>
+    internal const int MaxHealthTimeoutSeconds = 3600;
+
+    /// <summary>One second of a service's health timeout. Tests shorten it.</summary>
+    internal TimeSpan HealthTimeoutUnit { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>Pause between health probes. Tests shorten it.</summary>
+    internal TimeSpan HealthPollDelay { get; set; } = TimeSpan.FromSeconds(1);
+
     /// <param name="watched">
     /// A process that must stay up while it is probed: once it has exited and a probe has
     /// still failed, the wait ends at once rather than at the timeout.
     /// </param>
     private async Task WaitForHealthAsync(
-        string serviceName, string healthUrl, string worktreePath, CancellationToken cancellationToken, ManagedPreviewProcess? watched = null)
+        string serviceName, string healthUrl, string worktreePath, int timeoutSeconds, CancellationToken cancellationToken, ManagedPreviewProcess? watched = null)
     {
+        var timeout = HealthTimeoutUnit * timeoutSeconds;
+        var clock = Stopwatch.StartNew();
         using var client = _httpClientFactory.CreateClient(HealthProbeClientName);
         var probed = await ReachableHealthUrlAsync(_host, healthUrl, worktreePath, cancellationToken);
-        for (var attempt = 0; attempt < 60; attempt++)
+        while (clock.Elapsed < timeout)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
@@ -2057,11 +2077,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 throw new InvalidOperationException($"Preview service '{serviceName}' exited with code {watched.Process.ExitCode} before it became healthy.");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            await Task.Delay(HealthPollDelay, cancellationToken);
         }
 
         throw new InvalidOperationException(
-            $"Preview service '{serviceName}' did not become healthy at {healthUrl}{(probed == healthUrl ? "" : $" (reached at {probed})")}.");
+            $"Preview service '{serviceName}' did not become healthy at {healthUrl} within {timeoutSeconds}s{(probed == healthUrl ? "" : $" (reached at {probed})")}.");
     }
 
     /// <summary>
@@ -2744,6 +2764,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public string Port { get; set; } = string.Empty;
         public int? SuggestedPort { get; set; }
         public string? HealthUrl { get; set; }
+
+        /// <summary>How long to wait for the service to become healthy; the default applies when unset.</summary>
+        public int? HealthTimeoutSeconds { get; set; }
         public bool Public { get; set; }
         public string? PublicUrl { get; set; }
 
