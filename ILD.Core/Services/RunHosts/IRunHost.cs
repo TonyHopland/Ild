@@ -61,6 +61,26 @@ public interface IRunHost
     /// </summary>
     Task<int> KillUnownedAsync(Guid runIn, CancellationToken ct = default) => Task.FromResult(0);
 
+    // -- Child processes ---------------------------------------------------------
+
+    /// <summary>
+    /// The live processes of the agent launch <paramref name="launchId"/> (the value its <see cref="AgentChildren.LaunchVariable"/> carries) of
+    /// run <paramref name="ownerId"/>, leaving out any whose command line contains one of <paramref name="ignore"/>: the launch itself and
+    /// the helpers that stay up by design. What an agent that ended its turn left running. A host that cannot tell finds none.
+    /// </summary>
+    Task<IReadOnlyList<RunChildProcess>> ListAgentChildrenAsync(Guid ownerId, string launchId, IReadOnlyList<string> ignore, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<RunChildProcess>>([]);
+
+    /// <summary>Which of <paramref name="processes"/> are still running, the same process and not one that took a pid since. Throws when the host cannot tell: none means they have ended.</summary>
+    Task<IReadOnlyList<RunChildProcess>> StillRunningAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<RunChildProcess>>([]);
+
+    /// <summary>End <paramref name="processes"/> and what they started, and wait for them to go.</summary>
+    Task StopProcessesAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <summary>The last <paramref name="maxBytes"/> of the text of the file at <paramref name="path"/> in the run <paramref name="ownerId"/>, or null when it cannot be read: the output a child process wrote.</summary>
+    Task<string?> ReadTailAsync(Guid ownerId, string path, int maxBytes, CancellationToken ct = default) => Task.FromResult<string?>(null);
+
     // -- Terminal ----------------------------------------------------------------
 
     /// <summary>

@@ -84,6 +84,22 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task<int> KillUnownedAsync(Guid runIn, CancellationToken ct = default)
         => isolated.KillUnownedAsync(runIn, ct);
 
+    // The children of a run's agent live where the run does: its pod or container, otherwise this machine.
+    public async Task<IReadOnlyList<RunChildProcess>> ListAgentChildrenAsync(Guid ownerId, string launchId, IReadOnlyList<string> ignore, CancellationToken ct = default)
+        => await (await HostOf(ownerId, ct)).ListAgentChildrenAsync(ownerId, launchId, ignore, ct);
+
+    public async Task<IReadOnlyList<RunChildProcess>> StillRunningAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+        => await (await HostOf(ownerId, ct)).StillRunningAsync(ownerId, processes, ct);
+
+    public async Task StopProcessesAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+        => await (await HostOf(ownerId, ct)).StopProcessesAsync(ownerId, processes, ct);
+
+    public async Task<string?> ReadTailAsync(Guid ownerId, string path, int maxBytes, CancellationToken ct = default)
+        => await (await HostOf(ownerId, ct)).ReadTailAsync(ownerId, path, maxBytes, ct);
+
+    private async Task<IRunHost> HostOf(Guid ownerId, CancellationToken ct)
+        => await isolated.HeldOwnerAsync(ownerId, ct) is not null ? isolated : local;
+
     // -- Terminal ----------------------------------------------------------------
 
     public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default)

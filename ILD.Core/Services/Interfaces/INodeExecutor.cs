@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using ILD.Data.Enums;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -40,7 +41,7 @@ public enum FailureKind
 /// outcome of an inner unit of work (e.g. an LLM call, a process). Executors
 /// translate this into the higher-level <see cref="NodeOutcome"/>.
 /// </summary>
-public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null, ILD.Data.DTOs.TokenUsage? Usage = null, FailureKind Failure = FailureKind.Unknown)
+public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null, ILD.Data.DTOs.TokenUsage? Usage = null, FailureKind Failure = FailureKind.Unknown, IReadOnlyList<RunChildProcess>? LiveChildren = null)
 {
     public static NodeExecutionResult Ok(string? output = null, string? resolvedPrompt = null, string? sessionId = null, string? incomingSessionId = null, ILD.Data.DTOs.TokenUsage? usage = null) => new(true, output, null, resolvedPrompt, sessionId, incomingSessionId, usage);
     public static NodeExecutionResult Fail(string error, string? output = null, FailureKind failure = FailureKind.Unknown) => new(false, output, error, Failure: failure);
@@ -57,7 +58,7 @@ public abstract record NodeOutcome
     /// True for the outcomes that end a node's work: nothing the node itself does comes after them.
     /// A new outcome of that kind must be listed here, or work done before it is treated as unfinished.
     /// </summary>
-    public bool EndsNodeWork => this is Success or Fail or Interrupted or WaitingAction or Terminal;
+    public bool EndsNodeWork => this is Success or Fail or Interrupted or WaitingAction or WaitingChildren or Terminal;
 
     /// <summary>
     /// Node is about to commit to executing. The engine creates a
@@ -115,6 +116,13 @@ public abstract record NodeOutcome
     /// The run stays <c>Running</c> from the user's perspective.
     /// </summary>
     public sealed record WaitingIld(string Reason) : NodeOutcome;
+
+    /// <summary>
+    /// The agent ended its turn successfully, but processes it started (<paramref name="Children"/>) are still running. The node is
+    /// not finished and nothing is torn down: the engine parks the run as "Waiting for ILD" with the session and worktree kept, and
+    /// <c>ChildWaitService</c> resumes the agent when the children end. <paramref name="Output"/> is the agent's reply of this turn.
+    /// </summary>
+    public sealed record WaitingChildren(IReadOnlyList<RunChildProcess> Children, string? Output = null, ILD.Data.DTOs.TokenUsage? Usage = null) : NodeOutcome;
 
     /// <summary>
     /// Terminal node: the run is complete. No outgoing edge is followed.

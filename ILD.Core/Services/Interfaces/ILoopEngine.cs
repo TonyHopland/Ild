@@ -94,6 +94,32 @@ public interface ILoopEngine
     Task ResumeFromHaltAsync(Guid runId, string? note, bool automatic = false);
 
     /// <summary>
+    /// A person's <b>Resume</b> of a node that is Waiting for ILD: the same agent session runs again with <paramref name="note"/> (if any) as its
+    /// only addition, and the processes it left running keep running. Logged with <paramref name="user"/> and whether input was given.
+    /// Refused unless the run is parked with children its agent left running.
+    /// </summary>
+    Task ResumeWaitingForChildrenAsync(Guid runId, string? note, string user);
+
+    /// <summary>
+    /// A person's <b>Restart</b> of a node that is Waiting for ILD: the processes are stopped and the node restarts from scratch as a node
+    /// retry does, with <paramref name="note"/> (if any) after its prompt and nothing about the stopped processes. Logged with
+    /// <paramref name="user"/> and whether input was given. Refused unless the run is parked with children its agent left running.
+    /// </summary>
+    Task RestartWaitingForChildrenAsync(Guid runId, string? note, string user);
+
+    /// <summary>
+    /// ILD's own resume of a run whose children have ended, with <paramref name="note"/> telling the agent how. Only a run that is still
+    /// Waiting for ILD and not paused is resumed: one a person halted, resumed or restarted meanwhile is left as it is. Returns whether it was.
+    /// </summary>
+    Task<bool> WakeFromChildWaitAsync(Guid runId, string note);
+
+    /// <summary>
+    /// Stops ILD's own wait for a run's children and parks it for a person with <paramref name="reason"/>, keeping what is needed to Restart or
+    /// Resume the node: what <c>ChildWaitService</c> does when waking the agent fails. No-op unless the run is Waiting for ILD.
+    /// </summary>
+    Task ReleaseChildWaitToHumanAsync(Guid runId, string reason);
+
+    /// <summary>
     /// Park every run this process is driving for a host shutdown, then wait up
     /// to <paramref name="timeout"/> for their driving loops to unwind.
     ///

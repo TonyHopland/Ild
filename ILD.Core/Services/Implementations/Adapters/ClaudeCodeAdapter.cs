@@ -112,12 +112,15 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 ? 0m
                 : await ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
 
+            var launchId = OwnerOf(ctx).ToString("N");
+            IReadOnlyList<RunChildProcess> liveChildren = [];
             using var gateway = OpenGateway(ctx);
             IRunProcess? proc;
             try
             {
                 var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
                 var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+                if (ctx.ChatSessionId is null) environment[AgentChildren.LaunchVariable] = launchId;
                 if (gateway is not null) ApplyGateway(environment, gateway, ctx.Provider);
                 proc = await StartAgentProcessAsync(psi, ctx, environment, [mcpConfigPath]);
             }
@@ -129,7 +132,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
 
-            var stdoutTask = ReadStreamJsonAsync(process.StandardOutput, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel);
+            // Looked for at the result event, while the CLI is still there to tell its children apart from it: it may exit right after.
+            var stdoutTask = ReadStreamJsonAsync(
+                process.StandardOutput, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel,
+                ctx.ChatSessionId is null ? async () => liveChildren = await FindChildrenAsync(ctx, launchId) : null);
             var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
 
             try
@@ -154,6 +160,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
 
             var result = AssembleResult(stdout, stderr, process.ExitCode, ctx.Prompt, ctx.SessionId, ctx.IncomingSessionId, sessionCostBefore);
+            if (result.Success && liveChildren.Count > 0)
+                result = result with { LiveChildren = await StillRunningAfterExitAsync(ctx, liveChildren) };
 
             // On a successful managed-session turn, copy the JSONL claude
             // wrote at $HOME/.claude/projects/<encoded-cwd>/<sid>.jsonl into
@@ -177,6 +185,51 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
         }
     }
+
+    /// <summary>The processes the launch started and left running, without the launch itself and the helpers that stay up by design; none when they cannot be listed.</summary>
+    private async Task<IReadOnlyList<RunChildProcess>> FindChildrenAsync(AgentExecutionContext ctx, string launchId)
+    {
+        try
+        {
+            return await RunHost.ListAgentChildrenAsync(OwnerOf(ctx), launchId, [LaunchFingerprint, .. AgentChildren.LongLivedHelpers], ctx.Cancel);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not look for processes the agent left running: {Reason}", ex.Message);
+            return [];
+        }
+    }
+
+    /// <summary>How long a process seen at the result event is given to end with the CLI (its MCP servers, a language server) before it counts as left running.</summary>
+    internal static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ExitGraceInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Which of <paramref name="seen"/> outlive the CLI by <see cref="ExitGrace"/>. When the host cannot tell, those last known to be
+    /// running: the turn has succeeded either way, and ILD's wait checks them again.
+    /// </summary>
+    private async Task<IReadOnlyList<RunChildProcess>> StillRunningAfterExitAsync(AgentExecutionContext ctx, IReadOnlyList<RunChildProcess> seen)
+    {
+        var running = seen;
+        try
+        {
+            var deadline = DateTime.UtcNow + ExitGrace;
+            while (true)
+            {
+                running = await RunHost.StillRunningAsync(OwnerOf(ctx), running, ctx.Cancel);
+                if (running.Count == 0 || DateTime.UtcNow >= deadline) return running;
+                await Task.Delay(ExitGraceInterval, ctx.Cancel);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not check whether the processes the agent left running have ended: {Reason}", ex.Message);
+            return running;
+        }
+    }
+
+    /// <summary>Part of the command line of the CLI and of what wraps it, which every launch has and no child does.</summary>
+    private const string LaunchFingerprint = "--output-format stream-json";
 
     /// <summary>Turns a finished run's parsed output, stderr and exit code into the node's result.</summary>
     internal static NodeExecutionResult AssembleResult(
@@ -397,7 +450,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         StreamReader reader,
         Func<string, Task>? progressCallback,
         Action<string>? onSessionId,
-        CancellationToken ct)
+        CancellationToken ct,
+        Func<Task>? onResult = null)
     {
         var raw = new StringBuilder();
         var content = new StringBuilder();
@@ -467,6 +521,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
             else if (string.Equals(eventType, "result", StringComparison.OrdinalIgnoreCase))
             {
+                if (onResult is not null) await onResult().ConfigureAwait(false);
                 var isError = root.TryGetProperty("is_error", out var errFlag)
                     && errFlag.ValueKind == JsonValueKind.True;
                 if (isError && TryGetString(root, "result", out var errResult) && !string.IsNullOrWhiteSpace(errResult))

@@ -914,6 +914,110 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return result.Success && int.TryParse(result.StdOut.Trim(), out var killed) ? killed : 0;
     }
 
+
+    // -- Child processes ---------------------------------------------------------
+
+    /// <summary>
+    /// Prints <c>pid TAB output file TAB command line</c> for each live process whose environment carries the launch (<c>$1</c>) and whose
+    /// command line holds none of the rest of the arguments. A process the script cannot read, a zombie and one with no command line is left out.
+    /// </summary>
+    internal const string ListChildrenScript = $$"""
+        marker="{{AgentChildren.LaunchVariable}}=$1"; shift
+        for d in /proc/[0-9]*; do
+            pid=${d#/proc/}
+            [ "$pid" = "$$" ] && continue
+            tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qxF -- "$marker" || continue
+            grep -q '^State:[[:space:]]*Z' "$d/status" 2>/dev/null && continue
+            cmd=$(tr '\0\n\t' '   ' < "$d/cmdline" 2>/dev/null)
+            cmd=${cmd%"${cmd##*[! ]}"}
+            [ -n "$cmd" ] || continue
+            skip=
+            for part in "$@"; do case "$cmd" in *"$part"*) skip=1; break ;; esac; done
+            [ -z "$skip" ] || continue
+            out=$(readlink "$d/fd/1" 2>/dev/null); [ -f "$out" ] || out=
+            printf '%s\t%s\t%s\n' "$pid" "$out" "$cmd"
+        done
+        """;
+
+    /// <summary>Prints the pid of each (pid, command line) pair of its arguments that is still that process, running. Command lines are compared without their trailing blanks, as <see cref="ListChildrenScript"/> prints them.</summary>
+    internal const string StillRunningScript = """
+        while [ $# -ge 2 ]; do
+            pid=$1; want=$2; shift 2
+            case "$pid" in ''|*[!0-9]*) continue ;; esac
+            have=$(tr '\0\n\t' '   ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+            have=${have%"${have##*[! ]}"}
+            [ "$have" = "$want" ] || continue
+            grep -q '^State:[[:space:]]*Z' "/proc/$pid/status" 2>/dev/null && continue
+            echo "$pid"
+        done
+        exit 0
+        """;
+
+    /// <summary>Ends each (pid, command line) pair of its arguments that is still that process, with what it started: TERM, a wait, then KILL.</summary>
+    internal const string StopProcessesScript = """
+        descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do descendants "$c"; echo "$c"; done; }
+        pids=
+        while [ $# -ge 2 ]; do
+            pid=$1; want=$2; shift 2
+            case "$pid" in ''|*[!0-9]*) continue ;; esac
+            have=$(tr '\0\n\t' '   ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+            have=${have%"${have##*[! ]}"}
+            [ "$have" = "$want" ] || continue
+            pids="$pids $(descendants "$pid") $pid"
+        done
+        for pid in $pids; do kill -s TERM "$pid" 2>/dev/null; done
+        i=0
+        while [ "$i" -lt 50 ]; do
+            alive=
+            for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive=1; done
+            [ -z "$alive" ] && break
+            sleep 0.1; i=$((i+1))
+        done
+        for pid in $pids; do kill -s KILL "$pid" 2>/dev/null; done
+        exit 0
+        """;
+
+    public async Task<IReadOnlyList<RunChildProcess>> ListAgentChildrenAsync(Guid ownerId, string launchId, IReadOnlyList<string> ignore, CancellationToken ct = default)
+    {
+        if (await HeldOwnerAsync(ownerId, ct) is not { } owner) return [];
+        var result = await RunScriptAsync(owner, ListChildrenScript, [launchId, .. ignore], ct);
+        if (!result.Success) return [];
+        var found = new List<RunChildProcess>();
+        foreach (var line in result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = line.Split('\t', 3);
+            if (parts.Length == 3 && int.TryParse(parts[0], out var pid))
+                found.Add(new RunChildProcess(pid, parts[2], parts[1].Length > 0 ? parts[1] : null));
+        }
+        return found;
+    }
+
+    public async Task<IReadOnlyList<RunChildProcess>> StillRunningAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+    {
+        if (processes.Count == 0 || await HeldOwnerAsync(ownerId, ct) is not { } owner) return [];
+        var result = await RunScriptAsync(owner, StillRunningScript, PidArguments(processes), ct);
+        if (!result.Success)
+            throw new InvalidOperationException($"could not check the processes of run {ownerId:N} in its {Noun}: {result.StdErr.Trim()}");
+        var alive = result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Trim()).ToHashSet(StringComparer.Ordinal);
+        return processes.Where(p => alive.Contains(p.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToList();
+    }
+
+    public async Task StopProcessesAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+    {
+        if (processes.Count == 0 || await HeldOwnerAsync(ownerId, ct) is not { } owner) return;
+        await RunScriptAsync(owner, StopProcessesScript, PidArguments(processes), ct);
+    }
+
+    public async Task<string?> ReadTailAsync(Guid ownerId, string path, int maxBytes, CancellationToken ct = default)
+    {
+        if (await HeldOwnerAsync(ownerId, ct) is not { } owner) return null;
+        var result = await RunScriptAsync(owner, "[ -f \"$1\" ] && tail -c \"$2\" -- \"$1\"", [path, maxBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)], ct);
+        return result.Success ? result.StdOut : null;
+    }
+
+    private static string[] PidArguments(IReadOnlyList<RunChildProcess> processes)
+        => processes.SelectMany(p => new[] { p.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture), p.CommandLine.TrimEnd() }).ToArray();
+
     /// <summary>The directory, in the run's process directory, of the commands with no owner: one per run or chat they run in, since every chat shares a container.</summary>
     internal static string UnownedGroup(Guid? runIn) => runIn is { } holder ? $"unowned-{holder:N}" : "unowned";
 

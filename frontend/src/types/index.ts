@@ -582,6 +582,8 @@ export enum HaltReason {
   MaxAiTraversals = "MaxAiTraversals",
   /** The next node uses a global variable that does not exist or is empty. */
   GlobalVariableMissing = "GlobalVariableMissing",
+  /** The agent ended its turn with child processes still running; ILD waits for them ("Waiting for ILD"). */
+  WaitingForChildren = "WaitingForChildren",
 }
 
 export enum LoopRunNodeStatus {
@@ -592,6 +594,8 @@ export enum LoopRunNodeStatus {
   Skipped = "Skipped",
   WaitingHuman = "WaitingHuman",
   Interrupted = "Interrupted",
+  /** The agent ended its turn with child processes still running; ILD is waiting for them. */
+  WaitingIld = "WaitingIld",
 }
 
 export interface LoopRunNode {
@@ -677,6 +681,22 @@ export interface TurnVariableChange {
   changedLater: boolean;
 }
 
+/** A process the agent left running when its turn ended. */
+export interface ChildProcessInfo {
+  pid: number;
+  commandLine: string;
+}
+
+/** What a node that is Waiting for ILD is waiting for. */
+export interface ChildWait {
+  startedAt: string;
+  /** True while ILD itself waits; false once the cycle cap parked the run for a person. */
+  waiting: boolean;
+  /** Waits taken in a row since a person last touched the run. */
+  cycles: number;
+  processes: ChildProcessInfo[];
+}
+
 export interface LoopRun {
   id: string;
   workItemId: string;
@@ -692,6 +712,8 @@ export interface LoopRun {
   haltReason?: HaltReason | string | null;
   /** For a GlobalVariableMissing park, the ones still missing or empty now. */
   missingGlobalVariables?: string[];
+  /** The processes the agent left running when its turn ended, while the run waits for them or is parked after the cycle cap; absent when none. */
+  childWait?: ChildWait | null;
   retain?: boolean;
   worktreePath?: string | null;
   branchName?: string | null;

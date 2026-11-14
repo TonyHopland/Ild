@@ -15,6 +15,16 @@ interface HaltSteerControlsProps {
   workItemStatus: WorkItemStatus;
   /** Halt the in-flight AI node. */
   onHalt?: () => void | Promise<unknown>;
+  /**
+   * Restart a node that is Waiting for ILD: its running processes are stopped and the node starts over
+   * from scratch, with the optional note after its prompt. Offered with `onResumeWaiting`.
+   */
+  onRestartWaiting?: (note: string) => void | Promise<unknown>;
+  /**
+   * Resume a node that is Waiting for ILD in the same session, leaving its processes running. The agent
+   * gets only the optional note.
+   */
+  onResumeWaiting?: (note: string) => void | Promise<unknown>;
   /** Resume a halted run with optional steering guidance. */
   onResumeSteer?: (note: string) => void | Promise<unknown>;
   /** Cleanup handlers reused for a halted run. */
@@ -113,6 +123,8 @@ export default function HaltSteerControls({
   workItemStatus,
   onHalt,
   onResumeSteer,
+  onRestartWaiting,
+  onResumeWaiting,
   onCleanupDone,
   onCleanupBacklog,
   showAbandon = true,
@@ -123,6 +135,8 @@ export default function HaltSteerControls({
   const [abandoning, setAbandoning] = useState(false);
   const [confirmingAbandon, setConfirmingAbandon] = useState(false);
   const [steerNote, setSteerNote] = useState("");
+  const [confirmingWaiting, setConfirmingWaiting] = useState<"restart" | "resume" | null>(null);
+  const [actingWaiting, setActingWaiting] = useState(false);
   const [errorText, setErrorText] = useState("");
 
   if (!run) return null;
@@ -136,6 +150,10 @@ export default function HaltSteerControls({
   const throttled = isHalted && isThrottleParked(run);
   const stepCapped = isHalted && isStepCapParked(run);
   const globalMissing = isHalted && isGlobalMissingParked(run);
+  // Processes the agent left running when its turn ended: ILD waits for them (or has stopped waiting after
+  // too many cycles), and the person can restart or resume the node meanwhile.
+  const childWait =
+    isHalted && !!run.childWait && !!onRestartWaiting && !!onResumeWaiting ? run.childWait : null;
   const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
   // human feedback — so a run heading the wrong way can be dropped without
@@ -170,6 +188,22 @@ export default function HaltSteerControls({
       setErrorText(error instanceof Error ? error.message : "Failed to resume run.");
     } finally {
       setResuming(false);
+    }
+  };
+
+  const handleWaitingAction = async (action: "restart" | "resume") => {
+    const act = action === "restart" ? onRestartWaiting : onResumeWaiting;
+    if (!act) return;
+    setErrorText("");
+    setActingWaiting(true);
+    try {
+      await act(steerNote);
+      setSteerNote("");
+      setConfirmingWaiting(null);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : `Failed to ${action} the node.`);
+    } finally {
+      setActingWaiting(false);
     }
   };
 
@@ -253,8 +287,10 @@ export default function HaltSteerControls({
           <div className="wiv2-feedback-title">
             {throttled && "Provider interrupted — resume when ready"}
             {stepCapped && "Enough AI steps — carry on?"}
+            {childWait?.waiting && "Waiting for ILD — its processes are still running"}
+            {childWait && !childWait.waiting && "Processes still running — restart or resume"}
             {globalMissing && "Global variables missing — set them, then resume"}
-            {!throttled && !stepCapped && !globalMissing && "Halted — steer & resume"}
+            {!throttled && !stepCapped && !globalMissing && !childWait && "Halted — steer & resume"}
           </div>
           {stepCapped && (
             <div className="feedback-reason">
@@ -284,6 +320,24 @@ export default function HaltSteerControls({
               )}
             </div>
           )}
+          {childWait && (
+            <div className="feedback-reason">
+              <div>
+                {childWait.waiting
+                  ? "The agent ended its turn while these processes it started were still running. ILD is waiting for them and will wake the agent with how they ended."
+                  : "The agent ended its turn with these processes still running several times in a row, so ILD stopped waiting for them."}
+              </div>
+              <ul className="wiv2-child-processes">
+                {childWait.processes.map((p) => (
+                  <li key={p.pid}>
+                    <code>
+                      {p.pid}: {p.commandLine}
+                    </code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {throttled && (
             <div className="feedback-reason">
               <div>{interruption?.error ?? "An AI provider interrupted this run."}</div>
@@ -297,21 +351,84 @@ export default function HaltSteerControls({
             value={steerNote}
             onChange={(e) => setSteerNote(e.target.value)}
             placeholder={
-              globalMissing
-                ? "Optional guidance — it is added to the run's conversation. Leave blank to just continue…"
-                : "Optional guidance for the resumed agent — leave blank to just continue…"
+              childWait
+                ? "Optional input for the agent — leave blank to add nothing…"
+                : globalMissing
+                  ? "Optional guidance — it is added to the run's conversation. Leave blank to just continue…"
+                  : "Optional guidance for the resumed agent — leave blank to just continue…"
             }
             rows={3}
           />
           <div className="feedback-actions">
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              onClick={() => void handleResume()}
-              disabled={resuming || blocked}
-            >
-              {resuming ? "Resuming…" : "Resume"}
-            </button>
+            {childWait ? (
+              confirmingWaiting ? (
+                <span
+                  className="wiv2-abandon-confirm"
+                  role="group"
+                  aria-label={
+                    confirmingWaiting === "restart" ? "Confirm restart node" : "Confirm resume node"
+                  }
+                >
+                  <span className="wiv2-abandon-prompt">
+                    {confirmingWaiting === "restart"
+                      ? "Restart stops the processes that are still running and starts this node again from scratch. The agent is not told about the stopped processes; anything you typed above is added after its prompt."
+                      : "Resume runs this node again in the same session and leaves the processes running. The agent gets only what you typed above (or a plain continue) and what it already knows — nothing about the processes."}
+                  </span>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${confirmingWaiting === "restart" ? "btn-danger" : "btn-primary"}`}
+                    onClick={() => void handleWaitingAction(confirmingWaiting)}
+                    disabled={actingWaiting || blocked}
+                  >
+                    {confirmingWaiting === "restart"
+                      ? actingWaiting
+                        ? "Restarting…"
+                        : "Confirm restart"
+                      : actingWaiting
+                        ? "Resuming…"
+                        : "Confirm resume"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setConfirmingWaiting(null)}
+                    disabled={actingWaiting}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-danger"
+                    onClick={() => setConfirmingWaiting("restart")}
+                    disabled={blocked}
+                    title="Stop the running processes and start this node again from scratch"
+                  >
+                    Restart node
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    onClick={() => setConfirmingWaiting("resume")}
+                    disabled={blocked}
+                    title="Run this node again in the same session, leaving the processes running"
+                  >
+                    Resume node
+                  </button>
+                </>
+              )
+            ) : (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => void handleResume()}
+                disabled={resuming || blocked}
+              >
+                {resuming ? "Resuming…" : "Resume"}
+              </button>
+            )}
             {onCleanupDone && (
               <button
                 type="button"

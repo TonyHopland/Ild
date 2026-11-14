@@ -39,4 +39,7 @@ public static class HumanFeedbackReasons
 
     /// <summary>The next node uses a global variable that does not exist or is empty.</summary>
     public const string GlobalVariableMissing = "Global Variable Missing";
+
+    /// <summary>The agent ended its turn with child processes still running and ILD is waiting for them.</summary>
+    public const string WaitingForChildren = "Waiting for ILD";
 }

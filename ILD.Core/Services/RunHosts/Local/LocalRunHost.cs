@@ -187,6 +187,34 @@ public sealed class LocalRunHost : IRunHost
         return killed;
     }
 
+    // -- Child processes ---------------------------------------------------------
+
+    public Task<IReadOnlyList<RunChildProcess>> ListAgentChildrenAsync(Guid ownerId, string launchId, IReadOnlyList<string> ignore, CancellationToken ct = default)
+        => Task.FromResult(ProcScan.List(launchId, ignore));
+
+    public Task<IReadOnlyList<RunChildProcess>> StillRunningAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+        => Task.FromResult(ProcScan.StillRunning(processes));
+
+    public Task StopProcessesAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+        => ProcScan.StopAsync(processes, ct);
+
+    public async Task<string?> ReadTailAsync(Guid ownerId, string path, int maxBytes, CancellationToken ct = default)
+    {
+        try
+        {
+            await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var length = (int)Math.Min(file.Length, maxBytes);
+            file.Seek(-length, SeekOrigin.End);
+            var buffer = new byte[length];
+            await file.ReadExactlyAsync(buffer, ct);
+            return System.Text.Encoding.UTF8.GetString(buffer);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     // -- Terminal ----------------------------------------------------------------
 
     public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, ILD.Data.Enums.NetworkMode mode, CancellationToken ct = default)

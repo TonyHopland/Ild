@@ -82,6 +82,9 @@ public interface ILoopRunStore
     /// </summary>
     Task<IReadOnlyList<LoopRun>> GetThrottleParkedRunsAsync();
 
+    /// <summary>Runs Waiting for ILD (<see cref="LoopRun.WaitingForChildren"/>), which <c>ChildWaitService</c> watches. Untracked: it reads and acts by id.</summary>
+    Task<IReadOnlyList<LoopRun>> GetChildWaitingRunsAsync();
+
     /// <summary>
     /// The Active Work Item Set: the work items this instance is currently
     /// working on, one per run <see cref="GetActiveRunsAsync"/> considers alive.

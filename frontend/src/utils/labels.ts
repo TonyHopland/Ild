@@ -55,6 +55,7 @@ const FEEDBACK_REASON: Record<string, { label: string; tone: Tone }> = {
   "Node Failed": { label: "Node failed", tone: "danger" },
   "PR Awaiting Merge": { label: "PR awaiting merge", tone: "info" },
   "Rebase Conflict": { label: "Rebase conflict", tone: "attention" },
+  "Waiting for ILD": { label: "Waiting for ILD", tone: "info" },
 };
 
 export function feedbackReasonLabel(reason: string): string {
@@ -89,6 +90,7 @@ const NODE_STATUS: Record<LoopRunNodeStatus, string> = {
   [LoopRunNodeStatus.Skipped]: "Skipped",
   [LoopRunNodeStatus.WaitingHuman]: "Waiting for you",
   [LoopRunNodeStatus.Interrupted]: "Interrupted",
+  [LoopRunNodeStatus.WaitingIld]: "Waiting for ILD",
 };
 
 export function nodeStatusLabel(status: LoopRunNodeStatus | string): string {

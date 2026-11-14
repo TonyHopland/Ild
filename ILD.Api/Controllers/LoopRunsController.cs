@@ -142,6 +142,7 @@ public class LoopRunsController : ControllerBase
                 // Who parked it, so the UI can say so instead of inferring it
                 // from a node's prose. Null means a human pressed Halt.
                 haltReason = r.HaltReason?.ToString(),
+                childWait = ChildWaitOf(r),
                 missingGlobalVariables = missingGlobals[r.Id],
                 retain = r.Retain,
                 hasLocalGitState = HasLocalGitState(r),
@@ -194,6 +195,7 @@ public class LoopRunsController : ControllerBase
             isHalted = run.IsHalted,
             waitingRunNodeId = ParkedNode.WaitingVisitOf(run, runNodes)?.Id,
             haltReason = run.HaltReason?.ToString(),
+            childWait = ChildWaitOf(run),
             // Read now, not at the park, so it drops each one a person has set since.
             missingGlobalVariables = missingGlobals,
             retain = run.Retain,
@@ -368,6 +370,55 @@ public class LoopRunsController : ControllerBase
 
         if (await PredatesContainersAsync(guid) is { } refusal) return refusal;
         await _loopEngine.ResumeFromHaltAsync(guid, request?.Note);
+        return Ok();
+    }
+
+    /// <summary>
+    /// The processes the run's agent left running when its turn ended, while the run waits for them (<c>waiting</c>) or is parked for a
+    /// person after the cycle cap; null when there are none. Restart and Resume of the node are offered while it is set.
+    /// </summary>
+    private static object? ChildWaitOf(ILD.Data.Entities.LoopRun run)
+        => ChildWaitState.TryParse(run.ChildWaitJson) is { } state
+            ? new
+            {
+                startedAt = state.StartedAt,
+                waiting = run.HaltReason == ILD.Data.Enums.HaltReason.WaitingForChildren,
+                cycles = run.ChildWaitCycleCount,
+                processes = state.Processes.Select(p => new { pid = p.Pid, commandLine = p.CommandLine }).ToList(),
+            }
+            : null;
+
+    /// <summary>
+    /// <b>Restart</b> a node that is Waiting for ILD: its running children are stopped, then the node restarts from scratch as a node retry does,
+    /// with the optional <c>note</c> after its prompt. Nothing about the stopped processes is added for the agent.
+    /// </summary>
+    [HttpPost("{id}/waiting-ild/restart")]
+    public Task<IActionResult> RestartWaitingForChildren(string id, [FromBody] ResumeSteerRequest? request)
+        => ActOnWaitingForChildrenAsync(id, (guid, user) => _loopEngine.RestartWaitingForChildrenAsync(guid, request?.Note, user));
+
+    /// <summary>
+    /// <b>Resume</b> a node that is Waiting for ILD: the same agent session runs again without stopping its children. The agent gets only the
+    /// optional <c>note</c>, and its existing context.
+    /// </summary>
+    [HttpPost("{id}/waiting-ild/resume")]
+    public Task<IActionResult> ResumeWaitingForChildren(string id, [FromBody] ResumeSteerRequest? request)
+        => ActOnWaitingForChildrenAsync(id, (guid, user) => _loopEngine.ResumeWaitingForChildrenAsync(guid, request?.Note, user));
+
+    private async Task<IActionResult> ActOnWaitingForChildrenAsync(string id, Func<Guid, string, Task> act)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+        if (User.Identity?.Name is not { Length: > 0 } user)
+            return Unauthorized();
+        if (await PredatesContainersAsync(guid) is { } refusal) return refusal;
+        try
+        {
+            await act(guid, user);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
         return Ok();
     }
 

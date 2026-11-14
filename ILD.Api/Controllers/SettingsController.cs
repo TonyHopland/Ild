@@ -40,6 +40,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.ThrottleAutoResume,
         AppSettingKeys.ThrottleRetryDelayMinutes,
         AppSettingKeys.ThrottleMaxRetries,
+        AppSettingKeys.ChildrenWaitMinutes,
+        AppSettingKeys.ChildrenMaxCycles,
         AppSettingKeys.SessionIdleDays,
         AppSettingKeys.SessionMaxDays,
         AppSettingKeys.NetworkMode,
@@ -106,6 +108,10 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.ThrottleRetryDelayMinutes] = AppSettingKeys.DefaultThrottleRetryDelayMinutes.ToString();
         if (!map.ContainsKey(AppSettingKeys.ThrottleMaxRetries))
             map[AppSettingKeys.ThrottleMaxRetries] = AppSettingKeys.DefaultThrottleMaxRetries.ToString();
+        if (!map.ContainsKey(AppSettingKeys.ChildrenWaitMinutes))
+            map[AppSettingKeys.ChildrenWaitMinutes] = AppSettingKeys.DefaultChildrenWaitMinutes.ToString();
+        if (!map.ContainsKey(AppSettingKeys.ChildrenMaxCycles))
+            map[AppSettingKeys.ChildrenMaxCycles] = AppSettingKeys.DefaultChildrenMaxCycles.ToString();
         if (!map.ContainsKey(AppSettingKeys.SessionIdleDays))
             map[AppSettingKeys.SessionIdleDays] = AppSettingKeys.DefaultSessionIdleDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.SessionMaxDays))
@@ -209,6 +215,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.ThrottleAutoResume => AppSettingKeys.DefaultThrottleAutoResume.ToString().ToLowerInvariant(),
         AppSettingKeys.ThrottleRetryDelayMinutes => AppSettingKeys.DefaultThrottleRetryDelayMinutes.ToString(),
         AppSettingKeys.ThrottleMaxRetries => AppSettingKeys.DefaultThrottleMaxRetries.ToString(),
+        AppSettingKeys.ChildrenWaitMinutes => AppSettingKeys.DefaultChildrenWaitMinutes.ToString(),
+        AppSettingKeys.ChildrenMaxCycles => AppSettingKeys.DefaultChildrenMaxCycles.ToString(),
         AppSettingKeys.SessionIdleDays => AppSettingKeys.DefaultSessionIdleDays.ToString(),
         AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
         AppSettingKeys.NetworkMode => AppSettingKeys.DefaultNetworkMode,
@@ -288,6 +296,20 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var retries) || retries < 1 || retries > 100)
                 {
                     error = "throttle.maxRetries must be an integer between 1 and 100";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.ChildrenWaitMinutes:
+                if (!int.TryParse(value, out var childMins) || childMins < 1 || childMins > 10080)
+                {
+                    error = "children.waitMinutes must be an integer between 1 and 10080 (a week)";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.ChildrenMaxCycles:
+                if (!int.TryParse(value, out var childCycles) || childCycles < 1 || childCycles > 100)
+                {
+                    error = "children.maxCycles must be an integer between 1 and 100";
                     return false;
                 }
                 break;

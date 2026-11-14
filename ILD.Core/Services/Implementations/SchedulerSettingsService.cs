@@ -58,6 +58,20 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         return AppSettingKeys.DefaultThrottleMaxRetries;
     }
 
+    public async Task<int> GetChildrenWaitMinutesAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.ChildrenWaitMinutes, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
+        return AppSettingKeys.DefaultChildrenWaitMinutes;
+    }
+
+    public async Task<int> GetChildrenMaxCyclesAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.ChildrenMaxCycles, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
+        return AppSettingKeys.DefaultChildrenMaxCycles;
+    }
+
     public async Task<int> GetNetworkLogRetentionDaysAsync(CancellationToken ct = default)
     {
         var s = await _store.GetByKeyAsync(AppSettingKeys.NetworkLogRetentionDays, ct);

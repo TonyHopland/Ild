@@ -1003,6 +1003,12 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<int>("ChildWaitCycleCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ChildWaitJson")
+                        .HasColumnType("text");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 

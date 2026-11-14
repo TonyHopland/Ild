@@ -45,6 +45,23 @@ describe("loopRunService URL contract", () => {
     expect(JSON.parse(init?.body as string)).toEqual({ note: "focus on the bug" });
   });
 
+  test("restartWaitingForIld POSTs the note to /api/v1/loopruns/:id/waiting-ild/restart", async () => {
+    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
+    await loopRunService.restartWaitingForIld("abc-123", "run only unit tests");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/loopruns/abc-123/waiting-ild/restart");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ note: "run only unit tests" });
+  });
+
+  test("resumeWaitingForIld POSTs a null note when none is given", async () => {
+    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
+    await loopRunService.resumeWaitingForIld("abc-123");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/loopruns/abc-123/waiting-ild/resume");
+    expect(JSON.parse(init?.body as string)).toEqual({ note: null });
+  });
+
   test("resumeSteer sends null note when omitted", async () => {
     fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
     await loopRunService.resumeSteer("abc-123");
