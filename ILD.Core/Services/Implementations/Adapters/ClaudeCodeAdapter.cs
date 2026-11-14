@@ -112,7 +112,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 ? 0m
                 : await ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
 
-            var launchId = Guid.NewGuid().ToString("N");
+            var launchId = OwnerOf(ctx).ToString("N");
             IReadOnlyList<RunChildProcess> liveChildren = [];
             using var gateway = OpenGateway(ctx);
             IRunProcess? proc;
@@ -161,7 +161,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
             var result = AssembleResult(stdout, stderr, process.ExitCode, ctx.Prompt, ctx.SessionId, ctx.IncomingSessionId, sessionCostBefore);
             if (result.Success && liveChildren.Count > 0)
-                result = result with { LiveChildren = await RunHost.StillRunningAsync(OwnerOf(ctx), liveChildren, ctx.Cancel) };
+                result = result with { LiveChildren = await StillRunningAfterExitAsync(ctx, liveChildren) };
 
             // On a successful managed-session turn, copy the JSONL claude
             // wrote at $HOME/.claude/projects/<encoded-cwd>/<sid>.jsonl into
@@ -197,6 +197,34 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         {
             _logger.LogWarning(ex, "Could not look for processes the agent left running: {Reason}", ex.Message);
             return [];
+        }
+    }
+
+    /// <summary>How long a process seen at the result event is given to end with the CLI (its MCP servers, a language server) before it counts as left running.</summary>
+    internal static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ExitGraceInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Which of <paramref name="seen"/> outlive the CLI by <see cref="ExitGrace"/>. When the host cannot tell, those last known to be
+    /// running: the turn has succeeded either way, and ILD's wait checks them again.
+    /// </summary>
+    private async Task<IReadOnlyList<RunChildProcess>> StillRunningAfterExitAsync(AgentExecutionContext ctx, IReadOnlyList<RunChildProcess> seen)
+    {
+        var running = seen;
+        try
+        {
+            var deadline = DateTime.UtcNow + ExitGrace;
+            while (true)
+            {
+                running = await RunHost.StillRunningAsync(OwnerOf(ctx), running, ctx.Cancel);
+                if (running.Count == 0 || DateTime.UtcNow >= deadline) return running;
+                await Task.Delay(ExitGraceInterval, ctx.Cancel);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not check whether the processes the agent left running have ended: {Reason}", ex.Message);
+            return running;
         }
     }
 

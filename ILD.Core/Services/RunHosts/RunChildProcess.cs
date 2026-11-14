@@ -9,22 +9,24 @@ namespace ILD.Core.Services.RunHosts;
 public sealed record RunChildProcess(int Pid, string CommandLine, string? OutputPath = null);
 
 /// <summary>
-/// How a launch's child processes are told from the launch itself and from the helpers that live on beyond it.
-/// An agent launch is given <see cref="LaunchVariable"/> in its environment, which everything it starts inherits, so the processes
-/// of one launch are found by that value even after the CLI exits and its children are reparented.
+/// How the processes a run's agent started are told from the launch itself and from the helpers that live on beyond it.
+/// Every agent launch of a run is given <see cref="LaunchVariable"/> in its environment, which everything it starts inherits, so they
+/// are found by that value after the CLI exits and its children are reparented, and in a later turn of the same run.
 /// </summary>
 public static class AgentChildren
 {
-    /// <summary>The environment variable naming the launch (a fresh id per launch) in every process the launch started.</summary>
+    /// <summary>The environment variable naming the run in every process its agent launches started.</summary>
     public const string LaunchVariable = "ILD_AGENT_LAUNCH";
 
     /// <summary>
     /// Parts of a command line that are never a child worth waiting for: ILD's own stdio MCP server, and build servers that stay up
-    /// by design after a build (an MSBuild node, the Roslyn compiler server) and would otherwise keep a node waiting until the timeout.
+    /// by design after a build (an MSBuild node, the Roslyn compiler server, the Gradle, Kotlin and Nx daemons) and would otherwise
+    /// keep a node waiting until the timeout.
     /// </summary>
     public static readonly IReadOnlyList<string> LongLivedHelpers =
     [
         "ild-mcp-server", "ILD.McpServer", "/nodemode:", "VBCSCompiler", "build-server", "MSBuildTaskHost",
+        "GradleDaemon", "KotlinCompileDaemon", "nx/src/daemon/",
     ];
 }
 

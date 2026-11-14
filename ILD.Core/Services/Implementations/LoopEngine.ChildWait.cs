@@ -37,6 +37,7 @@ public sealed partial class LoopEngine
         if (run.ChildWaitCycleCount >= maxCycles)
         {
             _logger.LogWarning("Run {RunId}: node {NodeLabel} ended its turn with processes running {Max} times in a row; parked for a person", run.Id, node.Label, maxCycles);
+            await SettleWaitingAttemptAsync(store, run, LoopRunNodeStatus.Interrupted, "ILD stopped waiting for the agent's processes");
             await ParkForHumanAsync(run, node.Id, node.Label, HaltReason.Human, HumanFeedbackReasons.RunHalted,
                 $"The agent ended its turn with processes still running {maxCycles} times in a row, so ILD stopped waiting for them. Still running: {listing}. Restart the node (stops them) or resume it (leaves them running).",
                 store, workItems, eventLog, runNodeId);
@@ -73,51 +74,67 @@ public sealed partial class LoopEngine
         await _notifier.NodeStateChangedAsync(run.Id, attempt.LoopNodeId, LoopRunNodeStatus.WaitingIld, status);
     }
 
+    private const string NotWaitingForChildren = "The run is not waiting for the processes its agent left running";
+
     /// <summary>The run, when it is parked with children it left running (waiting for them, or parked for a person after the cycle cap); otherwise refused.</summary>
     private static async Task<LoopRun> RequireChildWaitAsync(ILoopRunStore store, Guid runId)
     {
         var run = await store.GetByIdAsync(runId) ?? throw new InvalidOperationException("Run not found");
         if (run.Status != LoopRunStatus.WaitingHuman || !run.IsHalted || ChildWaitState.TryParse(run.ChildWaitJson) is null)
-            throw new InvalidOperationException("The run is not waiting for the processes its agent left running");
+            throw new InvalidOperationException(NotWaitingForChildren);
         return run;
     }
 
+    /// <summary>Ends the processes the run is remembered to be waiting for. A host that cannot be reached never holds the caller up.</summary>
+    private async Task StopWaitedChildrenAsync(IServiceProvider sp, LoopRun run)
+    {
+        if (ChildWaitState.TryParse(run.ChildWaitJson) is not { } waiting) return;
+        try { await sp.GetRunHost().StopProcessesAsync(run.Id, waiting.Processes); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not stop the processes run {RunId} was waiting for", run.Id); }
+    }
+
+    public Task<bool> WakeFromChildWaitAsync(Guid runId, string note)
+        => ResumeFromHaltCoreAsync(runId, note, automatic: true, childWaitOnly: true, onAccepted: null);
+
     public async Task ResumeWaitingForChildrenAsync(Guid runId, string? note, string user)
     {
+        Guid? nodeId;
         using (var scope = _sp.CreateScope())
-        {
-            var run = await RequireChildWaitAsync(scope.ServiceProvider.GetRequiredService<ILoopRunStore>(), runId);
-            await LogChildWaitActionAsync(scope.ServiceProvider, run, user, "Resume", "the processes keep running", note, recordNote: false);
-        }
-        await ResumeFromHaltAsync(runId, note);
+            nodeId = (await RequireChildWaitAsync(scope.ServiceProvider.GetRequiredService<ILoopRunStore>(), runId)).CurrentNodeId;
+        var resumed = await ResumeFromHaltCoreAsync(runId, note, automatic: false, childWaitOnly: false,
+            onAccepted: sp => LogChildWaitActionAsync(sp, runId, nodeId, user, "Resume", "the processes keep running", note, recordNote: false));
+        if (!resumed)
+            throw new InvalidOperationException(NotWaitingForChildren);
     }
 
     public async Task RestartWaitingForChildrenAsync(Guid runId, string? note, string user)
     {
         Guid attemptId;
+        Guid? nodeId;
+        int stopped;
         using (var scope = _sp.CreateScope())
         {
-            var sp = scope.ServiceProvider;
-            var store = sp.GetRequiredService<ILoopRunStore>();
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
             var run = await RequireChildWaitAsync(store, runId);
             var attempt = await WaitingAttemptAsync(store, run)
                 ?? (await store.GetRunNodesAsync(runId)).LastOrDefault(rn => rn.LoopNodeId == run.CurrentNodeId)
                 ?? throw new InvalidOperationException("The node that was waiting was not found");
             attemptId = attempt.Id;
-            var processes = ChildWaitState.TryParse(run.ChildWaitJson)!.Processes;
-            await LogChildWaitActionAsync(sp, run, user, "Restart", $"stops {processes.Count} process(es)", note, recordNote: true);
+            nodeId = run.CurrentNodeId;
+            stopped = ChildWaitState.TryParse(run.ChildWaitJson)!.Processes.Count;
         }
-        await RetryCoreAsync(runId, attemptId, resumeSession: false, note);
+        await RetryCoreAsync(runId, attemptId, resumeSession: false, note,
+            onAccepted: sp => LogChildWaitActionAsync(sp, runId, nodeId, user, "Restart", $"stops {stopped} process(es)", note, recordNote: true));
     }
 
-    private async Task LogChildWaitActionAsync(IServiceProvider sp, LoopRun run, string user, string action, string effect, string? note, bool recordNote)
+    private async Task LogChildWaitActionAsync(IServiceProvider sp, Guid runId, Guid? nodeId, string user, string action, string effect, string? note, bool recordNote)
     {
         if (sp.GetService<IEventLogService>() is not { } eventLog) return;
         var gaveInput = !string.IsNullOrWhiteSpace(note);
-        await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.ChildWaitActionTaken,
-            $"{user} chose {action} for the node waiting for ILD ({effect}); input given: {(gaveInput ? "yes" : "no")}", run.CurrentNodeId));
+        await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.ChildWaitActionTaken,
+            $"{user} chose {action} for the node waiting for ILD ({effect}); input given: {(gaveInput ? "yes" : "no")}", nodeId));
         if (gaveInput && recordNote)
-            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.HumanFeedbackReceived, note!));
+            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, note!));
     }
 
     public async Task ReleaseChildWaitToHumanAsync(Guid runId, string reason)
@@ -129,7 +146,9 @@ public sealed partial class LoopEngine
         if (run is null || run.Status != LoopRunStatus.WaitingHuman || !run.IsHalted || run.HaltReason != HaltReason.WaitingForChildren) return;
         var nodes = await sp.GetRequiredService<ILoopTemplateStore>().GetNodesForVersionAsync(run.LoopTemplateVersionId);
         var node = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId);
+        var attemptId = (await WaitingAttemptAsync(store, run))?.Id;
+        await SettleWaitingAttemptAsync(store, run, LoopRunNodeStatus.Interrupted, reason);
         await ParkForHumanAsync(run, node?.Id, node?.Label, HaltReason.Human, HumanFeedbackReasons.RunHalted, reason,
-            store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), (await WaitingAttemptAsync(store, run))?.Id);
+            store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), attemptId);
     }
 }

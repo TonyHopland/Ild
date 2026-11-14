@@ -176,7 +176,7 @@ public class LoopEngineWaitingChildrenTests
         KeepSession(h);
         await h.RunAsync();
 
-        await h.Engine.ResumeFromHaltAsync(h.RunId, "ILD woke you: the tests finished.", automatic: true);
+        await h.Engine.WakeFromChildWaitAsync(h.RunId, "ILD woke you: the tests finished.");
         await h.WaitUntilIdleAsync();
 
         Assert.Equal(("sess-1", "ILD woke you: the tests finished."), agent.Seen[1]);
@@ -197,7 +197,7 @@ public class LoopEngineWaitingChildrenTests
         using var _h = h;
         await h.RunAsync();
 
-        await h.Engine.ResumeFromHaltAsync(h.RunId, "ILD woke you.", automatic: true);
+        await h.Engine.WakeFromChildWaitAsync(h.RunId, "ILD woke you.");
         await h.WaitUntilIdleAsync();
 
         Assert.DoesNotContain(h.ReloadEvents(), e => e.EventType == EventType.HumanFeedbackReceived);
@@ -207,7 +207,7 @@ public class LoopEngineWaitingChildrenTests
 
     private static async Task WakeAsync(LoopEngineHarness h)
     {
-        await h.Engine.ResumeFromHaltAsync(h.RunId, "woke", automatic: true);
+        await h.Engine.WakeFromChildWaitAsync(h.RunId, "woke");
         await h.WaitUntilIdleAsync();
     }
 
@@ -450,5 +450,90 @@ public class LoopEngineWaitingChildrenTests
             "ILD could not wake the agent", It.IsAny<string?>(), It.IsAny<Guid?>(), HumanFeedbackReasons.RunHalted), Times.Once);
 
         await h.Engine.ResumeWaitingForChildrenAsync(h.RunId, null, "alice");
+    }
+
+    [Fact]
+    public async Task A_run_released_to_a_person_no_longer_shows_its_node_as_waiting_for_ild()
+    {
+        var (h, _, _) = Harness(EndsWithTestsRunning());
+        using var _h = h;
+        await h.RunAsync();
+
+        await h.Engine.ReleaseChildWaitToHumanAsync(h.RunId, "ILD could not wake the agent");
+
+        Assert.Equal(LoopRunNodeStatus.Interrupted, Assert.Single(h.ReloadRunNodes()).Status);
+    }
+
+    [Fact]
+    public async Task At_the_cap_the_node_no_longer_shows_as_waiting_for_ild()
+    {
+        var (h, _, _) = Harness(EndsWithTestsRunning(), EndsWithTestsRunning());
+        using var _h = h;
+        await h.Db.Settings.UpsertAsync(AppSettingKeys.ChildrenMaxCycles, "1", TestContext.Current.CancellationToken);
+        await h.RunAsync();
+        await WakeAsync(h);
+
+        Assert.Equal(HaltReason.Human, h.ReloadRun().HaltReason);
+        Assert.DoesNotContain(h.ReloadRunNodes(), n => n.Status == LoopRunNodeStatus.WaitingIld);
+    }
+
+    // -- ILD's wake-up only ever ends its own wait ------------------------------------------------
+
+    private static void Stamp(LoopEngineHarness h, HaltReason reason)
+    {
+        h.Db.Context.LoopRuns.Where(r => r.Id == h.RunId).ExecuteUpdate(s => s.SetProperty(r => r.HaltReason, reason));
+        foreach (var entry in h.Db.Context.ChangeTracker.Entries<LoopRun>().ToList()) entry.Reload();
+    }
+
+    [Theory]
+    [InlineData(HaltReason.Human)]
+    [InlineData(HaltReason.Throttled)]
+    [InlineData(HaltReason.MaxAiTraversals)]
+    public async Task The_wake_up_leaves_a_run_that_is_parked_for_another_reason_by_now(HaltReason reason)
+    {
+        var (h, _, agent) = Harness(EndsWithTestsRunning(), Finishes());
+        using var _h = h;
+        await h.RunAsync();
+        Stamp(h, reason);
+
+        Assert.False(await h.Engine.WakeFromChildWaitAsync(h.RunId, "woke"));
+        await h.WaitUntilIdleAsync();
+
+        var run = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Equal(reason, run.HaltReason);
+        Assert.Single(agent.Seen);
+    }
+
+    [Fact]
+    public async Task The_wake_up_leaves_a_paused_run_waiting()
+    {
+        var (h, _, agent) = Harness(EndsWithTestsRunning(), Finishes());
+        using var _h = h;
+        await h.RunAsync();
+        await h.Engine.PauseRunAsync(h.RunId);
+
+        Assert.False(await h.Engine.WakeFromChildWaitAsync(h.RunId, "woke"));
+        await h.WaitUntilIdleAsync();
+
+        var run = h.ReloadRun();
+        Assert.Equal(HaltReason.WaitingForChildren, run.HaltReason);
+        Assert.NotNull(ChildWaitState.TryParse(run.ChildWaitJson));
+        Assert.Single(agent.Seen);
+    }
+
+    // -- A run that ends while waiting takes its children with it --------------------------------
+
+    [Fact]
+    public async Task Cancelling_a_waiting_run_stops_the_children()
+    {
+        var (h, host, _) = Harness(EndsWithTestsRunning());
+        using var _h = h;
+        await h.RunAsync();
+
+        await h.Engine.CancelRunAsync(h.RunId);
+
+        Assert.Equal([TestRun], host.StoppedProcesses);
+        Assert.Equal(LoopRunStatus.Cancelled, h.ReloadRun().Status);
     }
 }

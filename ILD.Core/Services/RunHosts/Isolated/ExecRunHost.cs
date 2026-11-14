@@ -929,7 +929,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qxF -- "$marker" || continue
             grep -q '^State:[[:space:]]*Z' "$d/status" 2>/dev/null && continue
             cmd=$(tr '\0\n\t' '   ' < "$d/cmdline" 2>/dev/null)
-            [ -n "${cmd// /}" ] || continue
+            cmd=${cmd%"${cmd##*[! ]}"}
+            [ -n "$cmd" ] || continue
             skip=
             for part in "$@"; do case "$cmd" in *"$part"*) skip=1; break ;; esac; done
             [ -z "$skip" ] || continue
@@ -938,16 +939,18 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         done
         """;
 
-    /// <summary>Prints the pid of each (pid, command line) pair of its arguments that is still that process, running.</summary>
+    /// <summary>Prints the pid of each (pid, command line) pair of its arguments that is still that process, running. Command lines are compared without their trailing blanks, as <see cref="ListChildrenScript"/> prints them.</summary>
     internal const string StillRunningScript = """
         while [ $# -ge 2 ]; do
             pid=$1; want=$2; shift 2
             case "$pid" in ''|*[!0-9]*) continue ;; esac
             have=$(tr '\0\n\t' '   ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+            have=${have%"${have##*[! ]}"}
             [ "$have" = "$want" ] || continue
             grep -q '^State:[[:space:]]*Z' "/proc/$pid/status" 2>/dev/null && continue
             echo "$pid"
         done
+        exit 0
         """;
 
     /// <summary>Ends each (pid, command line) pair of its arguments that is still that process, with what it started: TERM, a wait, then KILL.</summary>
@@ -958,6 +961,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             pid=$1; want=$2; shift 2
             case "$pid" in ''|*[!0-9]*) continue ;; esac
             have=$(tr '\0\n\t' '   ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+            have=${have%"${have##*[! ]}"}
             [ "$have" = "$want" ] || continue
             pids="$pids $(descendants "$pid") $pid"
         done
@@ -983,7 +987,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         {
             var parts = line.Split('\t', 3);
             if (parts.Length == 3 && int.TryParse(parts[0], out var pid))
-                found.Add(new RunChildProcess(pid, parts[2].TrimEnd(), parts[1].Length > 0 ? parts[1] : null));
+                found.Add(new RunChildProcess(pid, parts[2], parts[1].Length > 0 ? parts[1] : null));
         }
         return found;
     }
@@ -992,7 +996,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         if (processes.Count == 0 || await HeldOwnerAsync(ownerId, ct) is not { } owner) return [];
         var result = await RunScriptAsync(owner, StillRunningScript, PidArguments(processes), ct);
-        if (!result.Success) return [];
+        if (!result.Success)
+            throw new InvalidOperationException($"could not check the processes of run {ownerId:N} in its {Noun}: {result.StdErr.Trim()}");
         var alive = result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Trim()).ToHashSet(StringComparer.Ordinal);
         return processes.Where(p => alive.Contains(p.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToList();
     }
@@ -1011,7 +1016,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     private static string[] PidArguments(IReadOnlyList<RunChildProcess> processes)
-        => processes.SelectMany(p => new[] { p.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture), p.CommandLine }).ToArray();
+        => processes.SelectMany(p => new[] { p.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture), p.CommandLine.TrimEnd() }).ToArray();
+
     /// <summary>The directory, in the run's process directory, of the commands with no owner: one per run or chat they run in, since every chat shares a container.</summary>
     internal static string UnownedGroup(Guid? runIn) => runIn is { } holder ? $"unowned-{holder:N}" : "unowned";
 

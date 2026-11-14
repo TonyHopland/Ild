@@ -71,7 +71,7 @@ public interface IRunHost
     Task<IReadOnlyList<RunChildProcess>> ListAgentChildrenAsync(Guid ownerId, string launchId, IReadOnlyList<string> ignore, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<RunChildProcess>>([]);
 
-    /// <summary>Which of <paramref name="processes"/> are still running, the same process and not one that took a pid since.</summary>
+    /// <summary>Which of <paramref name="processes"/> are still running, the same process and not one that took a pid since. Throws when the host cannot tell: none means they have ended.</summary>
     Task<IReadOnlyList<RunChildProcess>> StillRunningAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<RunChildProcess>>([]);
 

@@ -147,8 +147,12 @@ internal sealed class FakeRunHost : IRunHost
         }
     }
 
+    /// <summary>Thrown by <c>StillRunningAsync</c> when set: a host that cannot tell.</summary>
+    public Exception? StillRunningFailure { get; set; }
+
     public Task<IReadOnlyList<RunChildProcess>> StillRunningAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
     {
+        if (StillRunningFailure is not null) throw StillRunningFailure;
         lock (_gate) return Task.FromResult<IReadOnlyList<RunChildProcess>>(processes.Where(p => RunningPids.Contains(p.Pid)).ToList());
     }
 

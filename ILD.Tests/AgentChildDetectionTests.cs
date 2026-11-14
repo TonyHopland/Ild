@@ -143,7 +143,7 @@ public class AgentChildDetectionTests
 
             Assert.Equal(0, exit);
             var line = Assert.Single(output.Split('\n', StringSplitOptions.RemoveEmptyEntries));
-            Assert.Equal($"{child.Id}\t{outFile}\tsleep 60 ", line);
+            Assert.Equal($"{child.Id}\t{outFile}\tsleep 60", line);
         }
         finally
         {

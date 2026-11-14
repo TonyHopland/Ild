@@ -65,7 +65,7 @@ public class ChildWaitServiceTests
     private static string? NoteOf(Mock<ILoopEngine> engine)
     {
         string? note = null;
-        foreach (var call in engine.Invocations.Where(i => i.Method.Name == nameof(ILoopEngine.ResumeFromHaltAsync)))
+        foreach (var call in engine.Invocations.Where(i => i.Method.Name == nameof(ILoopEngine.WakeFromChildWaitAsync)))
             note = (string?)call.Arguments[1];
         return note;
     }
@@ -79,7 +79,7 @@ public class ChildWaitServiceTests
 
         await s.SweepAsync();
 
-        s.Engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
         Assert.Empty(s.Host.StoppedProcesses);
         Assert.Contains(Tests.Pid, s.Host.RunningPids);
     }
@@ -93,7 +93,7 @@ public class ChildWaitServiceTests
 
         await s.SweepAsync();
 
-        s.Engine.Verify(e => e.ResumeFromHaltAsync(run.Id, It.IsAny<string?>(), true), Times.Once);
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(run.Id, It.IsAny<string>()), Times.Once);
         var note = NoteOf(s.Engine)!;
         Assert.Contains("have finished", note);
         Assert.Contains("pid 4321", note);
@@ -113,7 +113,7 @@ public class ChildWaitServiceTests
         await s.SweepAsync();
 
         Assert.Equal([Tests], s.Host.StoppedProcesses);
-        s.Engine.Verify(e => e.ResumeFromHaltAsync(run.Id, It.IsAny<string?>(), true), Times.Once);
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(run.Id, It.IsAny<string>()), Times.Once);
         var note = NoteOf(s.Engine)!;
         Assert.Contains("had not finished after 61 minute(s), so ILD stopped them", note);
         // The signal is passed on rather than the run parking in silence.
@@ -132,12 +132,12 @@ public class ChildWaitServiceTests
         s.Seed(startedAt: DateTime.UtcNow.AddMinutes(-20));
 
         await s.SweepAsync();
-        s.Engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
 
         await s.Db.Settings.UpsertAsync(AppSettingKeys.ChildrenWaitMinutes, "15", TestContext.Current.CancellationToken);
         await s.SweepAsync();
 
-        s.Engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>(), true), Times.Once);
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Once);
         Assert.Equal([Tests], s.Host.StoppedProcesses);
     }
 
@@ -146,7 +146,7 @@ public class ChildWaitServiceTests
     {
         using var s = new Setup();
         var run = s.Seed(startedAt: DateTime.UtcNow.AddMinutes(-12));
-        s.Engine.Setup(e => e.ResumeFromHaltAsync(run.Id, It.IsAny<string?>(), It.IsAny<bool>()))
+        s.Engine.Setup(e => e.WakeFromChildWaitAsync(run.Id, It.IsAny<string>()))
             .ThrowsAsync(new InvalidOperationException("session is gone"));
 
         await s.SweepAsync();
@@ -166,7 +166,7 @@ public class ChildWaitServiceTests
 
         await s.SweepAsync();
 
-        s.Engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
     }
 
     [Fact]
@@ -175,12 +175,53 @@ public class ChildWaitServiceTests
         using var s = new Setup();
         var first = s.Seed(startedAt: DateTime.UtcNow.AddMinutes(-12));
         var second = s.Seed(startedAt: DateTime.UtcNow.AddMinutes(-12));
-        s.Engine.Setup(e => e.ResumeFromHaltAsync(first.Id, It.IsAny<string?>(), It.IsAny<bool>())).ThrowsAsync(new InvalidOperationException("x"));
+        s.Engine.Setup(e => e.WakeFromChildWaitAsync(first.Id, It.IsAny<string>())).ThrowsAsync(new InvalidOperationException("x"));
         s.Engine.Setup(e => e.ReleaseChildWaitToHumanAsync(first.Id, It.IsAny<string>())).ThrowsAsync(new InvalidOperationException("y"));
 
         await s.SweepAsync();
 
-        s.Engine.Verify(e => e.ResumeFromHaltAsync(second.Id, It.IsAny<string?>(), true), Times.Once);
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(second.Id, It.IsAny<string>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_host_that_cannot_tell_is_not_taken_for_processes_that_have_ended()
+    {
+        using var s = new Setup();
+        s.Host.LeaveRunning(Tests.Pid, Tests.CommandLine);
+        s.Host.StillRunningFailure = new InvalidOperationException("exec failed");
+        s.Seed(startedAt: DateTime.UtcNow.AddMinutes(-5));
+
+        await s.SweepAsync();
+
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
+        s.Engine.Verify(e => e.ReleaseChildWaitToHumanAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
+        Assert.Empty(s.Host.StoppedProcesses);
+    }
+
+    [Fact]
+    public async Task A_host_that_still_cannot_tell_at_the_timeout_leaves_the_run_for_a_person()
+    {
+        using var s = new Setup();
+        s.Host.StillRunningFailure = new InvalidOperationException("exec failed");
+        var run = s.Seed(startedAt: DateTime.UtcNow.AddMinutes(-61));
+
+        await s.SweepAsync();
+
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
+        s.Engine.Verify(e => e.ReleaseChildWaitToHumanAsync(run.Id, It.Is<string>(reason => reason.Contains("exec failed"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_paused_run_is_left_alone()
+    {
+        using var s = new Setup();
+        var run = s.Seed(startedAt: DateTime.UtcNow.AddMinutes(-120));
+        run.IsPaused = true;
+        s.Db.Context.SaveChanges();
+
+        await s.SweepAsync();
+
+        s.Engine.Verify(e => e.WakeFromChildWaitAsync(It.IsAny<Guid>(), It.IsAny<string>()), Times.Never);
     }
 
     // -- The message ------------------------------------------------------------------------------

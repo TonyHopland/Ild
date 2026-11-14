@@ -11,7 +11,7 @@ namespace ILD.Core.Services.Implementations;
 /// <summary>
 /// ILD's half of "Waiting for ILD": a node whose agent ended its turn with processes of its own still running is parked
 /// (<see cref="Data.Enums.HaltReason.WaitingForChildren"/>) with its session and worktree kept, and this service watches those processes. When
-/// they have all ended it wakes the agent with the same resume a person's Resume gives (<see cref="ILoopEngine.ResumeFromHaltAsync"/>), carrying how
+/// they have all ended it wakes the agent with the same resume a person's Resume gives (<see cref="ILoopEngine.WakeFromChildWaitAsync"/>), carrying how
 /// they ended and the tail of their output, so the agent can go on (report the test results). After <c>children.waitMinutes</c>
 /// it stops them and wakes the agent anyway, saying so; if waking fails the run stays parked for a person, who can still Restart or Resume the node.
 ///
@@ -68,13 +68,35 @@ public sealed class ChildWaitService : BackgroundService
         }
     }
 
+    private static readonly Func<LoopRun, bool> IsWaiting = LoopRun.WaitingForChildren.Compile();
+
+    /// <summary>Whether the run is still in the wait <paramref name="seen"/> was read in: a person may have acted on it since.</summary>
+    private static async Task<bool> StillWaitingAsync(IServiceProvider sp, LoopRun seen)
+        => await sp.GetRequiredService<ILoopRunStore>().GetByIdAsync(seen.Id) is { } now && IsWaiting(now) && now.ChildWaitJson == seen.ChildWaitJson;
+
     private async Task CheckAsync(IServiceProvider sp, LoopRun run, TimeSpan timeout, CancellationToken ct)
     {
         var state = ChildWaitState.TryParse(run.ChildWaitJson);
         var host = sp.GetRunHost();
         var waited = state is null ? timeout : DateTime.UtcNow - state.StartedAt;
-        var running = state is null ? [] : await host.StillRunningAsync(run.Id, state.Processes, ct);
+        IReadOnlyList<RunChildProcess> running;
+        try
+        {
+            running = state is null ? [] : await host.StillRunningAsync(run.Id, state.Processes, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (waited < timeout)
+            {
+                _log.LogWarning(ex, "Could not check the processes run {RunId} is waiting for; trying again on the next sweep", run.Id);
+                return;
+            }
+            _log.LogError(ex, "Could not check the processes run {RunId} is waiting for, and the wait is over; leaving it parked for a person", run.Id);
+            await _engine.ReleaseChildWaitToHumanAsync(run.Id, $"ILD could not check the processes the agent left running: {ex.Message}");
+            return;
+        }
         if (running.Count > 0 && waited < timeout) return;
+        if (!await StillWaitingAsync(sp, run)) return;
 
         var timedOut = running.Count > 0;
         if (timedOut)
@@ -94,7 +116,8 @@ public sealed class ChildWaitService : BackgroundService
         _log.LogInformation("Waking the agent of run {RunId}: its processes {How}", run.Id, timedOut ? "were stopped at the timeout" : "have finished");
         try
         {
-            await _engine.ResumeFromHaltAsync(run.Id, note, automatic: true);
+            if (!await _engine.WakeFromChildWaitAsync(run.Id, note))
+                _log.LogInformation("Run {RunId} was no longer waiting for ILD when its processes ended; left as it is", run.Id);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

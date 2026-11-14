@@ -108,6 +108,12 @@ public interface ILoopEngine
     Task RestartWaitingForChildrenAsync(Guid runId, string? note, string user);
 
     /// <summary>
+    /// ILD's own resume of a run whose children have ended, with <paramref name="note"/> telling the agent how. Only a run that is still
+    /// Waiting for ILD and not paused is resumed: one a person halted, resumed or restarted meanwhile is left as it is. Returns whether it was.
+    /// </summary>
+    Task<bool> WakeFromChildWaitAsync(Guid runId, string note);
+
+    /// <summary>
     /// Stops ILD's own wait for a run's children and parks it for a person with <paramref name="reason"/>, keeping what is needed to Restart or
     /// Resume the node: what <c>ChildWaitService</c> does when waking the agent fails. No-op unless the run is Waiting for ILD.
     /// </summary>

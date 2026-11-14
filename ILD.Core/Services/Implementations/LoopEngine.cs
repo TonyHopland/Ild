@@ -299,6 +299,7 @@ public sealed partial class LoopEngine : ILoopEngine
         run.CompletedAt ??= DateTime.UtcNow;
         run.HumanFeedbackReason = reason;
         await loopRunStore.UpdateRunAsync(run);
+        await StopWaitedChildrenAsync(scope.ServiceProvider, run);
         await StaleHumanInputProposalsAsync(scope.ServiceProvider, run, runNodeId: null);
         _progressBuffer.Clear(runId);
         if (scope.ServiceProvider.GetService<IEventLogService>() is { } eventLog)
@@ -471,16 +472,22 @@ public sealed partial class LoopEngine : ILoopEngine
         await _notifier.HaltedAsync(runId);
     }
 
-    public async Task ResumeFromHaltAsync(Guid runId, string? note, bool automatic = false)
+    public Task ResumeFromHaltAsync(Guid runId, string? note, bool automatic = false)
+        => ResumeFromHaltCoreAsync(runId, note, automatic, childWaitOnly: false, onAccepted: null);
+
+    /// <summary>Whether the run was resumed. With <paramref name="childWaitOnly"/> only a run still waiting for its children, and not paused, is.</summary>
+    /// <param name="onAccepted">Runs once the resume is certain to happen, before the node is launched again.</param>
+    private async Task<bool> ResumeFromHaltCoreAsync(Guid runId, string? note, bool automatic, bool childWaitOnly, Func<IServiceProvider, Task>? onAccepted)
     {
         using var scope = _sp.CreateScope();
         var sp = scope.ServiceProvider;
         var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var run = await loopRunStore.GetByIdAsync(runId);
-        if (run is null) return;
+        if (run is null) return false;
         // Only a halted, parked run can be steered/resumed here.
-        if (run.Status != LoopRunStatus.WaitingHuman || !run.IsHalted) return;
+        if (run.Status != LoopRunStatus.WaitingHuman || !run.IsHalted) return false;
+        if (childWaitOnly && (run.HaltReason != HaltReason.WaitingForChildren || run.IsPaused)) return false;
 
         var wokeFromChildren = run.HaltReason == HaltReason.WaitingForChildren;
         if (ChildWaitState.TryParse(run.ChildWaitJson) is not null)
@@ -524,10 +531,13 @@ public sealed partial class LoopEngine : ILoopEngine
         // note is ILD's, not a person's.
         if (!automatic && !string.IsNullOrWhiteSpace(note) && sp.GetService<IEventLogService>() is { } eventLog)
             await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, note));
+        if (onAccepted is not null)
+            await onAccepted(sp);
         await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
             reason: automatic ? "Run resumed automatically" : "Run resumed", currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
+        return true;
     }
 
     /// <summary>
@@ -713,9 +723,9 @@ public sealed partial class LoopEngine : ILoopEngine
         run.Status = LoopRunStatus.Running;
     }
 
-    public Task RetryFromNodeAsync(Guid runId, Guid runNodeId) => RetryCoreAsync(runId, runNodeId, resumeSession: false, note: null);
+    public Task RetryFromNodeAsync(Guid runId, Guid runNodeId) => RetryCoreAsync(runId, runNodeId, resumeSession: false, note: null, onAccepted: null);
 
-    public Task ResumeFromNodeAsync(Guid runId, Guid runNodeId) => RetryCoreAsync(runId, runNodeId, resumeSession: true, note: null);
+    public Task ResumeFromNodeAsync(Guid runId, Guid runNodeId) => RetryCoreAsync(runId, runNodeId, resumeSession: true, note: null, onAccepted: null);
 
     public async Task<string?> GetResumeUnavailableReasonAsync(Guid runId, Guid runNodeId)
     {
@@ -753,7 +763,8 @@ public sealed partial class LoopEngine : ILoopEngine
         return traits.SupportsSessionResume ? null : $"{traits.DisplayName} can't resume sessions";
     }
 
-    private async Task RetryCoreAsync(Guid runId, Guid runNodeId, bool resumeSession, string? note)
+    /// <param name="onAccepted">Runs once the retry is certain to happen, before the node is launched again.</param>
+    private async Task RetryCoreAsync(Guid runId, Guid runNodeId, bool resumeSession, string? note, Func<IServiceProvider, Task>? onAccepted)
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
@@ -790,13 +801,10 @@ public sealed partial class LoopEngine : ILoopEngine
             resume = (target.AiSessionId!, ResumeNote(target.Error));
         }
 
-        if (ChildWaitState.TryParse(run.ChildWaitJson) is { } waiting)
+        if (ChildWaitState.TryParse(run.ChildWaitJson) is not null)
         {
             if (!resumeSession)
-            {
-                try { await scope.ServiceProvider.GetRunHost().StopProcessesAsync(runId, waiting.Processes); }
-                catch (Exception ex) { _logger.LogWarning(ex, "Could not stop the processes run {RunId} was waiting for before restarting its node", runId); }
-            }
+                await StopWaitedChildrenAsync(scope.ServiceProvider, run);
             await SettleWaitingAttemptAsync(loopRunStore, run, LoopRunNodeStatus.Interrupted, resumeSession ? "Resumed by a person" : "Restarted by a person");
             run.ChildWaitJson = null;
         }
@@ -815,6 +823,8 @@ public sealed partial class LoopEngine : ILoopEngine
             await loopRunStore.UpdateRunAsync(run);
         }
         await StaleHumanInputProposalsAsync(scope.ServiceProvider, run, runNodeId: null);
+        if (onAccepted is not null)
+            await onAccepted(scope.ServiceProvider);
         try
         {
             await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
@@ -914,6 +924,7 @@ public sealed partial class LoopEngine : ILoopEngine
         var nodes = await templateStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
         var cleanup = nodes.FirstOrDefault(n => n.NodeType == NodeType.Cleanup);
         if (cleanup is null) return;
+        await StopWaitedChildrenAsync(sp, run);
         run.CurrentNodeId = cleanup.Id;
         await loopRunStore.UpdateRunAsync(run);
         await ExecuteSingleNodeAsync(run, cleanup, sp, CancellationToken.None);

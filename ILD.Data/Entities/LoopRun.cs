@@ -85,12 +85,14 @@ public class LoopRun : IHasUpdatedAt
 
     /// <summary>
     /// A run waiting for the processes its agent left running when its turn ended ("Waiting for ILD"): halted and stamped
-    /// <see cref="Enums.HaltReason.WaitingForChildren"/>. A person's halt, a throttle park and the cycle-cap park are other reasons.
+    /// <see cref="Enums.HaltReason.WaitingForChildren"/>. A person's halt, a throttle park and the cycle-cap park are other reasons,
+    /// and a paused run waits for its person.
     /// </summary>
     public static readonly Expression<Func<LoopRun, bool>> WaitingForChildren =
         r => r.Status == LoopRunStatus.WaitingHuman
             && r.IsHalted
-            && r.HaltReason == Enums.HaltReason.WaitingForChildren;
+            && r.HaltReason == Enums.HaltReason.WaitingForChildren
+            && !r.IsPaused;
 
     private static readonly Func<LoopRun, bool> ShutdownHaltedHere = ShutdownHalted.Compile();
     private static readonly Func<LoopRun, bool> RecoverableHere = Recoverable.Compile();
