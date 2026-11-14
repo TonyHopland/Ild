@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-14
+
 ### Added
 
 - **When an agent ends its turn with a process still running, the node shows "Waiting for ILD" and ILD wakes the agent when it finishes.**
@@ -14,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ask a chat about a running work item's code.** A chat can list the changed files, read the diff including uncommitted changes, read a file, search and see the commits, read-only.
 - **A slow first preview start is no longer reported as a failure.** A preview service now has 300 seconds to become healthy by default, and `healthTimeoutSeconds` sets it per service.
 - **Preview services start one at a time and the work item dot follows them live.** Starting a service starts the ones it needs first, and the dot is green only while every service is up.
+
+### Fixed
+
+- **A provider with a base URL and no API key now reaches its model.**
 
 ## [0.24.0] - 2026-11-13
 
