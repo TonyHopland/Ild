@@ -111,6 +111,8 @@ export interface WorkItem {
   dependencyIds: string[];
   dependentIds: string[];
   isPreviewRunning?: boolean;
+  /** Overall preview state: running, partial, failed, starting or stopped. */
+  previewState?: string;
   /**
    * Badge-relevant PR status from the current run's heartbeat snapshot, surfaced
    * so the taskboard card can show the PR's CI/review/merge tags while the item
@@ -306,6 +308,8 @@ export interface WorktreePreviewService {
   exitCode: number | null;
   /** Why the service failed to start, when its status is failed. */
   error?: string | null;
+  /** Names of the other services whose port aliases this one references. */
+  dependsOn?: string[];
 }
 
 /** Tail of a preview service's captured stdout/stderr log. */

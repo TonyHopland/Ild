@@ -13,6 +13,12 @@ public sealed class WorktreePreviewStartRequest
     /// Ignored when starting a single service.
     /// </summary>
     public bool Wait { get; set; } = true;
+
+    /// <summary>
+    /// When starting a single service from the UI: launch the services it references by
+    /// port alias first, instead of refusing. Ignored for a full start and by the agent API.
+    /// </summary>
+    public bool StartDependencies { get; set; }
 }
 
 public sealed class WorktreePreviewResponse
@@ -96,6 +102,9 @@ public sealed class WorktreePreviewServiceResponse
     public int? ProcessId { get; set; }
     public int? ExitCode { get; set; }
     public string? Error { get; set; }
+
+    /// <summary>Names of the other services whose port aliases this one references; they must be running for it to start without starting them first.</summary>
+    public IReadOnlyList<string> DependsOn { get; set; } = [];
 
     public WorktreePreviewServiceResponse Clone() => (WorktreePreviewServiceResponse)MemberwiseClone();
 }

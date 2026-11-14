@@ -251,7 +251,7 @@ public class WorkItemManager : IWorkItemManager
     {
         await RecordUnreportedPullRequestsAsync(opts, remote, runs);
         var currentRun = CurrentRun(runs);
-        return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty), statusReason);
+        return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty), _previewService.PreviewState(currentRun?.WorktreePath ?? string.Empty), statusReason);
     }
 
     public async Task<IReadOnlyList<WorkItemView>> ListAsync(
@@ -501,6 +501,7 @@ public class WorkItemManager : IWorkItemManager
         LoopRun? run,
         IReadOnlyList<LoopRun> runs,
         bool isPreviewRunning,
+        string previewState,
         WorkItemStatusReason? statusReason)
     {
         var timingRun = LatestRun(runs);
@@ -538,6 +539,7 @@ public class WorkItemManager : IWorkItemManager
             LatestLoopRunId = timingRun?.Id,
             CurrentNodeLabel = ResolveCurrentNodeLabel(run),
             IsPreviewRunning = isPreviewRunning,
+            PreviewState = previewState,
             PrStatus = ResolvePrStatus(run?.PrSnapshot),
             PullRequests = BuildPrHistory(remote, runs),
             Attachments = remote.Attachments,
@@ -1161,6 +1163,7 @@ public class WorkItemManager : IWorkItemManager
             var runs = runsByWorkItem.GetValueOrDefault(remote.Id) ?? [];
             var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running) ?? LatestRun(runs);
             return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
+                _previewService.PreviewState(currentRun?.WorktreePath ?? string.Empty),
                 statusReasons.GetValueOrDefault(remote.Id));
         }).ToList();
     }

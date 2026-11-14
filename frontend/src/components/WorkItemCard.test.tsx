@@ -35,6 +35,26 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
 }
 
 describe("WorkItemCard", () => {
+  test.each([
+    ["running", "QA preview is running", "green"],
+    ["starting", "QA preview is starting", "amber"],
+    ["partial", "QA preview is partially running", "amber"],
+    ["failed", "QA preview has a failed service", "red"],
+  ])("a %s preview shows a %s dot", (previewState, label, tone) => {
+    render(<WorkItemCard workItem={makeItem({ previewState })} />);
+
+    const dot = screen.getByRole("img", { name: label });
+    expect(dot.className).toContain(`qa-active-dot--${tone}`);
+  });
+
+  test("a stopped preview, or one reported by an older server, shows no dot", () => {
+    const { rerender } = render(<WorkItemCard workItem={makeItem({ previewState: "stopped" })} />);
+    expect(screen.queryByRole("img")).toBeNull();
+
+    rerender(<WorkItemCard workItem={makeItem({ isPreviewRunning: true })} />);
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+
   test("a running card shows Preparing container instead of the step while its container is made", () => {
     render(
       <WorkItemCard workItem={makeItem({ currentNodeLabel: "Start", preparingContainer: true })} />,

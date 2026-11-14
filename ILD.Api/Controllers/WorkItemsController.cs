@@ -456,7 +456,7 @@ public class WorkItemsController : ControllerBase
             var response = await _worktreePreviewService.StartServiceAsync(
                 workItem!.WorktreePath!,
                 service,
-                await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
+                (await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds)) with { StartDependencies = request?.StartDependencies == true });
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

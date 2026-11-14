@@ -571,22 +571,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             // Past here this call really does launch the service, which is what makes
             // the guard its business: a reference to a service that is not up cannot be
             // honoured, and launching anyway is the failure it exists to prevent. It
-            // runs before anything is created, so a refusal leaves nothing behind.
-            EnsureCrossReferencedServicesAreRunning(service, profileName, profile, runtime);
-
-            if (runtime != null)
+            // runs before anything is created, so a refusal leaves nothing behind. With
+            // StartDependencies the caller asked for the missing owners to be launched
+            // first instead of refused.
+            IReadOnlyList<PreviewServiceConfig> launchOrder;
+            if (options.StartDependencies)
             {
-                if (existing != null)
-                {
-                    // An exited process lingers in the runtime so its log/exit code
-                    // stays visible; restarting the service replaces it cleanly.
-                    await StopProcessAsync(existing, cancellationToken);
-                    runtime.RemoveProcess(existing);
-                }
-
-                EnsureServicePortAllocated(service, runtime, options.PortOverrides);
+                launchOrder = DependenciesToStart(service, profileName, profile, runtime);
             }
             else
+            {
+                EnsureCrossReferencedServicesAreRunning(service, profileName, profile, runtime);
+                launchOrder = [service];
+            }
+
+            if (runtime == null)
             {
                 lease = await ClaimPreviewDataAsync(options.Volumes, normalized, holdsGate: true, cancellationToken);
                 runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, mode, cancellationToken);
@@ -594,22 +593,36 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 lease = null;
             }
 
-            try
+            foreach (var toStart in launchOrder)
             {
-                runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, mode, cancellationToken));
-            }
-            catch
-            {
-                // Nothing of this preview runs, and its state reads as stopped, so no stop
-                // control would ever be offered for it: left registered, it would hold the
-                // repository's preview data until a restart.
-                if (runtime.Processes.Count == 0 && _runtimes.TryRemove(normalized, out _))
-                    await RetireRuntimeAsync(runtime, CancellationToken.None);
-                throw;
-            }
+                var lingering = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, toStart.Name, StringComparison.OrdinalIgnoreCase));
+                if (lingering != null)
+                {
+                    // An exited process lingers in the runtime so its log/exit code
+                    // stays visible; restarting the service replaces it cleanly.
+                    await StopProcessAsync(lingering, cancellationToken);
+                    runtime.RemoveProcess(lingering);
+                }
 
-            await PublishAsync(options.WorkItemId);
-            await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), runtime.WorktreePath, cancellationToken);
+                EnsureServicePortAllocated(toStart, runtime, options.PortOverrides);
+
+                try
+                {
+                    runtime.AddProcess(await LaunchServiceProcessAsync(toStart, runtime, mode, cancellationToken));
+                }
+                catch
+                {
+                    // Nothing of this preview runs, and its state reads as stopped, so no stop
+                    // control would ever be offered for it: left registered, it would hold the
+                    // repository's preview data until a restart.
+                    if (runtime.Processes.Count == 0 && _runtimes.TryRemove(normalized, out _))
+                        await RetireRuntimeAsync(runtime, CancellationToken.None);
+                    throw;
+                }
+
+                await PublishAsync(options.WorkItemId);
+                await WaitForHealthAsync(toStart.Name, ResolveHealthUrl(toStart, runtime), runtime.WorktreePath, cancellationToken);
+            }
 
             return BuildResponse(loaded, runtime);
         }
@@ -837,6 +850,26 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var normalized = Path.GetFullPath(worktreePath);
         return _runtimes.ContainsKey(normalized)
             || (_starts.TryGetValue(normalized, out var start) && start.InProgress);
+    }
+
+    public string PreviewState(string worktreePath)
+    {
+        if (string.IsNullOrWhiteSpace(worktreePath))
+            return "stopped";
+
+        var normalized = Path.GetFullPath(worktreePath);
+        if (_starts.TryGetValue(normalized, out var start) && start.InProgress)
+            return "starting";
+        if (!_runtimes.TryGetValue(normalized, out var runtime))
+            return "stopped";
+
+        var processes = runtime.Processes;
+        var running = processes.Count(p => p.IsRunning);
+        if (processes.Count > running)
+            return "failed";
+        if (running == 0)
+            return "stopped";
+        return running >= runtime.ServiceCount ? "running" : "partial";
     }
 
     public bool AnyPreviewRunning() => !_runtimes.IsEmpty || _starts.Values.Any(start => start.InProgress);
@@ -1269,7 +1302,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             new PackageFeedFileShare(options.PackageFeeds ?? [], FeedFilePrefix(normalized, "preview"), _logger),
             await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, options.Volumes, stateDirectory, _logger, cancellationToken),
             lease,
-            options.WorkItemId);
+            options.WorkItemId)
+        {
+            ServiceCount = profile.Services.Count,
+        };
 
         if (progress != null)
         {
@@ -1434,6 +1470,56 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    /// <summary>The names of the other services whose port aliases <paramref name="service"/> references.</summary>
+    private static IReadOnlyList<string> DependsOnOf(PreviewServiceConfig service, IReadOnlyList<PreviewServiceConfig> services)
+        => CrossReferencedPortAliases(service)
+            .Select(alias => services.FirstOrDefault(s => string.Equals(s.Port, alias, StringComparison.OrdinalIgnoreCase))?.Name)
+            .OfType<string>()
+            .Where(name => !string.Equals(name, service.Name, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    /// <summary>
+    /// The services a single start has to launch, dependencies first and
+    /// <paramref name="service"/> last: every port-alias owner it references (and,
+    /// in turn, theirs) that is not running. A reference nothing in the profile owns
+    /// is left to <see cref="EnsureCrossReferencedServicesAreRunning"/>, which names it.
+    /// </summary>
+    private static IReadOnlyList<PreviewServiceConfig> DependenciesToStart(
+        PreviewServiceConfig service, string profileName, PreviewProfileConfig profile, PreviewRuntime? runtime)
+    {
+        var order = new List<PreviewServiceConfig>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { service.Name };
+
+        void Visit(PreviewServiceConfig current)
+        {
+            foreach (var alias in CrossReferencedPortAliases(current))
+            {
+                var isLive = runtime?.Processes.Any(p =>
+                    string.Equals(p.Service.Port, alias, StringComparison.OrdinalIgnoreCase) && p.IsRunning) == true;
+                if (isLive)
+                    continue;
+
+                var owner = profile.Services.FirstOrDefault(s => string.Equals(s.Port, alias, StringComparison.OrdinalIgnoreCase));
+                if (owner == null)
+                {
+                    EnsureCrossReferencedServicesAreRunning(current, profileName, profile, runtime);
+                    continue;
+                }
+
+                if (!visited.Add(owner.Name))
+                    continue;
+
+                Visit(owner);
+                order.Add(owner);
+            }
+        }
+
+        Visit(service);
+        order.Add(service);
+        return order;
+    }
+
     /// <summary>
     /// The port aliases a service's templates name other than its own — its
     /// cross-service references, which are the ones that only mean anything while the
@@ -1542,6 +1628,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             _ = process.WaitForExitAsync().ContinueWith(_ => feeds.Dispose(), TaskScheduler.Default);
             if (process.HasExited)
                 feeds.Dispose();
+
+            // A service that dies on its own (a crash, the run pod ending) changes the
+            // preview's state with nothing else to announce it.
+            _ = process.WaitForExitAsync().ContinueWith(_ => PublishAsync(runtime.WorkItemId), TaskScheduler.Default);
 
             var stdoutTask = PumpStreamAsync(process.StandardOutput, writer, writeGate, cancellationToken);
             var stderrTask = PumpStreamAsync(process.StandardError, writer, writeGate, cancellationToken);
@@ -1673,6 +1763,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 ? BuildServiceResponse(process, runtime, singlePublicService)
                 : BuildStoppedServiceResponse(service, runtime);
         }).ToList();
+
+        foreach (var row in serviceResponses)
+            row.DependsOn = DependsOnOf(profileServices.First(s => s.Name == row.Name), profileServices);
 
         return new WorktreePreviewResponse
         {
@@ -1815,6 +1908,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 PortAlias = service.Port,
                 Status = "stopped",
                 SuggestedPort = service.SuggestedPort,
+                DependsOn = DependsOnOf(service, profile.Services),
             }).ToList()
             : new List<WorktreePreviewServiceResponse>();
 
@@ -2481,6 +2575,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         /// URLs on their loopback form.
         /// </summary>
         public string? WorkItemId { get; }
+
+        /// <summary>How many services the profile defines, so a preview with fewer running reads as partial.</summary>
+        public int ServiceCount { get; init; }
 
         public string WorktreePath { get; }
         public string ConfigPath { get; }

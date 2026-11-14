@@ -105,6 +105,39 @@ describe("useWorkItemDetail preview start progress", () => {
     expect(result.current.preview?.state).toBe("installing");
   });
 
+  test("a service exiting on its own reaches the panel through a push, with no reload", async () => {
+    const { result, getPreview, changed } = await mountWithStoppedPreview();
+    const exited: WorktreePreview = {
+      ...preview("failed"),
+      services: [
+        {
+          name: "api",
+          portAlias: "api",
+          status: "exited",
+          port: 5000,
+          suggestedPort: null,
+          healthUrl: null,
+          publicUrl: null,
+          localUrl: null,
+          agentUrl: null,
+          logFilePath: null,
+          processId: null,
+          exitCode: 134,
+        },
+      ],
+    };
+    getPreview.mockResolvedValueOnce(exited);
+
+    await act(async () => {
+      changed();
+    });
+    await flush();
+
+    expect(result.current.preview?.state).toBe("failed");
+    expect(result.current.preview?.services[0].status).toBe("exited");
+    expect(result.current.preview?.services[0].exitCode).toBe(134);
+  });
+
   test("a progress event during a start re-reads quietly and the busy flag stays the start's own", async () => {
     const { result, getPreview, changed } = await mountWithStoppedPreview();
     const start = deferred<WorktreePreview>();

@@ -44,6 +44,10 @@ namespace ILD.Core.Services.Interfaces;
 /// over everything else, <paramref name="CustomEnv"/> included. The file exists only
 /// while an install step or a service of the preview is running.
 /// </param>
+/// <param name="StartDependencies">
+/// For a single-service start: launch the services whose port aliases it references
+/// and that are not running first, instead of refusing. Off by default.
+/// </param>
 /// <param name="Volumes">
 /// Whose preview data the volumes are; see <see cref="PreviewVolumeScope"/>. Read only
 /// when this call creates the runtime: a running preview keeps the folders it was
@@ -57,7 +61,8 @@ public sealed record WorktreePreviewStartOptions(
     string? CustomEnv = null,
     string? WorkItemId = null,
     IReadOnlyList<PackageFeedCredential>? PackageFeeds = null,
-    PreviewVolumeScope? Volumes = null);
+    PreviewVolumeScope? Volumes = null,
+    bool StartDependencies = false);
 
 /// <summary>
 /// Whose preview data a preview's named volumes (<c>${VOLUME:name}</c>) are: the run's
@@ -291,6 +296,12 @@ public interface IWorktreePreviewService
     /// </summary>
     bool IsPreviewRunning(string worktreePath);
 
+    /// <summary>
+    /// The overall preview state for the worktree from the in-memory runtime alone:
+    /// running (every service up), partial, failed (a service exited), starting or stopped.
+    /// </summary>
+    string PreviewState(string worktreePath) => IsPreviewRunning(worktreePath) ? "running" : "stopped";
+
     /// <summary>True while a preview runtime is active for any worktree.</summary>
     bool AnyPreviewRunning();
 
@@ -344,6 +355,7 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public bool IsPreviewRunning(string worktreePath) => false;
+    public string PreviewState(string worktreePath) => "stopped";
     public bool AnyPreviewRunning() => false;
     public Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default)
         => Task.FromResult(PreviewTarget.Failed(

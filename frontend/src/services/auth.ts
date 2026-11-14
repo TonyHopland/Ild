@@ -447,7 +447,7 @@ export const workItemService = {
   startPreviewService: async (
     id: string,
     service: string,
-    request?: { portOverrides?: Record<string, number> },
+    request?: { portOverrides?: Record<string, number>; startDependencies?: boolean },
   ): Promise<WorktreePreview> => {
     return api.post<WorktreePreview>(
       `/workitems/${id}/preview/services/${encodeURIComponent(service)}/start`,

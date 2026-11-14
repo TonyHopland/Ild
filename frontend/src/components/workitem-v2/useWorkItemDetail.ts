@@ -420,16 +420,19 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // user typed into that row's input is passed through as an override so the new
   // runtime (if this is the first service started) honours it.
   const handleStartService = useCallback(
-    async (service: string, portOverrides?: Record<string, number>) => {
+    async (
+      service: string,
+      portOverrides?: Record<string, number>,
+      startDependencies?: boolean,
+    ) => {
       if (!workItem) return;
       const hasOverrides = portOverrides && Object.keys(portOverrides).length > 0;
       await writePreview(
         () =>
-          workItemService.startPreviewService(
-            workItem.id,
-            service,
-            hasOverrides ? { portOverrides } : {},
-          ),
+          workItemService.startPreviewService(workItem.id, service, {
+            ...(hasOverrides ? { portOverrides } : {}),
+            ...(startDependencies ? { startDependencies } : {}),
+          }),
         "Failed to start service.",
         setPreviewLoading,
       );
