@@ -457,3 +457,70 @@
 .backup-warning {
   margin: 0 0 0.9rem;
 }
+
+.external-access-value {
+  word-break: break-all;
+  margin-right: 0.5rem;
+}
+
+.external-access-instructions {
+  width: 100%;
+  min-width: 20rem;
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+
+.external-access-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 0.5rem;
+}
+
+.external-grant-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.external-grant {
+  padding: 0.6rem 0;
+  border-top: 1px solid #2d2d44;
+}
+
+.external-grant:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.external-grant-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.external-grant-buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.external-grant-detail {
+  padding: 0.5rem 0 0 0.5rem;
+}
+
+.external-grant-detail h4 {
+  margin: 0.5rem 0 0.25rem;
+}
+
+.external-grant-bad {
+  color: #ff6b6b;
+}
+
+.external-grant-active {
+  color: #4ade80;
+}
+
+.external-grant-expired,
+.external-grant-revoked {
+  color: #94a3b8;
+}

@@ -15,6 +15,10 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      "/mcp": {
+        target: apiProxyTarget,
+        changeOrigin: true,
+      },
       "/hubs": {
         target: apiProxyTarget,
         changeOrigin: true,
