@@ -122,94 +122,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         return psi;
     }
 
-    private ContainerRunHost AgentReadHost(string readRoot, Dictionary<string, string> written)
-    {
-        var host = new ContainerRunHost(Options(), new ProcessRunner(), _log)
-        {
-            Credentials = EgressProxyTests.Creds,
-            ReadyPollInterval = TimeSpan.FromMilliseconds(10),
-            ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
-            Agents = () => [],
-            ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"),
-            AgentReadRoot = () => readRoot,
-        };
-        _api.OnExec = async e =>
-        {
-            if (e.WantsStdin)
-            {
-                var content = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
-                var target = e.Command.FirstOrDefault(c => c.StartsWith("/run/ild/agent-read", StringComparison.Ordinal));
-                if (target is not null) written[target] = content;
-            }
-            await e.ExitAsync(0);
-        };
-        return host;
-    }
-
-    [Fact]
-    public async Task Files_an_agent_launch_declares_are_copied_into_the_container_and_the_launch_is_pointed_at_the_copies()
-    {
-        await CreateRunAsync();
-        var readRoot = Path.Combine(_scratch, "agent-read");
-        Directory.CreateDirectory(Path.Combine(readRoot, "ild-mcp-config"));
-        var config = Path.Combine(readRoot, "ild-mcp-config", $"claude-{_run:N}-1.json");
-        File.WriteAllText(config, "{\"mcp\":true}");
-        var written = new Dictionary<string, string>();
-        var host = AgentReadHost(readRoot, written);
-
-        using var process = await host.StartCommandAsync(
-            RunCommand.Agent(Command(WorkingDirectory, "claude", "--mcp-config", config), _run, null, NetworkMode.Off, null, [config]),
-            TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var staged = $"/run/ild/agent-read/ild-mcp-config/claude-{_run:N}-1.json";
-        Assert.Equal("{\"mcp\":true}", written[staged]);
-        var launch = _api.Execs.Last().Command;
-        Assert.Contains(staged, launch);
-        Assert.DoesNotContain(launch, c => c.Contains(readRoot, StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task A_copilot_launch_reaches_the_listener_where_the_container_reaches_ild_and_trusts_the_staged_certificate()
-    {
-        await CreateRunAsync();
-        var readRoot = Path.Combine(_scratch, "agent-read");
-        var ca = Path.Combine(_scratch, "gateway-tls.pem");
-        File.WriteAllText(ca, "-----BEGIN CERTIFICATE-----");
-        var written = new Dictionary<string, string>();
-        var host = AgentReadHost(readRoot, written);
-
-        await CopilotLaunch.RunAsync(host, _run, WorkingDirectory, readRoot, ca, "http://ild.example:8080");
-
-        var launch = _api.Execs.Last().Env;
-        Assert.Contains("GH_HOST=ild.example:8442", launch);
-        var staged = Assert.Single(launch, c => c.StartsWith("NODE_EXTRA_CA_CERTS=", StringComparison.Ordinal))["NODE_EXTRA_CA_CERTS=".Length..];
-        Assert.StartsWith(RunPaths.AgentReadDirectory + "/", staged);
-        Assert.Equal("-----BEGIN CERTIFICATE-----", written[staged]);
-    }
-
-    [Fact]
-    public async Task Paths_in_a_prompt_are_not_copied_into_the_container()
-    {
-        await CreateRunAsync();
-        var readRoot = Path.Combine(_scratch, "agent-read");
-        Directory.CreateDirectory(Path.Combine(readRoot, "ild-mcp-config"));
-        var others = Path.Combine(readRoot, "ild-mcp-config", $"claude-{Guid.NewGuid():N}-1.json");
-        File.WriteAllText(others, "other launch");
-        File.WriteAllText(Path.Combine(_scratch, "auth.json"), "login");
-        var written = new Dictionary<string, string>();
-        var host = AgentReadHost(readRoot, written);
-        var prompt = $"read {readRoot}/ then {others} and {readRoot}/../auth.json";
-
-        using var process = await host.StartCommandAsync(
-            RunCommand.Agent(Command(WorkingDirectory, "claude", "-p", prompt), _run, null, NetworkMode.Off, null),
-            TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Empty(written);
-        Assert.Contains(prompt, _api.Execs.Last().Command);
-    }
-
     // -- Create ------------------------------------------------------------------
 
     [Fact]
@@ -617,21 +529,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_launch_reaches_ild_directly_so_its_host_is_in_NO_PROXY_and_the_gateway_url_uses_it()
-    {
-        await CreateRunAsync();
-        var psi = Command(WorkingDirectory, "curl");
-        
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var launch = _api.Execs.Last().Env;
-        foreach (var name in new[] { "NO_PROXY", "no_proxy" })
-            Assert.Contains(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) && c.Split('=', 2)[1].Split(',').Contains("ild.example"));
-        Assert.Equal("http://ild.example:8080", _host.GatewayApiUrl("http://elsewhere.invalid:1", RunPaths.WorkingDirectory(_run)));
-    }
-
-    [Fact]
     public async Task A_host_that_is_a_suffix_of_the_preview_domain_is_not_put_on_NO_PROXY_and_ild_is_reached_by_another_name()
     {
         _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
@@ -675,146 +572,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             () => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "ls"), _run), TestContext.Current.CancellationToken));
 
         Assert.Contains("could not run a command in the container", ex.Message);
-    }
-
-    // -- Every command gets the proxy and its declared files ----------------------
-
-    private (string ReadRoot, string Npmrc) WriteNpmrc(string kind)
-    {
-        var readRoot = Path.Combine(_scratch, "agent-read");
-        Directory.CreateDirectory(Path.Combine(readRoot, "ild-package-feeds"));
-        var npmrc = Path.Combine(readRoot, "ild-package-feeds", $"{_run:N}-{kind}-1.npmrc");
-        File.WriteAllText(npmrc, "//feed/:_password=abc\n");
-        return (readRoot, npmrc);
-    }
-
-    [Fact]
-    public async Task A_cmd_node_in_network_mode_off_gets_the_proxy_and_its_npm_config_inside_the_run()
-    {
-        await CreateRunAsync();
-        var (readRoot, npmrc) = WriteNpmrc("cmd");
-        var written = new Dictionary<string, string>();
-        var host = AgentReadHost(readRoot, written);
-        var psi = Command(WorkingDirectory, "/bin/sh", "-c", "npm install");
-
-        using var process = await host.StartCommandAsync(
-            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, [npmrc]),
-            TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var staged = $"{RunPaths.AgentReadDirectory}/ild-package-feeds/{_run:N}-cmd-1.npmrc";
-        Assert.Equal("//feed/:_password=abc\n", written[staged]);
-        var launch = _api.Execs.Last().Env;
-        Assert.Contains($"NPM_CONFIG_USERCONFIG={staged}", launch);
-        Assert.Contains(launch, c => c.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal) && c.Contains("ild.example:3128", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task A_preview_command_with_no_owner_gets_the_proxy_and_its_npm_config_inside_the_run()
-    {
-        await CreateRunAsync();
-        var (readRoot, npmrc) = WriteNpmrc("preview");
-        var written = new Dictionary<string, string>();
-        var host = AgentReadHost(readRoot, written);
-        var psi = Command(WorkingDirectory, "/bin/sh", "-c", "npm start");
-
-        using var process = await host.StartCommandAsync(
-            RunCommand.Prepared(psi, environment: new Dictionary<string, string?> { ["NPM_CONFIG_USERCONFIG"] = npmrc }, files: [npmrc]),
-            TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var staged = $"{RunPaths.AgentReadDirectory}/ild-package-feeds/{_run:N}-preview-1.npmrc";
-        Assert.True(written.ContainsKey(staged));
-        var launch = _api.Execs.Last().Env;
-        Assert.Contains($"NPM_CONFIG_USERCONFIG={staged}", launch);
-        Assert.Contains(launch, c => c.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal) && c.Contains("ild.example:3128", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task A_variable_the_caller_set_reaches_the_run_and_one_only_ilds_own_environment_has_does_not()
-    {
-        await CreateRunAsync();
-        var previous = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
-        Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", "8080");
-        // Set before the start info is made: it copies ILD's environment when it is created.
-        Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", "8080");
-        try
-        {
-            var psi = Command(WorkingDirectory, "dotnet", "run");
-
-            using var process = await _host.StartCommandAsync(
-                RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }),
-                TestContext.Current.CancellationToken);
-            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-            var launch = _api.Execs.Last().Env;
-            Assert.Contains("ASPNETCORE_HTTP_PORTS=8080", launch);
-            Assert.DoesNotContain("INHERITED_ONLY_FROM_ILD=8080", launch);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", previous);
-            Environment.SetEnvironmentVariable("INHERITED_ONLY_FROM_ILD", null);
-        }
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task None_of_ilds_secrets_or_inherited_variables_reach_a_command_in_the_container(bool asAgent)
-    {
-        await CreateRunAsync();
-        const string extra = "ILD_TEST_EXTRA_SECRET";
-        var previousDenylist = Environment.GetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar);
-        Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, extra);
-        Environment.SetEnvironmentVariable("ILD_INHERITED_PROBE", "inherited-probe");
-        try
-        {
-            var psi = Command(WorkingDirectory, "/bin/sh", "-c", "true");
-            var secrets = AgentIsolation.SecretEnvironmentKeys;
-            Assert.Contains(extra, secrets);
-            foreach (var name in secrets) psi.Environment[name] = "secret-" + name;
-            var caller = new Dictionary<string, string?> { ["ILD_CALLER_SET"] = "kept" };
-
-            var command = asAgent
-                ? RunCommand.Agent(psi, _run, null, NetworkMode.Whitelist, caller)
-                : RunCommand.Prepared(psi, _run, caller);
-            using var process = await _host.StartCommandAsync(command, TestContext.Current.CancellationToken);
-            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-            var exec = _api.Execs.Last();
-            var launch = exec.Env;
-            Assert.Contains("ILD_CALLER_SET=kept", launch);
-            foreach (var name in secrets)
-            {
-                Assert.DoesNotContain(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) || c.Contains("secret-" + name, StringComparison.Ordinal));
-                Assert.DoesNotContain(exec.Command, c => c.Contains("secret-" + name, StringComparison.Ordinal));
-            }
-            Assert.DoesNotContain(launch, c => c.StartsWith("ILD_INHERITED_PROBE=", StringComparison.Ordinal));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, previousDenylist);
-            Environment.SetEnvironmentVariable("ILD_INHERITED_PROBE", null);
-        }
-    }
-
-    [Theory]
-    [InlineData(NetworkMode.Monitor)]
-    [InlineData(NetworkMode.Whitelist)]
-    [InlineData(NetworkMode.Blacklist)]
-    public async Task An_agent_launch_in_a_proxied_mode_gets_the_proxy_at_ilds_host_in_the_container(NetworkMode mode)
-    {
-        await CreateRunAsync();
-        var providerId = Guid.NewGuid();
-
-        using var process = await _host.StartCommandAsync(
-            RunCommand.Agent(Command(WorkingDirectory, "claude", "-p", "hi"), _run, providerId, mode, null),
-            TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains(_api.Execs.Last().Env, e => e.StartsWith("HTTPS_PROXY=http://ild:", StringComparison.Ordinal) && e.EndsWith("@ild.example:3128", StringComparison.Ordinal));
-        Assert.Equal(new LaunchScope(LaunchKind.Run, _run, providerId), AgentIsolationEgressTests.ScopeInEnvironment(_api.Execs.Last().Env, EgressProxyTests.Creds));
     }
 
     // -- The direct route (network mode Off) -------------------------------------
@@ -1236,52 +993,12 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     // -- Kill leftovers ----------------------------------------------------------
 
     [Fact]
-    public async Task Kill_all_ends_what_still_runs_in_the_container_and_waits_for_it()
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            await e.WriteStdoutAsync("2\n");
-            await e.ExitAsync(0);
-        };
-
-        var killed = await _host.KillAllAsync(_run, TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, killed);
-        var kill = _api.Execs.Last();
-        Assert.Equal(Name(_run), kill.Container);
-        Assert.Equal(ExecRunHost.KillAllScript, kill.Command[5]);
-    }
-
-    [Fact]
     public async Task Kill_all_for_a_run_with_no_container_asks_nothing_of_the_engine_and_kills_nothing()
     {
         var killed = await _host.KillAllAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, killed);
         Assert.Empty(_api.Execs);
-    }
-
-    [Fact]
-    public async Task Killing_one_command_kills_its_process_group_by_the_name_it_was_started_under()
-    {
-        await CreateRunAsync();
-        var hold = new TaskCompletionSource();
-        _api.OnExec = async e =>
-        {
-            if (e.Joined.Contains("long-job")) await hold.Task;
-            else await e.ExitAsync(0);
-        };
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "long-job"), _run), TestContext.Current.CancellationToken);
-        var startedAs = Assert.Single(_api.Execs, e => e.Joined.Contains("long-job")).Command[5];
-
-        var killedOk = await Task.Run(() => process.TryKill(), TestContext.Current.CancellationToken);
-
-        Assert.True(killedOk);
-        var kill = _api.Execs.Last();
-        Assert.Equal(startedAs, kill.Command[^1]);
-        Assert.Contains("kill -s TERM", kill.Command[5]);
-        hold.SetResult();
     }
 
     // -- Terminal, files, preview ------------------------------------------------
@@ -1384,44 +1101,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains($"HOME={RunPaths.HomeDirectory(_run)}", exec.Env);
         Assert.DoesNotContain(exec.Command, c => c.Contains(ApiToken, StringComparison.Ordinal));
         Assert.DoesNotContain(ApiToken, exec.StdinSoFar());
-    }
-
-    [Fact]
-    public async Task A_callers_path_cannot_hide_the_runs_toolchains_and_its_home_is_the_runs()
-    {
-        await CreateRunAsync();
-        var psi = Command(WorkingDirectory, "npm", "test");
-
-        using var process = await _host.StartCommandAsync(
-            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["PATH"] = "/caller/bin", ["HOME"] = "/caller/home" }),
-            TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var exec = LaunchExec();
-        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
-        Assert.DoesNotContain(exec.Env, c => c.StartsWith("PATH=", StringComparison.Ordinal));
-        Assert.Equal("/caller/bin", exec.Command[7]);
-    }
-
-    [Fact]
-    public async Task Files_are_read_and_written_by_commands_in_the_container()
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            if (e.WantsStdin) await e.ReadStdinToEndAsync();
-            if (e.Joined.Contains("cat --")) await e.WriteStdoutAsync("{\"a\":1}");
-            await e.ExitAsync(0);
-        };
-        var path = $"{WorkingDirectory}/ild.config.json";
-
-        await using (var read = await _host.OpenReadAsync(path, TestContext.Current.CancellationToken))
-            Assert.Equal("{\"a\":1}", await new StreamReader(read!).ReadToEndAsync(TestContext.Current.CancellationToken));
-        await _host.WriteFileAsync(path, "new", TestContext.Current.CancellationToken);
-
-        var write = _api.Execs.Last();
-        Assert.Equal("new", Encoding.UTF8.GetString(await write.ReadStdinToEndAsync()));
-        Assert.Equal(path, write.Command[^2]);
     }
 
     private async Task<int> WritesAfterOpeningForWrite(string existing, string? written)

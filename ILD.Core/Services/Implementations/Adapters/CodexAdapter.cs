@@ -141,104 +141,82 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     }
 
 
-    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    protected override string CliName => "codex";
+    protected override string StartHelp
+        => "install or update Codex from the AI Provider page (or make sure the codex CLI is on PATH), and make sure you are signed in (open the provider terminal and sign in with ChatGPT).";
+    protected override ILogger Logger => _logger;
+
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+        => new Turn(this, ctx, worktreePath, gateway);
+
+    private sealed class Turn(CodexAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway) : CliAgentTurn
     {
-        // See TypeTraits.SupportsNoTools: launching anyway would hand a caller
-        // that asked for no tools every tool the CLI has.
-        if (ctx.NoTools)
-            return NodeExecutionResult.Fail(
-                "[codex-error] the Codex CLI cannot run without its tools, so it cannot take a call that must have none.");
+        private IReadOnlyList<CodexMcpServer> _mcpServers = [];
+        private string? _codexHome;
+        private string? _sessionsDirectory;
+        private string? _resumeId;
+        private CodexOutput? _stdout;
 
-        IReadOnlyList<CodexMcpServer> mcpServers = [];
-        try
+        public override string BinaryPath { get; } = AiProviderConfig.Parse(ctx.Provider.Config)
+            .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Codex, adapter.EnvironmentVariables));
+
+        public override async Task PrepareAsync()
         {
-            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
-                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Codex, EnvironmentVariables));
+            _mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx), adapter._credentials);
 
-            var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
-                return NodeExecutionResult.Fail(
-                    "[codex-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
-
-            mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx), _credentials);
-
-            using var gateway = OpenGateway(ctx);
-            var codexHome = RunHost.RunHomeFor(worktreePath) is { } runHome
+            _codexHome = adapter.RunHost.RunHomeFor(worktreePath) is { } runHome
                 ? Path.Combine(runHome, ".codex")
-                : gateway is null ? UserCodexHome() : RunCodexHome(OwnerOf(ctx));
-            var sessionsDirectory = codexHome is null ? null : Path.Combine(codexHome, "sessions");
-            if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId))
+                : gateway is null ? adapter.UserCodexHome() : RunCodexHome(OwnerOf(ctx));
+            _sessionsDirectory = _codexHome is null ? null : Path.Combine(_codexHome, "sessions");
+            if (ctx.ManageSession && adapter.ScopeFactory is not null && IsSessionId(ctx.SessionId))
             {
                 // Fork: seed a copy of the source session under the new id, so the
                 // restore below writes the copy and `resume` continues on it. A
                 // fork that fails fails the node, as for every adapter; a source
                 // with no snapshot leaves nothing to resume, so a new thread starts.
-                if (!string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
+                try
                 {
-                    try
-                    {
-                        await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, ctx.SessionId!, ctx.Cancel);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        return NodeExecutionResult.Fail(
-                            $"[codex-error] could not fork the codex session {ctx.ForkFromSessionId} into {ctx.SessionId}: {ex.Message}");
-                    }
+                    await adapter.ForkManagedSessionAsync(ctx);
                 }
-                if (sessionsDirectory is not null)
-                    await TryRestoreRolloutAsync(ctx, sessionsDirectory, ctx.SessionId!);
-            }
-
-            var resumeId = await ResumableSessionAsync(ctx.SessionId, sessionsDirectory, ctx.Cancel);
-
-            IRunProcess? proc;
-            try
-            {
-                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-                var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
-                if (gateway is not null && codexHome is not null)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    await RunHost.CreateDirectoryAsync(codexHome, ctx.Cancel);
-                    await RunHost.WriteFileAsync(
-                        Path.Combine(codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, gateway.Token), ctx.Cancel);
-                    ApplyGateway(psi, environment, gateway, codexHome);
+                    throw Failed($"[codex-error] could not fork the codex session {ctx.ForkFromSessionId} into {ctx.SessionId}: {ex.Message}");
                 }
-                proc = await StartAgentProcessAsync(psi, ctx, environment, mcpServers.Select(server => server.ConfigFile));
+                if (_sessionsDirectory is not null)
+                    await adapter.TryRestoreRolloutAsync(ctx, _sessionsDirectory, ctx.SessionId!);
             }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException)
+
+            _resumeId = await adapter.ResumableSessionAsync(ctx.SessionId, _sessionsDirectory, ctx.Cancel);
+        }
+
+        public override async Task<AgentLaunch> LaunchAsync()
+        {
+            var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, _resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, _mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
+            if (gateway is not null && _codexHome is not null)
             {
-                return NodeExecutionResult.Fail(
-                    $"[codex-error] cannot start '{binaryPath}' — install or update Codex from the AI Provider page (or make sure the codex CLI is on PATH), and make sure you are signed in (open the provider terminal and sign in with ChatGPT). Details: {ex.Message}");
+                await adapter.RunHost.CreateDirectoryAsync(_codexHome, ctx.Cancel);
+                await adapter.RunHost.WriteFileAsync(
+                    Path.Combine(_codexHome, "auth.json"), BuildPlaceholderLogin(DateTimeOffset.UtcNow, gateway.Token), ctx.Cancel);
+                ApplyGateway(psi, environment, gateway, _codexHome);
             }
+            return new AgentLaunch(psi, environment, _mcpServers.Select(server => server.ConfigFile));
+        }
 
-            using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
-
-            // codex exec reads stdin to the end before it starts, as more prompt.
+        // codex exec reads stdin to the end before it starts, as more prompt.
+        public override Task SendInputAsync(IRunProcess process)
+        {
             process.StandardInput.Close();
+            return Task.CompletedTask;
+        }
 
-            var stdoutTask = ReadEventsAsync(process.StandardOutput, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel);
-            var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
+        public override async Task ReadStdoutAsync(StreamReader stdout)
+            => _stdout = await ReadEventsAsync(stdout, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel);
 
-            try
-            {
-                await process.WaitForExitAsync(ctx.Cancel);
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(process, "codex timed out"));
-            }
-
-            CodexOutput stdout;
-            string stderr;
-            try
-            {
-                stdout = await stdoutTask;
-                stderr = StripNullChars(await stderrTask);
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(process, "codex stream read timed out"));
-            }
+        public override async Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
+        {
+            var stdout = _stdout!;
+            stderr = StripNullChars(stderr);
 
             var response = StripNullChars(string.Join("\n", stdout.Messages));
             if (response.Length == 0 && !stdout.SawJsonEvents)
@@ -254,39 +232,37 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                     AiFailureClassifier.ClassifyProviderMessage(message));
             }
 
-            if (process.ExitCode != 0)
-                return NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response.Length > 0 ? response : null);
+            if (exitCode != 0)
+                return NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response.Length > 0 ? response : null);
 
             if (string.IsNullOrWhiteSpace(response))
                 return NodeExecutionResult.Fail(!string.IsNullOrWhiteSpace(stderr)
                     ? $"[codex] no assistant text response. stderr: {stderr.Trim()}"
                     : "[codex] no assistant text response from model");
 
-            var sessionId = stdout.ThreadId ?? resumeId;
-            var store = ctx.ManageSession && ScopeFactory is not null;
-            var resumed = resumeId is not null && (stdout.ThreadId is null || stdout.ThreadId == resumeId);
+            var sessionId = stdout.ThreadId ?? _resumeId;
+            var store = ctx.ManageSession && adapter.ScopeFactory is not null;
+            var resumed = _resumeId is not null && (stdout.ThreadId is null || stdout.ThreadId == _resumeId);
 
-            var rollout = (store || resumed) && IsSessionId(sessionId) && sessionsDirectory is not null
-                ? await TryFindRolloutAsync(sessionsDirectory, sessionId!, ctx.Cancel)
+            var rollout = (store || resumed) && IsSessionId(sessionId) && _sessionsDirectory is not null
+                ? await adapter.TryFindRolloutAsync(_sessionsDirectory, sessionId!, ctx.Cancel)
                 : null;
             if (store && rollout is not null)
-                await PersistSessionFileAsync(ctx, sessionId!, rollout, SessionSnapshotFormats.CodexJsonl, _logger);
+                await adapter.PersistSessionFileAsync(ctx, sessionId!, rollout, SessionSnapshotFormats.CodexJsonl, adapter._logger);
 
             // A new thread counts from zero; a resumed one counts on from its earlier total.
             var usage = !resumed ? AdapterUsageParser.ParseCodex(stdout.RawStdout, NoUsage)
-                : await TryReadTotalBeforeLastTurnAsync(rollout, sessionId!, ctx.Cancel) is { } totalBefore
+                : await adapter.TryReadTotalBeforeLastTurnAsync(rollout, sessionId!, ctx.Cancel) is { } totalBefore
                     ? AdapterUsageParser.ParseCodex(stdout.RawStdout, totalBefore)
                     : null;
 
             return NodeExecutionResult.Ok(response, ctx.Prompt, sessionId, ctx.IncomingSessionId, usage);
         }
-        catch (Exception ex)
+
+        public override ValueTask DisposeAsync()
         {
-            return NodeExecutionResult.Fail($"[codex-error] {ex.Message}");
-        }
-        finally
-        {
-            DeleteConfigFiles(mcpServers);
+            DeleteConfigFiles(_mcpServers);
+            return ValueTask.CompletedTask;
         }
     }
 

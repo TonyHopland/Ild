@@ -26,7 +26,7 @@ public static class AgentChildren
     public static readonly IReadOnlyList<string> LongLivedHelpers =
     [
         "ild-mcp-server", "ILD.McpServer", "/nodemode:", "VBCSCompiler", "build-server", "MSBuildTaskHost",
-        "GradleDaemon", "KotlinCompileDaemon", "nx/src/daemon/",
+        "GradleDaemon", "KotlinCompileDaemon", "nx/src/daemon/", "/egress/relay.sh",
     ];
 }
 

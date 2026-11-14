@@ -13,6 +13,7 @@ using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
@@ -21,8 +22,8 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// (claude-code, opencode, pi, codex). These adapters all persist/restore managed
 /// sessions through the same snapshot store and parse JSON event streams the
 /// same way; this base owns those identical pieces so they live in exactly one
-/// place. The per-CLI parts — how the process is launched and how its output is
-/// parsed/finalized — stay in the concrete adapter.
+/// place, the turn itself among them (<see cref="ExecuteAsync"/>). The per-CLI parts — how the process is launched and how
+/// its output is parsed/finalized — are the adapter's <see cref="CliAgentTurn"/>.
 ///
 /// Adapters are transport, not templating: <see cref="AgentExecutionContext.Prompt"/>
 /// reaches the CLI unchanged. Placeholder expansion belongs to the node
@@ -115,7 +116,181 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             + "Don't put secrets here: the arguments are visible in the process list. "
             + "Use the API key or environment settings for secrets.");
 
-    public abstract Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);
+    /// <summary>The CLI's name as failures carry it: <c>[name-error]</c>, <c>name timed out</c>.</summary>
+    protected abstract string CliName { get; }
+
+    /// <summary>What to do about a CLI that cannot be started, as a sentence that follows "cannot start 'x' — ".</summary>
+    protected abstract string StartHelp { get; }
+
+    protected virtual ILogger Logger => NullLogger.Instance;
+
+    /// <summary>
+    /// Part of the command line of the CLI and of what wraps it, which every launch has and nothing it starts does. Declaring it is
+    /// what makes a turn look for processes the agent left running, so its stream reader has to await <see cref="CliAgentTurn.TurnEnded"/>.
+    /// </summary>
+    protected virtual string? LaunchFingerprint => null;
+
+    /// <summary>The turn of <paramref name="ctx"/>, with nothing done yet: it is disposed however the turn ends.</summary>
+    protected abstract CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway);
+
+    public virtual async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    {
+        // Launching anyway would hand a caller that asked for no tools every tool the CLI has.
+        if (ctx.NoTools && !Traits.SupportsNoTools)
+            return NodeExecutionResult.Fail(
+                $"[{CliName}-error] the {Traits.DisplayName} CLI cannot run without its tools, so it cannot take a call that must have none.");
+
+        CliAgentTurn? turn = null;
+        try
+        {
+            var worktreePath = ctx.RunContext.WorktreePath;
+            if (string.IsNullOrWhiteSpace(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
+                return NodeExecutionResult.Fail(
+                    $"[{CliName}-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
+
+            using var gateway = OpenGateway(ctx);
+            turn = CreateTurn(ctx, worktreePath, gateway);
+            return await RunAsync(turn, ctx);
+        }
+        catch (AgentTurnFailedException failed)
+        {
+            return failed.Result;
+        }
+        catch (Exception ex)
+        {
+            return NodeExecutionResult.Fail($"[{CliName}-error] {ex.Message}");
+        }
+        finally
+        {
+            if (turn is not null) await turn.DisposeAsync();
+        }
+    }
+
+    private async Task<NodeExecutionResult> RunAsync(CliAgentTurn turn, AgentExecutionContext ctx)
+    {
+        await turn.PrepareAsync();
+
+        var launchId = LaunchFingerprint is not null && ctx.ChatSessionId is null ? OwnerOf(ctx).ToString("N") : null;
+        IRunProcess? started;
+        try
+        {
+            started = await StartAsync(await turn.LaunchAsync(), ctx, launchId);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        {
+            if (await turn.RetryLaunchAsync(ex) is not { } retry)
+                return NodeExecutionResult.Fail(CannotStart(turn, ex));
+            try
+            {
+                started = await StartAsync(retry, ctx, launchId);
+            }
+            catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
+            {
+                return NodeExecutionResult.Fail(CannotStart(turn, retryEx));
+            }
+        }
+
+        using var process = started ?? throw new InvalidOperationException("Process.Start returned null");
+        await turn.SendInputAsync(process);
+
+        // Looked for when the CLI says its turn is over, while it is still there to tell its children apart from it: it may exit right after.
+        IReadOnlyList<RunChildProcess> liveChildren = [];
+        turn.TurnEnded = launchId is null ? null : async () => liveChildren = await FindChildrenAsync(ctx, launchId);
+        var stdoutTask = turn.ReadStdoutAsync(process.StandardOutput);
+        var stderrTask = turn.ReadStderrAsync(process.StandardError, ctx.Cancel);
+
+        try
+        {
+            await process.WaitForExitAsync(ctx.Cancel);
+        }
+        catch (OperationCanceledException)
+        {
+            var timedOut = KillAndDescribe(process, $"{CliName} timed out");
+            await turn.AfterTimeoutAsync(stdoutTask);
+            return NodeExecutionResult.Fail(timedOut);
+        }
+
+        string stderr;
+        try
+        {
+            await stdoutTask;
+            stderr = await stderrTask;
+        }
+        catch (OperationCanceledException)
+        {
+            return NodeExecutionResult.Fail(KillAndDescribe(process, $"{CliName} stream read timed out"));
+        }
+
+        var result = await turn.CompleteAsync(stderr, process.ExitCode);
+        return result.Success && liveChildren.Count > 0
+            ? result with { LiveChildren = await StillRunningAfterExitAsync(ctx, liveChildren) }
+            : result;
+    }
+
+    private Task<IRunProcess> StartAsync(AgentLaunch launch, AgentExecutionContext ctx, string? launchId)
+    {
+        if (launchId is null) return StartAgentProcessAsync(launch.StartInfo, ctx, launch.Environment, launch.AgentFiles);
+        var environment = new Dictionary<string, string?>(launch.Environment ?? new Dictionary<string, string?>(), StringComparer.Ordinal)
+        {
+            [AgentChildren.LaunchVariable] = launchId,
+        };
+        return StartAgentProcessAsync(launch.StartInfo, ctx, environment, launch.AgentFiles);
+    }
+
+    private string CannotStart(CliAgentTurn turn, Exception ex)
+        => $"[{CliName}-error] cannot start '{turn.BinaryPath}' — {StartHelp} Details: {ex.Message}";
+
+    /// <summary>The processes the launch started and left running, without the launch itself and the helpers that stay up by design; none when they cannot be listed.</summary>
+    private async Task<IReadOnlyList<RunChildProcess>> FindChildrenAsync(AgentExecutionContext ctx, string launchId)
+    {
+        try
+        {
+            return await RunHost.ListAgentChildrenAsync(OwnerOf(ctx), launchId, [LaunchFingerprint!, .. AgentChildren.LongLivedHelpers], ctx.Cancel);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(ex, "Could not look for processes the agent left running: {Reason}", ex.Message);
+            return [];
+        }
+    }
+
+    /// <summary>How long a process seen at the end of the turn is given to end with the CLI (its MCP servers, a language server) before it counts as left running.</summary>
+    internal static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ExitGraceInterval = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Which of <paramref name="seen"/> outlive the CLI by <see cref="ExitGrace"/>. When the host cannot tell, those last known to be
+    /// running: the turn has succeeded either way, and ILD's wait checks them again.
+    /// </summary>
+    private async Task<IReadOnlyList<RunChildProcess>> StillRunningAfterExitAsync(AgentExecutionContext ctx, IReadOnlyList<RunChildProcess> seen)
+    {
+        var running = seen;
+        try
+        {
+            var deadline = DateTime.UtcNow + ExitGrace;
+            while (true)
+            {
+                running = await RunHost.StillRunningAsync(OwnerOf(ctx), running, ctx.Cancel);
+                if (running.Count == 0 || DateTime.UtcNow >= deadline) return running;
+                await Task.Delay(ExitGraceInterval, ctx.Cancel);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not check whether the processes the agent left running have ended: {Reason}", ex.Message);
+            return running;
+        }
+    }
+
+    /// <summary>
+    /// Seeds a copy of the session the execution forks from under the session it runs on, so restoring that one brings up the copy
+    /// and the CLI continues on the fork while the source stays as it was.
+    /// </summary>
+    protected async Task ForkManagedSessionAsync(AgentExecutionContext ctx)
+    {
+        if (ctx.ManageSession && !string.IsNullOrWhiteSpace(ctx.SessionId) && !string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
+            await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, ctx.SessionId!, ctx.Cancel);
+    }
 
     public virtual CredentialPath? CredentialPathFor(AiProvider provider) => null;
 

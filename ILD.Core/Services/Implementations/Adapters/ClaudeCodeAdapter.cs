@@ -73,95 +73,63 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1";
     }
 
-    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    protected override string CliName => "claude-code";
+    protected override string StartHelp
+        => "install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure the provider has its long-lived token (open the provider terminal).";
+    protected override ILogger Logger => _logger;
+    protected override string? LaunchFingerprint => "--output-format stream-json";
+
+    protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway)
+        => new Turn(this, ctx, worktreePath, gateway);
+
+    private sealed class Turn(ClaudeCodeAdapter adapter, AgentExecutionContext ctx, string worktreePath, ModelGatewayLease? gateway) : CliAgentTurn
     {
-        string? mcpConfigPath = null;
-        try
+        private string? _mcpConfigPath;
+        private decimal _sessionCostBefore;
+        private ClaudeStreamOutput? _stdout;
+
+        public override string BinaryPath { get; } = AiProviderConfig.Parse(ctx.Provider.Config)
+            .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode, adapter.EnvironmentVariables));
+
+        public override async Task PrepareAsync()
         {
-            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
-                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode, EnvironmentVariables));
-
-            var worktreePath = ctx.RunContext.WorktreePath;
-            if (string.IsNullOrEmpty(worktreePath) || !await RunHost.DirectoryExistsAsync(worktreePath, ctx.Cancel))
-                return NodeExecutionResult.Fail(
-                    "[claude-code-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
-
             // Inject the ILD MCP server entry so the headless `claude` process
             // can call list/create tools through the agent-scoped API. The CLI
             // accepts a JSON config via `--mcp-config <file>`, which we merge
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
             if (!ctx.NoTools)
-                mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, RunFacingEnvironmentFor(ctx));
+                _mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx));
 
-            // Fork: seed a copy of the source session's transcript under the
-            // destination id (leaving the source file untouched) so the restore
-            // below rehydrates the copy and `--resume` continues on the fork.
-            if (ctx.ManageSession && !string.IsNullOrWhiteSpace(ctx.SessionId) && !string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
-                await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, ctx.SessionId!, ctx.Cancel);
+            await adapter.ForkManagedSessionAsync(ctx);
 
             // Before invoking claude, if a managed session is in play and the
             // turn JSONL is missing from $HOME/.claude/projects, materialize
             // it from the snapshot store so `--resume` can pick up the
             // history even when the on-disk cache has been wiped.
             if (ctx.ManageSession && !string.IsNullOrWhiteSpace(ctx.SessionId))
-                await TryRestoreSessionJsonlAsync(ctx, ctx.SessionId!, worktreePath);
+                await adapter.TryRestoreSessionJsonlAsync(ctx, ctx.SessionId!, worktreePath);
 
             // Read after the fork and restore, as it is what `--resume` restores from.
-            var sessionCostBefore = string.IsNullOrWhiteSpace(ctx.SessionId)
+            _sessionCostBefore = string.IsNullOrWhiteSpace(ctx.SessionId)
                 ? 0m
-                : await ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
+                : await adapter.ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
+        }
 
-            var launchId = OwnerOf(ctx).ToString("N");
-            IReadOnlyList<RunChildProcess> liveChildren = [];
-            using var gateway = OpenGateway(ctx);
-            IRunProcess? proc;
-            try
-            {
-                var psi = BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger));
-                var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-                if (ctx.ChatSessionId is null) environment[AgentChildren.LaunchVariable] = launchId;
-                if (gateway is not null) ApplyGateway(environment, gateway, ctx.Provider);
-                proc = await StartAgentProcessAsync(psi, ctx, environment, [mcpConfigPath]);
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException)
-            {
-                return NodeExecutionResult.Fail(
-                    $"[claude-code-error] cannot start '{binaryPath}' — install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure the provider has its long-lived token (open the provider terminal). Details: {ex.Message}");
-            }
+        public override Task<AgentLaunch> LaunchAsync()
+        {
+            var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, ctx.SessionId, _mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
+            var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+            if (gateway is not null) ApplyGateway(environment, gateway, ctx.Provider);
+            return Task.FromResult(new AgentLaunch(psi, environment, [_mcpConfigPath]));
+        }
 
-            using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
+        public override async Task ReadStdoutAsync(StreamReader stdout)
+            => _stdout = await ReadStreamJsonAsync(stdout, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel, TurnEnded);
 
-            // Looked for at the result event, while the CLI is still there to tell its children apart from it: it may exit right after.
-            var stdoutTask = ReadStreamJsonAsync(
-                process.StandardOutput, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel,
-                ctx.ChatSessionId is null ? async () => liveChildren = await FindChildrenAsync(ctx, launchId) : null);
-            var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
-
-            try
-            {
-                await process.WaitForExitAsync(ctx.Cancel);
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(process, "claude-code timed out"));
-            }
-
-            ClaudeStreamOutput stdout;
-            string stderr;
-            try
-            {
-                stdout = await stdoutTask;
-                stderr = await stderrTask;
-            }
-            catch (OperationCanceledException)
-            {
-                return NodeExecutionResult.Fail(KillAndDescribe(process, "claude-code stream read timed out"));
-            }
-
-            var result = AssembleResult(stdout, stderr, process.ExitCode, ctx.Prompt, ctx.SessionId, ctx.IncomingSessionId, sessionCostBefore);
-            if (result.Success && liveChildren.Count > 0)
-                result = result with { LiveChildren = await StillRunningAfterExitAsync(ctx, liveChildren) };
+        public override async Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
+        {
+            var result = AssembleResult(_stdout!, stderr, exitCode, ctx.Prompt, ctx.SessionId, ctx.IncomingSessionId, _sessionCostBefore);
 
             // On a successful managed-session turn, copy the JSONL claude
             // wrote at $HOME/.claude/projects/<encoded-cwd>/<sid>.jsonl into
@@ -169,67 +137,20 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // the "Available AI Sessions" panel and lets us rehydrate the
             // on-disk file on a later turn (see TryRestoreSessionJsonlAsync).
             if (result.Success && ctx.ManageSession && !string.IsNullOrWhiteSpace(result.SessionId))
-                await TryPersistSessionJsonlAsync(ctx, result.SessionId!, worktreePath);
+                await adapter.TryPersistSessionJsonlAsync(ctx, result.SessionId!, worktreePath);
 
             return result;
         }
-        catch (Exception ex)
+
+        public override ValueTask DisposeAsync()
         {
-            return NodeExecutionResult.Fail($"[claude-code-error] {ex.Message}");
-        }
-        finally
-        {
-            if (!string.IsNullOrEmpty(mcpConfigPath))
+            if (!string.IsNullOrEmpty(_mcpConfigPath))
             {
-                try { File.Delete(mcpConfigPath); } catch { /* best effort */ }
+                try { File.Delete(_mcpConfigPath); } catch { /* best effort */ }
             }
+            return ValueTask.CompletedTask;
         }
     }
-
-    /// <summary>The processes the launch started and left running, without the launch itself and the helpers that stay up by design; none when they cannot be listed.</summary>
-    private async Task<IReadOnlyList<RunChildProcess>> FindChildrenAsync(AgentExecutionContext ctx, string launchId)
-    {
-        try
-        {
-            return await RunHost.ListAgentChildrenAsync(OwnerOf(ctx), launchId, [LaunchFingerprint, .. AgentChildren.LongLivedHelpers], ctx.Cancel);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Could not look for processes the agent left running: {Reason}", ex.Message);
-            return [];
-        }
-    }
-
-    /// <summary>How long a process seen at the result event is given to end with the CLI (its MCP servers, a language server) before it counts as left running.</summary>
-    internal static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan ExitGraceInterval = TimeSpan.FromMilliseconds(500);
-
-    /// <summary>
-    /// Which of <paramref name="seen"/> outlive the CLI by <see cref="ExitGrace"/>. When the host cannot tell, those last known to be
-    /// running: the turn has succeeded either way, and ILD's wait checks them again.
-    /// </summary>
-    private async Task<IReadOnlyList<RunChildProcess>> StillRunningAfterExitAsync(AgentExecutionContext ctx, IReadOnlyList<RunChildProcess> seen)
-    {
-        var running = seen;
-        try
-        {
-            var deadline = DateTime.UtcNow + ExitGrace;
-            while (true)
-            {
-                running = await RunHost.StillRunningAsync(OwnerOf(ctx), running, ctx.Cancel);
-                if (running.Count == 0 || DateTime.UtcNow >= deadline) return running;
-                await Task.Delay(ExitGraceInterval, ctx.Cancel);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not check whether the processes the agent left running have ended: {Reason}", ex.Message);
-            return running;
-        }
-    }
-
-    /// <summary>Part of the command line of the CLI and of what wraps it, which every launch has and no child does.</summary>
-    private const string LaunchFingerprint = "--output-format stream-json";
 
     /// <summary>Turns a finished run's parsed output, stderr and exit code into the node's result.</summary>
     internal static NodeExecutionResult AssembleResult(

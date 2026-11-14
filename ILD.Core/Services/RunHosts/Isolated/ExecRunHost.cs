@@ -33,7 +33,7 @@ public sealed record DirectRoute(Guid OwnerId, bool Chat);
 /// as bundles, so the environment never holds the git credential or the mirror. A subclass supplies the exec
 /// transport and the lifecycle of the environment: how it is made, found, deleted and swept.
 /// </summary>
-public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRunHost
+public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRunHost, ISignInTerminalHost
 {
     /// <summary>How much of what a run holds or prints ILD reads before it stops.</summary>
     public RunReadLimits ReadLimits { get; init; } = RunReadLimits.Default;
@@ -59,7 +59,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>
     /// Puts a relay on the environment's own loopback between a launch and ILD's egress proxy, and points the launch's proxy variables at it.
     /// The relay adds the launch's proxy credential to each request, so a client that sends none (a browser, a JVM) is still the launch's
-    /// to the proxy. One relay per credential, kept for the next launch that holds the same one. Without socat or bash the variables stay
+    /// to the proxy. One relay per credential, kept for the next launch that holds the same one, so it carries no launch's
+    /// <see cref="AgentChildren.LaunchVariable"/> and is never a process an agent left running. Without socat or bash the variables stay
     /// as they are, naming the proxy with the credential.
     /// </summary>
     internal const string EgressRelayScript = $$"""
@@ -78,7 +79,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
                     relay_port=$(( 20000 + relay_key % 10000 )); relay_try=0; relay_up=
                     while [ -z "$relay_up" ] && [ "$relay_try" -lt 20 ]; do
                         if ! bash -c "exec 3<>/dev/tcp/127.0.0.1/$relay_port" 2>/dev/null; then
-                            ILD_RELAY_AUTH=$(printf %s "${relay_to%%@*}" | base64 -w0) ILD_RELAY_UPSTREAM="${relay_to#*@}" setsid socat "TCP-LISTEN:$relay_port,bind=127.0.0.1,reuseaddr,fork" "EXEC:bash $relay_dir/relay.sh,nofork" </dev/null >/dev/null 2>&1 9>&- &
+                            env -u {{AgentChildren.LaunchVariable}} "ILD_RELAY_AUTH=$(printf %s "${relay_to%%@*}" | base64 -w0)" "ILD_RELAY_UPSTREAM=${relay_to#*@}" setsid socat "TCP-LISTEN:$relay_port,bind=127.0.0.1,reuseaddr,fork" "EXEC:bash $relay_dir/relay.sh,nofork" </dev/null >/dev/null 2>&1 9>&- &
                             relay_pid=$!; relay_wait=0
                             while kill -0 "$relay_pid" 2>/dev/null && [ "$relay_wait" -lt 40 ]; do
                                 if bash -c "exec 3<>/dev/tcp/127.0.0.1/$relay_port" 2>/dev/null; then relay_up=1; break; fi
@@ -251,8 +252,25 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// Runs <see cref="HostsScript"/>. By default as the user commands run as; a host whose engine makes the hosts file
     /// root's but lets root write it without a capability runs it as root.
     /// </summary>
-    protected virtual Task<RunHostOutput> RunHostsScriptAsync(ExecOwner owner, IReadOnlyList<string> arguments, CancellationToken ct)
-        => RunScriptAsync(owner, HostsScript, arguments, ct);
+    private async Task<RunHostOutput> RunHostsScriptAsync(ExecOwner owner, IReadOnlyList<string> arguments, CancellationToken ct)
+    {
+        if (!HostsFileIsRoots) return await RunScriptAsync(owner, HostsScript, arguments, ct);
+        using var exec = await OpenExecStreamAsync(owner, IldScript("/bin/bash", HostsScript, arguments.ToArray()), RootEnvironment, stdin: false, tty: false, asRoot: true, ct);
+        var output = new StreamReader(exec.Stdout).ReadToEndAsync(ct);
+        var error = new StreamReader(exec.Stderr!).ReadToEndAsync(ct);
+        var status = await exec.Status;
+        await Task.WhenAll(output, error);
+        return new RunHostOutput(status ?? -1, await output, await error);
+    }
+
+    /// <summary>
+    /// Whether the engine makes the hosts file root's in each environment and lets root write it without a capability, as it does
+    /// resolv.conf: <see cref="HostsScript"/> then runs as root, and the environment keeps its capabilities and its commands their user.
+    /// </summary>
+    protected virtual bool HostsFileIsRoots => false;
+
+    /// <summary>What ILD's own execs as root start with: the environment's PATH has directories the agent writes, which root must not run from.</summary>
+    protected static readonly IReadOnlyDictionary<string, string> RootEnvironment = new Dictionary<string, string> { ["PATH"] = FixedPath };
 
     // The owners whose hosts file could not be written, so that is logged once and not on every command.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ExecOwner, bool> _hostsUnwritable = new();
@@ -382,10 +400,58 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>Whether this host keeps chats: whether a path under <see cref="RunPaths.ChatsRoot"/> is one of its own.</summary>
     public virtual bool HostsChats => false;
 
-    /// <summary>Start a command in the run's environment, with the streams it needs.</summary>
+    /// <summary>Start a command in the pod or container called <paramref name="name"/>, with the streams it needs.</summary>
     /// <param name="environment">What the exec is started with, when <see cref="ExecTakesEnvironment"/>; otherwise null.</param>
-    protected abstract Task<IExecStream> OpenExecStreamAsync(
-        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct);
+    /// <param name="asRoot">As root, not as the user commands run as: only asked of an engine whose <see cref="HostsFileIsRoots"/>.</param>
+    protected abstract Task<IExecStream> OpenExecInAsync(
+        string name, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct);
+
+    /// <summary>What a run's pod or container is called.</summary>
+    protected abstract string RunEnvironmentName(Guid run);
+
+    /// <summary>
+    /// Bring back a run's pod or container when <paramref name="failure"/>, met starting a command in it, shows that it stopped or
+    /// ended: with all it held, so the command is tried once more. False when that is not what happened, and the failure stands.
+    /// </summary>
+    protected abstract Task<bool> ReviveRunAsync(Guid run, Exception failure, CancellationToken ct);
+
+    // Pods and containers that are not a run's, exec'd into by an id of their own: the store's installers and the sign-in terminals.
+    private readonly ConcurrentDictionary<Guid, string> _execNames = new();
+    // The sign-in terminals open now, which the sweep must not take for leftovers.
+    private readonly ConcurrentDictionary<string, byte> _signIns = new(StringComparer.Ordinal);
+
+    /// <summary>The installers and sign-in terminals ILD has open now, by name: no leftovers of a crash, and what a shutdown puts away.</summary>
+    protected IReadOnlySet<string> OpenSideEnvironments => _execNames.Values.Concat(_signIns.Keys).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>What a toolchain installer's pod or container is called.</summary>
+    public static string InstallerName(Guid id) => $"{InstallerPrefix}{id:N}";
+
+    /// <summary>What a provider sign-in's pod or container is called.</summary>
+    public static string SignInName(Guid id) => $"{SignInPrefix}{id:N}";
+
+    public const string InstallerPrefix = "ild-tools-";
+    public const string SignInPrefix = "ild-signin-";
+
+    // A chat's command goes to the container every chat shares, an installer's or sign-in's to its own, and a run's to the run's.
+    private async Task<IExecStream> OpenExecStreamAsync(
+        ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct)
+    {
+        if (owner.Chat)
+            return await OpenExecInAsync(await EnsureChatAsync(ct), command, environment, stdin, tty, asRoot, ct);
+        if (_execNames.TryGetValue(owner.Id, out var other))
+            return await OpenExecInAsync(other, command, environment, stdin, tty, asRoot, ct);
+
+        var name = RunEnvironmentName(owner.Id);
+        try
+        {
+            return await OpenExecInAsync(name, command, environment, stdin, tty, asRoot, ct);
+        }
+        catch (Exception ex)
+        {
+            if (!await ReviveRunAsync(owner.Id, ex, ct)) throw;
+            return await OpenExecInAsync(name, command, environment, stdin, tty, asRoot, ct);
+        }
+    }
 
     /// <summary>
     /// Whether the exec transport carries an environment in a field of its own. Where it does not, the environment goes in a file the
@@ -404,9 +470,44 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     // -- Lifecycle ---------------------------------------------------------------
 
-    public abstract Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default);
+    public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
+    {
+        var owner = request.OwnerId;
+        var environment = new RunEnvironment(owner, RunPaths.WorkingDirectory(owner));
+        if (await IsRunReadyAsync(owner, ct)) return environment;
 
-    public abstract Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default);
+        var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
+        var undo = await MakeRunAsync(request, tools, ct);
+        try
+        {
+            await PrepareAsync(owner, request, ct);
+        }
+        catch
+        {
+            await undo();
+            throw;
+        }
+        return environment;
+    }
+
+    public async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
+    {
+        await SyncPreviewDataBackAsync(environment, ct);
+        await RemoveRunAsync(environment.OwnerId, ct);
+    }
+
+    /// <summary>Whether the run has a pod or container that <see cref="CreateAsync"/> would make no differently: running, and placed as one made now would be.</summary>
+    protected abstract Task<bool> IsRunReadyAsync(Guid run, CancellationToken ct);
+
+    /// <summary>
+    /// Make the run's pod or container and what it needs (its volume, its network or policy), keeping what an earlier attempt left,
+    /// and wait until it is ready. A failure removes what this call made and nothing else: a run a retry reached keeps its checkout.
+    /// </summary>
+    /// <returns>What removes, without throwing, what this call made, for a run that cannot be made ready to work in.</returns>
+    protected abstract Task<Func<Task>> MakeRunAsync(RunEnvironmentRequest request, RunToolEnvironment? tools, CancellationToken ct);
+
+    /// <summary>Remove the run's pod or container and everything that was made for it.</summary>
+    protected abstract Task RemoveRunAsync(Guid run, CancellationToken ct);
 
     // The run's home, with the .local/bin npm install -g writes to. When the run's Node has corepack, its shims go there
     // too, so pnpm and yarn are the versions a project's packageManager pins. A Node without corepack is no failure.
@@ -423,7 +524,31 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <paramref name="installer"/> names, with the network the host gives it, and remove it afterwards. The installer's id
     /// is what <see cref="ExecAsync"/> takes.
     /// </summary>
-    protected abstract Task<T> WithToolInstallerAsync<T>(ToolInstaller installer, Func<Guid, Task<T>> work, CancellationToken ct);
+    private async Task<T> WithToolInstallerAsync<T>(ToolInstaller installer, Func<Guid, Task<T>> work, CancellationToken ct)
+    {
+        var id = Guid.NewGuid();
+        var name = InstallerName(id);
+        _execNames[id] = name;
+        try
+        {
+            await StartToolInstallerAsync(name, id, installer, ct);
+            return await work(id);
+        }
+        finally
+        {
+            _execNames.TryRemove(id, out _);
+            await RemoveToolInstallerAsync(name);
+        }
+    }
+
+    /// <summary>
+    /// Make the installer's pod or container under <paramref name="name"/> and wait until it runs: only what
+    /// <paramref name="installer"/> names mounted, and a network that reaches only ILD. It carries no run label, so the sweep never takes it for a run's.
+    /// </summary>
+    protected abstract Task StartToolInstallerAsync(string name, Guid id, ToolInstaller installer, CancellationToken ct);
+
+    /// <summary>Remove the installer and what was made for it, whether or not it started. What cannot be removed is left to the sweep.</summary>
+    protected abstract Task RemoveToolInstallerAsync(string name);
 
     /// <summary>Make the zone's storage exist before its installer mounts it (a volume on a container engine).</summary>
     protected virtual Task PrepareToolZoneAsync(RunToolMount zone, CancellationToken ct) => Task.CompletedTask;
@@ -440,7 +565,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// and every other tool of the plan in the zone of <paramref name="repositoryId"/> alone. With no repository (a chat),
     /// those other tools are not installed.
     /// </summary>
-    protected async Task<RunToolEnvironment> ToolZonesAsync(string label, RunToolPlan plan, IReadOnlyList<RunAgent> agents, Guid? repositoryId, CancellationToken ct)
+    private async Task<RunToolEnvironment> ToolZonesAsync(string label, RunToolPlan plan, IReadOnlyList<RunAgent> agents, Guid? repositoryId, CancellationToken ct)
     {
         RunToolEnvironment? agentZone = null, toolchainZone = null, repositoryZone = null;
         if (agents.Count > 0)
@@ -463,8 +588,22 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return RunToolEnvironment.Merge(agentZone, toolchainZone, repositoryZone);
     }
 
-    /// <summary>The agents ILD has installed, when runs get them from the store; none when they do not.</summary>
-    protected virtual IReadOnlyList<RunAgent> StoreAgents() => [];
+    /// <summary>Whether runs and chats mount the toolchain store; where they do not, they have only what the runner image has.</summary>
+    protected abstract bool UsesToolStore { get; }
+
+    /// <summary>The agent CLIs a run gets: those ILD has installed, at their versions. Replaced in tests.</summary>
+    internal Func<IReadOnlyList<RunAgent>> Agents { get; init; } = () => RunAgent.Installed(ManagedAgentInstall.ResolveDataRoot());
+
+    /// <summary>
+    /// What the commands of a run or chat get from the toolchain store for <paramref name="plan"/>, with the agents ILD has
+    /// installed, each zone installed into first when it lacks them; null when there is no store. <paramref name="repositoryId"/>
+    /// is the run's repository, null for a chat.
+    /// </summary>
+    private Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, Guid? repositoryId, CancellationToken ct)
+        => ToolsForAsync(label, plan, Agents(), repositoryId, ct);
+
+    private async Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, IReadOnlyList<RunAgent> agents, Guid? repositoryId, CancellationToken ct)
+        => UsesToolStore ? await ToolZonesAsync(label, plan, agents, repositoryId, ct) : null;
 
     private string? _agentsNotWarmed;
 
@@ -477,7 +616,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         try
         {
-            var agents = StoreAgents();
+            IReadOnlyList<RunAgent> agents = UsesToolStore ? Agents() : [];
             if (agents.Count == 0) return;
             var arguments = RunToolStore.Arguments([], agents);
             var wanted = string.Join('\n', arguments);
@@ -579,7 +718,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }, CancellationToken.None, ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope);
 
     /// <summary>Make the environment ready to work in: the run's home and the code the base repository has.</summary>
-    protected async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
+    private async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
     {
         if (Probe is { } probe) _ = probe.ProbeAsync((host, port, token) => ConnectDirectlyAsync(owner, host, port, token));
         var home = await ExecAsync(owner, ["/bin/bash", "-c", HomeScript, "bash", RunPaths.HomeDirectory(owner)], null, null, ct);
@@ -664,8 +803,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         _liveOff.AddOrUpdate(owner, 1, (_, n) => n + 1);
         try
         {
-            using (await RouteGateAsync(owner, ct))
-                await OpenDirectRouteAsync(owner, ct);
+            await OpenRouteAsync(owner, ct);
             return await StartRoutedAsync(command, owner, direct: true, ct);
         }
         catch
@@ -723,6 +861,14 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     private void EndOff(ExecOwner owner) => _liveOff.AddOrUpdate(owner, 0, (_, n) => Math.Max(0, n - 1));
+
+    // The chats' route is their container's, which has to be there to be given one.
+    private async Task OpenRouteAsync(ExecOwner owner, CancellationToken ct)
+    {
+        using var gate = await RouteGateAsync(owner, ct);
+        if (owner.Chat) await EnsureChatAsync(ct);
+        await OpenDirectRouteAsync(owner, ct);
+    }
 
     /// <summary>Give the run's pod or container a route to the network that does not go through ILD. Idempotent. The route is the pod's or container's, not a process's.</summary>
     protected abstract Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct);
@@ -1044,11 +1190,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             await CloseDirectRouteIfUnusedAsync(owner, ct);
         try
         {
-            if (direct)
-            {
-                using (await RouteGateAsync(owner, ct))
-                    await OpenDirectRouteAsync(owner, ct);
-            }
+            if (direct) await OpenRouteAsync(owner, ct);
 
             var caller = CommandEnvironment.Of(options.Environment);
             caller.TryAdd("TERM", "xterm-256color");
@@ -1332,7 +1474,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// run's objects are deleted. Only from a run that is still running: one whose pod or container stopped or went away ended some other
     /// way, and what it left is not kept. Never throws; the run is deleted whatever happened here.
     /// </summary>
-    protected async Task SyncPreviewDataBackAsync(RunEnvironment environment, CancellationToken ct)
+    private async Task SyncPreviewDataBackAsync(RunEnvironment environment, CancellationToken ct)
     {
         if (environment.KeptPreviewDataOf is not { } repositoryId || PreviewData is not { } store) return;
         var owner = environment.OwnerId;
@@ -1370,7 +1512,15 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     /// <summary>Where the preview proxy forwards to reach a service listening on <paramref name="port"/> in the run.</summary>
-    public abstract Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default);
+    public async Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)
+    {
+        var target = OwnerFor(workingDirectory);
+        if (target.Chat) throw new NotSupportedException("a service in a chat cannot be previewed");
+        return new UriBuilder(Uri.UriSchemeHttp, await RunAddressAsync(target.Id, ct), port).Uri;
+    }
+
+    /// <summary>The address ILD reaches the run's pod or container at.</summary>
+    protected abstract Task<string> RunAddressAsync(Guid run, CancellationToken ct);
 
     // -- Sweep -------------------------------------------------------------------
 
@@ -1380,19 +1530,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     // -- Chats -------------------------------------------------------------------
 
-    /// <summary>Whether chats get toolchains from the store: whether this host mounts it.</summary>
-    protected abstract bool ChatToolchains { get; }
-
     /// <summary>Where what each chat's repositories need from the toolchain store is kept. Replaced in tests.</summary>
     internal Func<string> ChatToolsRoot { get; init; } = () => Path.Combine(ManagedAgentInstall.ResolveDataRoot(), "chat-tools");
 
     private readonly ConcurrentDictionary<Guid, List<RunTool>> _chatTools = new();
-
-    /// <summary>
-    /// What the commands of a run or chat get from the toolchain store for <paramref name="plan"/>, installed into it first
-    /// when it lacks them; null when there is no store. <paramref name="repositoryId"/> is the run's repository, null for a chat.
-    /// </summary>
-    protected abstract Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, Guid? repositoryId, CancellationToken ct);
 
     // What the chat's repositories need, kept on ILD's side: a chat's agent writes everything in the chat's folder, and
     // what is asked of the toolchain store (which every run and chat shares) must not be something it can write.
@@ -1418,7 +1559,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>Adds what the repository at <paramref name="basePath"/> needs to the chat's toolchains, installing them now.</summary>
     public async Task AddChatToolsAsync(string chatPath, string basePath, CancellationToken ct = default)
     {
-        if (!ChatToolchains || RunPaths.ChatOf(chatPath) is not { } chat) return;
+        if (!UsesToolStore || RunPaths.ChatOf(chatPath) is not { } chat) return;
 
         // The installer runs in another container, so nothing in the chat's own would show this work.
         using var hold = HoldChat(chatPath);
@@ -1454,9 +1595,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     /// <summary>The variables (<c>NAME=value</c>) every command of the chat starts with besides its caller's: its toolchains on <c>PATH</c>.</summary>
-    protected async Task<IReadOnlyList<string>> ChatEnvironmentAsync(Guid chat, CancellationToken ct)
+    private async Task<IReadOnlyList<string>> ChatEnvironmentAsync(Guid chat, CancellationToken ct)
     {
-        if (!ChatToolchains) return [];
+        if (!UsesToolStore) return [];
 
         List<RunTool> tools;
         var known = ChatToolsOf(chat);
@@ -1511,11 +1652,49 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private int _chatRemoving;
     private int _removedForIdle;
 
-    /// <summary>Whether the reaper is about to remove, or removing, the chat container: <c>EnsureChat*</c> then waits for the gate instead of trusting what it sees.</summary>
-    protected bool ChatBeingRemoved => Volatile.Read(ref _chatRemoving) != 0;
+    // Whether the reaper is about to remove, or removing, the chat container: EnsureChatAsync then waits for the gate instead of trusting what it sees.
+    private bool ChatBeingRemoved => Volatile.Read(ref _chatRemoving) != 0;
 
-    /// <summary>Whether the chat container was removed for idleness and has not come back since; reads once.</summary>
-    protected bool TakeRemovedForIdle() => Interlocked.Exchange(ref _removedForIdle, 0) != 0;
+    // Whether the chat container was removed for idleness and has not come back since; reads once.
+    private bool TakeRemovedForIdle() => Interlocked.Exchange(ref _removedForIdle, 0) != 0;
+
+    // Making and removing the chat container are one at a time.
+    private readonly SemaphoreSlim _chatGate = new(1, 1);
+
+    /// <summary>What the pod or container every chat shares is called.</summary>
+    protected abstract string ChatEnvironmentName { get; }
+
+    /// <summary>Whether the chat pod or container is up, and made from what ILD would make it from now.</summary>
+    protected abstract Task<bool> ChatIsUpAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Make the chat pod or container and wait until it is ready, replacing one that stopped, ended or is no longer what ILD would
+    /// make. Its volume keeps the chats' folders through that. Called by one caller at a time, right after <see cref="ChatIsUpAsync"/> said no.
+    /// </summary>
+    protected abstract Task MakeChatAsync(CancellationToken ct);
+
+    /// <summary>Remove the chat pod or container, and nothing of what it mounts.</summary>
+    protected abstract Task RemoveChatAsync(CancellationToken ct);
+
+    /// <summary>The name of the chat pod or container, made first when it is not up.</summary>
+    private async Task<string> EnsureChatAsync(CancellationToken ct)
+    {
+        var name = ChatEnvironmentName;
+        if (!ChatBeingRemoved && await ChatIsUpAsync(ct)) return name;
+
+        await _chatGate.WaitAsync(ct);
+        try
+        {
+            if (await ChatIsUpAsync(ct)) return name;
+            await MakeChatAsync(ct);
+            if (TakeRemovedForIdle()) Logger?.LogInformation("The chat {Noun} {Name} is back, made for a chat after it was removed for idleness", Noun, name);
+            return name;
+        }
+        finally
+        {
+            _chatGate.Release();
+        }
+    }
 
     private void BeginChatWork()
     {
@@ -1543,15 +1722,15 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     /// <summary>
     /// Removes the chat container or pod when it has been idle for the timeout; its volume or claim and network stay. Never
-    /// touches a run's container or pod. Does nothing by default.
+    /// touches a run's container or pod: it goes by the chat container's name, not by what ILD manages. Under the chat's gate,
+    /// so it never interleaves with <see cref="EnsureChatAsync"/>.
     /// </summary>
-    public virtual Task ReapIdleChatAsync(CancellationToken ct = default) => Task.CompletedTask;
-
-    /// <summary>The reaper's check and removal, under the chat's <paramref name="gate"/> so it never interleaves with <c>EnsureChat*</c>.</summary>
-    protected async Task ReapChatAsync(SemaphoreSlim gate, string name, Func<CancellationToken, Task> remove, CancellationToken ct)
+    public async Task ReapIdleChatAsync(CancellationToken ct = default)
     {
-        if (!IsChatIdle()) return;
+        if (!HostsChats || !IsChatIdle()) return;
 
+        var gate = _chatGate;
+        var name = ChatEnvironmentName;
         await gate.WaitAsync(ct);
         try
         {
@@ -1562,7 +1741,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             {
                 // Work that began after the check above, and before the flag, is seen here.
                 if (!IsChatIdle()) return;
-                await remove(ct);
+                await RemoveChatAsync(ct);
                 Interlocked.Exchange(ref _removedForIdle, 1);
                 Logger?.LogInformation("Removed the chat {Noun} {Name}: it was idle for {Minutes} minutes; the next chat makes it again", Noun, name, (int)ChatIdleTimeout.TotalMinutes);
             }
@@ -1629,12 +1808,12 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     // -- Exec --------------------------------------------------------------------
 
-    protected ExecOwner OwnerFor(string path)
+    private ExecOwner OwnerFor(string path)
         => RunPaths.OwnerOf(path) is { } run ? run
             : RunPaths.ChatOf(path) is { } chat && HostsChats ? new ExecOwner(chat, Chat: true)
             : throw new InvalidOperationException($"{path} is not a path in a run's or chat's {Noun}");
 
-    private protected async Task<IExecStream> OpenExecAsync(
+    private async Task<IExecStream> OpenExecAsync(
         ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct)
     {
         // Counted before the stream is opened, since opening it is what makes the chat container when it is missing.
@@ -1646,7 +1825,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
         try
         {
-            var stream = await OpenExecStreamAsync(owner, command, environment, stdin, tty, ct);
+            var stream = await OpenExecStreamAsync(owner, command, environment, stdin, tty, asRoot: false, ct);
             return work is null ? stream : new ChatExecStream(stream, work);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1675,8 +1854,58 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         base64 -w0 -- "$f"
         """;
 
-    /// <summary>The text of a login file in a sign-in environment's home, by its path relative to it; null when it is not a regular file of a size worth reading.</summary>
-    protected async Task<string?> ReadSignInFileAsync(Guid id, string relativePath, CancellationToken ct)
+    /// <summary>
+    /// A terminal for a provider's login in a short-lived pod or container of the runner image of its own: the agent from the
+    /// toolchain store (installed first if it is missing), a way out to the provider for the OAuth flow, and none of what a chat or
+    /// run has. It writes the credentials that the model gateway keeps from agents, so nothing else shares it. It goes when the
+    /// result is disposed, or on a failure to start.
+    /// </summary>
+    public async Task<SignInTerminal> OpenSignInAsync(ManagedAgent? agent, string command, IReadOnlyList<string> arguments, int cols, int rows, CancellationToken ct)
+    {
+        var id = Guid.NewGuid();
+        var name = SignInName(id);
+        _signIns[name] = 0;
+        _execNames[id] = name;
+
+        async Task RemoveAsync()
+        {
+            _execNames.TryRemove(id, out _);
+            // Forgotten whether or not the removal works, so the sweep can remove what it did not.
+            _signIns.TryRemove(name, out _);
+            await RemoveSignInAsync(name);
+        }
+
+        try
+        {
+            // Only the agent being signed in; none when there is none to install.
+            var agents = agent is null ? (IReadOnlyList<RunAgent>)[] : Agents().Where(a => a.Agent.Key == agent.Key).ToList();
+            var tools = await ToolsForAsync("The provider sign-in", new RunToolPlan([], []), agents, null, ct);
+            await StartSignInAsync(name, id, tools, ct);
+
+            var exec = await OpenExecAsync(id, SignInTerminalCommand(command, arguments), environment: null, stdin: true, tty: true, ct);
+            var pty = new ExecPty(exec);
+            pty.Resize(cols, rows);
+
+            return new SignInTerminal(pty, (path, token) => ReadSignInFileAsync(id, path, token), RemoveAsync);
+        }
+        catch
+        {
+            await RemoveAsync();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Make the sign-in's pod or container under <paramref name="name"/>, with <see cref="SignInHome"/> as its home and
+    /// <paramref name="tools"/> mounted read-only, and wait until it runs. No volume of a run or chat, and no run label.
+    /// </summary>
+    protected abstract Task StartSignInAsync(string name, Guid id, RunToolEnvironment? tools, CancellationToken ct);
+
+    /// <summary>Remove the sign-in and what was made for it, whether or not it started. Never throws: what cannot be removed is logged and left to the sweep.</summary>
+    protected abstract Task RemoveSignInAsync(string name);
+
+    // The text of a login file in a sign-in environment's home, by its path relative to it; null when it is not a regular file of a size worth reading.
+    private async Task<string?> ReadSignInFileAsync(Guid id, string relativePath, CancellationToken ct)
     {
         var result = await RunScriptAsync(id, ReadLoginScript, [relativePath, CredentialImport.MaxBytes.ToString(System.Globalization.CultureInfo.InvariantCulture), SignInHome], ct);
         if (result.ExitCode == 3) return null;
@@ -1685,8 +1914,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         return Encoding.UTF8.GetString(Convert.FromBase64String(result.StdOut.Trim()));
     }
 
-    /// <summary>The command that starts a sign-in CLI in its home, in a terminal.</summary>
-    protected static IReadOnlyList<string> SignInTerminalCommand(string command, IReadOnlyList<string> arguments)
+    // The command that starts a sign-in CLI in its home, in a terminal.
+    private static IReadOnlyList<string> SignInTerminalCommand(string command, IReadOnlyList<string> arguments)
         => ["/bin/sh", "-c", "mkdir -p -- \"$HOME\" && cd -- \"$HOME\" && exec env TERM=xterm-256color \"$@\"", "sh",
             Path.IsPathRooted(command) ? Path.GetFileName(command) : command, .. arguments];
 
