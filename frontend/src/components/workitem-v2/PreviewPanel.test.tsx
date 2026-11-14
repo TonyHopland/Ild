@@ -521,7 +521,65 @@ describe("PreviewPanel against the services", () => {
       await Promise.resolve();
     });
 
-    expect(startServiceSpy).toHaveBeenCalledWith("wi-1", "web", { portOverrides: { web: 4000 } });
+    expect(startServiceSpy).toHaveBeenCalledWith("wi-1", "web", {
+      portOverrides: { web: 4000 },
+      startDependencies: true,
+    });
+  });
+
+  test("a service that needs a stopped one says so and Start asks for the dependency to be started", async () => {
+    mockServices();
+    const row = (name: string, status: string, dependsOn: string[]) => ({
+      name,
+      portAlias: name,
+      status,
+      port: null,
+      suggestedPort: 5000,
+      healthUrl: null,
+      publicUrl: null,
+      localUrl: null,
+      agentUrl: null,
+      logFilePath: null,
+      processId: null,
+      exitCode: status === "exited" ? 134 : null,
+      dependsOn,
+    });
+    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
+      configured: true,
+      state: "failed",
+      worktreePath: "/wt",
+      configPath: "/wt/ild.config.json",
+      profileName: "app",
+      publicHost: null,
+      stateDirectory: null,
+      message: null,
+      services: [row("api", "exited", []), row("web", "stopped", ["api"])],
+    });
+    const startServiceSpy = vi
+      .spyOn(authServices.workItemService, "startPreviewService")
+      .mockResolvedValue({
+        configured: true,
+        state: "running",
+        worktreePath: "/wt",
+        configPath: "/wt/ild.config.json",
+        profileName: "app",
+        publicHost: null,
+        stateDirectory: null,
+        message: null,
+        services: [],
+      });
+    await renderPreview();
+
+    expect(await screen.findByText(/Needs api; Start will start it first/)).toBeTruthy();
+    expect(screen.getByText("(exit 134)")).toBeTruthy();
+
+    const startButtons = screen.getAllByRole("button", { name: "Start" });
+    await act(async () => {
+      fireEvent.click(startButtons[1]);
+      await Promise.resolve();
+    });
+
+    expect(startServiceSpy).toHaveBeenCalledWith("wi-1", "web", { startDependencies: true });
   });
 
   test("the per-row Stop button stops only that service", async () => {

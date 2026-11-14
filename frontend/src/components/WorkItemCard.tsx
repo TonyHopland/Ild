@@ -28,6 +28,24 @@ interface WorkItemCardProps {
   schedulerPaused?: boolean;
 }
 
+/** The corner dot for the preview's overall state; null when nothing is running or broken. */
+function previewDotFor(
+  state: string | undefined,
+): { tone: "green" | "amber" | "red"; label: string } | null {
+  switch (state) {
+    case "running":
+      return { tone: "green", label: "QA preview is running" };
+    case "starting":
+      return { tone: "amber", label: "QA preview is starting" };
+    case "partial":
+      return { tone: "amber", label: "QA preview is partially running" };
+    case "failed":
+      return { tone: "red", label: "QA preview has a failed service" };
+    default:
+      return null;
+  }
+}
+
 export default function WorkItemCard({
   workItem,
   onClick,
@@ -95,6 +113,7 @@ export default function WorkItemCard({
   const proposalLabel = proposalCount === 1 ? "1 proposed edit" : `${proposalCount} proposed edits`;
   const queuePill = queueStatusPill(workItem, schedulerPaused);
   const statusLabel = workItemStatusLabel(workItem.status);
+  const previewDot = previewDotFor(workItem.previewState);
   // The card's label replaces its content for a screen reader, so it names why the item waits.
   const waiting = queuePill && queuePill.label !== statusLabel ? `, ${queuePill.label}` : "";
 
@@ -112,8 +131,13 @@ export default function WorkItemCard({
       tabIndex={0}
       aria-label={`${workItem.title}, status ${statusLabel}${workItem.preparingContainer ? ", preparing container" : ""}${waiting}. Use left and right arrow keys to move between columns.`}
     >
-      {workItem.isPreviewRunning && (
-        <span className="qa-active-dot" aria-label="QA preview is active" />
+      {previewDot && (
+        <span
+          className={`qa-active-dot qa-active-dot--${previewDot.tone}`}
+          role="img"
+          aria-label={previewDot.label}
+          title={previewDot.label}
+        />
       )}
       <div className="work-item-id">
         <span>#{workItem.id}</span>
@@ -388,6 +412,16 @@ export default function WorkItemCard({
           border-radius: 50%;
           background-color: #22c55e;
           box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+        }
+
+        .qa-active-dot--amber {
+          background-color: #f59e0b;
+          box-shadow: 0 0 4px rgba(245, 158, 11, 0.6);
+        }
+
+        .qa-active-dot--red {
+          background-color: #ef4444;
+          box-shadow: 0 0 4px rgba(239, 68, 68, 0.6);
         }
 
       `}</style>

@@ -107,6 +107,9 @@ public sealed class WorkItemView
     public string? CurrentNodeLabel { get; set; }
     public bool IsPreviewRunning { get; set; }
 
+    /// <summary>Overall preview state: running, partial, failed, starting or stopped.</summary>
+    public string PreviewState { get; set; } = "stopped";
+
     /// <summary>
     /// Badge-relevant PR status, projected from the current run's persisted PR
     /// snapshot. Lets the taskboard card surface the same CI/review/merge tags

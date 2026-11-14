@@ -656,7 +656,7 @@ function PreviewServiceTable({
       const parsed = Number.parseInt(raw, 10);
       if (Number.isFinite(parsed) && parsed > 0) overrides[service.portAlias] = parsed;
     }
-    void detail.handleStartService(service.name, overrides);
+    void detail.handleStartService(service.name, overrides, true);
   };
 
   const startInProgress = isStartInProgress(detail.preview?.state);
@@ -681,6 +681,11 @@ function PreviewServiceTable({
             portInputs[service.portAlias] ?? String(service.port ?? service.suggestedPort ?? "");
           const log = logs[service.name];
           const config = configs[service.name];
+          const missingDependencies = running
+            ? []
+            : (service.dependsOn ?? []).filter(
+                (name) => services.find((other) => other.name === name)?.status !== "running",
+              );
           return (
             <Fragment key={service.name}>
               <tr className="preview-service-row">
@@ -691,6 +696,12 @@ function PreviewServiceTable({
                   )}
                   {service.error && (
                     <div className="preview-message preview-error">{service.error}</div>
+                  )}
+                  {missingDependencies.length > 0 && (
+                    <div className="preview-message">
+                      Needs {missingDependencies.join(", ")}; Start will start{" "}
+                      {missingDependencies.length === 1 ? "it" : "them"} first.
+                    </div>
                   )}
                 </td>
                 <td className="preview-cell-name">{service.name}</td>
