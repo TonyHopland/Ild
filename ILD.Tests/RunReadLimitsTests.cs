@@ -230,8 +230,8 @@ public sealed class RunReadLimitsTests
         public string Path => RunPaths.WorkingDirectory(Owner) + "/file";
         public List<IReadOnlyList<string>> Commands { get; } = [];
 
-        protected override Task<IExecStream> OpenExecStreamAsync(
-            ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct)
+        protected override Task<IExecStream> OpenExecInAsync(
+            string name, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct)
         {
             Commands.Add(command);
             return Task.FromResult(exec);
@@ -242,7 +242,7 @@ public sealed class RunReadLimitsTests
         public Task SyncAsync(Guid repository, PreviewDataStore store, CancellationToken ct)
         {
             PreviewData = store;
-            return SyncPreviewDataBackAsync(new RunEnvironment(Owner, RunPaths.WorkingDirectory(Owner), repository), ct);
+            return DeleteAsync(new RunEnvironment(Owner, RunPaths.WorkingDirectory(Owner), repository), ct);
         }
 
         public override RunHostKind Kind => throw new NotSupportedException();
@@ -252,19 +252,28 @@ public sealed class RunReadLimitsTests
         protected override string IldUrl => throw new NotSupportedException();
         protected override int EgressProxyPort => 0;
         protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(true);
-        public override Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default) => throw new NotSupportedException();
-        public override Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default) => throw new NotSupportedException();
-        protected override Task<T> WithToolInstallerAsync<T>(ToolInstaller installer, Func<Guid, Task<T>> work, CancellationToken ct) => throw new NotSupportedException();
+        protected override string RunEnvironmentName(Guid run) => "run";
+        protected override Task<bool> ReviveRunAsync(Guid run, Exception failure, CancellationToken ct) => Task.FromResult(false);
+        protected override Task<bool> IsRunReadyAsync(Guid run, CancellationToken ct) => throw new NotSupportedException();
+        protected override Task<Func<Task>> MakeRunAsync(RunEnvironmentRequest request, RunToolEnvironment? tools, CancellationToken ct) => throw new NotSupportedException();
+        protected override Task RemoveRunAsync(Guid run, CancellationToken ct) => Task.CompletedTask;
+        protected override Task StartToolInstallerAsync(string name, Guid id, ToolInstaller installer, CancellationToken ct) => throw new NotSupportedException();
+        protected override Task RemoveToolInstallerAsync(string name) => throw new NotSupportedException();
+        protected override Task StartSignInAsync(string name, Guid id, RunToolEnvironment? tools, CancellationToken ct) => throw new NotSupportedException();
+        protected override Task RemoveSignInAsync(string name) => throw new NotSupportedException();
+        protected override string ChatEnvironmentName => throw new NotSupportedException();
+        protected override Task<bool> ChatIsUpAsync(CancellationToken ct) => throw new NotSupportedException();
+        protected override Task MakeChatAsync(CancellationToken ct) => throw new NotSupportedException();
+        protected override Task RemoveChatAsync(CancellationToken ct) => throw new NotSupportedException();
         protected override string ToolZoneName(RunToolMount zone) => throw new NotSupportedException();
         protected override Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct) => throw new NotSupportedException();
         protected override Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct) => throw new NotSupportedException();
         protected override Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct) => throw new NotSupportedException();
         public override Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => throw new NotSupportedException();
         protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => Task.FromResult(true);
-        public override Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default) => throw new NotSupportedException();
+        protected override Task<string> RunAddressAsync(Guid run, CancellationToken ct) => throw new NotSupportedException();
         public override Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default) => throw new NotSupportedException();
         public override Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default) => throw new NotSupportedException();
-        protected override bool ChatToolchains => false;
-        protected override Task<RunToolEnvironment?> ToolsForAsync(string label, RunToolPlan plan, Guid? repositoryId, CancellationToken ct) => throw new NotSupportedException();
+        protected override bool UsesToolStore => false;
     }
 }
