@@ -24,7 +24,8 @@ public sealed record WorkItemSummary(
     DateTime UpdatedAt,
     Guid? RepositoryId,
     Guid? CreatedByLoopRunId,
-    Guid? CreatedByChatSessionId);
+    Guid? CreatedByChatSessionId,
+    Guid? CreatedByExternalGrantId = null);
 
 /// <summary>
 /// Field a <see cref="IWorkItemManager.ListSummariesAsync"/> result is ordered

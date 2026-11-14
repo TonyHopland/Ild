@@ -149,7 +149,10 @@ public class LoopTemplateProposalsController : ControllerBase
     private object View(LoopTemplateProposalEntry entry, bool withDocument)
     {
         var p = entry.Proposal;
-        var kind = entry.SourceWorkItemId is not null ? "run" : entry.SourceChatOwner is not null ? "chat" : "deleted";
+        var kind = entry.SourceWorkItemId is not null ? "run"
+            : entry.SourceChatOwner is not null ? "chat"
+            : p.CreatedByExternalGrantId is not null ? "external"
+            : "deleted";
         return new
         {
             id = p.Id,
@@ -168,12 +171,15 @@ public class LoopTemplateProposalsController : ControllerBase
             createdByLoopRunId = p.CreatedByLoopRunId,
             createdByRunNodeId = p.CreatedByRunNodeId,
             createdByChatSessionId = p.CreatedByChatSessionId,
+            createdByExternalGrantId = p.CreatedByExternalGrantId,
             chatReplySequence = p.ChatReplySequence,
             source = new
             {
                 kind,
                 workItemId = entry.SourceWorkItemId,
                 chatSessionId = kind == "chat" ? p.CreatedByChatSessionId : null,
+                grantId = kind == "external" ? p.CreatedByExternalGrantId : null,
+                grantName = kind == "external" ? entry.SourceGrantName : null,
                 linkable = kind == "run" || (kind == "chat" && entry.SourceChatOwner == User.Identity?.Name),
             },
             changes = entry.BaseGraph is { } baseGraph ? LoopTemplateChanges.Diff(baseGraph, p.Document) : null,

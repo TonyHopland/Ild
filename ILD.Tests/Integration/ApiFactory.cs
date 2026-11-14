@@ -116,6 +116,7 @@ public class ApiFactory : WebApplicationFactory<Program>
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Serilog:WriteToConsole"] = "false",
+                [ILD.Api.Mcp.ExternalAgentMcp.LoopbackUrlSetting] = "http://localhost",
             });
             config.AddInMemoryCollection(_extraConfiguration);
         });
@@ -125,6 +126,10 @@ public class ApiFactory : WebApplicationFactory<Program>
             services.AddDataStores();
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection,
                 sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)).WithPostgresSemantics());
+
+            // The MCP tools call back into the API; here that is this host, in memory, not a listening socket.
+            services.AddHttpClient(ILD.Api.Mcp.ExternalAgentMcp.LoopbackClient)
+                .ConfigurePrimaryHttpMessageHandler(() => Server.CreateHandler());
 
             services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemStartupReconciler>();
             services.RemoveHostedService<ILD.Core.Services.Remote.WorkItemScheduler>();

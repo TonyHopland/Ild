@@ -148,7 +148,7 @@ export interface RepositoryParallelismHold {
 
 export type WorkItemHistoryKind = "Created" | "Baseline" | "Changed" | "Deleted";
 
-export type WorkItemActorKind = "Human" | "Agent" | "Chat" | "System";
+export type WorkItemActorKind = "Human" | "Agent" | "Chat" | "System" | "ExternalAgent";
 
 /**
  * One field of one save in a work item's history, newest first, with the value it
@@ -913,6 +913,7 @@ export interface HumanInputProposal {
   decidedAt: string | null;
   createdByLoopRunId: string | null;
   createdByChatSessionId: string | null;
+  createdByExternalGrantId?: string | null;
 }
 
 export type GlobalVariableProposalStatus =
@@ -943,6 +944,7 @@ export interface GlobalVariableProposal {
   /** The loop run step that was running when it was made; places its card in the Action tab. */
   createdByRunNodeId: string | null;
   createdByChatSessionId: string | null;
+  createdByExternalGrantId?: string | null;
   /** The sequence of the chat reply its card follows. */
   chatReplySequence: number | null;
   /**
@@ -950,9 +952,12 @@ export interface GlobalVariableProposal {
    * chat; "deleted" once it does not. A chat is linkable only for its owner.
    */
   source: {
-    kind: "run" | "chat" | "deleted";
+    kind: "run" | "chat" | "external" | "deleted";
     workItemId: string | null;
     chatSessionId: string | null;
+    /** The external-agent grant, when kind is "external". */
+    grantId?: string | null;
+    grantName?: string | null;
     linkable: boolean;
   };
 }
@@ -1021,6 +1026,7 @@ export interface LoopTemplateProposal {
   /** The loop run step that was running when it was made; places its card in the Action tab. */
   createdByRunNodeId: string | null;
   createdByChatSessionId: string | null;
+  createdByExternalGrantId?: string | null;
   /** The sequence of the chat reply its card follows. */
   chatReplySequence: number | null;
   /**
@@ -1028,9 +1034,12 @@ export interface LoopTemplateProposal {
    * chat; "deleted" once it does not. A chat is linkable only for its owner.
    */
   source: {
-    kind: "run" | "chat" | "deleted";
+    kind: "run" | "chat" | "external" | "deleted";
     workItemId: string | null;
     chatSessionId: string | null;
+    /** The external-agent grant, when kind is "external". */
+    grantId?: string | null;
+    grantName?: string | null;
     linkable: boolean;
   };
   /** Against the base version; null once that version no longer exists. */
@@ -1808,4 +1817,57 @@ export interface MergePrResult {
   edge?: string;
   /** The output that carried the run: `edge`, or OnSuccess / OnFailure when that edge is not wired. */
   output?: string;
+}
+
+export type ExternalAgentGrantScope = "Full" | "ReadOnly";
+
+export type ExternalAgentGrantStatus = "active" | "expired" | "revoked";
+
+/** Temporary access an operator handed to an AI session outside ILD. The token is never part of it. */
+export interface ExternalAgentGrant {
+  id: string;
+  name: string;
+  scope: ExternalAgentGrantScope;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt?: string | null;
+  lastUsedFrom?: string | null;
+  revokedAt?: string | null;
+  status: ExternalAgentGrantStatus;
+}
+
+/** A created grant with its token, which the server returns this once and never again. */
+export interface IssuedExternalAgentGrant {
+  grant: ExternalAgentGrant;
+  token: string;
+}
+
+export type ExternalGrantProposalKind =
+  | "workItemEdit"
+  | "globalVariable"
+  | "loopTemplate"
+  | "humanInput";
+
+export interface ExternalGrantProposal {
+  kind: ExternalGrantProposalKind;
+  id: string;
+  target: string;
+  summary: string;
+  rationale?: string | null;
+  createdAt: string;
+}
+
+export interface ExternalGrantActivity {
+  at: string;
+  method: string;
+  path: string;
+  statusCode: number;
+  from?: string | null;
+}
+
+export interface ExternalAgentGrantDetail {
+  grant: ExternalAgentGrant;
+  pendingProposals: ExternalGrantProposal[];
+  activity: ExternalGrantActivity[];
 }

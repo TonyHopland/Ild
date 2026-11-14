@@ -9,6 +9,7 @@ public enum RemoteWorkItemActorKind
     Agent = 1,
     Chat = 2,
     System = 3,
+    ExternalAgent = 4,
 }
 
 /// <summary>
@@ -39,6 +40,10 @@ public sealed record WorkItemActor(string Username, RemoteWorkItemActorKind Kind
     /// <summary>A chat session, acting as the user it belongs to.</summary>
     public static WorkItemActor Chat(string username, Guid chatSessionId)
         => new(username, RemoteWorkItemActorKind.Chat, $"chat {chatSessionId}");
+
+    /// <summary>An external agent holding an access grant, acting as the instance's user and named by the grant.</summary>
+    public static WorkItemActor External(string instanceUsername, string grantName, Guid grantId)
+        => new(instanceUsername, RemoteWorkItemActorKind.ExternalAgent, $"{grantName} (grant {grantId})");
 
     /// <summary>A process of this instance with no person or agent behind it, acting as the instance's user.</summary>
     public static WorkItemActor System(string instanceUsername, string reason)

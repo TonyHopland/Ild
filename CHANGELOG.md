@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Share temporary access with an AI.** Settings → Share access with an AI gives an AI session outside ILD a link and token to use ILD's agent API and MCP until it expires or you revoke it.
+
 ## [0.24.0] - 2026-11-13
 
 ### Security

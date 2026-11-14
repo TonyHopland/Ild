@@ -90,6 +90,7 @@ public sealed class WorkItemService : IWorkItemService
             Status = req.ForceStatus ?? WorkItemStatus.Backlog,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
+            CreatedByExternalGrantId = req.CreatedByExternalGrantId,
             RepositoryId = req.RepositoryId,
             BranchNameOverride = WorkItemMapper.NormalizeBranchRef(req.BranchNameOverride),
             BaseBranchOverride = WorkItemMapper.NormalizeBranchRef(req.BaseBranchOverride),

@@ -88,5 +88,6 @@ public class HumanInputProposalsController : ControllerBase
         decidedAt = p.DecidedAt,
         createdByLoopRunId = p.CreatedByLoopRunId,
         createdByChatSessionId = p.CreatedByChatSessionId,
+        createdByExternalGrantId = p.CreatedByExternalGrantId,
     };
 }

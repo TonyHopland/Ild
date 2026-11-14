@@ -108,6 +108,7 @@ internal static class WorkItemMapper
         HumanFeedbackActions = w.HumanFeedbackActions,
         CreatedByLoopRunId = w.CreatedByLoopRunId,
         CreatedByChatSessionId = w.CreatedByChatSessionId,
+        CreatedByExternalGrantId = w.CreatedByExternalGrantId,
         RepositoryId = w.RepositoryId,
         AiProviderOverride = w.AiProviderOverride,
         AiProviderOverrideId = w.AiProviderOverrideId,

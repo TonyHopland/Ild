@@ -52,6 +52,7 @@ describe("Settings sections", () => {
       "/settings/logging",
       "/settings/work-item-server",
       "/settings/storage",
+      "/settings/ai-access",
     ]);
   });
 

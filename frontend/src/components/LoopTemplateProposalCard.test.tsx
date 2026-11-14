@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router";
-import LoopTemplateProposalCard from "./LoopTemplateProposalCard";
+import LoopTemplateProposalCard, { LoopTemplateProposalSource } from "./LoopTemplateProposalCard";
 import { makeLoopTemplateProposal, reply, stubFetch } from "../test-support";
 import type { LoopTemplateEdit, LoopTemplateProposal, LoopTemplateProposalStatus } from "../types";
 
@@ -77,6 +77,25 @@ function reviewControl(): HTMLElement | null {
 }
 
 describe("LoopTemplateProposalCard", () => {
+  test("names the external AI grant a proposal came from", () => {
+    render(
+      <LoopTemplateProposalSource
+        proposal={makeProposal({
+          source: {
+            kind: "external",
+            workItemId: null,
+            chatSessionId: null,
+            grantId: "g-1",
+            grantName: "Claude Code",
+            linkable: false,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Proposed by external AI grant «Claude Code»")).toBeTruthy();
+  });
+
   test("shows the template, its base version, the rationale and what changes structurally, never the raw document", () => {
     const { container } = renderCard(makeProposal());
     const text = container.textContent ?? "";

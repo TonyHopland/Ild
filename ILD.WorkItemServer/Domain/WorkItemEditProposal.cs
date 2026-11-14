@@ -81,6 +81,8 @@ public class WorkItemEditProposal
 
     public Guid? CreatedByChatSessionId { get; set; }
 
+    public Guid? CreatedByExternalGrantId { get; set; }
+
     /// <summary>
     /// The node execution of <see cref="CreatedByLoopRunId"/> that was running
     /// when the proposal was made. Only on a loop proposal; null when no step

@@ -94,6 +94,7 @@ public sealed class RemoteWorkItem
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
     public Guid? RepositoryId { get; set; }
     public RemoteAiProviderOverrideMode AiProviderOverride { get; set; }
     public Guid? AiProviderOverrideId { get; set; }
@@ -126,6 +127,7 @@ public sealed class RemoteCreateWorkItemRequest
     public RemoteWorkItemStatus? ForceStatus { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
     public Guid? RepositoryId { get; set; }
 
     /// <summary>Custom branch name for every run of the new item; blank/null = generated.</summary>
@@ -311,6 +313,7 @@ public sealed class RemoteWorkItemEditProposal
     public string? Rationale { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
 
     /// <summary>The loop run's step that was running when it was proposed; places its card in the Action tab.</summary>
     public Guid? CreatedByRunNodeId { get; set; }
@@ -342,6 +345,7 @@ public sealed class RemoteCreateEditProposalRequest
     public string? Rationale { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
     public Guid? CreatedByRunNodeId { get; set; }
     public int? ChatReplySequence { get; set; }
 }
@@ -401,6 +405,7 @@ public sealed class RemoteEditProposalQuery
 {
     public RemoteEditProposalStatus? Status { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
 
     /// <summary>Only decided proposals whose decision the proposing chat has not been told.</summary>
     public bool UndeliveredOnly { get; set; }

@@ -37,7 +37,7 @@ public interface IWorkItemEditProposalService
     /// null does not filter, and an empty set matches nothing.
     /// </summary>
     Task<IReadOnlyList<WorkItemEditProposalDto>> ListAsync(
-        WorkItemEditProposalStatus? status, Guid? createdByChatSessionId, bool undeliveredOnly,
+        WorkItemEditProposalStatus? status, Guid? createdByChatSessionId, Guid? createdByExternalGrantId, bool undeliveredOnly,
         IReadOnlyCollection<Guid>? createdByLoopRunIds, CancellationToken ct = default);
 
     /// <summary>
@@ -127,6 +127,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Rationale = string.IsNullOrWhiteSpace(req.Rationale) ? null : req.Rationale.Trim(),
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
+            CreatedByExternalGrantId = req.CreatedByExternalGrantId,
             CreatedByRunNodeId = req.CreatedByRunNodeId,
             ChatReplySequence = req.ChatReplySequence,
             Status = WorkItemEditProposalStatus.Pending,
@@ -164,8 +165,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             return $"A base branch may be at most {MaxBranchRefLength} characters.";
         if (req.Rationale?.Trim().Length > MaxRationaleLength)
             return $"A rationale may be at most {MaxRationaleLength} characters.";
-        if (req.CreatedByLoopRunId is not null && req.CreatedByChatSessionId is not null)
-            return "A proposal comes from a loop run or a chat session, never both.";
+        if ((req.CreatedByLoopRunId is not null ? 1 : 0) + (req.CreatedByChatSessionId is not null ? 1 : 0) + (req.CreatedByExternalGrantId is not null ? 1 : 0) > 1)
+            return "A proposal comes from a loop run, a chat session or an external-agent grant, never more than one.";
         if (req.CreatedByRunNodeId is not null && req.CreatedByLoopRunId is null)
             return "Only a proposal from a loop run can name the run step that made it.";
         if (req.ChatReplySequence is not null && req.CreatedByChatSessionId is null)
@@ -188,12 +189,13 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
     }
 
     public async Task<IReadOnlyList<WorkItemEditProposalDto>> ListAsync(
-        WorkItemEditProposalStatus? status, Guid? createdByChatSessionId, bool undeliveredOnly,
+        WorkItemEditProposalStatus? status, Guid? createdByChatSessionId, Guid? createdByExternalGrantId, bool undeliveredOnly,
         IReadOnlyCollection<Guid>? createdByLoopRunIds, CancellationToken ct = default)
     {
         IQueryable<WorkItemEditProposal> q = _db.WorkItemEditProposals.AsNoTracking();
         if (status is { } s) q = q.Where(p => p.Status == s);
         if (createdByChatSessionId is { } chat) q = q.Where(p => p.CreatedByChatSessionId == chat);
+        if (createdByExternalGrantId is { } grant) q = q.Where(p => p.CreatedByExternalGrantId == grant);
         if (createdByLoopRunIds is not null)
             q = q.Where(p => p.CreatedByLoopRunId != null && createdByLoopRunIds.Contains(p.CreatedByLoopRunId.Value));
         if (undeliveredOnly)
@@ -453,6 +455,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
         Rationale = p.Rationale,
         CreatedByLoopRunId = p.CreatedByLoopRunId,
         CreatedByChatSessionId = p.CreatedByChatSessionId,
+        CreatedByExternalGrantId = p.CreatedByExternalGrantId,
         CreatedByRunNodeId = p.CreatedByRunNodeId,
         ChatReplySequence = p.ChatReplySequence,
         RejectionReason = p.RejectionReason,

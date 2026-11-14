@@ -17,6 +17,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.3.0" />
     <PackageReference Include="Serilog" Version="4.4.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
@@ -49,11 +50,10 @@
     <ProjectReference Include="..\ILD.Core\ILD.Core.csproj" />
     <ProjectReference Include="..\ILD.Data\ILD.Data.csproj" />
     <!--
-      Build the MCP server alongside the API so its DLL is on disk for the
-      OpenCode adapter to launch. We don't reference its types — only its
-      build output — so flip the assembly off.
+      The MCP server's tools are hosted in-process too, over HTTP for external agents. Its
+      DLL also stays on disk for the adapters that launch it as a stdio server.
     -->
-    <ProjectReference Include="..\ILD.McpServer\ILD.McpServer.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
+    <ProjectReference Include="..\ILD.McpServer\ILD.McpServer.csproj" />
   </ItemGroup>
 
 </Project>

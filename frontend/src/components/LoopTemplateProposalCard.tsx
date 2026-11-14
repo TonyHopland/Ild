@@ -29,6 +29,8 @@ export function LoopTemplateProposalSource({ proposal }: { proposal: LoopTemplat
       </Link>
     );
   if (source.kind === "chat") return <>Proposed in another user&apos;s chat</>;
+  if (source.kind === "external")
+    return <>Proposed by external AI grant «{source.grantName ?? "unknown"}»</>;
   return <>Source deleted</>;
 }
 

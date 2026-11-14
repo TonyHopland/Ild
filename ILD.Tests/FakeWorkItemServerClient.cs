@@ -58,6 +58,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         HumanFeedbackActions = dto.HumanFeedbackActions,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
         CreatedByChatSessionId = dto.CreatedByChatSessionId,
+        CreatedByExternalGrantId = dto.CreatedByExternalGrantId,
         RepositoryId = dto.RepositoryId,
         BranchNameOverride = dto.BranchNameOverride,
         BaseBranchOverride = dto.BaseBranchOverride,
@@ -79,6 +80,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             ForceStatus = req.ForceStatus.HasValue ? Map(req.ForceStatus.Value) : null,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
+            CreatedByExternalGrantId = req.CreatedByExternalGrantId,
             RepositoryId = req.RepositoryId,
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
@@ -275,6 +277,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Rationale = req.Rationale,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
+            CreatedByExternalGrantId = req.CreatedByExternalGrantId,
             CreatedByRunNodeId = req.CreatedByRunNodeId,
             ChatReplySequence = req.ChatReplySequence,
         }, ct);
@@ -291,6 +294,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         => (await _proposals.ListAsync(
                 query.Status is { } status ? (WorkItemEditProposalStatus)(int)status : null,
                 query.CreatedByChatSessionId,
+                query.CreatedByExternalGrantId,
                 query.UndeliveredOnly,
                 query.CreatedByLoopRunIds,
                 ct))
@@ -333,6 +337,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         Rationale = dto.Rationale,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
         CreatedByChatSessionId = dto.CreatedByChatSessionId,
+        CreatedByExternalGrantId = dto.CreatedByExternalGrantId,
         CreatedByRunNodeId = dto.CreatedByRunNodeId,
         ChatReplySequence = dto.ChatReplySequence,
         RejectionReason = dto.RejectionReason,

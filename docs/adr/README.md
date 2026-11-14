@@ -39,5 +39,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0034](./0034-container-run-host.md)                           | A loop run can be a container, with a volume and a network, swept by label                |
 | [0035](./0035-run-toolchains.md)                               | A run gets its repository's toolchains and ILD's agents from a shared, read-only store    |
 | [0036](./0036-runs-always-in-containers.md)                    | ILD from its image always runs agents in containers; local runs are for `dotnet run` only |
+| [0037](./0037-external-agents-use-expiring-revocable-grants.md)  | External agents authenticate with expiring, revocable grants; a grant is its own session   |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

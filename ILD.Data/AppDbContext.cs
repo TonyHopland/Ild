@@ -34,6 +34,8 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<AgentToken> AgentTokens => Set<AgentToken>();
+    public DbSet<ExternalAgentGrant> ExternalAgentGrants => Set<ExternalAgentGrant>();
+    public DbSet<ExternalAgentGrantActivity> ExternalAgentGrantActivities => Set<ExternalAgentGrantActivity>();
     public DbSet<UserPreference> UserPreferences => Set<UserPreference>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
@@ -384,6 +386,18 @@ public class AppDbContext : DbContext
             e.HasIndex(t => new { t.Source, t.SourceId });
         });
 
+        modelBuilder.Entity<ExternalAgentGrant>(e =>
+        {
+            e.HasIndex(g => g.TokenHash).IsUnique();
+            e.HasIndex(g => g.ExpiresAt);
+        });
+
+        modelBuilder.Entity<ExternalAgentGrantActivity>(e =>
+        {
+            e.HasIndex(a => new { a.GrantId, a.At });
+            e.HasOne<ExternalAgentGrant>().WithMany().HasForeignKey(a => a.GrantId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<AppSetting>(e =>
         {
             e.HasIndex(s => s.Key).IsUnique();
@@ -442,6 +456,7 @@ public class AppDbContext : DbContext
             e.HasIndex(p => p.NormalizedName);
             e.HasIndex(p => p.CreatedByLoopRunId);
             e.HasIndex(p => p.CreatedByChatSessionId);
+            e.HasIndex(p => p.CreatedByExternalGrantId);
             // One pending suggestion per source per variable, enforced where the
             // race is: two suggestions that both pass the supersede step must not
             // both stay pending. The filter is GlobalVariableProposalStatus.Pending (0).
@@ -449,6 +464,9 @@ public class AppDbContext : DbContext
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
             e.HasIndex(p => new { p.CreatedByChatSessionId, p.NormalizedName }, "IX_GlobalVariableProposals_ChatSession_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
+            e.HasIndex(p => new { p.CreatedByExternalGrantId, p.NormalizedName }, "IX_GlobalVariableProposals_Grant_Pending")
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
         });
@@ -459,6 +477,7 @@ public class AppDbContext : DbContext
             e.HasIndex(p => p.RunNodeId);
             e.HasIndex(p => p.CreatedByLoopRunId);
             e.HasIndex(p => p.CreatedByChatSessionId);
+            e.HasIndex(p => p.CreatedByExternalGrantId);
             // One pending suggestion per source per work item, enforced where the
             // race is: two suggestions that both pass the supersede step must not
             // both stay pending. The filter is HumanInputProposalStatus.Pending (0).
@@ -468,6 +487,9 @@ public class AppDbContext : DbContext
             e.HasIndex(p => new { p.CreatedByChatSessionId, p.WorkItemId }, "IX_HumanInputProposals_ChatSession_Pending")
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
+            e.HasIndex(p => new { p.CreatedByExternalGrantId, p.WorkItemId }, "IX_HumanInputProposals_Grant_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
         });
 
         modelBuilder.Entity<LoopTemplateProposal>(e =>
@@ -475,6 +497,7 @@ public class AppDbContext : DbContext
             e.HasIndex(p => p.LoopTemplateId);
             e.HasIndex(p => p.CreatedByLoopRunId);
             e.HasIndex(p => p.CreatedByChatSessionId);
+            e.HasIndex(p => p.CreatedByExternalGrantId);
             // One pending proposal per source per template, enforced where the
             // race is: two proposals that both pass the supersede step must not
             // both stay pending. The filter is LoopTemplateProposalStatus.Pending (0).
@@ -482,6 +505,9 @@ public class AppDbContext : DbContext
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
             e.HasIndex(p => new { p.CreatedByChatSessionId, p.LoopTemplateId }, "IX_LoopTemplateProposals_ChatSession_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
+            e.HasIndex(p => new { p.CreatedByExternalGrantId, p.LoopTemplateId }, "IX_LoopTemplateProposals_Grant_Pending")
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
         });

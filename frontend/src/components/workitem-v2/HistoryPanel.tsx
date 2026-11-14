@@ -213,7 +213,11 @@ function SaveEvent({
       </div>
       {(first.actorKind || first.actorDetail || first.actorWorkItemId) && (
         <div className="wiv2-history-actor">
-          {first.actorKind && <span className="wiv2-history-kind">{first.actorKind}</span>}{" "}
+          {first.actorKind && (
+            <span className="wiv2-history-kind">
+              {first.actorKind === "ExternalAgent" ? "External agent" : first.actorKind}
+            </span>
+          )}{" "}
           {first.actorDetail && <ActorDetail kind={first.actorKind} detail={first.actorDetail} />}{" "}
           {first.actorWorkItemId && (
             <span>

@@ -5,6 +5,7 @@ using ILD.Api.Authentication;
 using ILD.Api.Configuration;
 using ILD.Api.Middleware;
 using ILD.Api.Hubs;
+using ILD.Api.Mcp;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using Serilog.Core;
@@ -138,6 +139,8 @@ try
         });
 
     builder.Services.AddIldAuthentication();
+    builder.Services.AddExternalAgentRateLimit();
+    builder.Services.AddIldMcpEndpoint();
 
     builder.Services.AddSignalR();
 
@@ -380,9 +383,12 @@ try
     // this point and so stay anonymous, as they must for the SPA shell to load.
     app.UseRouting();
     app.UseAuthentication();
+    app.UseMiddleware<ExternalAgentAuditMiddleware>();
+    app.UseRateLimiter();
     app.UseAuthorization();
 
     app.MapControllers();
+    app.MapIldMcpEndpoint();
     app.MapHub<LoopRunHub>("/hubs/loop-run");
     app.MapHub<WorkItemHub>("/hubs/work-item");
     app.MapHub<ChatHub>("/hubs/chat");
@@ -394,7 +400,7 @@ try
         // catch-all and would otherwise answer them with a 200 and a page. Left
         // under the fallback policy, so an unknown path still tells an anonymous
         // caller nothing.
-        foreach (var prefix in new[] { "/api", "/hubs", "/metrics" })
+        foreach (var prefix in new[] { "/api", "/hubs", "/metrics", ILD.Api.Mcp.ExternalAgentMcp.Path })
         {
             app.MapFallback($"{prefix}/{{**rest}}", () => Results.NotFound());
         }

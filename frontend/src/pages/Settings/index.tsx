@@ -6,6 +6,7 @@ import PackageFeedsSettings from "./sections/PackageFeedsSettings";
 import LoggingSettings from "./sections/LoggingSettings";
 import WorkItemServerSettings from "./sections/WorkItemServerSettings";
 import StorageSettings from "./sections/StorageSettings";
+import ExternalAccessSettings from "./sections/ExternalAccessSettings";
 import "./Settings.css";
 
 function Icon({ path }: { path: string }) {
@@ -68,6 +69,12 @@ const SECTIONS = [
     label: "Storage",
     icon: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 0v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3",
     Component: StorageSettings,
+  },
+  {
+    id: "ai-access",
+    label: "Share with an AI",
+    icon: "M8 12h8m-4-4 4 4-4 4M4 5h16v14H4V5Z",
+    Component: ExternalAccessSettings,
   },
 ] as const;
 

@@ -27,7 +27,7 @@ public sealed class HumanInputProposalService : IHumanInputProposalService
 
     public async Task<HumanInputProposalResult> ProposeAsync(
         string workItemId, string output, string text, string rationale,
-        Guid? runId, Guid? chatSessionId, CancellationToken ct)
+        Guid? runId, Guid? chatSessionId, CancellationToken ct, Guid? externalGrantId = null)
     {
         if (await _workItems.GetWorkItemAsync(workItemId) is null)
             return new(HumanInputProposalOutcome.NotFound);
@@ -46,6 +46,7 @@ public sealed class HumanInputProposalService : IHumanInputProposalService
             Rationale = rationale,
             CreatedByLoopRunId = runId,
             CreatedByChatSessionId = chatSessionId,
+            CreatedByExternalGrantId = externalGrantId,
         }, ct);
         await _notifier.HumanInputProposalsChangedAsync(workItemId);
         return new(HumanInputProposalOutcome.Created, proposal);

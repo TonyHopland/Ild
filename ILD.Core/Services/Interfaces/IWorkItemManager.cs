@@ -5,7 +5,7 @@ namespace ILD.Core.Services.Interfaces;
 public interface IWorkItemManager
 {
     Task<string> CreateWorkItemAsync(WorkItemActor actor, string title, string description, Guid? repositoryId);
-    Task<string> CreateWorkItemAsync(WorkItemActor actor, string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null);
+    Task<string> CreateWorkItemAsync(WorkItemActor actor, string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null, Guid? createdByExternalGrantId = null);
 
     /// <summary>
     /// Edit the server-held fields of a work item. <paramref name="branchNameOverride"/>

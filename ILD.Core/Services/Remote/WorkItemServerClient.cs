@@ -364,6 +364,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         var qs = new List<string>();
         if (query.Status is { } status) qs.Add($"status={(int)status}");
         if (query.CreatedByChatSessionId is { } chat) qs.Add($"createdByChatSessionId={chat}");
+        if (query.CreatedByExternalGrantId is { } grant) qs.Add($"createdByExternalGrantId={grant}");
         if (query.UndeliveredOnly) qs.Add("undelivered=true");
         foreach (var run in query.CreatedByLoopRunIds ?? []) qs.Add($"createdByLoopRunId={run}");
         var suffix = qs.Count == 0 ? string.Empty : "?" + string.Join('&', qs);

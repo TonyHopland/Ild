@@ -82,12 +82,14 @@ internal sealed class AgentProposals<TProposal, TStatus>
     }
 
     /// <summary>The proposals every filter set narrows to; none set matches every proposal.</summary>
-    public IQueryable<TProposal> Matching(TStatus? status, Guid? createdByLoopRunId, Guid? createdByChatSessionId, string? workItemId)
+    public IQueryable<TProposal> Matching(
+        TStatus? status, Guid? createdByLoopRunId, Guid? createdByChatSessionId, string? workItemId, Guid? createdByExternalGrantId = null)
     {
         IQueryable<TProposal> q = _table.AsNoTracking();
         if (status is { } s) q = q.Where(HasStatus(s));
         if (createdByLoopRunId is { } runId) q = q.Where(p => p.CreatedByLoopRunId == runId);
         if (createdByChatSessionId is { } chatId) q = q.Where(p => p.CreatedByChatSessionId == chatId);
+        if (createdByExternalGrantId is { } grantId) q = q.Where(p => p.CreatedByExternalGrantId == grantId);
         if (workItemId is not null)
             q = q.Where(p => _db.LoopRuns.Any(r => r.Id == p.CreatedByLoopRunId && r.WorkItemId == workItemId));
         return q;
@@ -169,22 +171,27 @@ internal sealed class AgentProposals<TProposal, TStatus>
     {
         var runIds = rows.Select(p => p.CreatedByLoopRunId).OfType<Guid>().Distinct().ToList();
         var chatIds = rows.Select(p => p.CreatedByChatSessionId).OfType<Guid>().Distinct().ToList();
+        var grantIds = rows.Select(p => p.CreatedByExternalGrantId).OfType<Guid>().Distinct().ToList();
         var runs = await _db.LoopRuns.AsNoTracking()
             .Where(r => runIds.Contains(r.Id))
             .ToDictionaryAsync(r => r.Id, r => r.WorkItemId, ct);
         var chats = await _db.ChatSessions.AsNoTracking()
             .Where(c => chatIds.Contains(c.Id))
             .ToDictionaryAsync(c => c.Id, c => c.UserId, ct);
-        return new(runs, chats);
+        var grants = await _db.ExternalAgentGrants.AsNoTracking()
+            .Where(g => grantIds.Contains(g.Id))
+            .ToDictionaryAsync(g => g.Id, g => g.Name, ct);
+        return new(runs, chats, grants);
     }
 
     private static Expression<Func<TProposal, bool>> FromSourceOf(TProposal proposal)
     {
         var runId = proposal.CreatedByLoopRunId;
         var chatId = proposal.CreatedByChatSessionId;
-        return runId is not null
-            ? p => p.CreatedByLoopRunId == runId
-            : p => p.CreatedByChatSessionId == chatId;
+        var grantId = proposal.CreatedByExternalGrantId;
+        return runId is not null ? p => p.CreatedByLoopRunId == runId
+            : chatId is not null ? p => p.CreatedByChatSessionId == chatId
+            : p => p.CreatedByExternalGrantId == grantId;
     }
 
     /// <summary><c>p =&gt; p.Status == status</c>, which C# cannot write over a generic enum.</summary>
@@ -201,13 +208,19 @@ internal sealed class AgentProposals<TProposal, TStatus>
 /// Where proposals came from, while that still exists: the work item of the run
 /// that made one, or the owner of the chat that made it. Null once deleted.
 /// </summary>
-internal sealed class ProposalSources(IReadOnlyDictionary<Guid, string> runWorkItems, IReadOnlyDictionary<Guid, string> chatOwners)
+internal sealed class ProposalSources(
+    IReadOnlyDictionary<Guid, string> runWorkItems,
+    IReadOnlyDictionary<Guid, string> chatOwners,
+    IReadOnlyDictionary<Guid, string> grantNames)
 {
     public string? WorkItemOf(IAgentProposal proposal)
         => proposal.CreatedByLoopRunId is { } run ? runWorkItems.GetValueOrDefault(run) : null;
 
     public string? ChatOwnerOf(IAgentProposal proposal)
         => proposal.CreatedByChatSessionId is { } chat ? chatOwners.GetValueOrDefault(chat) : null;
+
+    public string? GrantNameOf(IAgentProposal proposal)
+        => proposal.CreatedByExternalGrantId is { } grant ? grantNames.GetValueOrDefault(grant) : null;
 }
 
 internal static class AgentProposals

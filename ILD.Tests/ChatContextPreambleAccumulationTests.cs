@@ -418,7 +418,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
     public void The_authoring_guide_is_pullable_on_demand_from_every_agent_surface()
     {
         var mcpTool = McpToolInvoker.Tool("get_loop_authoring_guide");
-        Assert.Equal(typeof(ILD.McpServer.Tools.LoopTools), mcpTool.DeclaringType);
+        Assert.Equal(typeof(ILD.McpServer.Tools.LoopGuideTools), mcpTool.DeclaringType);
         Assert.Equal("GetLoopAuthoringGuide", mcpTool.Name);
 
         // ...and the agent API actually routes it.

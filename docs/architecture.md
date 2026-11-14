@@ -27,7 +27,7 @@ ILD.McpServer -> local ILD API for agent-facing work-item tools
 - **`ILD.Api`** is the main host for auth, controllers, SignalR hubs, startup seeding, and recovery.
 - **`ILD.Core`** owns loop execution, repository operations, polling orchestration, preview control, metrics generation, and AI adapter selection.
 - **`ILD.Data`** stores loop runs, templates, repositories, providers, users, event logs, adapter session snapshots, and other ILD-local state.
-- **`ILD.McpServer`** exposes local agent tools against the ILD API.
+- **`ILD.McpServer`** exposes the agent tools against the ILD API: as a stdio server for ILD's own agents, and, hosted by `ILD.Api` at `/mcp`, over Streamable HTTP for external agents holding a grant ([ADR-0037](./adr/0037-external-agents-use-expiring-revocable-grants.md)).
 - **`frontend/`** is the React SPA surfaced at runtime from `wwwroot/` and proxied through Vite+ during development.
 
 ## Realtime channel

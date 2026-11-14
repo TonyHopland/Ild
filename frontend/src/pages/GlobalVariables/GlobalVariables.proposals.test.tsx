@@ -136,6 +136,27 @@ const reads = (calls: Call[], path: string) =>
   calls.filter((c) => c.method === "GET" && c.path === path).length;
 
 describe("suggestions on the Global Variables page", () => {
+  test("names the external AI grant a suggestion came from, with no link", async () => {
+    mockHub();
+    stubApi({
+      variables: [rules, writing],
+      proposals: [
+        suggestion(
+          "gp-ext",
+          "review_rules",
+          "From an outside AI.",
+          { kind: "external", grantId: "g-1", grantName: "Claude Code" },
+          { createdByLoopRunId: null, createdByExternalGrantId: "g-1" },
+        ),
+      ],
+    });
+    renderPage();
+
+    const card = await cardOf("From an outside AI.");
+    expect(card.textContent).toContain("Suggested by external AI grant «Claude Code»");
+    expect(within(card).queryAllByRole("link")).toHaveLength(0);
+  });
+
   test("lists each pending suggestion under its variable, new ones as new variables, each linking to where it came from", async () => {
     mockHub();
     stubApi({

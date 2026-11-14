@@ -631,6 +631,92 @@ namespace ILD.Data.Migrations
                     b.ToTable("EventLogs");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.ExternalAgentGrant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastUsedFrom")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Scope")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.ToTable("ExternalAgentGrants");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.ExternalAgentGrantActivity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("From")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("GrantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Method")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<int>("StatusCode")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GrantId", "At");
+
+                    b.ToTable("ExternalAgentGrantActivities");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.GlobalVariable", b =>
                 {
                     b.Property<Guid>("Id")
@@ -676,6 +762,9 @@ namespace ILD.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("CreatedByChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByExternalGrantId")
                         .HasColumnType("uuid");
 
                     b.Property<Guid?>("CreatedByLoopRunId")
@@ -724,11 +813,17 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("CreatedByChatSessionId");
 
+                    b.HasIndex("CreatedByExternalGrantId");
+
                     b.HasIndex("CreatedByLoopRunId");
 
                     b.HasIndex("NormalizedName");
 
                     b.HasIndex(new[] { "CreatedByChatSessionId", "NormalizedName" }, "IX_GlobalVariableProposals_ChatSession_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.HasIndex(new[] { "CreatedByExternalGrantId", "NormalizedName" }, "IX_GlobalVariableProposals_Grant_Pending")
                         .IsUnique()
                         .HasFilter("\"Status\" = 0");
 
@@ -749,6 +844,9 @@ namespace ILD.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("CreatedByChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByExternalGrantId")
                         .HasColumnType("uuid");
 
                     b.Property<Guid?>("CreatedByLoopRunId")
@@ -800,6 +898,8 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("CreatedByChatSessionId");
 
+                    b.HasIndex("CreatedByExternalGrantId");
+
                     b.HasIndex("CreatedByLoopRunId");
 
                     b.HasIndex("RunNodeId");
@@ -807,6 +907,10 @@ namespace ILD.Data.Migrations
                     b.HasIndex("WorkItemId");
 
                     b.HasIndex(new[] { "CreatedByChatSessionId", "WorkItemId" }, "IX_HumanInputProposals_ChatSession_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.HasIndex(new[] { "CreatedByExternalGrantId", "WorkItemId" }, "IX_HumanInputProposals_Grant_Pending")
                         .IsUnique()
                         .HasFilter("\"Status\" = 0");
 
@@ -1339,6 +1443,9 @@ namespace ILD.Data.Migrations
                     b.Property<Guid?>("CreatedByChatSessionId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("CreatedByExternalGrantId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("CreatedByLoopRunId")
                         .HasColumnType("uuid");
 
@@ -1380,11 +1487,17 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("CreatedByChatSessionId");
 
+                    b.HasIndex("CreatedByExternalGrantId");
+
                     b.HasIndex("CreatedByLoopRunId");
 
                     b.HasIndex("LoopTemplateId");
 
                     b.HasIndex(new[] { "CreatedByChatSessionId", "LoopTemplateId" }, "IX_LoopTemplateProposals_ChatSession_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.HasIndex(new[] { "CreatedByExternalGrantId", "LoopTemplateId" }, "IX_LoopTemplateProposals_Grant_Pending")
                         .IsUnique()
                         .HasFilter("\"Status\" = 0");
 
@@ -1913,6 +2026,15 @@ namespace ILD.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("LoopRun");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.ExternalAgentGrantActivity", b =>
+                {
+                    b.HasOne("ILD.Data.Entities.ExternalAgentGrant", null)
+                        .WithMany()
+                        .HasForeignKey("GrantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopNode", b =>

@@ -37,7 +37,8 @@ public sealed record LoopTemplateProposalQuery(
     Guid? TemplateId = null,
     Guid? CreatedByLoopRunId = null,
     Guid? CreatedByChatSessionId = null,
-    string? WorkItemId = null);
+    string? WorkItemId = null,
+    Guid? CreatedByExternalGrantId = null);
 
 public enum LoopTemplateProposeOutcome
 {
@@ -65,7 +66,8 @@ public sealed record LoopTemplateProposalEntry(
     int? LatestVersion,
     TemplateGraph? BaseGraph,
     string? SourceWorkItemId,
-    string? SourceChatOwner);
+    string? SourceChatOwner,
+    string? SourceGrantName = null);
 
 public enum LoopTemplateProposalDecisionOutcome
 {

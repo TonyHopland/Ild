@@ -25,6 +25,7 @@ public enum WorkItemActorKind
     Agent = 1,
     Chat = 2,
     System = 3,
+    ExternalAgent = 4,
 }
 
 /// <summary>

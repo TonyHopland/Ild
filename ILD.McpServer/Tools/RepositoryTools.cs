@@ -13,6 +13,7 @@ namespace ILD.McpServer.Tools;
 /// (<c>AgentController</c>) they call.
 /// </summary>
 [McpServerToolType]
+[RunOrChatScoped]
 public sealed class RepositoryTools
 {
     private readonly IldClient _ild;

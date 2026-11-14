@@ -13,6 +13,7 @@ namespace ILD.McpServer.Tools;
 /// placeholder. Variables live as long as the run.
 /// </summary>
 [McpServerToolType]
+[RunOrChatScoped]
 public sealed class VariableTools
 {
     private readonly IldClient _ild;

@@ -29,6 +29,7 @@ public sealed class WorkItemDto
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
     public Guid? RepositoryId { get; set; }
     public AiProviderOverrideMode AiProviderOverride { get; set; }
     public Guid? AiProviderOverrideId { get; set; }
@@ -65,6 +66,7 @@ public sealed class CreateWorkItemRequest
     public WorkItemStatus? ForceStatus { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
     public Guid? RepositoryId { get; set; }
 
     /// <summary>
@@ -315,6 +317,7 @@ public sealed class WorkItemEditProposalDto
     public string? Rationale { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
     public Guid? CreatedByRunNodeId { get; set; }
     public int? ChatReplySequence { get; set; }
     public string? RejectionReason { get; set; }
@@ -344,6 +347,7 @@ public sealed class CreateEditProposalRequest
     public string? Rationale { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByExternalGrantId { get; set; }
 
     /// <summary>Only with <see cref="CreatedByLoopRunId"/>.</summary>
     public Guid? CreatedByRunNodeId { get; set; }

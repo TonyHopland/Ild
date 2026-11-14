@@ -6,12 +6,14 @@ namespace ILD.Api.Authentication;
 /// <summary>
 /// ILD's one authentication scheme and the vocabulary built on it.
 ///
-/// Two principals exist and nothing else can authenticate: the <c>user</c> — the
+/// Three principals exist and nothing else can authenticate: the <c>user</c> — the
 /// single seeded operator, holding a session token from <c>/api/v1/auth/login</c>
-/// — and the <c>agent</c>, ILD's own spawned MCP server presenting the
-/// per-launch token ILD issues to each run and chat it starts (see <see cref="ILD.Core.Services.Interfaces.IAgentTokenService"/>).
-/// Because those are the only two roles, "agent or user" is exactly "any
-/// authenticated caller".
+/// — the <c>agent</c>, ILD's own spawned MCP server presenting the
+/// per-launch token ILD issues to each run and chat it starts (see <see cref="ILD.Core.Services.Interfaces.IAgentTokenService"/>),
+/// and the <c>external-agent</c>, an AI session outside ILD presenting the token of a temporary
+/// grant the operator created (see <see cref="ILD.Core.Services.Interfaces.IExternalAgentGrantService"/>).
+/// "Agent or user" is any caller ILD itself launched or the operator; an external agent is admitted
+/// only by <see cref="AgentSurfacePolicy"/>.
 ///
 /// The fallback policy is the point of the whole arrangement: an endpoint that
 /// says nothing about authorization is user-only. A coding agent that finds an
@@ -25,11 +27,17 @@ public static class IldAuthentication
     public const string UserRole = "user";
     public const string AgentRole = "agent";
 
+    /// <summary>An AI session outside ILD holding an access grant (ADR-0037). Never the operator, and never admitted outside <see cref="AgentSurfacePolicy"/>.</summary>
+    public const string ExternalAgentRole = "external-agent";
+
     /// <summary>The claim naming what an agent token was issued for: <c>run</c> or <c>chat</c> (later a grant).</summary>
     public const string SessionSourceClaim = "ild:session-source";
 
     /// <summary>The claim carrying the id of the run or chat the agent token was issued for.</summary>
     public const string SessionIdClaim = "ild:session-id";
+
+    /// <summary>The claim carrying the scope of a grant: <c>Full</c> or <c>ReadOnly</c>.</summary>
+    public const string GrantScopeClaim = "ild:grant-scope";
 
     /// <summary>
     /// Any authenticated caller, agent included. The opt-out from the user-only
@@ -37,6 +45,12 @@ public static class IldAuthentication
     /// callers present an operator-configured token of either kind.
     /// </summary>
     public const string AgentOrUserPolicy = "AgentOrUser";
+
+    /// <summary>
+    /// What the agent API (<c>/api/v1/agent/*</c>) and the MCP endpoint admit: the user, ILD's own agents
+    /// and external-agent grants. The only policy that admits <see cref="ExternalAgentRole"/>.
+    /// </summary>
+    public const string AgentSurfacePolicy = "AgentSurface";
 
     /// <summary>
     /// The fallback policy under its own name, for endpoints that want to state
@@ -68,7 +82,11 @@ public static class IldAuthentication
             .AddPolicy(AgentOrUserPolicy, policy => policy
                 .AddAuthenticationSchemes(Scheme)
                 .RequireAuthenticatedUser()
-                .RequireRole(AgentRole, UserRole));
+                .RequireRole(AgentRole, UserRole))
+            .AddPolicy(AgentSurfacePolicy, policy => policy
+                .AddAuthenticationSchemes(Scheme)
+                .RequireAuthenticatedUser()
+                .RequireRole(AgentRole, UserRole, ExternalAgentRole));
 
         return services;
     }

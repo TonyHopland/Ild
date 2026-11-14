@@ -45,7 +45,7 @@ public sealed class LoopTemplateProposalStore : ILoopTemplateProposalStore
 
     public async Task<IReadOnlyList<LoopTemplateProposalEntry>> ListAsync(LoopTemplateProposalQuery query, CancellationToken ct)
     {
-        var matching = _proposals.Matching(query.Status, query.CreatedByLoopRunId, query.CreatedByChatSessionId, query.WorkItemId);
+        var matching = _proposals.Matching(query.Status, query.CreatedByLoopRunId, query.CreatedByChatSessionId, query.WorkItemId, query.CreatedByExternalGrantId);
         if (query.TemplateId is { } templateId) matching = matching.Where(p => p.LoopTemplateId == templateId);
         return await EntriesAsync(await _proposals.NewestFirstAsync(matching, ct), ct);
     }
@@ -117,6 +117,7 @@ public sealed class LoopTemplateProposalStore : ILoopTemplateProposalStore
             latest.TryGetValue(p.LoopTemplateId, out var number) ? number : null,
             graphs.GetValueOrDefault((p.LoopTemplateId, p.BaseVersion)),
             sources.WorkItemOf(p),
-            sources.ChatOwnerOf(p))).ToList();
+            sources.ChatOwnerOf(p),
+            sources.GrantNameOf(p))).ToList();
     }
 }
