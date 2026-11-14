@@ -11,4 +11,6 @@ public enum LoopRunNodeStatus
     // Previous attempt was interrupted (process restart, throttle cancel)
     // before reaching a terminal outcome.
     Interrupted = 6,
+    // The agent ended its turn with child processes still running; ILD waits for them and then wakes the agent.
+    WaitingIld = 7,
 }

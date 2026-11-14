@@ -124,6 +124,9 @@ public class LoopRunStore : ILoopRunStore
     public async Task<IReadOnlyList<LoopRun>> GetRecoverableRunsAsync()
         => await _db.LoopRuns.AsNoTracking().Where(LoopRun.Recoverable).ToListAsync();
 
+    public async Task<IReadOnlyList<LoopRun>> GetChildWaitingRunsAsync()
+        => await _db.LoopRuns.AsNoTracking().Where(LoopRun.WaitingForChildren).ToListAsync();
+
     public async Task<IReadOnlyList<LoopRun>> GetThrottleParkedRunsAsync()
         => await _db.LoopRuns.AsNoTracking().Where(LoopRun.ThrottleParked).ToListAsync();
 

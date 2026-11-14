@@ -82,4 +82,7 @@ public enum EventType
     /// the node from the beginning instead. Carries the reason.
     /// </summary>
     ResumeFellBackToRetry = 26,
+
+    /// <summary>A person chose Restart or Resume for a node that was Waiting for ILD (who, which, and whether they gave input).</summary>
+    ChildWaitActionTaken = 27,
 }

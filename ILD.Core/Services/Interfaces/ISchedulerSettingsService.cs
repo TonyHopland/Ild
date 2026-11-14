@@ -75,6 +75,20 @@ public static class AppSettingKeys
     public const int DefaultThrottleMaxRetries = 6;
 
     /// <summary>
+    /// Minutes ILD waits for the child processes an agent left running when its turn ended (the "Waiting for ILD" state)
+    /// before it stops them, tells the agent and resumes it.
+    /// </summary>
+    public const string ChildrenWaitMinutes = "children.waitMinutes";
+    public const int DefaultChildrenWaitMinutes = 60;
+
+    /// <summary>
+    /// How many times in a row a node may end its turn with children still running and be woken again, counted since a
+    /// human last touched the run. At the cap the run parks for a person, who can still restart or resume the node.
+    /// </summary>
+    public const string ChildrenMaxCycles = "children.maxCycles";
+    public const int DefaultChildrenMaxCycles = 5;
+
+    /// <summary>
     /// Days a sign-in survives without being used. Re-evaluated on every
     /// request, so lowering it signs idle devices out immediately. <c>0</c>
     /// disables idle expiry.
@@ -175,6 +189,12 @@ public interface ISchedulerSettingsService
 
     /// <summary>Automatic retries a run may spend before it parks for a person (minimum 1).</summary>
     Task<int> GetThrottleMaxRetriesAsync(CancellationToken ct = default);
+
+    /// <summary>Minutes to wait for an agent's leftover child processes (<see cref="AppSettingKeys.ChildrenWaitMinutes"/>).</summary>
+    Task<int> GetChildrenWaitMinutesAsync(CancellationToken ct = default);
+
+    /// <summary>Consecutive "Waiting for ILD" cycles a node may take (<see cref="AppSettingKeys.ChildrenMaxCycles"/>).</summary>
+    Task<int> GetChildrenMaxCyclesAsync(CancellationToken ct = default);
 
     /// <summary>
     /// Network log retention window in days, never above

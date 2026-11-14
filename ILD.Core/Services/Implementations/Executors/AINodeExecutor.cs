@@ -251,6 +251,11 @@ public sealed class AINodeExecutor : INodeExecutor
             {
                 yield return new NodeOutcome.SessionBound(sessionPlaceholder!, result.SessionId!);
             }
+            if (result.LiveChildren is { Count: > 0 } liveChildren)
+            {
+                yield return new NodeOutcome.WaitingChildren(liveChildren, result.Output, usage);
+                yield break;
+            }
             if (!string.IsNullOrEmpty(result.Output) && cfg.MatchRules is { Count: > 0 })
             {
                 // Last match wins: agents narrate ("no reason to reject, so:

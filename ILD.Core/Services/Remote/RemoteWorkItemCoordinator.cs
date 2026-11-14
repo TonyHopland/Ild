@@ -159,6 +159,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         {
             var run = await _loopRunStore.GetActiveByWorkItemAsync(w.Id);
             if (run is null) continue;
+            // Waiting for ILD because the agent's own processes are running is not the capacity wait this pass resumes.
+            if (run.HaltReason == ILD.Data.Enums.HaltReason.WaitingForChildren) continue;
             if (!await HasProviderCapacityForResumeAsync(w, run, ct)) continue;
 
             var resp = await _client.TransitionAsync(opts, w.Id,

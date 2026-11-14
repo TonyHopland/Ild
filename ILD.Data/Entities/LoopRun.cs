@@ -83,6 +83,15 @@ public class LoopRun : IHasUpdatedAt
             && r.HaltReason == Enums.HaltReason.Throttled
             && !r.IsPaused;
 
+    /// <summary>
+    /// A run waiting for the processes its agent left running when its turn ended ("Waiting for ILD"): halted and stamped
+    /// <see cref="Enums.HaltReason.WaitingForChildren"/>. A person's halt, a throttle park and the cycle-cap park are other reasons.
+    /// </summary>
+    public static readonly Expression<Func<LoopRun, bool>> WaitingForChildren =
+        r => r.Status == LoopRunStatus.WaitingHuman
+            && r.IsHalted
+            && r.HaltReason == Enums.HaltReason.WaitingForChildren;
+
     private static readonly Func<LoopRun, bool> ShutdownHaltedHere = ShutdownHalted.Compile();
     private static readonly Func<LoopRun, bool> RecoverableHere = Recoverable.Compile();
 
@@ -154,6 +163,19 @@ public class LoopRun : IHasUpdatedAt
     /// itself a fresh budget of either kind.
     /// </summary>
     public int ThrottleAutoResumeCount { get; set; }
+
+    /// <summary>
+    /// "Waiting for ILD" cycles this run has taken since a human last touched it: each time the agent ended its turn
+    /// with child processes still running and ILD woke it again when they ended. Bounded by <c>children.maxCycles</c>;
+    /// at the cap the run parks as an ordinary halt. Refilled by exactly what refills <see cref="AiTraversalCount"/>.
+    /// </summary>
+    public int ChildWaitCycleCount { get; set; }
+
+    /// <summary>
+    /// The child processes the agent left running when its turn ended (<c>ChildWaitState</c> as JSON), kept while the
+    /// run waits for them so a restart of ILD resumes the wait and a manual Restart can stop them. Null when none.
+    /// </summary>
+    public string? ChildWaitJson { get; set; }
 
     /// <summary>
     /// When the provider said the limit behind a Provider Interruption park

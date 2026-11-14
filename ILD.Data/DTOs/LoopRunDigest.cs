@@ -28,6 +28,10 @@ public sealed record LoopRunDigest(
     int ThrottleAutoResumeCount,
     int NodeExecutionCount,
     DateTime? ThrottleResetAt,
+    // True while the agent ended its turn with child processes still running and ILD waits for them ("Waiting for ILD", HaltReason.WaitingForChildren),
+    // and the cycles of that taken since a human last touched the run. Distinct from a human park and from a throttle park.
+    bool WaitingForIld,
+    int ChildWaitCycleCount,
     IReadOnlyList<LoopRunVisitDigest> Nodes,
     IReadOnlyList<LoopRunFeedbackDigest> Feedback,
     LoopRunPrDigest? Pr);

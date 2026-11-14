@@ -111,6 +111,58 @@ internal sealed class FakeRunHost : IRunHost
         return Task.FromResult<IRunProcess>(process);
     }
 
+    // -- Child processes ---------------------------------------------------------
+
+    /// <summary>What <c>ListAgentChildrenAsync</c> finds, before the caller's ignore list is applied, as the real hosts apply it.</summary>
+    public List<RunChildProcess> AgentChildren { get; } = [];
+
+    /// <summary>The pids of processes that are still running: a process leaves it when it is stopped, or when a test removes it.</summary>
+    public HashSet<int> RunningPids { get; } = [];
+
+    public List<(Guid OwnerId, string LaunchId, IReadOnlyList<string> Ignore)> ListChildrenCalls { get; } = [];
+    public List<RunChildProcess> StoppedProcesses { get; } = [];
+
+    /// <summary>What a child wrote, by the file it wrote it to.</summary>
+    public Dictionary<string, string> Tails { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Adds a process the agent left running.</summary>
+    public RunChildProcess LeaveRunning(int pid, string commandLine, string? outputPath = null)
+    {
+        var child = new RunChildProcess(pid, commandLine, outputPath);
+        lock (_gate)
+        {
+            AgentChildren.Add(child);
+            RunningPids.Add(pid);
+        }
+        return child;
+    }
+
+    public Task<IReadOnlyList<RunChildProcess>> ListAgentChildrenAsync(Guid ownerId, string launchId, IReadOnlyList<string> ignore, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            ListChildrenCalls.Add((ownerId, launchId, ignore));
+            return Task.FromResult<IReadOnlyList<RunChildProcess>>(
+                AgentChildren.Where(c => RunningPids.Contains(c.Pid) && !ignore.Any(part => c.CommandLine.Contains(part, StringComparison.Ordinal))).ToList());
+        }
+    }
+
+    public Task<IReadOnlyList<RunChildProcess>> StillRunningAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+    {
+        lock (_gate) return Task.FromResult<IReadOnlyList<RunChildProcess>>(processes.Where(p => RunningPids.Contains(p.Pid)).ToList());
+    }
+
+    public Task StopProcessesAsync(Guid ownerId, IReadOnlyList<RunChildProcess> processes, CancellationToken ct = default)
+    {
+        lock (_gate)
+            foreach (var process in processes.Where(p => RunningPids.Remove(p.Pid)))
+                StoppedProcesses.Add(process);
+        return Task.CompletedTask;
+    }
+
+    public Task<string?> ReadTailAsync(Guid ownerId, string path, int maxBytes, CancellationToken ct = default)
+        => Task.FromResult(Tails.TryGetValue(path, out var text) ? text : null);
+
     public Task<int> KillUnownedAsync(Guid runIn, CancellationToken ct = default)
     {
         lock (_gate) KillUnownedCalls.Add(runIn);
