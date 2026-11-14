@@ -15,13 +15,17 @@
           {
             "cwd": ".",
             "command": "dotnet restore ILD.sln"
+          },
+          {
+            "cwd": ".",
+            "command": "dotnet build ILD.sln --no-restore"
           }
         ],
         "services": [
           {
             "name": "workitem-server",
             "cwd": ".",
-            "command": "dotnet run --project ILD.WorkItemServer --no-launch-profile",
+            "command": "dotnet run --no-build --project ILD.WorkItemServer --no-launch-profile",
             "port": "workitem-server",
             "suggestedPort": 5200,
             "env": {
@@ -34,7 +38,7 @@
           {
             "name": "api",
             "cwd": ".",
-            "command": "dotnet run --project ILD.Api --no-launch-profile",
+            "command": "dotnet run --no-build --project ILD.Api --no-launch-profile",
             "port": "backend",
             "suggestedPort": 5100,
             "env": {

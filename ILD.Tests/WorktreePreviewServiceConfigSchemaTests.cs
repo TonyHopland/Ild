@@ -119,4 +119,22 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
 
         Assert.True(result.Installed);
     }
+
+    [Fact]
+    public async Task The_schema_describes_healthTimeoutSeconds_and_the_validator_accepts_it()
+    {
+        var doc = ToolDocument();
+        var property = doc.GetProperty("schema").GetProperty("definitions").GetProperty("service")
+            .GetProperty("properties").GetProperty("healthTimeoutSeconds");
+        Assert.Equal("integer", property.GetProperty("type").GetString());
+        Assert.True(doc.GetProperty("fieldReference").TryGetProperty("services[].healthTimeoutSeconds", out _));
+
+        var starter = System.Text.Json.Nodes.JsonNode.Parse(doc.GetProperty("starter").GetRawText())!;
+        starter["preview"]!["profiles"]!["app"]!["services"]![0]!["healthTimeoutSeconds"] = 600;
+        File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), starter.ToJsonString());
+
+        var result = await BuildService().ValidateConfigAsync(_worktree, cancellationToken: CancellationToken.None);
+
+        Assert.True(result.Configured);
+    }
 }

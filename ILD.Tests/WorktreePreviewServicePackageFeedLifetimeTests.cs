@@ -105,8 +105,9 @@ public sealed class WorktreePreviewServicePackageFeedLifetimeTests : IDisposable
             PackageFeedCredentialFilesTests.Feed("company", "https://pkgs.dev.azure.com/example-org/_packaging/company", "companyPAT-33cc"),
         };
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _service.StartServiceAsync(_worktree, "web", new WorktreePreviewStartOptions(PackageFeeds: feeds), giveUp.Token));
+        Assert.Contains("exited with code 3", failure.Message);
 
         // The runtime stays registered, with its exited service on show.
         Assert.True(_service.IsPreviewRunning(_worktree));
