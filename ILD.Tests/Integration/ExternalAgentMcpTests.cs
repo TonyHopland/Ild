@@ -84,6 +84,61 @@ public class ExternalAgentMcpTests(ExternalAgentMcpTests.Host host) : IClassFixt
     }
 
     [Fact]
+    public async Task A_get_or_delete_on_the_endpoint_is_a_405_and_not_a_403()
+    {
+        var (_, token) = await CreateGrantAsync();
+        var client = host.Factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var get = await client.GetAsync("/mcp", Ct);
+        var delete = await client.DeleteAsync("/mcp", Ct);
+        var anonymous = await host.Factory.CreateClient().GetAsync("/mcp", Ct);
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, get.StatusCode);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, delete.StatusCode);
+        Assert.Contains("POST", get.Content.Headers.Allow);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_refusal_reaches_the_client_with_its_reason_and_without_the_internal_address()
+    {
+        var (_, token) = await CreateGrantAsync();
+        var created = await host.Operator.PostAsJsonAsync("/api/v1/workitems",
+            new { title = "theirs", description = "", repositoryId = host.RepositoryId.ToString() }, Ct);
+        var id = JsonDocument.Parse(await created.Content.ReadAsStringAsync(Ct)).RootElement.GetProperty("id").GetString()!;
+        await using var client = await ConnectAsync(token);
+
+        foreach (var (tool, arguments) in new (string, Dictionary<string, object?>)[]
+                 {
+                     ("get_preview", new() { ["workItemId"] = id }),
+                     ("update_workitem", new() { ["id"] = id, ["title"] = "x" }),
+                 })
+        {
+            var result = await client.CallToolAsync(tool, arguments, cancellationToken: Ct);
+
+            Assert.True(result.IsError, tool);
+            var text = TextOf(result);
+            Assert.Contains("403", text);
+            Assert.DoesNotContain("localhost", text);
+            Assert.DoesNotContain("127.0.0.1", text);
+        }
+    }
+
+    [Fact]
+    public async Task create_workitem_does_not_offer_the_run_a_grant_cannot_have()
+    {
+        var (_, token) = await CreateGrantAsync();
+        await using var client = await ConnectAsync(token);
+
+        var tool = (await client.ListToolsAsync(cancellationToken: Ct)).Single(t => t.Name == "create_workitem");
+
+        var properties = tool.JsonSchema.GetProperty("properties");
+        Assert.True(properties.TryGetProperty("title", out _));
+        Assert.False(properties.TryGetProperty("createdByLoopRunId", out _));
+    }
+
+    [Fact]
     public async Task The_endpoint_is_not_answered_with_the_SPA_for_a_path_below_it()
     {
         var response = await host.Factory.CreateClient().GetAsync("/mcp/unknown", Ct);

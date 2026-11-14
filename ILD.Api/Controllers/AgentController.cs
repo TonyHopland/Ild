@@ -209,9 +209,9 @@ public class AgentController : ControllerBase, IActionFilter
     /// </summary>
     [AllowAnonymous]
     [HttpGet("_about")]
-    public IActionResult About()
+    public IActionResult About([FromServices] IConfiguration configuration, [FromServices] TrustedProxies proxies)
     {
-        var baseUrl = $"{Request.Scheme}://{Request.Host}{Request.PathBase}";
+        var baseUrl = PublicUrl.For(Request, configuration, proxies);
         return Ok(new
         {
             name = "ILD agent API",

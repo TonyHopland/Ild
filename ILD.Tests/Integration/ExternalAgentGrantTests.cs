@@ -431,6 +431,61 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
     }
 
     [Fact]
+    public async Task A_grant_token_without_the_Bearer_scheme_is_refused()
+    {
+        var grant = await CreateGrantAsync();
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/repositories");
+        request.Headers.TryAddWithoutValidation("Authorization", grant.Token);
+
+        var response = await host.Factory.CreateClient().SendAsync(request, Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_discovery_document_names_the_public_address_not_the_internal_one()
+    {
+        await using var factory = new ApiFactory(new Dictionary<string, string?>
+        {
+            [ILD.Api.Configuration.PublicUrl.EnvVar] = "https://ild.example.com",
+        });
+
+        var about = await ReadAsync(await factory.CreateClient().GetAsync("/api/v1/agent/_about", Ct));
+
+        Assert.Equal("https://ild.example.com/api/v1/agent", about.GetProperty("rest").GetProperty("baseUrl").GetString());
+        Assert.Equal("https://ild.example.com/mcp", about.GetProperty("mcp").GetProperty("url").GetString());
+    }
+
+    [Fact]
+    public async Task The_discovery_document_ignores_forwarded_headers_from_a_caller_that_is_no_trusted_proxy()
+    {
+        await using var factory = new ApiFactory(new Dictionary<string, string?>());
+        var client = factory.CreateClient();
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/_about");
+        request.Headers.Add("X-Forwarded-Host", "ild.example.com");
+        request.Headers.Add("X-Forwarded-Proto", "https");
+
+        var untrusted = await ReadAsync(await client.SendAsync(request, Ct));
+
+        Assert.StartsWith("http://localhost", untrusted.GetProperty("mcp").GetProperty("url").GetString());
+    }
+
+    [Fact]
+    public async Task A_proposal_on_an_item_that_was_then_deleted_does_not_linger_on_the_grants_page()
+    {
+        var grant = await CreateGrantAsync("deleter");
+        var item = await CreateItemAsync(grant);
+        var proposed = await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{item}/edit-proposals",
+            new { description = "x", rationale = "y" });
+        Assert.Equal(HttpStatusCode.Created, proposed.StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await SendAsync(grant, HttpMethod.Delete, $"/api/v1/agent/workitems/{item}")).StatusCode);
+
+        var detail = await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{grant.Id}", Ct));
+        Assert.Empty(detail.GetProperty("pendingProposals").EnumerateArray());
+    }
+
+    [Fact]
     public async Task A_grant_that_asks_too_often_is_limited_and_the_operator_is_not()
     {
         await using var factory = new ApiFactory(new Dictionary<string, string?>
@@ -448,6 +503,11 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
             statuses.Add((await client.GetAsync("/api/v1/agent/repositories", Ct)).StatusCode);
 
         Assert.Equal([HttpStatusCode.OK, HttpStatusCode.OK, HttpStatusCode.OK, HttpStatusCode.TooManyRequests, HttpStatusCode.TooManyRequests], statuses);
+        var limited = await client.GetAsync("/api/v1/agent/repositories", Ct);
+        Assert.True(limited.Headers.RetryAfter?.Delta > TimeSpan.Zero);
+        var body = await ReadAsync(limited);
+        Assert.Equal("Too Many Requests", body.GetProperty("error").GetString());
+        Assert.Contains("3 requests per minute", body.GetProperty("message").GetString());
         for (var i = 0; i < 5; i++)
             Assert.Equal(HttpStatusCode.OK, (await operatorClient.GetAsync("/api/v1/agent/repositories", Ct)).StatusCode);
     }

@@ -30,6 +30,7 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
     private const string NoToken = "No authentication token provided";
     private const string InvalidSession = "Invalid or expired session";
     private const string GrantTokenInQuery = "A grant token is accepted only in the Authorization header";
+    private const string GrantTokenNeedsBearer = "A grant token must be sent as 'Authorization: Bearer <token>'";
 
     private readonly IAuthService _authService;
     private readonly IAgentTokenService _agentTokens;
@@ -51,7 +52,7 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        var (token, fromQuery) = ExtractToken();
+        var (token, fromQuery, bearer) = ExtractToken();
 
         if (string.IsNullOrWhiteSpace(token))
             return AuthenticateResult.NoResult();
@@ -65,6 +66,8 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
         {
             if (fromQuery)
                 return AuthenticateResult.Fail(GrantTokenInQuery);
+            if (!bearer)
+                return AuthenticateResult.Fail(GrantTokenNeedsBearer);
             if (await _grants.AuthenticateAsync(token, Context.RequestAborted) is { } grant)
                 return GrantTicket(grant);
         }
@@ -125,7 +128,7 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
         return AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name));
     }
 
-    private (string? Token, bool FromQuery) ExtractToken()
+    private (string? Token, bool FromQuery, bool Bearer) ExtractToken()
     {
         var authHeader = Request.Headers.Authorization.FirstOrDefault();
 
@@ -136,13 +139,12 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
         if (!string.IsNullOrWhiteSpace(authHeader)
             && !authHeader.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
         {
-            return (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-                ? authHeader["Bearer ".Length..].Trim()
-                : authHeader.Trim(), false);
+            var bearer = authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
+            return (bearer ? authHeader["Bearer ".Length..].Trim() : authHeader.Trim(), false, bearer);
         }
 
         return Request.Query.TryGetValue("access_token", out var queryToken)
-            ? (queryToken.ToString(), true)
-            : (null, false);
+            ? (queryToken.ToString(), true, false)
+            : (null, false, false);
     }
 }

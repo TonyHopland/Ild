@@ -22,7 +22,19 @@ public static class ExternalAgentRateLimit
         services.AddOptions<RateLimiterOptions>().Configure<IConfiguration>((options, configuration) =>
         {
             var requestsPerMinute = ParseRequestsPerMinute(Environment.GetEnvironmentVariable(EnvVar) ?? configuration[EnvVar]);
-            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.OnRejected = async (rejected, ct) =>
+            {
+                var response = rejected.HttpContext.Response;
+                response.StatusCode = StatusCodes.Status429TooManyRequests;
+                var retryAfter = rejected.Lease.TryGetMetadata(MetadataName.RetryAfter, out var wait) ? (int)Math.Ceiling(wait.TotalSeconds) : 60;
+                response.Headers.RetryAfter = retryAfter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                await response.WriteAsJsonAsync(new
+                {
+                    error = "Too Many Requests",
+                    message = $"This grant has used its {requestsPerMinute} requests per minute. Retry in {retryAfter} seconds.",
+                    retryAfterSeconds = retryAfter,
+                }, ct);
+            };
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 context.User.IsInRole(IldAuthentication.ExternalAgentRole)
                     ? RateLimitPartition.GetFixedWindowLimiter(

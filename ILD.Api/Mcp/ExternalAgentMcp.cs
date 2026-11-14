@@ -34,7 +34,7 @@ public static class ExternalAgentMcp
             http.BaseAddress = new Uri(apiUrl.TrimEnd('/') + "/");
             http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             http.DefaultRequestHeaders.Add(ExternalAgentAuditMiddleware.ViaHeader, ExternalAgentAuditMiddleware.ViaMcp);
-            return new IldClient(http, new IldClientOptions(apiUrl, token, LoopRunId: null));
+            return new IldClient(http, new IldClientOptions(apiUrl, token, LoopRunId: null, ConcealApiUrl: true));
         });
 
         services.AddMcpServer(options =>
@@ -42,13 +42,51 @@ public static class ExternalAgentMcp
                 options.ServerInfo = new() { Name = "ild", Version = typeof(ExternalAgentMcp).Assembly.GetName().Version?.ToString() ?? "0" };
             })
             .WithHttpTransport(options => options.Stateless = true)
+            .WithRequestFilters(filters => filters.AddListToolsFilter(next => async (context, ct) =>
+            {
+                var listed = await next(context, ct);
+                foreach (var tool in listed.Tools)
+                {
+                    if (ExternalAgentTools.HiddenParameters.TryGetValue(tool.Name, out var hidden))
+                        tool.InputSchema = WithoutProperties(tool.InputSchema, hidden);
+                }
+                return listed;
+            }))
             // Named: the unnamed call binds the generic WithTools<T>(target) overload, which registers no tool at all.
             .WithTools(toolTypes: ExternalAgentTools.ToolTypes);
         return services;
     }
 
     public static IEndpointConventionBuilder MapIldMcpEndpoint(this IEndpointRouteBuilder endpoints)
-        => endpoints.MapMcp(Path).RequireAuthorization(IldAuthentication.AgentSurfacePolicy);
+    {
+        // Stateless: there is no event stream to open and no session to end, so say so rather than let the
+        // catch-all fallback answer these with a 403.
+        endpoints.MapMethods(Path, ["GET", "DELETE"], (HttpContext context) =>
+            {
+                context.Response.Headers.Allow = "POST";
+                return Results.StatusCode(StatusCodes.Status405MethodNotAllowed);
+            })
+            .RequireAuthorization(IldAuthentication.AgentSurfacePolicy);
+        return endpoints.MapMcp(Path).RequireAuthorization(IldAuthentication.AgentSurfacePolicy);
+    }
+
+    private static System.Text.Json.JsonElement WithoutProperties(System.Text.Json.JsonElement schema, IReadOnlyList<string> names)
+    {
+        if (System.Text.Json.Nodes.JsonNode.Parse(schema.GetRawText()) is not System.Text.Json.Nodes.JsonObject root)
+            return schema;
+        foreach (var name in names)
+        {
+            (root["properties"] as System.Text.Json.Nodes.JsonObject)?.Remove(name);
+            if (root["required"] is System.Text.Json.Nodes.JsonArray required)
+            {
+                for (var i = required.Count - 1; i >= 0; i--)
+                {
+                    if (required[i]?.GetValue<string>() == name) required.RemoveAt(i);
+                }
+            }
+        }
+        return System.Text.Json.JsonSerializer.SerializeToElement(root);
+    }
 
     private static string BearerToken(HttpRequest request)
     {

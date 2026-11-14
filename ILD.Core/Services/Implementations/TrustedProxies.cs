@@ -53,5 +53,8 @@ public sealed class TrustedProxies
         return remote;
     }
 
+    /// <summary>Whether <paramref name="address"/> is one of the trusted proxies.</summary>
+    public bool IsTrustedProxy(IPAddress? address) => address is not null && IsTrusted(address);
+
     private bool IsTrusted(IPAddress address) => _ranges.Any(range => range.Contains(address));
 }

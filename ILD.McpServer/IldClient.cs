@@ -5,7 +5,7 @@ using ModelContextProtocol;
 namespace ILD.McpServer;
 
 /// <summary>Where the server calls the ILD API, with which token, and for which run or chat.</summary>
-public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null)
+public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null, bool ConcealApiUrl = false)
 {
     /// <summary>Names a JSON object holding the settings, for an agent CLI that cannot set a server's environment.</summary>
     public const string EnvFileVariable = "ILD_MCP_ENV_FILE";
@@ -150,7 +150,7 @@ public sealed class IldClient
         // answered is half the diagnosis. A preview's MCP server calling the host
         // API instead of its own is a 401 that looks identical to an expired token
         // until you can see the address it went to.
-        var url = $"{_http.BaseAddress}{path}";
+        var url = _opts.ConcealApiUrl ? path : $"{_http.BaseAddress}{path}";
 
         HttpResponseMessage resp;
         try
@@ -165,7 +165,9 @@ public sealed class IldClient
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             throw new McpException(
-                $"{method} {url} could not reach the ILD API (ILD_API_URL={_opts.ApiUrl}): {ex.Message}");
+                _opts.ConcealApiUrl
+                    ? $"{method} {url} could not reach the ILD API."
+                    : $"{method} {url} could not reach the ILD API (ILD_API_URL={_opts.ApiUrl}): {ex.Message}");
         }
 
         using (resp)
