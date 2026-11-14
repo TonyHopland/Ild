@@ -438,20 +438,17 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     protected override string ChatEnvironmentName => ChatPodName;
 
-    // The pod as ChatIsUpAsync last saw it, which is what MakeChatAsync, called right after it, mends.
-    private V1Pod? _chatPodSeen;
-
     protected override async Task<bool> ChatIsUpAsync(CancellationToken ct)
     {
         await ChatIldAddressAsync(ct);
-        var pod = _chatPodSeen = await ChatPodStateAsync(ct);
+        var pod = await ChatPodStateAsync(ct);
         return pod is not null && IsReady(pod) && pod.Metadata.DeletionTimestamp is null && IsCurrent(pod);
     }
 
     // The chat pod is made when it is missing, and replaced when it has ended, is going away or is stale. The claim keeps the chats' folders through that.
     protected override async Task MakeChatAsync(CancellationToken ct)
     {
-        var existing = _chatPodSeen;
+        var existing = await ChatPodStateAsync(ct);
         if (existing is not null && (existing.Metadata.DeletionTimestamp is not null || existing.Status?.Phase is "Failed" or "Succeeded" || !IsCurrent(existing)))
         {
             if (existing.Metadata.DeletionTimestamp is null)

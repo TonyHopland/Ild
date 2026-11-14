@@ -33,9 +33,9 @@ public sealed class IsolatedRunHostCommandTests : IDisposable
         if (Directory.Exists(_scratch)) Directory.Delete(_scratch, recursive: true);
     }
 
-    private static InMemoryRunHost NewHost(string? agentReadRoot = null)
+    private static InMemoryRunHost NewHost(string? agentReadRoot = null, bool environmentInAFile = false)
         => agentReadRoot is null
-            ? new InMemoryRunHost { Credentials = EgressProxyTests.Creds }
+            ? new InMemoryRunHost { Credentials = EgressProxyTests.Creds, EnvironmentInAFile = environmentInAFile }
             : new InMemoryRunHost { Credentials = EgressProxyTests.Creds, AgentReadRoot = () => agentReadRoot };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -70,9 +70,12 @@ public sealed class IsolatedRunHostCommandTests : IDisposable
         Assert.Equal("/caller/bin", exec.Command[7]);
     }
 
-    [Fact]
-    public async Task A_variable_the_caller_set_reaches_the_run_and_one_only_ilds_own_environment_has_does_not()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_variable_the_caller_set_reaches_the_run_and_one_only_ilds_own_environment_has_does_not(bool inAFile)
     {
+        var host = NewHost(environmentInAFile: inAFile);
         var previous = Environment.GetEnvironmentVariable("ASPNETCORE_HTTP_PORTS");
         Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", "8080");
         // Set before the start info is made: it copies ILD's environment when it is created.
@@ -81,9 +84,9 @@ public sealed class IsolatedRunHostCommandTests : IDisposable
         {
             var psi = Command(WorkingDirectory, "dotnet", "run");
 
-            await RunAsync(_host, RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }));
+            await RunAsync(host, RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ASPNETCORE_HTTP_PORTS"] = "8080" }));
 
-            var launch = _host.Execs.Last().Env;
+            var launch = await host.LaunchEnvironmentAsync();
             Assert.Contains("ASPNETCORE_HTTP_PORTS=8080", launch);
             Assert.DoesNotContain("INHERITED_ONLY_FROM_ILD=8080", launch);
         }
@@ -95,10 +98,13 @@ public sealed class IsolatedRunHostCommandTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task None_of_ilds_secrets_or_inherited_variables_reach_a_command_in_the_run(bool asAgent)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task None_of_ilds_secrets_or_inherited_variables_reach_a_command_in_the_run(bool asAgent, bool inAFile)
     {
+        var host = NewHost(environmentInAFile: inAFile);
         const string extra = "ILD_TEST_EXTRA_SECRET";
         var previousDenylist = Environment.GetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar);
         Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, extra);
@@ -111,17 +117,18 @@ public sealed class IsolatedRunHostCommandTests : IDisposable
             foreach (var name in secrets) psi.Environment[name] = "secret-" + name;
             var caller = new Dictionary<string, string?> { ["ILD_CALLER_SET"] = "kept" };
 
-            await RunAsync(_host, asAgent
+            await RunAsync(host, asAgent
                 ? RunCommand.Agent(psi, _run, null, NetworkMode.Whitelist, caller)
                 : RunCommand.Prepared(psi, _run, caller));
 
-            var exec = _host.Execs.Last();
-            var launch = exec.Env;
+            var launch = await host.LaunchEnvironmentAsync();
+            var commands = host.Execs.SelectMany(e => e.Command).ToList();
             Assert.Contains("ILD_CALLER_SET=kept", launch);
+            Assert.DoesNotContain(commands, c => c.Contains("ILD_CALLER_SET", StringComparison.Ordinal));
             foreach (var name in secrets)
             {
                 Assert.DoesNotContain(launch, c => c.StartsWith(name + "=", StringComparison.Ordinal) || c.Contains("secret-" + name, StringComparison.Ordinal));
-                Assert.DoesNotContain(exec.Command, c => c.Contains("secret-" + name, StringComparison.Ordinal));
+                Assert.DoesNotContain(commands, c => c.Contains("secret-" + name, StringComparison.Ordinal));
             }
             Assert.DoesNotContain(launch, c => c.StartsWith("ILD_INHERITED_PROBE=", StringComparison.Ordinal));
         }

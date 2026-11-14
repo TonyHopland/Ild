@@ -60,8 +60,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// Puts a relay on the environment's own loopback between a launch and ILD's egress proxy, and points the launch's proxy variables at it.
     /// The relay adds the launch's proxy credential to each request, so a client that sends none (a browser, a JVM) is still the launch's
     /// to the proxy. One relay per credential, kept for the next launch that holds the same one, so it carries no launch's
-    /// <see cref="AgentChildren.LaunchVariable"/> and is never a process an agent left running. Without socat or bash the variables stay
-    /// as they are, naming the proxy with the credential.
+    /// <see cref="AgentChildren.LaunchVariable"/> and is never a process an agent left running. The credential reaches the relay in its
+    /// environment, set by the shell itself: never in a command line. Without socat or bash the variables stay as they are, naming the
+    /// proxy with the credential.
     /// </summary>
     internal const string EgressRelayScript = $$"""
         case "${HTTP_PROXY:-}" in "http://{{ILD.Core.Services.Implementations.Network.EgressCredentials.User}}:"*@*)
@@ -75,11 +76,16 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
                     [ -f "$relay_dir/relay.sh" ] || printf "%s\n" 'IFS= read -r -t 30 line || exit 0
         exec 3<>"/dev/tcp/${ILD_RELAY_UPSTREAM%:*}/${ILD_RELAY_UPSTREAM##*:}" || exit 0
         printf "%s\nProxy-Authorization: Basic %s\r\n" "$line" "$ILD_RELAY_AUTH" >&3
-        exec socat STDIO FD:3' > "$relay_dir/relay.sh"
+        exec {{AgentChildren.EgressRelayConnection}}' > "$relay_dir/relay.sh"
                     relay_port=$(( 20000 + relay_key % 10000 )); relay_try=0; relay_up=
                     while [ -z "$relay_up" ] && [ "$relay_try" -lt 20 ]; do
                         if ! bash -c "exec 3<>/dev/tcp/127.0.0.1/$relay_port" 2>/dev/null; then
-                            env -u {{AgentChildren.LaunchVariable}} "ILD_RELAY_AUTH=$(printf %s "${relay_to%%@*}" | base64 -w0)" "ILD_RELAY_UPSTREAM=${relay_to#*@}" setsid socat "TCP-LISTEN:$relay_port,bind=127.0.0.1,reuseaddr,fork" "EXEC:bash $relay_dir/relay.sh,nofork" </dev/null >/dev/null 2>&1 9>&- &
+                            (
+                                unset {{AgentChildren.LaunchVariable}}
+                                ILD_RELAY_AUTH=$(printf %s "${relay_to%%@*}" | base64 -w0); ILD_RELAY_UPSTREAM=${relay_to#*@}
+                                export ILD_RELAY_AUTH ILD_RELAY_UPSTREAM
+                                exec setsid socat "TCP-LISTEN:$relay_port,bind=127.0.0.1,reuseaddr,fork" "EXEC:bash $relay_dir/relay.sh,nofork"
+                            ) </dev/null >/dev/null 2>&1 9>&- &
                             relay_pid=$!; relay_wait=0
                             while kill -0 "$relay_pid" 2>/dev/null && [ "$relay_wait" -lt 40 ]; do
                                 if bash -c "exec 3<>/dev/tcp/127.0.0.1/$relay_port" 2>/dev/null; then relay_up=1; break; fi
@@ -1669,7 +1675,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     /// <summary>
     /// Make the chat pod or container and wait until it is ready, replacing one that stopped, ended or is no longer what ILD would
-    /// make. Its volume keeps the chats' folders through that. Called by one caller at a time, right after <see cref="ChatIsUpAsync"/> said no.
+    /// make. Its volume keeps the chats' folders through that. Called by one caller at a time, and reads for itself
+    /// what there is to replace: <see cref="ChatIsUpAsync"/> is called by many at once.
     /// </summary>
     protected abstract Task MakeChatAsync(CancellationToken ct);
 
@@ -1729,9 +1736,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         if (!HostsChats || !IsChatIdle()) return;
 
-        var gate = _chatGate;
         var name = ChatEnvironmentName;
-        await gate.WaitAsync(ct);
+        await _chatGate.WaitAsync(ct);
         try
         {
             if (!IsChatIdle() || !await RunExistsAsync(new ExecOwner(Guid.Empty, Chat: true), ct)) return;
@@ -1752,7 +1758,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
         finally
         {
-            gate.Release();
+            _chatGate.Release();
         }
     }
 

@@ -18,15 +18,19 @@ public static class AgentChildren
     /// <summary>The environment variable naming the run in every process its agent launches started.</summary>
     public const string LaunchVariable = "ILD_AGENT_LAUNCH";
 
+    /// <summary>The command line of one open connection of an egress relay.</summary>
+    public const string EgressRelayConnection = "socat STDIO FD:3";
+
     /// <summary>
-    /// Parts of a command line that are never a child worth waiting for: ILD's own stdio MCP server, and build servers that stay up
+    /// Parts of a command line that are never a child worth waiting for: ILD's own stdio MCP server, build servers that stay up
     /// by design after a build (an MSBuild node, the Roslyn compiler server, the Gradle, Kotlin and Nx daemons) and would otherwise
-    /// keep a node waiting until the timeout.
+    /// keep a node waiting until the timeout, and an egress relay with its open connections, which a relay started before relays
+    /// stopped carrying <see cref="LaunchVariable"/> still has.
     /// </summary>
     public static readonly IReadOnlyList<string> LongLivedHelpers =
     [
         "ild-mcp-server", "ILD.McpServer", "/nodemode:", "VBCSCompiler", "build-server", "MSBuildTaskHost",
-        "GradleDaemon", "KotlinCompileDaemon", "nx/src/daemon/", "/egress/relay.sh",
+        "GradleDaemon", "KotlinCompileDaemon", "nx/src/daemon/", "/egress/relay.sh", EgressRelayConnection,
     ];
 }
 

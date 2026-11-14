@@ -50,7 +50,21 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
 
     public string NameOf(Guid run) => RunEnvironmentName(run);
 
-    protected override bool ExecTakesEnvironment => true;
+    /// <summary>Whether a command's environment goes in a file its wrapper sources, as on an engine whose exec has no field for it.</summary>
+    public bool EnvironmentInAFile { get; init; }
+
+    protected override bool ExecTakesEnvironment => !EnvironmentInAFile;
+
+    /// <summary>The environment the last command was started with, as <c>NAME=value</c>, whichever way it travelled.</summary>
+    public async Task<IReadOnlyList<string>> LaunchEnvironmentAsync()
+    {
+        if (!EnvironmentInAFile) return Execs.Last().Env;
+        var written = Encoding.UTF8.GetString(await Execs.Last(e => e.Command.Contains(WriteEnvironmentFileScript)).ReadStdinToEndAsync());
+        return written.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line["export ".Length..])
+            .Select(line => line[..line.IndexOf('=')] + "=" + line[(line.IndexOf('=') + 2)..^1].Replace("'\\''", "'"))
+            .ToList();
+    }
 
     protected override Task<IExecStream> OpenExecInAsync(
         string name, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct)
