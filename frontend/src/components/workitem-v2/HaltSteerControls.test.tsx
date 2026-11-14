@@ -409,3 +409,132 @@ describe("HaltSteerControls resume note", () => {
     expect(noteBox(HaltReason.Human).placeholder).toMatch(/resumed agent/i);
   });
 });
+
+function waitingForIld(overrides: Partial<LoopRun> = {}): LoopRun {
+  return run({
+    status: LoopRunStatus.WaitingHuman,
+    isHalted: true,
+    haltReason: HaltReason.WaitingForChildren,
+    childWait: {
+      startedAt: "2025-01-01T00:00:00Z",
+      waiting: true,
+      cycles: 1,
+      processes: [{ pid: 4321, commandLine: "dotnet test ILD.Tests" }],
+    },
+    nodes: [node({ status: LoopRunNodeStatus.WaitingIld })],
+    ...overrides,
+  });
+}
+
+function renderWaiting(
+  props: Partial<Parameters<typeof HaltSteerControls>[0]> = {},
+  runOverrides: Partial<LoopRun> = {},
+) {
+  const onRestartWaiting = vi.fn();
+  const onResumeWaiting = vi.fn();
+  const onResumeSteer = vi.fn();
+  render(
+    <MemoryRouter>
+      <HaltSteerControls
+        run={waitingForIld(runOverrides)}
+        workItemStatus={WorkItemStatus.WaitingForIld}
+        onResumeSteer={onResumeSteer}
+        onRestartWaiting={onRestartWaiting}
+        onResumeWaiting={onResumeWaiting}
+        {...props}
+      />
+    </MemoryRouter>,
+  );
+  return { onRestartWaiting, onResumeWaiting, onResumeSteer };
+}
+
+describe("HaltSteerControls while a node is Waiting for ILD", () => {
+  test("says so, names the processes and offers Restart and Resume instead of the plain Resume", () => {
+    renderWaiting();
+
+    expect(screen.getByText(/waiting for ild — its processes are still running/i)).toBeTruthy();
+    expect(screen.getByText("4321: dotnet test ILD.Tests")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restart node" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Resume node" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  });
+
+  test("explains what Restart does before confirming, and does nothing until confirmed", () => {
+    const { onRestartWaiting } = renderWaiting();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart node" }));
+
+    expect(screen.getByText(/stops the processes that are still running/i)).toBeTruthy();
+    expect(screen.getByText(/not told about the stopped processes/i)).toBeTruthy();
+    expect(onRestartWaiting).not.toHaveBeenCalled();
+  });
+
+  test("explains what Resume does before confirming, and Cancel backs out", () => {
+    const { onResumeWaiting } = renderWaiting();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume node" }));
+
+    expect(screen.getByText(/leaves the processes running/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Resume node" })).toBeTruthy();
+    expect(onResumeWaiting).not.toHaveBeenCalled();
+  });
+
+  test("Restart passes the optional input and leaves Resume uncalled", async () => {
+    const { onRestartWaiting, onResumeWaiting } = renderWaiting();
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Run only unit tests" } });
+    fireEvent.click(screen.getByRole("button", { name: "Restart node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm restart" }));
+
+    await vi.waitFor(() => expect(onRestartWaiting).toHaveBeenCalledWith("Run only unit tests"));
+    expect(onResumeWaiting).not.toHaveBeenCalled();
+  });
+
+  test("Resume works without input", async () => {
+    const { onRestartWaiting, onResumeWaiting } = renderWaiting();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm resume" }));
+
+    await vi.waitFor(() => expect(onResumeWaiting).toHaveBeenCalledWith(""));
+    expect(onRestartWaiting).not.toHaveBeenCalled();
+  });
+
+  test("shows the failure when an action is refused", async () => {
+    renderWaiting({
+      onResumeWaiting: vi.fn().mockRejectedValue(new Error("not waiting any more")),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume node" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm resume" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("not waiting any more");
+  });
+
+  test("after the cycle cap it says ILD stopped waiting and still offers both actions", () => {
+    renderWaiting(
+      {},
+      {
+        haltReason: HaltReason.Human,
+        childWait: {
+          startedAt: "2025-01-01T00:00:00Z",
+          waiting: false,
+          cycles: 5,
+          processes: [{ pid: 4321, commandLine: "dotnet test ILD.Tests" }],
+        },
+      },
+    );
+
+    expect(screen.getByText(/processes still running — restart or resume/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restart node" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Resume node" })).toBeTruthy();
+  });
+
+  test("a halted run with no processes left running keeps the ordinary Resume", () => {
+    renderWaiting({}, { childWait: null, haltReason: HaltReason.Human });
+
+    expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Restart node" })).toBeNull();
+  });
+});

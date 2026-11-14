@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **When an agent ends its turn with a process still running, the node shows "Waiting for ILD" and ILD wakes the agent when it finishes.**
 - **Share temporary access with an AI.** Settings → Share access with an AI gives an AI session outside ILD a link and token to use ILD's agent API and MCP until it expires or you revoke it.
 - **Ask a chat about a running work item's code.** A chat can list the changed files, read the diff including uncommitted changes, read a file, search and see the commits, read-only.
 - **A slow first preview start is no longer reported as a failure.** A preview service now has 300 seconds to become healthy by default, and `healthTimeoutSeconds` sets it per service.

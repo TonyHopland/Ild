@@ -176,6 +176,26 @@ describe("Ild settings", () => {
     });
   });
 
+  test("saves how long to wait for leftover processes and how many waits in a row", async () => {
+    const put = vi.spyOn(authServices.settingsService, "put");
+
+    render(<IldSettings />, { wrapper: WorkItemHubProvider });
+
+    const wait = (await screen.findByLabelText(/wait for leftover processes/i)) as HTMLInputElement;
+    fireEvent.change(wait, { target: { value: "30" } });
+    fireEvent.blur(wait);
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.ChildrenWaitMinutes, "30");
+    });
+
+    const cycles = screen.getByLabelText(/waits in a row before asking you/i) as HTMLInputElement;
+    fireEvent.change(cycles, { target: { value: "2" } });
+    fireEvent.blur(cycles);
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.ChildrenMaxCycles, "2");
+    });
+  });
+
   test("keeps the scheduler switch where it was when the save fails", async () => {
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
       key: authServices.SchedulerSettingKeys.IsPaused,

@@ -406,6 +406,12 @@ function RunThread({
         onResumeSteer={(note) =>
           detail.runLock.hold(runId, "steer", () => detail.handleResumeSteer(runId, note))
         }
+        onRestartWaiting={(note) =>
+          detail.runLock.hold(runId, "steer", () => detail.handleRestartWaiting(runId, note))
+        }
+        onResumeWaiting={(note) =>
+          detail.runLock.hold(runId, "steer", () => detail.handleResumeWaiting(runId, note))
+        }
         onCleanupDone={() => detail.runLock.hold(runId, "abandon", detail.handleCleanupDone)}
         onCleanupBacklog={() => detail.runLock.hold(runId, "abandon", detail.handleCleanupBacklog)}
         showAbandon={false}

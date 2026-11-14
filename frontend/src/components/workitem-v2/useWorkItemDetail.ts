@@ -960,6 +960,16 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     return runAction(() => loopRunService.resumeSteer(runId, note), "resume run");
   };
 
+  const handleRestartWaiting = (runId: string | null, note?: string) => {
+    if (!runId) return Promise.resolve();
+    return runAction(() => loopRunService.restartWaitingForIld(runId, note), "restart node");
+  };
+
+  const handleResumeWaiting = (runId: string | null, note?: string) => {
+    if (!runId) return Promise.resolve();
+    return runAction(() => loopRunService.resumeWaitingForIld(runId, note), "resume node");
+  };
+
   const handleCleanupDone = () =>
     runAction((id) => workItemService.cleanupToDone(id), "cleanup to done");
 
@@ -1091,6 +1101,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleMerge,
     handleHalt,
     handleResumeSteer,
+    handleRestartWaiting,
+    handleResumeWaiting,
     handleCleanupDone,
     handleCleanupBacklog,
     readVersionGraph,

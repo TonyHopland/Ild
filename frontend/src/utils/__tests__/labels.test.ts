@@ -23,12 +23,14 @@ describe("labels", () => {
   it("names run and node statuses in words", () => {
     expect(runStatusLabel(LoopRunStatus.WaitingHuman)).toBe("Waiting for you");
     expect(nodeStatusLabel(LoopRunNodeStatus.WaitingHuman)).toBe("Waiting for you");
+    expect(nodeStatusLabel(LoopRunNodeStatus.WaitingIld)).toBe("Waiting for ILD");
     for (const status of Object.values(LoopRunStatus)) {
       expect(runStatusLabel(status)).not.toMatch(/[a-z][A-Z]/);
     }
   });
 
   it("gives each feedback reason its words and tone, and shows an unknown one as written", () => {
+    expect(feedbackReasonLabel("Waiting for ILD")).toBe("Waiting for ILD");
     expect(feedbackReasonLabel("Node Failed")).toBe("Node failed");
     expect(feedbackReasonTone("Node Failed")).toBe("danger");
     expect(feedbackReasonTone("PR Awaiting Merge")).toBe("info");

@@ -166,6 +166,36 @@ export default function IldSettings() {
         </NumericSettingField>
       </section>
 
+      <section className="settings-card">
+        <div className="settings-card-header">
+          <h3 className="settings-card-title">Processes left running</h3>
+        </div>
+        <NumericSettingField
+          settingKey={SchedulerSettingKeys.ChildrenWaitMinutes}
+          label="Wait for leftover processes"
+          min={1}
+          max={10080}
+          fallback={60}
+          unit="minutes"
+        >
+          When an agent ends its turn with a process of its own still running — a long test run —
+          the node shows <strong>Waiting for ILD</strong> while ILD waits for it and then wakes the
+          agent with how it ended. After this long ILD stops the process, tells the agent and wakes
+          it anyway.
+        </NumericSettingField>
+        <NumericSettingField
+          settingKey={SchedulerSettingKeys.ChildrenMaxCycles}
+          label="Waits in a row before asking you"
+          min={1}
+          max={100}
+          fallback={5}
+        >
+          How many times in a row a node may end its turn with processes still running and be woken
+          again. Past it the run waits in Needs you, where you can still restart or resume the node.
+          The count resets whenever you interact with the run.
+        </NumericSettingField>
+      </section>
+
       <ChatTitlesSettings />
 
       <ChatRetentionSettings />
