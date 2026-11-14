@@ -40,5 +40,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0035](./0035-run-toolchains.md)                               | A run gets its repository's toolchains and ILD's agents from a shared, read-only store    |
 | [0036](./0036-runs-always-in-containers.md)                    | ILD from its image always runs agents in containers; local runs are for `dotnet run` only |
 | [0037](./0037-external-agents-use-expiring-revocable-grants.md)  | External agents authenticate with expiring, revocable grants; a grant is its own session   |
+| [0038](./0038-chat-reads-a-worktree-through-fixed-read-only-git-commands.md) | Chat reads a work item's worktree, uncommitted changes included, through fixed read-only git commands |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

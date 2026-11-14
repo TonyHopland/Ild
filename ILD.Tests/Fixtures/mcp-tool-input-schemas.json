@@ -455,6 +455,77 @@
       "attachmentId"
     ]
   },
+  "get_worktree_commit": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "sha": {
+        "description": "Commit sha, as listed by get_worktree_log.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "sha"
+    ]
+  },
+  "get_worktree_diff": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "path": {
+        "description": "Optional path relative to the worktree root, to diff one file or folder.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "statOnly": {
+        "description": "Return only the per-file change summary (git diff --stat) instead of the patch.",
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
+  "get_worktree_log": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "limit": {
+        "description": "How many commits to list (1 to 100, default 20).",
+        "type": "integer",
+        "default": 20
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
+  "get_worktree_status": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
   "list_global_variable_proposals": {
     "type": "object",
     "properties": {}
@@ -883,6 +954,23 @@
       "workItemId"
     ]
   },
+  "read_worktree_file": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "path": {
+        "description": "Path relative to the worktree root, e.g. 'src/app.ts'.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "path"
+    ]
+  },
   "remove_workitem_dependency": {
     "type": "object",
     "properties": {
@@ -937,6 +1025,36 @@
     "required": [
       "workItemId",
       "threadId"
+    ]
+  },
+  "search_worktree": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "pattern": {
+        "description": "What to look for (up to 500 characters).",
+        "type": "string"
+      },
+      "regex": {
+        "description": "Treat the pattern as an extended regular expression (default false: a fixed string).",
+        "type": "boolean",
+        "default": false
+      },
+      "path": {
+        "description": "Optional path relative to the worktree root to search only there.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "workItemId",
+      "pattern"
     ]
   },
   "set_loop_node_field": {

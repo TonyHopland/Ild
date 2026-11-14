@@ -321,6 +321,7 @@ public static class ServiceCollectionExtensions
         // The read side of a CI failure: the agent tool that pulls a failing
         // check's log with the forge credentials it does not itself hold.
         services.AddScoped<IPrCiLogService, PrCiLogService>();
+        services.AddScoped<IWorktreeInspector, WorktreeInspector>();
         services.AddScoped<PrReviewService>();
         services.AddScoped<IPrReviewService>(sp => sp.GetRequiredService<PrReviewService>());
         services.AddScoped<IPrWriteQueue>(sp => sp.GetRequiredService<PrReviewService>());

@@ -220,4 +220,23 @@ public interface IRepositoryManager
     /// Returns null if the worktree is not a valid git worktree.
     /// </summary>
     Task<string?> ResolveBaseRepoPathAsync(string worktreePath);
+
+    /// <summary>
+    /// Run one read-only git command (<paramref name="args"/>, exactly as given, no shell) in the worktree, agent-scoped,
+    /// with git's optional locks, fsmonitor and pager off. At most <paramref name="maxBytes"/> of stdout are kept;
+    /// the rest is counted, not held. The caller owns what <paramref name="args"/> may contain.
+    /// </summary>
+    Task<CappedGitOutput> ReadGitAsync(string worktreePath, IReadOnlyList<string> args, int maxBytes, CancellationToken ct = default);
+
+    /// <summary>
+    /// The first <paramref name="maxBytes"/> of a working-tree file, read through the same link-resolving boundary as
+    /// <see cref="ReadWorktreeFileAsync"/>; null when the path is not a file inside the worktree, or resolves into <c>.git</c>.
+    /// </summary>
+    Task<CappedFileRead?> ReadWorktreeFileCappedAsync(string worktreePath, string relativePath, int maxBytes);
 }
+
+/// <summary>What <see cref="IRepositoryManager.ReadGitAsync"/> heard back: stdout up to the cap, the bytes beyond it, and stderr.</summary>
+public sealed record CappedGitOutput(int ExitCode, string StdOut, long OmittedBytes, string StdErr);
+
+/// <summary>A working-tree file's head: its text (null for a binary) and the whole file's length, which exceeds the text when it was cut short.</summary>
+public sealed record CappedFileRead(string? Text, bool IsBinary, long TotalBytes);

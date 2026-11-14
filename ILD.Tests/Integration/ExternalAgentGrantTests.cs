@@ -405,6 +405,16 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
     }
 
     [Fact]
+    public async Task A_grant_cannot_read_any_worktree_not_even_of_its_own_items()
+    {
+        var grant = await CreateGrantAsync();
+        var own = await CreateItemAsync(grant);
+
+        foreach (var route in new[] { "status", "diff", "file?path=a.txt", "search?pattern=a", "log", "commits/abcdef1" })
+            Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(grant, HttpMethod.Get, $"/api/v1/agent/workitems/{own}/worktree/{route}")).StatusCode);
+    }
+
+    [Fact]
     public async Task Every_request_a_grant_makes_is_audited_with_its_status()
     {
         var grant = await CreateGrantAsync();

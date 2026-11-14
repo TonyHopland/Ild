@@ -131,6 +131,12 @@ public class AgentTokenIsolationTests(SharedApiFactory factory) : IClassFixture<
             Request(HttpMethod.Get, $"/api/v1/agent/workitems/{itemOfB}/pr-review", tokenA),
             Request(HttpMethod.Post, $"/api/v1/agent/workitems/{itemOfB}/pull-branch", tokenA),
             Request(HttpMethod.Get, $"/api/v1/agent/workitems/{itemOfB}/ci-log?checkId=1", tokenA),
+            Request(HttpMethod.Get, $"/api/v1/agent/workitems/{itemOfB}/worktree/status", tokenA),
+            Request(HttpMethod.Get, $"/api/v1/agent/workitems/{itemOfB}/worktree/diff", tokenA),
+            Request(HttpMethod.Get, $"/api/v1/agent/workitems/{itemOfB}/worktree/file?path=a.txt", tokenA),
+            Request(HttpMethod.Get, $"/api/v1/agent/workitems/{itemOfB}/worktree/search?pattern=a", tokenA),
+            Request(HttpMethod.Get, $"/api/v1/agent/workitems/{itemOfB}/worktree/log", tokenA),
+            Request(HttpMethod.Get, $"/api/v1/agent/workitems/{itemOfB}/worktree/commits/abcdef1", tokenA),
         };
         foreach (var request in refused)
             Assert.True(HttpStatusCode.Forbidden == await SendAsync(request), $"{request.Method} {request.RequestUri} was not refused");
