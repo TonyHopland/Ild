@@ -15,6 +15,7 @@ import {
   buildAccessInstructions,
   discoveryUrl,
   formatTimeLeft,
+  GRANT_SCOPES,
   mcpUrl,
 } from "../../../utils/externalAccess";
 import { formatRelativeTime } from "../../../utils/relativeTime";
@@ -216,14 +217,21 @@ function RenewDialog({
               ))}
             </select>
           </SettingRow>
-          <SettingRow label="Rights" htmlFor="external-grant-renew-scope">
+          <SettingRow
+            label="Rights"
+            help={GRANT_SCOPES.find((s) => s.value === scope)?.allows}
+            htmlFor="external-grant-renew-scope"
+          >
             <select
               id="external-grant-renew-scope"
               value={scope}
               onChange={(e) => setScope(e.target.value as ExternalAgentGrantScope)}
             >
-              <option value="Full">Read, create and propose</option>
-              <option value="ReadOnly">Read-only</option>
+              {GRANT_SCOPES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
             </select>
           </SettingRow>
         </div>
@@ -284,6 +292,7 @@ function GrantRow({
           <span className="settings-row-label">{grant.name}</span>
           <span className={`settings-badge external-grant-${grant.status}`}>{grant.status}</span>
           {grant.scope === "ReadOnly" && <span className="settings-badge">read-only</span>}
+          {grant.scope === "Control" && <span className="settings-badge">control of work</span>}
           <div className="settings-row-help">
             {live
               ? formatTimeLeft(grant.expiresAt, now)
@@ -463,7 +472,7 @@ export default function ExternalAccessSettings() {
         </SettingRow>
         <SettingRow
           label="Rights"
-          help="Read-only can look but not create work items or propose."
+          help={GRANT_SCOPES.find((s) => s.value === scope)?.allows}
           htmlFor="external-grant-scope"
         >
           <select
@@ -471,8 +480,11 @@ export default function ExternalAccessSettings() {
             value={scope}
             onChange={(e) => setScope(e.target.value as ExternalAgentGrantScope)}
           >
-            <option value="Full">Read, create and propose</option>
-            <option value="ReadOnly">Read-only</option>
+            {GRANT_SCOPES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
           </select>
         </SettingRow>
         <div className="external-access-actions">

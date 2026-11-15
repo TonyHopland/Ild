@@ -1,3 +1,4 @@
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
 using ILD.Data.Enums;
@@ -159,9 +160,10 @@ public interface ILoopEngine
     /// just resumed — throws <c>HumanFeedbackRefusedException</c>, and a run that
     /// has ended throws <see cref="ILD.Data.Stores.RunClosedException"/>, with
     /// nothing written. Once delivered, a failure to move the work item to
-    /// Running is logged and the run is driven regardless.
+    /// Running is logged and the run is driven regardless. That move is attributed to
+    /// <paramref name="answeredBy"/> when given (an external agent answering), else to the run.
     /// </summary>
-    Task DeliverHumanFeedbackAsync(Guid runId, Guid runNodeId, NodeSignal signal, string feedback, string? edgeName);
+    Task DeliverHumanFeedbackAsync(Guid runId, Guid runNodeId, NodeSignal signal, string feedback, string? edgeName, WorkItemActor? answeredBy);
 
     Task ResumeRecoveredRunAsync(Guid runId);
 

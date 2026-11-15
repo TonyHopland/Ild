@@ -1,6 +1,7 @@
 using System.Net;
 using ILD.Api.Authentication;
 using ILD.Api.Middleware;
+using ILD.Data.Entities;
 using ILD.McpServer;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -45,6 +46,8 @@ public static class ExternalAgentMcp
             .WithRequestFilters(filters => filters.AddListToolsFilter(next => async (context, ct) =>
             {
                 var listed = await next(context, ct);
+                if (context.User?.FindFirst(IldAuthentication.GrantScopeClaim)?.Value != nameof(ExternalAgentGrantScope.Control))
+                    listed.Tools = listed.Tools.Where(t => !ExternalAgentTools.ControlToolNames.Contains(t.Name)).ToList();
                 foreach (var tool in listed.Tools)
                 {
                     if (ExternalAgentTools.HiddenParameters.TryGetValue(tool.Name, out var hidden))
@@ -53,7 +56,7 @@ public static class ExternalAgentMcp
                 return listed;
             }))
             // Named: the unnamed call binds the generic WithTools<T>(target) overload, which registers no tool at all.
-            .WithTools(toolTypes: ExternalAgentTools.ToolTypes);
+            .WithTools(toolTypes: [.. ExternalAgentTools.ToolTypes, .. ExternalAgentTools.ControlToolTypes]);
         return services;
     }
 

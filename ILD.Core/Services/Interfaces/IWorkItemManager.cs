@@ -209,16 +209,16 @@ public interface IWorkItemManager
     /// <see cref="ILD.Data.Stores.RunClosedException"/> for a run that has
     /// ended) and nothing is written. False when there is no such work item.
     /// </summary>
-    Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input);
-    Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input);
+    Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input, WorkItemActor? answeredBy = null);
+    Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input, WorkItemActor? answeredBy = null);
 
     /// <summary>
     /// Route the parked node to its named output <paramref name="edgeName"/>
     /// (a Human node button), passing <paramref name="input"/> as the node's
     /// output for downstream <c>{{Node.Input}}</c>.
     /// </summary>
-    Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input);
-    Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null);
+    Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input, WorkItemActor? answeredBy = null);
+    Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null, WorkItemActor? answeredBy = null);
 
     /// <summary>
     /// Answer the execution <paramref name="runNodeId"/> of the parked node with

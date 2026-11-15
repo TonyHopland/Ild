@@ -25,6 +25,13 @@ describe("buildAccessInstructions", () => {
     expect(buildAccessInstructions({ ...access, scope: "ReadOnly" })).toContain("read-only");
     expect(buildAccessInstructions(access)).not.toContain("read-only");
   });
+
+  test("says a Control grant can start work and a Full one cannot", () => {
+    expect(buildAccessInstructions({ ...access, scope: "Control" })).toContain(
+      "start or queue any work item",
+    );
+    expect(buildAccessInstructions(access)).toContain("cannot start work");
+  });
 });
 
 describe("formatTimeLeft", () => {

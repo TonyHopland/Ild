@@ -31,7 +31,8 @@ static async Task RunServerAsync(string[] args)
     builder.Services
         .AddMcpServer()
         .WithStdioServerTransport()
-        .WithToolsFromAssembly();
+        // Not WithToolsFromAssembly: the tools only a grant with control of work may use are left out (ADR-0039).
+        .WithTools(toolTypes: ILD.McpServer.ExternalAgentTools.RunAndChatToolTypes);
 
     await builder.Build().RunAsync();
 }

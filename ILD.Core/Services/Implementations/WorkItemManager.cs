@@ -1474,17 +1474,17 @@ public class WorkItemManager : IWorkItemManager
     // Human feedback
     // ──────────────────────────────────────────────────────────────────
 
-    public Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input)
-        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Approval(input));
+    public Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input, WorkItemActor? answeredBy = null)
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Approval(input), answeredBy: answeredBy);
 
-    public Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null)
-        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Rejection(input));
+    public Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null, WorkItemActor? answeredBy = null)
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Rejection(input), answeredBy: answeredBy);
 
-    public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input)
-        => SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input);
+    public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input, WorkItemActor? answeredBy = null)
+        => SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input, answeredBy);
 
-    public Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input)
-        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Edge(edgeName, input));
+    public Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input, WorkItemActor? answeredBy = null)
+        => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Edge(edgeName, input), answeredBy: answeredBy);
 
     public Task<bool> SubmitHumanFeedbackAnswerAsync(string workItemId, Guid runId, Guid runNodeId, string output, string input)
         => DeliverHumanFeedbackAsync(workItemId, runId, output switch
@@ -1516,7 +1516,7 @@ public class WorkItemManager : IWorkItemManager
     /// node may be the one waiting: an answer to one visit never lands on a later one.
     /// </summary>
     private async Task<bool> DeliverHumanFeedbackAsync(
-        string workItemId, Guid runId, HumanAnswer answer, Guid? expectedRunNodeId = null)
+        string workItemId, Guid runId, HumanAnswer answer, Guid? expectedRunNodeId = null, WorkItemActor? answeredBy = null)
     {
         if (await GetWorkItemAsync(workItemId) is null) return false;
 
@@ -1535,7 +1535,7 @@ public class WorkItemManager : IWorkItemManager
         if (_engine is null)
             throw new HumanFeedbackRefusedException("No loop engine is running to deliver this answer.");
 
-        await _engine.DeliverHumanFeedbackAsync(runId, waiting.Id, answer.Signal, answer.Feedback, answer.EdgeName);
+        await _engine.DeliverHumanFeedbackAsync(runId, waiting.Id, answer.Signal, answer.Feedback, answer.EdgeName, answeredBy);
         return true;
     }
 

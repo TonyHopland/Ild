@@ -428,6 +428,101 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
         Assert.Contains(("/api/v1/settings", 403), activity);
     }
 
+    // -- Control of work (ADR-0039) ---------------------------------------------
+
+    private static readonly (HttpMethod Method, string Suffix, object Body)[] ControlRoutes =
+    [
+        (HttpMethod.Post, "start", new { }),
+        (HttpMethod.Post, "queue", new { }),
+        (HttpMethod.Post, "human-feedback/input", new { runId = Guid.NewGuid(), input = "go" }),
+        (HttpMethod.Post, "human-feedback/respond", new { runId = Guid.NewGuid(), input = "go" }),
+        (HttpMethod.Post, "human-feedback/reject", new { runId = Guid.NewGuid() }),
+        (HttpMethod.Post, "human-feedback/edge", new { runId = Guid.NewGuid(), name = "Rework" }),
+    ];
+
+    [Theory]
+    [InlineData("ReadOnly")]
+    [InlineData("Full")]
+    public async Task A_grant_below_Control_is_refused_on_every_control_route(string scope)
+    {
+        var grant = await CreateGrantAsync(scope: scope);
+        var id = await CreateOperatorItemAsync();
+
+        foreach (var (method, suffix, body) in ControlRoutes)
+            Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(grant, method, $"/api/v1/agent/workitems/{id}/{suffix}", body)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_run_token_is_refused_on_every_control_route()
+    {
+        using var client = host.Factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", host.Factory.Services.IssueAgentToken());
+        var id = await CreateOperatorItemAsync();
+
+        foreach (var (method, suffix, body) in ControlRoutes)
+            Assert.Equal(HttpStatusCode.Forbidden,
+                (await client.SendAsync(new HttpRequestMessage(method, $"/api/v1/agent/workitems/{id}/{suffix}") { Content = JsonContent.Create(body) }, Ct)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_Control_grant_queues_an_item_it_did_not_create_and_the_history_names_the_grant()
+    {
+        var grant = await CreateGrantAsync("driver", scope: "Control");
+        var id = await CreateOperatorItemAsync();
+
+        var response = await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/queue", new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var item = await ReadAsync(await host.Operator.GetAsync($"/api/v1/workitems/{id}", Ct));
+        // The scheduler may already have promoted it from the queue.
+        Assert.Contains(item.GetProperty("status").GetString(), new[] { "WorkQueue", "Ready" });
+        var history = await ReadAsync(await host.Operator.GetAsync($"/api/v1/workitems/{id}/history", Ct));
+        var mine = history.EnumerateArray().Where(e => e.GetProperty("actorKind").GetString() == "ExternalAgent").ToList();
+        Assert.NotEmpty(mine);
+        Assert.All(mine, e => Assert.Contains($"driver (grant {grant.Id})", e.GetProperty("actorDetail").GetString()));
+    }
+
+    [Fact]
+    public async Task A_Control_grant_reaches_start_and_the_answer_routes_on_an_item_it_did_not_create()
+    {
+        var grant = await CreateGrantAsync(scope: "Control");
+        var id = await CreateOperatorItemAsync();
+
+        // A Backlog item is not Ready: the route was reached and the item refused, not the grant.
+        Assert.Equal(HttpStatusCode.Conflict, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/start", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{Guid.NewGuid()}/start", new { })).StatusCode);
+        // No run is waiting on it: refused as a conflict, and an answer naming no run is a bad request.
+        Assert.Equal(HttpStatusCode.Conflict,
+            (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/human-feedback/input", new { runId = Guid.NewGuid(), input = "go" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/human-feedback/reject", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/human-feedback/edge", new { runId = Guid.NewGuid() })).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_Control_grant_still_cannot_transition_merge_or_edit_an_item_it_did_not_create()
+    {
+        var grant = await CreateGrantAsync(scope: "Control");
+        var id = await CreateOperatorItemAsync();
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/workitems/{id}/transition", new { targetStatus = "Done" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/workitems/{id}/pr/merge", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/workitems/{id}/human-feedback/input", new { runId = Guid.NewGuid() })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(grant, HttpMethod.Put, $"/api/v1/agent/workitems/{id}", new { title = "x", description = "" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task The_discovery_document_lists_the_control_routes_and_the_request_fields()
+    {
+        var body = await host.Factory.CreateClient().GetStringAsync("/api/v1/agent/_about", Ct);
+
+        Assert.Contains("POST workitems/{id}/start", body);
+        Assert.Contains("/edge", body);
+        Assert.Contains("tags", body);
+        Assert.Contains("repositoryId", body);
+    }
+
     [Fact]
     public async Task The_discovery_document_is_open_and_reveals_no_secret()
     {

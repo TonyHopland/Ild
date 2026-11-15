@@ -527,7 +527,7 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
     }
 
     [Fact]
-    public async Task Agent_surface_does_not_expose_start_or_transition()
+    public async Task Agent_surface_does_not_expose_transition_and_refuses_start_to_anyone_but_a_Control_grant()
     {
         var client = await factory.CreateAuthenticatedClientAsync();
 
@@ -537,8 +537,9 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         // path but accepts only GET/HEAD, so an unrouted POST is 405 rather than 404.
         var notRouted = new[] { HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed };
 
-        var startResp = await client.PostAsync("/api/v1/agent/workitems/" + Guid.NewGuid() + "/start", null, TestContext.Current.CancellationToken);
-        Assert.Contains(startResp.StatusCode, notRouted);
+                // Start exists for a grant with control of work (ADR-0039); the operator is not one, so 403.
+var startResp = await client.PostAsync("/api/v1/agent/workitems/" + Guid.NewGuid() + "/start", null, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Forbidden, startResp.StatusCode);
 
         var trResp = await client.PostAsJsonAsync(
             "/api/v1/agent/workitems/" + Guid.NewGuid() + "/transition",

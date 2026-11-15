@@ -6,6 +6,27 @@ export const agentApiUrl = (baseUrl: string) => `${baseUrl}/api/v1/agent`;
 
 export const discoveryUrl = (baseUrl: string) => `${agentApiUrl(baseUrl)}/_about`;
 
+/** The levels a grant can have, in the order the operator is offered them, with what each allows. */
+export const GRANT_SCOPES: { value: ExternalAgentGrantScope; label: string; allows: string }[] = [
+  {
+    value: "ReadOnly",
+    label: "Read only",
+    allows: "Can look at work items, repositories and loops, but not create work items or propose.",
+  },
+  {
+    value: "Full",
+    label: "Read, create and propose",
+    allows:
+      "Can also create work items in the Backlog, edit its own, and propose edits to others. It cannot start work.",
+  },
+  {
+    value: "Control",
+    label: "Control of work (start and answer)",
+    allows:
+      "Can also start and queue any work item and answer its human-feedback questions, so it can drive work to done without you. Starting work spends AI provider money. Merging and settings stay with you.",
+  },
+];
+
 /** What an AI session needs, in the words it can act on, to use the access it was handed. */
 export function buildAccessInstructions(access: {
   baseUrl: string;
@@ -24,7 +45,9 @@ export function buildAccessInstructions(access: {
     "You are your own session: you may edit or delete only the work items you created. Propose edits to anything else; a human approves or rejects each proposal.",
     scope === "ReadOnly"
       ? "This access is read-only: you can read but not create work items or make proposals."
-      : "You can read, create work items in the Backlog, and make proposals.",
+      : scope === "Control"
+        ? "You can read, create work items, and make proposals. You can also start or queue any work item and answer its human-feedback stops (give input, respond, reject, pick an edge). Transitions to other statuses and merging stay with the operator."
+        : "You can read, create work items in the Backlog, and make proposals. You cannot start work.",
     "Never put the token in a URL.",
   ].join("\n");
 }

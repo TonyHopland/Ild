@@ -4,11 +4,20 @@ namespace ILD.Data.Entities;
 
 public enum ExternalAgentGrantScope
 {
-    /// <summary>Everything the agent API offers an agent: reads, work items of its own, and proposals.</summary>
+    /// <summary>
+    /// Agent-level rights, no run control: reads, work items of its own, and proposals. Stored as 0 so existing
+    /// grants keep it; the UI calls it "Read, create and propose".
+    /// </summary>
     Full = 0,
 
     /// <summary>Reads only. Creating work items and making proposals are refused.</summary>
     ReadOnly = 1,
+
+    /// <summary>
+    /// Everything <see cref="Full"/> offers, and control of the work it is handed (ADR-0039): start any work item,
+    /// queue it and answer a human-feedback stop.
+    /// </summary>
+    Control = 2,
 }
 
 /// <summary>
