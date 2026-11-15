@@ -94,6 +94,36 @@ public class ExternalGrantsController : ControllerBase
         });
     }
 
+    public sealed class RenewGrantRequest
+    {
+        /// <summary>A new name; the grant keeps its current one when this is null or blank.</summary>
+        public string? Name { get; set; }
+
+        public int LifetimeMinutes { get; set; }
+
+        public ExternalAgentGrantScope Scope { get; set; } = ExternalAgentGrantScope.Full;
+    }
+
+    /// <summary>Replaces the grant's token, scope and lifetime. The new token is in the response of this call and of no other.</summary>
+    [HttpPost("{id:guid}/renew")]
+    public async Task<IActionResult> Renew(Guid id, [FromBody] RenewGrantRequest request, CancellationToken ct)
+    {
+        var name = request.Name?.Trim();
+        if (name is { Length: > IExternalAgentGrantService.MaxNameLength })
+            return BadRequest(new { error = $"A name may be at most {IExternalAgentGrantService.MaxNameLength} characters." });
+
+        var lifetime = TimeSpan.FromMinutes(request.LifetimeMinutes);
+        if (IExternalAgentGrantService.ValidateLifetime(lifetime) is { } problem)
+            return BadRequest(new { error = problem });
+
+        if (User.Identity?.Name is not { Length: > 0 } renewedBy)
+            return Unauthorized();
+
+        if (await _grants.RenewAsync(id, lifetime, request.Scope, name, renewedBy, ct) is not { } issued)
+            return NotFound(new { error = "No grant has this id." });
+        return Ok(new { grant = View(issued.Grant), token = issued.Token });
+    }
+
     [HttpPost("{id:guid}/revoke")]
     public async Task<IActionResult> Revoke(Guid id, CancellationToken ct)
         => await _grants.RevokeAsync(id, ct) ? NoContent() : NotFound(new { error = "No live grant has this id." });

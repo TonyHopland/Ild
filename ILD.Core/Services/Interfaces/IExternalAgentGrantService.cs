@@ -35,6 +35,13 @@ public interface IExternalAgentGrantService
     Task<IssuedExternalAgentGrant> CreateAsync(
         string name, TimeSpan lifetime, ExternalAgentGrantScope scope, string createdBy, CancellationToken ct = default);
 
+    /// <summary>
+    /// Gives the grant a new token, scope and lifetime, keeping its id, name (unless <paramref name="newName"/> is
+    /// given), ownership, history and last-used info. Reactivates a revoked or expired grant. Null when no grant has this id.
+    /// </summary>
+    Task<IssuedExternalAgentGrant?> RenewAsync(
+        Guid id, TimeSpan lifetime, ExternalAgentGrantScope scope, string? newName, string renewedBy, CancellationToken ct = default);
+
     /// <summary>The grant a token belongs to when it is neither revoked nor expired, else null.</summary>
     Task<ExternalAgentGrantIdentity?> AuthenticateAsync(string token, CancellationToken ct = default);
 

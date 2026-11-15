@@ -70,7 +70,7 @@ function AccessField({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Shown once, right after creation: the only time the token exists in readable form. */
+/** Shown once, right after creation or renewal: the only time the token exists in readable form. */
 function IssuedAccess({
   issued,
   baseUrl,
@@ -163,14 +163,98 @@ function GrantDetail({ detail, now }: { detail: ExternalAgentGrantDetail; now: n
   );
 }
 
+/** Asks for the new lifetime and rights; the grant keeps its name, items and history. */
+function RenewDialog({
+  grant,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  grant: ExternalAgentGrant;
+  busy: boolean;
+  onConfirm: (lifetimeMinutes: number, scope: ExternalAgentGrantScope) => void;
+  onCancel: () => void;
+}) {
+  const [lifetime, setLifetime] = useState<number>(LIFETIMES[1].minutes);
+  const [scope, setScope] = useState<ExternalAgentGrantScope>(grant.scope);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div className="modal-overlay" onMouseDown={onCancel}>
+      <div
+        className="modal-content confirm-modal-content"
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Renew ${grant.name}`}
+      >
+        <div className="modal-header">
+          <h2>Renew {grant.name}</h2>
+        </div>
+        <div className="modal-body">
+          <p>
+            This issues a new token. The previous token stops working immediately. The name and the
+            work items this access created stay linked to it.
+          </p>
+          <SettingRow label="Lasts" htmlFor="external-grant-renew-lifetime">
+            <select
+              id="external-grant-renew-lifetime"
+              value={lifetime}
+              onChange={(e) => setLifetime(Number(e.target.value))}
+            >
+              {LIFETIMES.map((l) => (
+                <option key={l.minutes} value={l.minutes}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </SettingRow>
+          <SettingRow label="Rights" htmlFor="external-grant-renew-scope">
+            <select
+              id="external-grant-renew-scope"
+              value={scope}
+              onChange={(e) => setScope(e.target.value as ExternalAgentGrantScope)}
+            >
+              <option value="Full">Read, create and propose</option>
+              <option value="ReadOnly">Read-only</option>
+            </select>
+          </SettingRow>
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={() => onConfirm(lifetime, scope)}
+          >
+            Renew and show new token
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GrantRow({
   grant,
   now,
   onRevoke,
+  onRenew,
 }: {
   grant: ExternalAgentGrant;
   now: number;
   onRevoke: (grant: ExternalAgentGrant) => void;
+  onRenew: (grant: ExternalAgentGrant) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<ExternalAgentGrantDetail | null>(null);
@@ -221,6 +305,14 @@ function GrantRow({
           >
             {open ? "Hide details" : "Details"}
           </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => onRenew(grant)}
+            aria-label={`Renew ${grant.name}`}
+          >
+            Renew / new token
+          </button>
           {live && (
             <button
               type="button"
@@ -248,6 +340,8 @@ export default function ExternalAccessSettings() {
   const [issued, setIssued] = useState<IssuedExternalAgentGrant | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [renewing, setRenewing] = useState<ExternalAgentGrant | null>(null);
+  const [renewBusy, setRenewBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const baseUrl = window.location.origin;
 
@@ -280,6 +374,24 @@ export default function ExternalAccessSettings() {
       setError(errorMessage(err, "Failed to create the access."));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const renew = async (lifetimeMinutes: number, newScope: ExternalAgentGrantScope) => {
+    if (!renewing) return;
+    setRenewBusy(true);
+    try {
+      setIssued(
+        await externalGrantService.renew(renewing.id, { lifetimeMinutes, scope: newScope }),
+      );
+      setRenewing(null);
+      setError(null);
+      await refresh();
+    } catch (err) {
+      setRenewing(null);
+      setError(errorMessage(err, "Failed to renew the access."));
+    } finally {
+      setRenewBusy(false);
     }
   };
 
@@ -392,11 +504,26 @@ export default function ExternalAccessSettings() {
         ) : (
           <ul className="external-grant-list">
             {grants.map((g) => (
-              <GrantRow key={g.id} grant={g} now={now} onRevoke={(grant) => void revoke(grant)} />
+              <GrantRow
+                key={g.id}
+                grant={g}
+                now={now}
+                onRevoke={(grant) => void revoke(grant)}
+                onRenew={setRenewing}
+              />
             ))}
           </ul>
         )}
       </section>
+
+      {renewing && (
+        <RenewDialog
+          grant={renewing}
+          busy={renewBusy}
+          onConfirm={(minutes, newScope) => void renew(minutes, newScope)}
+          onCancel={() => setRenewing(null)}
+        />
+      )}
     </>
   );
 }
