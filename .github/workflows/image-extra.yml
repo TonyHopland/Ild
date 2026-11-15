@@ -45,7 +45,7 @@ jobs:
           - name: ild-workitem-server
             dockerfile: Dockerfile.WorkItemServer
             platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             extra_cache_from: type=gha,scope=ci-ild
             build_args: ""
           - name: ild-arm64
@@ -54,12 +54,12 @@ jobs:
             runner: ubuntu-24.04-arm
             build_args: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build ${{ matrix.name }} (${{ matrix.platform }}, no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}

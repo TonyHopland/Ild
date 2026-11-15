@@ -8,9 +8,9 @@ on:
 
 jobs:
   scripts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Publish version-stamping tests
         run: .github/scripts/compute-version.test.sh
@@ -40,9 +40,9 @@ jobs:
         run: .github/scripts/image-toolchain-pins.test.sh
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: voidzero-dev/setup-vp@v1
         with:
@@ -57,16 +57,16 @@ jobs:
         working-directory: frontend
 
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
 
       # The preview-service and MCP-bridge tests spawn node themselves.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "26"
 
@@ -109,14 +109,14 @@ jobs:
   # change, so they live in image-extra.yml behind a paths filter rather than
   # rebuilding the frontend and both dotnet publishes on every PR.
   image-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build ild (amd64, no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -134,14 +134,14 @@ jobs:
   # release-only. Reads the ild scope for the shared stages but writes its own,
   # so it never overwrites ci-ild.
   runner-image-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build runner (amd64, no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
