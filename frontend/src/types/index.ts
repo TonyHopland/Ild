@@ -723,7 +723,7 @@ export interface LoopRun {
   currentNodeId: string | null;
   isPaused: boolean;
   isHalted?: boolean;
-  /** The execution of the Human node the run waits on a person at; null when it is not waiting for one. */
+  /** The execution of the Human or PR node the run waits on a person at; null when it is not waiting for one. */
   waitingRunNodeId?: string | null;
   /** Who parked the run, when `isHalted`; absent/null for a human's Halt. */
   haltReason?: HaltReason | string | null;
@@ -936,7 +936,7 @@ export type HumanInputProposalStatus = "Pending" | "Approved" | "Rejected" | "St
 
 /**
  * An agent's suggested answer to the question a work item is parked on at a
- * Human node: the output to take and the text to send with it, delivered only
+ * Human or PR node: the output to take and the text to send with it, delivered only
  * when a human approves it. It answers the one visit `runNodeId` of run `runId`.
  */
 export interface HumanInputProposal {

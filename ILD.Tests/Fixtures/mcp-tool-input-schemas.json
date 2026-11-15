@@ -741,7 +741,7 @@
         "type": "string"
       },
       "output": {
-        "description": "The output to take: OnSuccess, OnFailure or a named output of the Human node.",
+        "description": "The output to take: OnSuccess, OnFailure or a named output of the Human or PR node.",
         "type": "string"
       },
       "text": {

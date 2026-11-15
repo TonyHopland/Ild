@@ -4,7 +4,7 @@ namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
 /// The rules of Human Input Proposals (ADR-0030): what may be suggested for a
-/// work item parked at a Human node, and what approving or rejecting a
+/// work item parked at a Human or PR node, and what approving or rejecting a
 /// suggestion does. The decider is a plain name, so a person's click and a
 /// later automatic approver go through the same calls.
 /// </summary>
@@ -34,7 +34,7 @@ public enum HumanInputProposalOutcome
     Created,
     NotFound,
 
-    /// <summary>The work item is not waiting for human input at a Human node.</summary>
+    /// <summary>The work item is not waiting for human input at a Human or PR node.</summary>
     NotParked,
 
     OutputNotOffered,

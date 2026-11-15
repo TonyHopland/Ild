@@ -112,17 +112,19 @@ public sealed class HumanInputProposalService : IHumanInputProposalService
 
     /// <summary>
     /// The work item's active run and its waiting visit, when the run is parked
-    /// for human input at a Human node, with the outputs that node offers.
+    /// for human input at a Human node or awaiting merge at a PR node, with the outputs that node offers.
     /// </summary>
     private async Task<(LoopRun Run, LoopRunNode Visit, IReadOnlyList<string> Offered)?> ParkedVisitAsync(string workItemId)
     {
         if (await _runs.GetActiveByWorkItemAsync(workItemId) is not
-            { HumanFeedbackReason: HumanFeedbackReasons.HumanInputNeeded } run)
+            { HumanFeedbackReason: HumanFeedbackReasons.HumanInputNeeded or HumanFeedbackReasons.PrAwaitingMerge } run)
             return null;
         if (ParkedNode.WaitingVisitOf(run, await _runs.GetRunNodesAsync(run.Id)) is not { } visit)
             return null;
         var node = (await _runs.GetNodesForVersionAsync(run.LoopTemplateVersionId)).FirstOrDefault(n => n.Id == run.CurrentNodeId);
-        if (node is not { NodeType: NodeType.Human })
+        // The reason must belong to the node kind, so the two cannot be mixed.
+        var expected = run.HumanFeedbackReason == HumanFeedbackReasons.PrAwaitingMerge ? NodeType.PR : NodeType.Human;
+        if (node is null || node.NodeType != expected)
             return null;
         return (run, visit, ParkedNode.Outputs(node.Id, await _runs.GetEdgesForNodeIdsAsync([node.Id])));
     }

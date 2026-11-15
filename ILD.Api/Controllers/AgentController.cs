@@ -2143,7 +2143,7 @@ public class AgentController : ControllerBase, IActionFilter
 
     // -- Human Input Proposals (ADR-0030) -------------------------------------
     //
-    // Agents suggest the answer for a work item parked at a Human node. Approving
+    // Agents suggest the answer for a work item parked at a Human or PR node. Approving
     // and rejecting are human-only and live on HumanInputProposalsController.
 
     [HttpPost("workitems/{id}/human-input-proposals")]
@@ -2181,7 +2181,7 @@ public class AgentController : ControllerBase, IActionFilter
                 status = result.Proposal.Status.ToString(),
             }),
             HumanInputProposalOutcome.NotFound => NotFound(),
-            HumanInputProposalOutcome.NotParked => Conflict(new { error = "This work item is not waiting for human input at a Human node." }),
+            HumanInputProposalOutcome.NotParked => Conflict(new { error = "This work item is not waiting for human input at a Human or PR node." }),
             _ => BadRequest(new
             {
                 error = $"The node does not offer the output '{output}'. It offers: {string.Join(", ", result.OfferedOutputs!)}.",
