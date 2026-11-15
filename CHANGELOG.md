@@ -7,19 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [0.26.0] - 2026-11-15
 
-- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
-
-### Changed
+### Added
 
 - **Give a shared AI control of the work.** A new access level lets an outside AI start work items and answer their human-feedback questions, so it can take an item from Backlog to done without you.
 - **Chats can now suggest the answer to a work item waiting at a PR node.** The suggestion is approved or rejected in the Action tab, as for a Human node.
 - **Renew a shared AI access with a new token.** An expired, revoked or live access keeps its name and the work items it created.
-- **Frontend tests now run on jsdom 31.**
 - **The work item Terminal tab is now a Container tab.** It keeps the terminal and the VS Code button and adds live CPU, memory, network and disk use against the container's limits.
 - **The work item Overview now lets you approve or reject proposed edits.** Each pending proposal shows its diff, who proposed it and when, a banner counts what awaits you, and decided or stale ones sit in a collapsed history.
+
+### Changed
+
 - **Global Variables moved from the main menu to Settings → Global variables.** The pending-suggestions count now shows on Settings and on its Global variables section, and the old `/global-variables` address redirects.
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ## [0.25.1] - 2026-11-14
 
