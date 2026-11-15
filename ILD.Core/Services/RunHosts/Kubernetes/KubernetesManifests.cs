@@ -17,16 +17,11 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     private const string RunnerContainer = "runner";
     private const string ToolsVolume = "tools";
 
-    private IDictionary<string, string> Labels(Guid ownerId) => new Dictionary<string, string>
-    {
-        [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
-        [RunPaths.InstanceLabel] = options.Instance,
-        [RunPaths.RunLabel] = ownerId.ToString("N"),
-    };
+    private Dictionary<string, string> Labels(Guid ownerId) => RunNames.Labels(options.Instance, runId: ownerId);
 
     private V1ObjectMeta Meta(Guid ownerId, V1OwnerReference? owner = null) => new()
     {
-        Name = KubernetesNames.ObjectName(ownerId),
+        Name = RunNames.Run(ownerId),
         NamespaceProperty = namespaceName,
         Labels = Labels(ownerId),
         OwnerReferences = owner is null ? null : [owner],
@@ -36,14 +31,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     // either: the chat pod is replaced when it ends, and the claim, with the chats' folders, outlives it.
     private V1ObjectMeta ChatMeta() => new()
     {
-        Name = KubernetesNames.ChatName(options.Instance),
+        Name = RunNames.Chat(options.Instance),
         NamespaceProperty = namespaceName,
-        Labels = new Dictionary<string, string>
-        {
-            [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
-            [RunPaths.InstanceLabel] = options.Instance,
-            [RunPaths.RoleLabel] = RunPaths.ChatRole,
-        },
+        Labels = RunNames.Labels(options.Instance, RunPaths.ChatRole),
     };
 
     public V1PersistentVolumeClaim ChatClaim() => new() { Metadata = ChatMeta(), Spec = ClaimSpec() };
@@ -93,7 +83,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     public V1NetworkPolicy OpenPolicy(Guid ownerId, V1OwnerReference owner)
     {
         var meta = Meta(ownerId, owner);
-        meta.Name = KubernetesNames.OpenName(meta.Name);
+        meta.Name = RunNames.OpenPolicy(meta.Name);
         meta.Labels[RunPaths.RoleLabel] = RunPaths.OpenRole;
         return Open(meta, new Dictionary<string, string> { [RunPaths.RunLabel] = ownerId.ToString("N"), [RunPaths.InstanceLabel] = options.Instance });
     }
@@ -102,7 +92,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     public V1NetworkPolicy ChatOpenPolicy()
     {
         var meta = ChatMeta();
-        meta.Name = KubernetesNames.OpenName(meta.Name);
+        meta.Name = RunNames.OpenPolicy(meta.Name);
         meta.Labels[RunPaths.RoleLabel] = RunPaths.OpenRole;
         return Open(meta, new Dictionary<string, string> { [RunPaths.RoleLabel] = RunPaths.ChatRole, [RunPaths.InstanceLabel] = options.Instance });
     }
@@ -128,20 +118,14 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// </summary>
     public V1NetworkPolicy ToolsPolicy(Guid installer)
     {
-        var name = KubernetesNames.ToolsName(installer);
+        var name = RunNames.Installer(installer);
         return new V1NetworkPolicy
         {
             Metadata = new V1ObjectMeta
             {
                 Name = name,
                 NamespaceProperty = namespaceName,
-                Labels = new Dictionary<string, string>
-                {
-                    [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
-                    [RunPaths.InstanceLabel] = options.Instance,
-                    [RunPaths.RoleLabel] = RunPaths.ToolsRole,
-                    [KubernetesNames.InstallerLabel] = installer.ToString("N"),
-                },
+                Labels = new Dictionary<string, string>(RunNames.Labels(options.Instance, RunPaths.ToolsRole)) { [KubernetesNames.InstallerLabel] = installer.ToString("N") },
             },
             Spec = new V1NetworkPolicySpec
             {
@@ -210,12 +194,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         {
             Name = name,
             NamespaceProperty = namespaceName,
-            Labels = new Dictionary<string, string>
-            {
-                [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
-                [RunPaths.InstanceLabel] = options.Instance,
-                [RunPaths.RoleLabel] = KubernetesNames.SignInRole,
-            },
+            Labels = RunNames.Labels(options.Instance, RunPaths.SignInRole),
         },
         Spec = new V1NetworkPolicySpec
         {
@@ -248,7 +227,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     }
 
     public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false, string? nameServer = null)
-        => BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), KubernetesNames.ObjectName(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
+        => BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), RunNames.Run(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
 
     // The zones every chat mounts: the agents' and the shared toolchains, never a repository's own tools.
     private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];
@@ -260,19 +239,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     /// </summary>
     public V1Pod ChatPod(string? ildAddress = null, string? nameServer = null)
     {
-        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, KubernetesNames.ChatName(options.Instance), [], options.UsesToolStore ? ChatToolZones : [], limits: false, ildAddress, dns: false, nameServer);
-        pod.Metadata.Annotations = new Dictionary<string, string> { [KubernetesNames.SpecAnnotation] = SpecOf(pod) };
+        var pod = BuildPod(ChatMeta(), RunPaths.ChatsRoot, null, RunNames.Chat(options.Instance), [], options.UsesToolStore ? ChatToolZones : [], limits: false, ildAddress, dns: false, nameServer);
+        pod.Metadata.Annotations = new Dictionary<string, string> { [ChatSpecStamp.Key] = ChatSpecStamp.Of(k8s.KubernetesJson.Serialize(pod.Spec)) };
         return pod;
-    }
-
-    /// <summary>
-    /// A hash of a pod's spec: the runner image and everything ILD gives the pod. The chat pod is long-lived, so one whose
-    /// annotation differs from what ILD would make now (a new runner image, other settings) is replaced.
-    /// </summary>
-    public static string SpecOf(V1Pod pod)
-    {
-        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(k8s.KubernetesJson.Serialize(pod.Spec)));
-        return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
     }
 
     private V1Pod BuildPod(V1ObjectMeta metadata, string root, string? home, string claimName, IEnumerable<string>? toolEnvironment, IReadOnlyList<RunToolMount> zones, bool limits, string? ildAddress, bool dns, string? nameServer = null)
@@ -401,15 +370,9 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     {
         Metadata = new V1ObjectMeta
         {
-            Name = KubernetesNames.ToolsName(installer),
+            Name = RunNames.Installer(installer),
             NamespaceProperty = namespaceName,
-            Labels = new Dictionary<string, string>
-            {
-                [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
-                [RunPaths.InstanceLabel] = options.Instance,
-                [RunPaths.RoleLabel] = RunPaths.ToolsRole,
-                [KubernetesNames.InstallerLabel] = installer.ToString("N"),
-            },
+            Labels = new Dictionary<string, string>(RunNames.Labels(options.Instance, RunPaths.ToolsRole)) { [KubernetesNames.InstallerLabel] = installer.ToString("N") },
         },
         Spec = new V1PodSpec
         {
@@ -481,13 +444,7 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         {
             Name = name,
             NamespaceProperty = namespaceName,
-            Labels = new Dictionary<string, string>
-            {
-                [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue,
-                [RunPaths.InstanceLabel] = options.Instance,
-                [RunPaths.RoleLabel] = KubernetesNames.SignInRole,
-                [KubernetesNames.SignInLabel] = id.ToString("N"),
-            },
+            Labels = new Dictionary<string, string>(RunNames.Labels(options.Instance, RunPaths.SignInRole)) { [KubernetesNames.SignInLabel] = id.ToString("N") },
         },
         Spec = new V1PodSpec
         {

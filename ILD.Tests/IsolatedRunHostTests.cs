@@ -240,7 +240,7 @@ public class IsolatedRunHostTests
         var terminal = await host.OpenSignInAsync(agent: null, "/usr/local/bin/claude", ["setup-token"], 80, 24, Ct);
 
         var name = Assert.Single(host.SignInsStarted);
-        Assert.StartsWith(ExecRunHost.SignInPrefix, name);
+        Assert.StartsWith(RunNames.SignInPrefix, name);
         Assert.Equal([name], host.Open);
         var exec = Assert.Single(host.Execs);
         Assert.Equal(name, exec.Name);

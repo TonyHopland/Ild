@@ -64,7 +64,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
 
-    private static string Name(Guid run) => KubernetesNames.ObjectName(run);
+    private static string Name(Guid run) => RunNames.Run(run);
 
     private string MakeBaseRepository(params (string Path, string Content)[] files) => MakeBaseRepositoryIn("base", files);
 
@@ -291,7 +291,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         await _host.ShutdownAsync(ct);
 
-        Assert.Contains($"pods/{KubernetesNames.ChatName(Instance)}", _api.Deleted);
+        Assert.Contains($"pods/{RunNames.Chat(Instance)}", _api.Deleted);
         Assert.Contains($"pods/{signInPod}", _api.Deleted);
         Assert.DoesNotContain($"pods/{Name(_run)}", _api.Deleted);
     }
@@ -306,7 +306,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         };
         var ct = TestContext.Current.CancellationToken;
         await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
-        var chat = KubernetesNames.ChatName(Instance);
+        var chat = RunNames.Chat(Instance);
 
         await NewHost(Options()).CheckAsync(ct);
         Assert.DoesNotContain($"pods/{chat}", _api.Deleted);
@@ -337,7 +337,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var terminal = await _host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "/usr/local/bin/claude", ["setup-token"], 100, 30, ct);
         var name = SignInPod();
         var pod = _api.Get<V1Pod>("pods", name)!;
-        Assert.Equal(KubernetesNames.SignInRole, pod.Metadata.Labels[RunPaths.RoleLabel]);
+        Assert.Equal(RunPaths.SignInRole, pod.Metadata.Labels[RunPaths.RoleLabel]);
         // No run label: no run's NetworkPolicy selects it, so the OAuth flow can reach the provider.
         Assert.False(pod.Metadata.Labels.ContainsKey(RunPaths.RunLabel));
         Assert.False(pod.Spec.AutomountServiceAccountToken);
@@ -612,7 +612,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     // -- The direct route (network mode Off) -------------------------------------
 
-    private string OpenPolicyName => KubernetesNames.OpenName(Name(_run));
+    private string OpenPolicyName => RunNames.OpenPolicy(Name(_run));
 
     private async Task<IRunProcess> StartAsync(NetworkMode mode, bool prepared = false, KubernetesRunHost? host = null)
     {
@@ -650,7 +650,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     private async Task<IRunProcess> ChatLaunchAsync(Guid chat, NetworkMode mode)
         => await _host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "git", "status"), chat, networkMode: mode), TestContext.Current.CancellationToken);
 
-    private string ChatOpenPolicyName => KubernetesNames.OpenName(ChatPodName);
+    private string ChatOpenPolicyName => RunNames.OpenPolicy(ChatPodName);
 
     private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
 
@@ -820,14 +820,14 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         var ct = TestContext.Current.CancellationToken;
         var dead = Guid.NewGuid();
-        _api.Seed("networkpolicies", KubernetesNames.OpenName(Name(dead)), Instance, dead);
+        _api.Seed("networkpolicies", RunNames.OpenPolicy(Name(dead)), Instance, dead);
 
         var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct));
         Assert.Equal(dead.ToString("N"), leftover.Location);
         Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
 
-        Assert.Contains($"networkpolicies/{KubernetesNames.OpenName(Name(dead))}", _api.Deleted);
-        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", KubernetesNames.OpenName(Name(dead))));
+        Assert.Contains($"networkpolicies/{RunNames.OpenPolicy(Name(dead))}", _api.Deleted);
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", RunNames.OpenPolicy(Name(dead))));
     }
 
     [Fact]
@@ -845,7 +845,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     public async Task The_sweep_removes_the_chat_pods_open_policy_when_the_pod_is_gone()
     {
         var ct = TestContext.Current.CancellationToken;
-        var name = KubernetesNames.OpenName(KubernetesNames.ChatName(Instance));
+        var name = RunNames.OpenPolicy(RunNames.Chat(Instance));
         _api.Seed("networkpolicies", name, Instance, Guid.Empty);
         // Not a run's: it carries no run label.
         _api.Get<V1NetworkPolicy>("networkpolicies", name)!.Metadata.Labels.Remove("ild/run");
@@ -987,7 +987,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var host = NewHost(Options() with { ReadyTimeout = TimeSpan.FromMilliseconds(300) });
         var dead = Guid.NewGuid();
         SeedRun(dead, Instance);
-        _api.Seed("networkpolicies", KubernetesNames.OpenName(Name(dead)), Instance, dead);
+        _api.Seed("networkpolicies", RunNames.OpenPolicy(Name(dead)), Instance, dead);
         _api.Get<V1Pod>("pods", Name(dead))!.Metadata.DeletionTimestamp = DateTime.UtcNow;
         var violations = GuardPolicies();
 

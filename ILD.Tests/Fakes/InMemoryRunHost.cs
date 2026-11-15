@@ -169,8 +169,53 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
     protected override Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
     protected override Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(false);
     public override Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<DirectRoute>>([]);
-    public override Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<RunLeftover>>([]);
-    public override Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default) => Task.FromResult(false);
+    // -- Sweep: what the engine finds, and what it is asked to delete ----------------------
+
+    /// <summary>What the engine says it holds; the policy decides which of it is a leftover.</summary>
+    public SweepFacts Facts { get; set; } = SweepFacts.None;
+
+    /// <summary>The names the engine takes for open routes when a leftover is given by its location alone.</summary>
+    public HashSet<string> OpenRouteNames { get; } = [];
+
+    /// <summary>What the engine is asked to delete, by what it was handed.</summary>
+    public List<Guid> RunsDeleted { get; } = [];
+    public List<(string Name, bool IsInstaller)> SideEnvironmentsDeleted { get; } = [];
+    public List<string> OpenRoutesDeleted { get; } = [];
+
+    /// <summary>What a delete does instead of deleting: an engine failure, or a run whose pod is still there.</summary>
+    public bool EngineFails { get; set; }
+    public bool RunStays { get; set; }
+
+    /// <summary>The failure of the engine this host survives.</summary>
+    public sealed class EngineDownException : Exception;
+
+    protected override Task<SweepFacts> FindLeftoverFactsAsync(CancellationToken ct)
+        => EngineFails ? throw new EngineDownException() : Task.FromResult(Facts);
+
+    protected override Task<bool> DeleteRunAsync(Guid run, CancellationToken ct)
+    {
+        if (EngineFails) throw new EngineDownException();
+        if (RunStays) return Task.FromResult(false);
+        RunsDeleted.Add(run);
+        return Task.FromResult(true);
+    }
+
+    protected override Task<bool> DeleteSideEnvironmentAsync(string name, bool isInstaller, CancellationToken ct)
+    {
+        if (EngineFails) throw new EngineDownException();
+        SideEnvironmentsDeleted.Add((name, isInstaller));
+        return Task.FromResult(true);
+    }
+
+    protected override Task DeleteOpenRouteAsync(string name, CancellationToken ct)
+    {
+        if (EngineFails) throw new EngineDownException();
+        OpenRoutesDeleted.Add(name);
+        return Task.CompletedTask;
+    }
+
+    protected override bool IsOpenRoute(string location) => OpenRouteNames.Contains(location);
+    protected override bool IsEngineFailure(Exception ex) => ex is EngineDownException;
 }
 
 /// <summary>One command started on the <see cref="InMemoryRunHost"/>: what it was started with, and the means for a test to answer it.</summary>

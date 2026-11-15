@@ -474,15 +474,6 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>The installers and sign-in terminals ILD has open now, by name: no leftovers of a crash, and what a shutdown puts away.</summary>
     protected IReadOnlySet<string> OpenSideEnvironments => _execNames.Values.Concat(_signIns.Keys).ToHashSet(StringComparer.Ordinal);
 
-    /// <summary>What a toolchain installer's pod or container is called.</summary>
-    public static string InstallerName(Guid id) => $"{InstallerPrefix}{id:N}";
-
-    /// <summary>What a provider sign-in's pod or container is called.</summary>
-    public static string SignInName(Guid id) => $"{SignInPrefix}{id:N}";
-
-    public const string InstallerPrefix = "ild-tools-";
-    public const string SignInPrefix = "ild-signin-";
-
     // A chat's command goes to the container every chat shares, an installer's or sign-in's to its own, and a run's to the run's.
     private async Task<IExecStream> OpenExecStreamAsync(
         ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct)
@@ -579,7 +570,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private async Task<T> WithToolInstallerAsync<T>(ToolInstaller installer, Func<Guid, Task<T>> work, CancellationToken ct)
     {
         var id = Guid.NewGuid();
-        var name = InstallerName(id);
+        var name = RunNames.Installer(id);
         _execNames[id] = name;
         try
         {
@@ -1576,9 +1567,65 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     // -- Sweep -------------------------------------------------------------------
 
-    public abstract Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default);
+    /// <summary>Finds what ILD's objects there are in the engine, and decides nothing about them (<see cref="RunSweepPolicy"/> does).</summary>
+    protected abstract Task<SweepFacts> FindLeftoverFactsAsync(CancellationToken ct);
 
-    public abstract Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default);
+    /// <summary>Deletes what a run left in the engine; false when something of it is still there.</summary>
+    protected abstract Task<bool> DeleteRunAsync(Guid run, CancellationToken ct);
+
+    /// <summary>Deletes a sign-in's or an installer's pod or container, and an installer's network or policy; false when the pod is still there.</summary>
+    protected abstract Task<bool> DeleteSideEnvironmentAsync(string name, bool isInstaller, CancellationToken ct);
+
+    /// <summary>Deletes the network or NetworkPolicy of a direct route.</summary>
+    protected abstract Task DeleteOpenRouteAsync(string name, CancellationToken ct);
+
+    /// <summary>Whether a leftover given by its location alone, which names no run or side environment, is the engine's open route.</summary>
+    protected abstract bool IsOpenRoute(string location);
+
+    /// <summary>Whether <paramref name="ex"/> is the engine failing or being unreachable, which a sweep survives and tries again after.</summary>
+    protected abstract bool IsEngineFailure(Exception ex);
+
+    public async Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)
+    {
+        try
+        {
+            var facts = await FindLeftoverFactsAsync(ct);
+            return RunSweepPolicy.Leftovers(LeftoverKind, facts, liveIds, await RetainedRuns(ct), OpenSideEnvironments);
+        }
+        catch (Exception ex) when (IsEngineFailure(ex))
+        {
+            Logger?.LogWarning(ex, "Could not list the {Noun}s runs left behind; the next sweep tries again", Noun);
+            return [];
+        }
+    }
+
+    public async Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default)
+    {
+        if (leftover.Kind != LeftoverKind)
+            throw new ArgumentException($"unknown leftover kind '{leftover.Kind}'", nameof(leftover));
+        if (RunSweepPolicy.TargetOf(leftover, IsOpenRoute) is not { } target)
+            return false;
+        try
+        {
+            switch (target)
+            {
+                case LeftoverTarget.Run run:
+                    return await DeleteRunAsync(run.Id, ct);
+                case LeftoverTarget.SideEnvironment side:
+                    return await DeleteSideEnvironmentAsync(side.Name, side.IsInstaller, ct);
+                case LeftoverTarget.OpenRoute route:
+                    await DeleteOpenRouteAsync(route.Name, ct);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        catch (Exception ex) when (IsEngineFailure(ex))
+        {
+            Logger?.LogWarning(ex, "Could not delete the leftover {Location} of the {Noun} host; the next sweep tries again", leftover.Location, Noun);
+            return false;
+        }
+    }
 
     // -- Chats -------------------------------------------------------------------
 
@@ -1915,7 +1962,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task<SignInTerminal> OpenSignInAsync(ManagedAgent? agent, string command, IReadOnlyList<string> arguments, int cols, int rows, CancellationToken ct)
     {
         var id = Guid.NewGuid();
-        var name = SignInName(id);
+        var name = RunNames.SignIn(id);
         _signIns[name] = 0;
         _execNames[id] = name;
 

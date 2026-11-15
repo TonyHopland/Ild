@@ -77,7 +77,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
     private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
 
-    private static string Name(Guid run) => ContainerRunHost.ObjectName(run);
+    private static string Name(Guid run) => RunNames.Run(run);
 
     private string MakeBaseRepository(string folder = "base", params (string Path, string Content)[] files)
     {
@@ -1068,20 +1068,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             Assert.DoesNotContain(Name(gone), _api.Volumes());
             Assert.DoesNotContain(Name(gone), _api.Networks());
         }
-    }
-
-    [Fact]
-    public async Task The_sweeper_keeps_the_runs_that_have_not_ended_even_when_the_caller_does_not_call_them_live()
-    {
-        var failed = Guid.NewGuid();
-        SeedRun(failed, Instance);
-        var retaining = new ContainerRunHost(Options(), new ProcessRunner(), _log) { RetainedRuns = _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { failed }) };
-        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), retaining), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
-
-        await sweeper.SweepAsync(retaining, TestContext.Current.CancellationToken);
-        retaining.Dispose();
-
-        Assert.Contains(Name(failed), _api.Containers());
     }
 
     [Fact]
@@ -2359,7 +2345,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         _api.ImageIds["registry.example/ild-runner:1"] = "sha256:aaa";
         await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
-        var made = _api.Container(ChatContainer)!["Labels"]![ContainerRunHost.SpecLabel]!.GetValue<string>();
+        var made = _api.Container(ChatContainer)!["Labels"]![ChatSpecStamp.Key]!.GetValue<string>();
 
         using (var same = NewHost(Options()))
         {
@@ -2374,7 +2360,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Contains($"containers/{ChatContainer}", _api.Deleted);
 
         await upgraded.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
-        Assert.NotEqual(made, _api.Container(ChatContainer)!["Labels"]![ContainerRunHost.SpecLabel]!.GetValue<string>());
+        Assert.NotEqual(made, _api.Container(ChatContainer)!["Labels"]![ChatSpecStamp.Key]!.GetValue<string>());
     }
 
     // -- Chats -------------------------------------------------------------------

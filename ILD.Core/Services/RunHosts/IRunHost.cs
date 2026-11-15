@@ -319,7 +319,11 @@ public sealed record RunHostOutput(int ExitCode, string StdOut, string StdErr)
 public sealed record RunToolStreams(Stream? StandardInputFrom = null, Stream? StandardOutputTo = null);
 
 /// <summary>Something a run left in a host, named so it can be shown and deleted.</summary>
-public sealed record RunLeftover(string Kind, string Location);
+public sealed record RunLeftover(string Kind, string Location)
+{
+    /// <summary>What the leftover is, when the host that found it knew; without one, the host reads it from <see cref="Location"/>.</summary>
+    public Isolated.LeftoverTarget? Target { get; init; }
+}
 
 /// <summary>A command running in a host.</summary>
 public interface IRunProcess : IDisposable

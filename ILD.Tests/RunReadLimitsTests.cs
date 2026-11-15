@@ -272,8 +272,12 @@ public sealed class RunReadLimitsTests
         public override Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => throw new NotSupportedException();
         protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => Task.FromResult(true);
         protected override Task<string> RunAddressAsync(Guid run, CancellationToken ct) => throw new NotSupportedException();
-        public override Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default) => throw new NotSupportedException();
-        public override Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default) => throw new NotSupportedException();
+        protected override Task<SweepFacts> FindLeftoverFactsAsync(CancellationToken ct) => throw new NotSupportedException();
+        protected override Task<bool> DeleteRunAsync(Guid run, CancellationToken ct) => throw new NotSupportedException();
+        protected override Task<bool> DeleteSideEnvironmentAsync(string name, bool isInstaller, CancellationToken ct) => throw new NotSupportedException();
+        protected override Task DeleteOpenRouteAsync(string name, CancellationToken ct) => throw new NotSupportedException();
+        protected override bool IsOpenRoute(string location) => throw new NotSupportedException();
+        protected override bool IsEngineFailure(Exception ex) => throw new NotSupportedException();
         protected override bool UsesToolStore => false;
     }
 }
