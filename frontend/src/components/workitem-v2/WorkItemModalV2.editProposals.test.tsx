@@ -478,14 +478,10 @@ describe("edit proposals in the detail view", () => {
   });
 });
 
-describe("pending proposals on the Overview", () => {
-  const heading = () => within(overview()).queryByRole("heading", { name: /propos/i });
-  const rows = () => within(overview()).queryAllByRole("listitem");
-  const rowWith = (field: string) => {
-    const matching = rows().filter((r) => r.textContent?.includes(field));
-    expect(matching).toHaveLength(1);
-    return matching[0];
-  };
+describe("proposed edits on the Overview", () => {
+  const heading = () => within(overview()).queryByRole("heading", { name: /proposed edits/i });
+  const cards = () => within(overview()).queryAllByTestId("proposal-card");
+  const banner = () => within(overview()).queryByRole("status");
 
   const fromItemA = makeProposal("From A", null, {
     id: "p-a",
@@ -503,13 +499,6 @@ describe("pending proposals on the Overview", () => {
     requestedByWorkItemId: null,
     proposed: { description: "From chat" },
   });
-  const fromGoneRun = makeProposal("Orphan", null, {
-    id: "p-o",
-    workItemId: "wi-2",
-    createdByLoopRunId: "run-gone",
-    requestedByWorkItemId: null,
-    proposed: { branchNameOverride: "feature/orphan" },
-  });
   const decidedFromItemC = makeProposal("Decided", null, {
     id: "p-d",
     workItemId: "wi-2",
@@ -520,107 +509,127 @@ describe("pending proposals on the Overview", () => {
     proposed: { baseBranchOverride: "main" },
   });
 
-  test("lists each pending proposal with its source, links a loop's to the requesting item, and offers no decision", async () => {
+  test("lists each pending proposal as a card with its source, and offers Approve and Reject", async () => {
     mockServices();
     vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
       fromItemA,
       fromChat,
-      fromGoneRun,
       decidedFromItemC,
     ]);
 
     await renderDialog(makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }));
 
     await waitFor(() => expect(heading()).not.toBeNull());
-    expect(rows()).toHaveLength(3);
-
-    const loopRow = rowWith("Title");
-    expect(loopRow.textContent).toContain("Tags");
-    expect(within(loopRow).getByRole("link", { name: "#wi-1" }).getAttribute("href")).toBe(
+    const pending = cards().filter((c) => !c.closest("details"));
+    expect(pending).toHaveLength(2);
+    const fromLoop = pending.find((c) => c.textContent?.includes("From A"))!;
+    expect(within(fromLoop).getByRole("link", { name: "#wi-1" }).getAttribute("href")).toBe(
       "/taskboard/wi-1",
     );
-
-    const chatRow = rowWith("Description");
-    expect(chatRow.textContent).toContain("Chat");
-    expect(within(chatRow).queryByRole("link")).toBeNull();
-
-    const orphanRow = rowWith("Branch");
-    expect(orphanRow.textContent).not.toContain("Chat");
-    expect(within(orphanRow).queryByRole("link")).toBeNull();
-
-    expect(rows().some((r) => r.textContent?.includes("Base branch"))).toBe(false);
-    expect(within(overview()).queryByRole("link", { name: "#wi-3" })).toBeNull();
-    expect(within(overview()).queryByRole("button", { name: "Approve" })).toBeNull();
-    expect(within(overview()).queryByRole("button", { name: "Reject" })).toBeNull();
+    expect(within(fromLoop).getByTestId("proposal-source").textContent).toContain("Proposed by");
+    const fromChatCard = pending.find((c) => c.textContent?.includes("From chat"))!;
+    expect(within(fromChatCard).getByTestId("proposal-source").textContent).toContain("Chat");
+    for (const card of pending) {
+      expect(within(card).getByRole("button", { name: "Approve" })).toBeTruthy();
+      expect(within(card).getByRole("button", { name: "Reject" })).toBeTruthy();
+    }
+    expect(banner()?.textContent).toContain("2 proposed edits awaiting your decision");
   });
 
-  test("names Dependencies for a proposal that adds or removes dependencies", async () => {
+  test("Approve calls the service and the list re-reads", async () => {
     mockServices();
-    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
-      makeProposal("Adds", null, {
-        id: "p-add",
-        workItemId: "wi-2",
-        requestedByWorkItemId: "wi-1",
-        proposed: { addDependencies: [{ id: "wi-277", title: "Chat tab" }] },
-      }),
-      makeProposal("Removes", null, {
-        id: "p-remove",
-        workItemId: "wi-2",
-        createdByLoopRunId: null,
-        createdByChatSessionId: "chat-1",
-        chatReplySequence: 1,
-        requestedByWorkItemId: null,
-        proposed: { title: "Also renamed", removeDependencies: [{ id: "wi-12", title: null }] },
-      }),
-    ]);
-
-    await renderDialog(makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }));
-
-    await waitFor(() => expect(heading()).not.toBeNull());
-    expect(rows()).toHaveLength(2);
-    expect(rows().every((r) => r.textContent?.includes("Dependencies"))).toBe(true);
-    expect(rowWith("Chat").textContent).toContain("Title");
-  });
-
-  test("shows only while the item has a pending proposal, follows hints, and never shows the previous item's rows", async () => {
-    const { hint } = mockServices();
-    const served: Record<string, WorkItemEditProposal[]> = { "wi-2": [decidedFromItemC] };
-    let answerThirdItem: (cards: WorkItemEditProposal[]) => void = () => {};
     const list = vi
       .spyOn(authServices.workItemService, "listEditProposals")
-      .mockImplementation((id: string) =>
-        id === "wi-3"
-          ? new Promise((resolve) => {
-              answerThirdItem = resolve;
-            })
-          : Promise.resolve(served[id] ?? []),
-      );
+      .mockResolvedValueOnce([fromItemA])
+      .mockResolvedValue([{ ...fromItemA, status: "Approved", decidedAt: "2026-09-26T11:00:00Z" }]);
+    const approve = vi
+      .spyOn(authServices.workItemService, "approveEditProposal")
+      .mockResolvedValue({
+        proposal: { ...fromItemA, status: "Approved" },
+        workItem: makeWorkItem({ id: "wi-2" }),
+      });
+    await renderDialog(makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }));
+    await waitFor(() => expect(cards()).toHaveLength(1));
 
-    const { rerender } = await renderDialog(
-      makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }),
+    fireEvent.click(within(cards()[0]).getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(banner()).toBeNull());
+    expect(approve).toHaveBeenCalledWith("wi-2", "p-a");
+    expect(list.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(within(overview()).getByText("History (1)")).toBeTruthy();
+  });
+
+  test("Reject with a reason sends it, and the history shows the reason", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "listEditProposals")
+      .mockResolvedValueOnce([fromItemA])
+      .mockResolvedValue([
+        {
+          ...fromItemA,
+          status: "Rejected",
+          rejectionReason: "Not this title",
+          decidedAt: "2026-09-26T11:00:00Z",
+        },
+      ]);
+    const reject = vi.spyOn(authServices.workItemService, "rejectEditProposal").mockResolvedValue({
+      ...fromItemA,
+      status: "Rejected",
+    } as never);
+    await renderDialog(makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }));
+    await waitFor(() => expect(cards()).toHaveLength(1));
+
+    fireEvent.click(within(cards()[0]).getByRole("button", { name: "Reject" }));
+    fireEvent.change(within(overview()).getByRole("textbox"), {
+      target: { value: "Not this title" },
+    });
+    fireEvent.click(within(overview()).getByRole("button", { name: /^(Confirm|Reject)/ }));
+
+    await waitFor(() => expect(reject).toHaveBeenCalledWith("wi-2", "p-a", "Not this title"));
+    await waitFor(() => expect(overview().textContent).toContain("Reason: Not this title"));
+    expect(banner()).toBeNull();
+    expect(within(overview()).getByText("History (1)")).toBeTruthy();
+  });
+
+  test("an approve refused as stale shows the stale explanation and no buttons", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "listEditProposals")
+      .mockResolvedValueOnce([fromItemA])
+      .mockResolvedValue([{ ...fromItemA, status: "Stale", decidedAt: "2026-09-26T11:00:00Z" }]);
+    vi.spyOn(authServices.workItemService, "approveEditProposal").mockRejectedValue({
+      status: 409,
+      message: "The work item changed after this proposal was made.",
+    });
+    await renderDialog(makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }));
+    await waitFor(() => expect(cards()).toHaveLength(1));
+
+    fireEvent.click(within(cards()[0]).getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(overview().textContent).toContain("so it can't be applied"));
+    expect(within(overview()).queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(banner()).toBeNull();
+  });
+
+  test("decided proposals are history only: no banner, no buttons, hidden when there are none at all", async () => {
+    const { hint } = mockServices();
+    const served: Record<string, WorkItemEditProposal[]> = { "wi-2": [] };
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockImplementation((id: string) =>
+      Promise.resolve(served[id] ?? []),
     );
-    await waitFor(() => expect(list).toHaveBeenCalledWith("wi-2"));
+    await renderDialog(makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }));
     await act(async () => {
       await Promise.resolve();
     });
     expect(heading()).toBeNull();
-    expect(rows()).toHaveLength(0);
+
+    served["wi-2"] = [decidedFromItemC];
+    hint("wi-2");
+    await waitFor(() => expect(heading()).not.toBeNull());
+    expect(banner()).toBeNull();
+    expect(within(overview()).getByText("History (1)")).toBeTruthy();
+    expect(within(overview()).queryByRole("button", { name: "Approve" })).toBeNull();
 
     served["wi-2"] = [fromItemA, decidedFromItemC];
     hint("wi-2");
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(within(overview()).getByRole("link", { name: "#wi-1" })).toBeTruthy();
-
-    rerender(dialog(makeWorkItem({ id: "wi-3", status: WorkItemStatus.Done })));
-    await waitFor(() => expect(list).toHaveBeenCalledWith("wi-3"));
-    expect(heading()).toBeNull();
-    expect(rows()).toHaveLength(0);
-
-    await act(async () => {
-      answerThirdItem([{ ...fromChat, id: "p-c3", workItemId: "wi-3" }]);
-    });
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rowWith("Description").textContent).toContain("Chat");
-    expect(within(overview()).queryByRole("link", { name: "#wi-1" })).toBeNull();
+    await waitFor(() => expect(banner()?.textContent).toContain("1 proposed edit awaiting"));
   });
 });

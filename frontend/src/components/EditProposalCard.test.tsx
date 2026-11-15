@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import EditProposalCard from "./EditProposalCard";
 import type { WorkItemEditProposal } from "../types";
 import * as authServices from "../services/auth";
@@ -168,5 +169,28 @@ describe("EditProposalCard", () => {
     if (reason) expect(container.textContent).toContain(reason);
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
+  });
+});
+
+describe("EditProposalCard source and time", () => {
+  test("names a chat as the source, with when it was proposed", () => {
+    render(<EditProposalCard proposal={makeProposal()} onSettled={vi.fn()} />);
+    const line = screen.getByTestId("proposal-source");
+    expect(line.textContent).toContain("Proposed by Chat");
+    expect(line.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-26T10:00:00Z");
+  });
+
+  test("links a loop run's requesting item", () => {
+    render(
+      <MemoryRouter>
+        <EditProposalCard
+          proposal={makeProposal({ createdByChatSessionId: null, requestedByWorkItemId: "wi-9" })}
+          onSettled={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { name: "#wi-9" }).getAttribute("href")).toBe(
+      "/taskboard/wi-9",
+    );
   });
 });

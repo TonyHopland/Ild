@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { workItemService } from "../services/auth";
 import { DescriptionDiff, TagsChange } from "./FieldChanges";
 import ProposalDecision from "./ProposalDecision";
@@ -46,6 +47,20 @@ function DependencyChanges({
   );
 }
 
+function Source({ proposal }: { proposal: WorkItemEditProposal }) {
+  if (proposal.createdByChatSessionId) return <>Chat</>;
+  if (proposal.requestedByWorkItemId)
+    return (
+      <>
+        Loop run on{" "}
+        <Link to={`/taskboard/${proposal.requestedByWorkItemId}`}>
+          #{proposal.requestedByWorkItemId}
+        </Link>
+      </>
+    );
+  return null;
+}
+
 export default function EditProposalCard({ proposal, onSettled }: EditProposalCardProps) {
   const { proposed, snapshot } = proposal;
   const addedDependencies = proposed.addDependencies ?? [];
@@ -61,6 +76,13 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
           {proposal.status}
         </span>
       </div>
+
+      <p className="proposal-source" data-testid="proposal-source">
+        Proposed by <Source proposal={proposal} />{" "}
+        <time dateTime={proposal.createdAt} title={new Date(proposal.createdAt).toLocaleString()}>
+          {new Date(proposal.createdAt).toLocaleString()}
+        </time>
+      </p>
 
       {proposal.rationale && <p className="proposal-rationale">{proposal.rationale}</p>}
 
