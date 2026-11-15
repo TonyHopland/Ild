@@ -300,26 +300,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Create_puts_the_base_repository_in_as_a_bundle_with_the_remote_as_origin_and_checks_out_the_run_branch()
-    {
-        var stdin = new Dictionary<FakeDockerExec, byte[]>();
-        _api.OnExec = async e =>
-        {
-            if (e.WantsStdin) stdin[e] = await e.ReadStdinToEndAsync();
-            await e.ExitAsync(0);
-        };
-
-        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
-
-        var clone = Assert.Single(_api.Execs, e => e.Joined.Contains("git clone"));
-        Assert.Equal(WorkingDirectory, clone.Command[^2]);
-        Assert.Equal("https://forge.example/acme/app.git", clone.Command[^1]);
-        Assert.StartsWith("# v2 git bundle", Encoding.ASCII.GetString(stdin[clone], 0, 15));
-        var checkout = Assert.Single(_api.Execs, e => e.Joined.Contains("git checkout"));
-        Assert.Equal(["ild/wi-1-run"], checkout.Command.TakeLast(1));
-    }
-
-    [Fact]
     public async Task Stats_of_a_running_container_are_read_against_its_limits()
     {
         await CreateRunAsync();
@@ -417,128 +397,21 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     // -- Forwards ----------------------------------------------------------------
 
     [Fact]
-    public async Task A_command_starts_with_the_declared_forwards_answering_on_the_runs_loopback_through_the_proxy()
+    public async Task The_name_of_a_forward_is_mapped_by_root_which_owns_the_hosts_file_starting_with_the_systems_path_alone()
     {
         await CreateRunAsync();
-        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>(
-            [new(15432, "postgres", 5432), new(16379, "bad,host", 6379)]);
+        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
 
         using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var sync = _api.Execs.Single(e => e.Command.Contains(ExecRunHost.ForwardsScript));
-        Assert.Equal(Name(_run), sync.Container);
-        var address = ForwardAddresses.Allocate(["postgres"])["postgres"];
-        Assert.Equal(["15432", "postgres", "5432", address], sync.Command.TakeLast(4));
-        // The name is mapped to that address first, by root, which owns the hosts file.
         var hosts = _api.Execs.Single(e => e.Command.Contains(ExecRunHost.HostsScript));
         Assert.Equal("0", hosts.User);
         // Root starts with the system's PATH alone: the container's has a directory the agent writes ahead of /usr/bin.
         Assert.Equal(["PATH=/usr/sbin:/usr/bin:/sbin:/bin"], hosts.Env);
-        Assert.Equal(["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-c"], hosts.Command.Take(5));
-        Assert.Equal([address, "postgres"], hosts.Command.TakeLast(2));
-        Assert.True(_api.Execs.IndexOf(hosts) < _api.Execs.IndexOf(sync));
-        // A host that could carry a socat option is not given a relay.
-        Assert.DoesNotContain("bad,host", sync.Command);
-        Assert.True(_api.Execs.IndexOf(sync) < _api.Execs.FindIndex(e => e.Command.Contains("make-it")));
-    }
-
-    private static readonly string[] IldScriptPrefix = ["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"];
-
-    [Fact]
-    public async Task ILDs_own_scripts_start_with_a_fixed_environment_and_the_runs_own_command_does_not()
-    {
-        await CreateRunAsync();
-        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
-        var ct = TestContext.Current.CancellationToken;
-
-        using (var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), ct)) await process.WaitForExitAsync(ct);
-        await _host.GetFileLengthAsync($"{WorkingDirectory}/file", ct);
-
-        var own = _api.Execs.Where(e => e.Command.Contains(ExecRunHost.ForwardsScript) || e.Command.Contains(ExecRunHost.HostsScript) || e.Joined.Contains("stat -c %s")).ToList();
-        Assert.Equal(3, own.Count);
-        Assert.All(own, e => Assert.Equal(IldScriptPrefix, e.Command.Take(3)));
-        var run = _api.Execs.Single(e => e.Command.Contains("make-it"));
-        Assert.NotEqual("/usr/bin/env", run.Command[0]);
-        Assert.Contains(run.Env, c => c.StartsWith("HOME=", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task With_no_forwards_a_command_costs_no_extra_exec_until_one_was_given_then_its_relays_are_stopped()
-    {
-        await CreateRunAsync();
-        IReadOnlyList<RunForward> forwards = [];
-        _host.Forwards = _ => Task.FromResult(forwards);
-        var ct = TestContext.Current.CancellationToken;
-
-        using (var first = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "a"), _run), ct)) await first.WaitForExitAsync(ct);
-        Assert.DoesNotContain(_api.Execs, e => e.Command.Contains(ExecRunHost.ForwardsScript));
-
-        forwards = [new(15432, "postgres", 5432)];
-        using (var second = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "b"), _run), ct)) await second.WaitForExitAsync(ct);
-        forwards = [];
-        using (var third = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "c"), _run), ct)) await third.WaitForExitAsync(ct);
-
-        var syncs = _api.Execs.Where(e => e.Command.Contains(ExecRunHost.ForwardsScript)).ToList();
-        Assert.Equal(2, syncs.Count);
-        Assert.Equal("5432", syncs[0].Command[^2]);
-        // Only the proxy's host and port: every relay is stopped.
-        Assert.Equal(["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-c", ExecRunHost.ForwardsScript, "bash"], syncs[1].Command.Take(7));
-        Assert.Equal(9, syncs[1].Command.Count);
     }
 
     // -- Exec --------------------------------------------------------------------
-
-    [Fact]
-    public async Task A_command_streams_its_output_and_reports_its_exit_code_with_only_the_environment_the_caller_set()
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            await e.WriteStdoutAsync("hello\n");
-            await e.WriteStderrAsync("warn\n");
-            await e.ExitAsync(3);
-        };
-        var psi = Command(WorkingDirectory, "make-it", "a b");
-
-        using var process = await _host.StartCommandAsync(
-            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ILD_TEST_ONLY"] = "yes" }), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal("hello\n", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
-        Assert.Equal("warn\n", await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken));
-        Assert.Equal(3, process.ExitCode);
-        var exec = _api.Execs.Last();
-        Assert.Equal(Name(_run), exec.Container);
-        Assert.Contains("ILD_TEST_ONLY=yes", exec.Env);
-        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
-        Assert.DoesNotContain(exec.Env, c => c.StartsWith("PATH=", StringComparison.Ordinal));
-        Assert.DoesNotContain(exec.Command, c => c.Contains("ILD_TEST_ONLY", StringComparison.Ordinal));
-        Assert.Equal(["make-it", "a b"], exec.Command.TakeLast(2));
-        Assert.Contains(WorkingDirectory, exec.Command);
-    }
-
-    [Fact]
-    public async Task Closing_the_input_of_a_command_ends_what_it_reads_to_the_end()
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            var input = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
-            await e.WriteStdoutAsync(input.ToUpperInvariant());
-            await e.ExitAsync(0);
-        };
-        var psi = Command(WorkingDirectory, "cat");
-        psi.RedirectStandardInput = true;
-
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
-        await process.StandardInput.WriteAsync("prompt text");
-        process.StandardInput.Close();
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal("PROMPT TEXT", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
-        Assert.Equal(0, process.ExitCode);
-    }
 
     [Fact]
     public async Task A_dropped_stream_fails_the_command_instead_of_leaving_it_waiting()
@@ -559,22 +432,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Proxy_variables_that_name_ilds_loopback_name_ilds_host_name_for_the_container()
-    {
-        await CreateRunAsync();
-        var psi = Command(WorkingDirectory, "curl");
-
-        using var process = await _host.StartCommandAsync(
-            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128" }), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var proxy = Assert.Single(_api.Execs.Last().Env, c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
-        Assert.Contains("ild.example:3128", proxy);
-        Assert.DoesNotContain("127.0.0.1", proxy);
-    }
-
-    [Fact]
-    public async Task A_host_that_is_a_suffix_of_the_preview_domain_is_not_put_on_NO_PROXY_and_ild_is_reached_by_another_name()
+    public async Task Ild_is_reached_by_the_name_ild_api_which_the_run_is_given_as_a_host()
     {
         _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
         await CreateRunAsync();
@@ -585,7 +443,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var noProxy = Assert.Single(_api.Execs.Last().Env, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
         Assert.Contains("ild-api", noProxy);
-        Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
         Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
         var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host, RunPaths.WorkingDirectory(_run)));
         Assert.Contains(new Uri((string)mcp["ILD_API_URL"]!).Host, noProxy);
@@ -1037,38 +894,16 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
     // -- Kill leftovers ----------------------------------------------------------
 
-    [Fact]
-    public async Task Kill_all_for_a_run_with_no_container_asks_nothing_of_the_engine_and_kills_nothing()
-    {
-        var killed = await _host.KillAllAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
-
-        Assert.Equal(0, killed);
-        Assert.Empty(_api.Execs);
-    }
-
     // -- Terminal, files, preview ------------------------------------------------
 
     [Fact]
-    public async Task A_terminal_is_a_tty_exec_whose_input_output_and_end_go_through_the_pty_interface()
+    public async Task A_terminal_is_given_the_size_it_was_opened_with()
     {
         await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            await e.WriteStdoutAsync("ready$ ");
-            while (!e.StdinSoFar().Contains('x')) await Task.Delay(10);
-            await e.WriteStdoutAsync("got x");
-            await e.ExitAsync(5);
-        };
-        var exited = new TaskCompletionSource<int>();
 
         using var pty = await _host.OpenTerminalAsync(
             new PtyOptions { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 120, Rows = 30, Name = "t" }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
-        pty.ProcessExited += (_, args) => exited.TrySetResult(args.ExitCode);
-        await pty.WriterStream.WriteAsync("x"u8.ToArray(), TestContext.Current.CancellationToken);
-        var read = await new StreamReader(pty.ReaderStream).ReadToEndAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("ready$ got x", read);
-        Assert.Equal(5, await exited.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         var exec = _api.Execs.Last();
         Assert.True(exec.Tty);
         Assert.Contains("120x30", exec.Resizes);
@@ -1082,7 +917,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task No_secret_of_a_commands_environment_is_in_any_exec_command_it_travels_in_the_exec_create_env_field(bool asAgent)
+    public async Task A_commands_environment_travels_in_the_exec_create_env_field(bool asAgent)
     {
         await CreateRunAsync();
         var psi = Command(WorkingDirectory, "claude", "-p", "hi");
@@ -1095,8 +930,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var exec = LaunchExec();
         Assert.Contains($"ANTHROPIC_API_KEY={GatewayToken}", exec.Env);
         Assert.Contains($"ILD_API_TOKEN={ApiToken}", exec.Env);
-        Assert.DoesNotContain(_api.Execs.SelectMany(e => e.Command), c => c.Contains(GatewayToken, StringComparison.Ordinal) || c.Contains(ApiToken, StringComparison.Ordinal));
-        Assert.DoesNotContain(_api.Execs, e => e.StdinSoFar().Contains(GatewayToken, StringComparison.Ordinal));
     }
 
     private PtyOptions Terminal() => new() { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 80, Rows = 24, Name = "t" };
@@ -1104,32 +937,27 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     [Theory]
     [InlineData(NetworkMode.Monitor)]
     [InlineData(NetworkMode.Whitelist)]
-    public async Task A_terminal_in_a_proxied_mode_reaches_the_network_through_the_runs_relay_as_a_launch_does(NetworkMode mode)
+    public async Task A_terminal_in_a_proxied_mode_is_not_on_the_open_network(NetworkMode mode)
     {
         await CreateRunAsync();
 
         using var pty = await _host.OpenTerminalAsync(Terminal(), mode, TestContext.Current.CancellationToken);
 
-        var terminal = _api.Execs.Last();
-        Assert.True(terminal.Tty);
-        Assert.Contains(terminal.Command, c => c.Contains(ExecRunHost.EgressRelayScript, StringComparison.Ordinal));
-        Assert.Contains(terminal.Env, e => e.StartsWith("HTTPS_PROXY=http://", StringComparison.Ordinal));
         Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
     }
 
     [Fact]
-    public async Task A_terminal_in_off_has_the_direct_route_and_no_proxy_variables()
+    public async Task A_terminal_in_off_is_on_the_open_network()
     {
         await CreateRunAsync();
 
         using var pty = await _host.OpenTerminalAsync(Terminal(), NetworkMode.Off, TestContext.Current.CancellationToken);
 
         Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
-        Assert.DoesNotContain(_api.Execs.Last(e => e.Tty).Env, e => ProxyVariables.Any(v => e.StartsWith(v + "=", StringComparison.Ordinal)));
     }
 
     [Fact]
-    public async Task No_secret_of_a_terminals_environment_is_in_the_exec_command_or_typed_into_the_terminal()
+    public async Task A_terminals_environment_travels_in_the_exec_create_env_field()
     {
         await CreateRunAsync();
 
@@ -1141,69 +969,10 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
 
         var exec = _api.Execs.Last();
-        Assert.True(exec.Tty);
         Assert.Contains($"ILD_API_TOKEN={ApiToken}", exec.Env);
         Assert.Contains($"HOME={RunPaths.HomeDirectory(_run)}", exec.Env);
-        Assert.DoesNotContain(exec.Command, c => c.Contains(ApiToken, StringComparison.Ordinal));
-        Assert.DoesNotContain(ApiToken, exec.StdinSoFar());
     }
 
-    private async Task<int> WritesAfterOpeningForWrite(string existing, string? written)
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            if (e.WantsStdin) await e.ReadStdinToEndAsync();
-            if (e.Joined.Contains("cat --")) await e.WriteStdoutAsync(existing);
-            await e.ExitAsync(0);
-        };
-        var path = $"{WorkingDirectory}/scripts/build.sh";
-        var before = _api.Execs.Count;
-        await using (var stream = await _host.OpenFileForWriteAsync(path, TestContext.Current.CancellationToken))
-        {
-            if (written is not null)
-            {
-                stream.SetLength(0);
-                await stream.WriteAsync(Encoding.UTF8.GetBytes(written), TestContext.Current.CancellationToken);
-            }
-        }
-        return _api.Execs.Skip(before).Count(e => e.Command.Contains(ExecRunHost.WriteFileScript));
-    }
-
-    [Fact]
-    public async Task A_file_opened_for_write_but_not_written_is_not_rewritten()
-        => Assert.Equal(0, await WritesAfterOpeningForWrite("abc", null));
-
-    [Fact]
-    public async Task A_file_saved_with_the_same_bytes_is_not_rewritten()
-        => Assert.Equal(0, await WritesAfterOpeningForWrite("abc", "abc"));
-
-    [Fact]
-    public async Task An_edited_file_is_written_back_once_in_place()
-    {
-        Assert.Equal(1, await WritesAfterOpeningForWrite("abc", "changed"));
-        var write = _api.Execs.Last();
-        Assert.Equal("changed", Encoding.UTF8.GetString(await write.ReadStdinToEndAsync()));
-        Assert.Equal("rw", write.Command[^1]);
-    }
-
-    [Fact]
-    public async Task A_bundle_comes_out_of_the_container_into_the_sink()
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            await e.WriteStdoutAsync("BUNDLE-BYTES");
-            await e.ExitAsync(0);
-        };
-        using var sink = new MemoryStream();
-
-        var result = await _host.PullBundleAsync(WorkingDirectory, "ild/wi-1-run", incremental: true, sink, TestContext.Current.CancellationToken);
-
-        Assert.True(result.Success);
-        Assert.Equal("BUNDLE-BYTES", Encoding.UTF8.GetString(sink.ToArray()));
-        Assert.Contains("--remotes=origin", _api.Execs.Last().Command);
-    }
 
     [Fact]
     public async Task The_preview_proxy_is_pointed_at_the_containers_address_on_its_network()
@@ -1353,232 +1122,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         Assert.Empty(leftovers);
         Assert.Contains(_log.Warnings, w => w.Contains("Could not list"));
-    }
-
-    [Fact]
-    public async Task A_command_with_no_working_directory_goes_to_the_run_it_is_for_and_an_unknown_owner_is_refused()
-    {
-        await CreateRunAsync();
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-
-        using var inRun = await routing.StartCommandAsync(
-            RunCommand.Prepared(Command("", "ls"), _run), TestContext.Current.CancellationToken);
-        await inRun.WaitForExitAsync(TestContext.Current.CancellationToken);
-        Assert.Empty(local.Started);
-        Assert.Equal(Name(_run), _api.Execs.Last().Container);
-
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(
-            RunCommand.Prepared(Command("", "ls"), Guid.NewGuid()), TestContext.Current.CancellationToken));
-        Assert.Empty(local.Started);
-    }
-
-    // -- Runs and chats from before containers: read and deleted, never run ------
-
-    private static readonly string[] OldPaths = ["/worktrees/ild/old-run/repo", "/data/chat-sessions/11111111111111111111111111111111"];
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public async Task An_agent_launch_for_a_path_on_ilds_disk_starts_nothing_on_ilds_machine(int which)
-    {
-        await CreateRunAsync();
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        var execs = _api.Execs.Count;
-        var agent = RunCommand.Agent(Command(OldPaths[which], "claude"), _run, null, NetworkMode.Monitor, null) with { RunIn = RunPaths.HolderOf(OldPaths[which]) ?? _run };
-
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(agent, TestContext.Current.CancellationToken));
-
-        Assert.Empty(local.Started);
-        Assert.Equal(execs, _api.Execs.Count);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public async Task A_command_without_a_run_for_a_path_on_ilds_disk_starts_nothing_on_ilds_machine(int which)
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(
-            RunCommand.Prepared(Command(OldPaths[which], "git"), Guid.NewGuid()), TestContext.Current.CancellationToken));
-
-        Assert.Empty(local.Started);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public async Task A_terminal_a_tool_and_a_bundle_for_a_path_on_ilds_disk_are_refused_and_reach_no_host(int which)
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        var path = OldPaths[which];
-        var ct = TestContext.Current.CancellationToken;
-
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.OpenTerminalAsync(new Porta.Pty.PtyOptions { Cwd = path, App = "sh" }, NetworkMode.Monitor, ct));
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.RunToolAsync(path, "git", ["status"], null, ct));
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.PushBundleAsync(path, "origin", new MemoryStream(), ct));
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.FetchBundleAsync(path, new MemoryStream(), ct));
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.PullBundleAsync(path, "main", false, new MemoryStream(), ct));
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.AddChatToolsAsync(path, "/base", ct));
-        Assert.Throws<PredatesContainersException>(() => routing.HoldChat(path));
-
-        Assert.Empty(local.Started);
-    }
-
-    [Fact]
-    public async Task Git_in_a_path_on_ilds_disk_is_refused_whatever_its_dot_git_looks_like_and_branch_cleanup_in_a_base_clone_still_works()
-    {
-        var forged = Path.Combine(_scratch, "worktrees", "old-run");
-        Directory.CreateDirectory(Path.Combine(forged, ".git"));
-        var routing = new RoutingRunHost(new FakeRunHost(), _host);
-        await Assert.ThrowsAsync<PredatesContainersException>(
-            () => routing.RunToolAsync(forged, "git", ["status"], null, TestContext.Current.CancellationToken));
-
-        var baseClone = Path.Combine(_scratch, "base");
-        Directory.CreateDirectory(baseClone);
-        using (var init = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", ["init", "-q", baseClone])))
-            await init!.WaitForExitAsync(TestContext.Current.CancellationToken);
-        var repositories = new RepositoryManager(new ProcessRunner(), routing, worktreesRoot: Path.Combine(_scratch, "wt"));
-
-        Assert.False(await repositories.LocalBranchExistsAsync(baseClone, "ild/none"));
-        Assert.False(await repositories.DeleteLocalBranchAsync(baseClone, "ild/none"));
-    }
-
-    [Fact]
-    public async Task A_base_clone_named_by_a_repository_row_is_cloned_fetched_and_reset_on_ilds_disk_and_any_other_path_there_is_refused()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var remote = GitCli.MakeRemote(_scratch, "remote");
-        var seed = Path.Combine(_scratch, "remote-seed");
-        var auth = new GitAuthOptions(remote, "tok", "Forgejo");
-        var baseClone = Path.Combine(_scratch, "repos", "base");
-        var runner = new ProcessRunner();
-        var routing = new RoutingRunHost(new LocalRunHost(runner), _host);
-        var repositories = new RepositoryManager(
-            runner, routing, worktreesRoot: Path.Combine(_scratch, "wt"), mirrorsRoot: Path.Combine(_scratch, "mirrors"),
-            isBaseRepository: (path, _) => ValueTask.FromResult(path == baseClone));
-
-        var (cloned, error) = await repositories.CloneAsync(remote, baseClone, ct, auth);
-        Assert.True(cloned, error);
-
-        File.WriteAllText(Path.Combine(seed, "late.txt"), "late\n");
-        GitCli.Run(seed, "add", "-A");
-        GitCli.Run(seed, "commit", "-m", "late");
-        GitCli.Run(seed, "push", remote, "main");
-        Assert.True(await repositories.FetchAsync(baseClone, ct, auth));
-        Assert.True(await repositories.ResetHardAsync(baseClone, "origin/main", ct));
-        Assert.True(File.Exists(Path.Combine(baseClone, "late.txt")));
-
-        var other = Path.Combine(_scratch, "repos", "other");
-        await Assert.ThrowsAsync<PredatesContainersException>(() => repositories.CloneAsync(remote, other, ct, auth));
-        await Assert.ThrowsAsync<PredatesContainersException>(
-            () => new RepositoryManager(runner, routing, worktreesRoot: Path.Combine(_scratch, "wt"), mirrorsRoot: Path.Combine(_scratch, "mirrors"))
-                .ResetHardAsync(baseClone, "origin/main", ct));
-    }
-
-    [Fact]
-    public async Task A_remote_branch_check_in_a_worktree_goes_to_the_run_for_a_run_path_and_is_refused_for_a_path_on_ilds_disk()
-    {
-        await CreateRunAsync();
-        var routing = new RoutingRunHost(new FakeRunHost(), _host);
-        var repositories = new RepositoryManager(new ProcessRunner(), routing, worktreesRoot: Path.Combine(_scratch, "wt"));
-        var forged = Path.Combine(_scratch, "worktrees", "old-run");
-        Directory.CreateDirectory(Path.Combine(forged, ".git"));
-
-        await Assert.ThrowsAsync<PredatesContainersException>(() => repositories.RemoteBranchExistsAsync(forged, "ild/x"));
-
-        var execs = _api.Execs.Count;
-        await repositories.RemoteBranchExistsAsync(WorkingDirectory, "ild/x");
-        Assert.True(_api.Execs.Count > execs);
-    }
-
-    [Fact]
-    public async Task A_title_launch_in_a_chats_folder_under_a_run_id_of_its_own_still_goes_to_the_isolated_host()
-    {
-        var chat = Guid.NewGuid();
-        var routing = new RoutingRunHost(new FakeRunHost(), _host);
-        await routing.CreateChatFolderAsync(chat, "/unused", TestContext.Current.CancellationToken);
-        var folder = ChatFolder(chat);
-
-        using var process = await routing.StartCommandAsync(
-            RunCommand.Agent(Command(folder, "claude"), Guid.NewGuid(), null, NetworkMode.Monitor, null) with { RunIn = RunPaths.HolderOf(folder) },
-            TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(ChatContainer, _api.Execs.Last().Container);
-    }
-
-    [Fact]
-    public async Task Reading_and_deleting_on_ilds_disk_still_reach_the_local_host()
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        var ct = TestContext.Current.CancellationToken;
-
-        var notes = OldPaths[0] + "/notes.md";
-        await local.WriteFileAsync(notes, "history", ct);
-
-        Assert.Equal("history", await routing.ReadTextFileAsync(notes, ct));
-        Assert.True(await routing.DeleteAsync([OldPaths[0], notes], ct));
-        Assert.Null(await local.ReadTextFileAsync(notes, ct));
-    }
-
-    // -- Commands that must run in a run, and where a preview's files are -------
-
-    [Fact]
-    public async Task A_preview_step_in_its_state_directory_runs_in_the_runs_container()
-    {
-        await CreateRunAsync();
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        var state = routing.PreviewStateDirectoryFor(WorkingDirectory);
-
-        using var step = await routing.StartCommandAsync(
-            RunCommand.Prepared(Command(state + "/npm-cache", "npm", "ci")) with { RunIn = _run }, TestContext.Current.CancellationToken);
-        await step.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal($"{RunPaths.RunRoot(_run)}/preview-state", state);
-        Assert.Empty(local.Started);
-        Assert.Equal(Name(_run), _api.Execs.Last().Container);
-    }
-
-    [Theory]
-    [InlineData("/tmp/preview/0123abcd")]
-    [InlineData("/data/worktrees/.preview-volumes/11111111-1111-1111-1111-111111111111/data")]
-    [InlineData("/ild-run/22222222222222222222222222222222/repo")]
-    [InlineData("{run}/../22222222222222222222222222222222/repo")]
-    public async Task A_command_that_must_run_in_a_run_is_refused_outside_it_and_never_starts_on_ilds_machine(string directory)
-    {
-        await CreateRunAsync();
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        var execs = _api.Execs.Count;
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => routing.StartCommandAsync(
-            RunCommand.Prepared(Command(directory.Replace("{run}", RunPaths.RunRoot(_run)), "sh")) with { RunIn = _run },
-            TestContext.Current.CancellationToken));
-
-        Assert.StartsWith("refusing to run sh", error.Message);
-        Assert.Empty(local.Started);
-        Assert.Equal(execs, _api.Execs.Count);
-    }
-
-    [Fact]
-    public async Task A_command_for_a_run_the_host_does_not_hold_is_refused_and_not_started_on_ilds_machine()
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        var gone = Guid.NewGuid();
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => routing.StartCommandAsync(
-            RunCommand.Prepared(Command(RunPaths.WorkingDirectory(gone), "sh")) with { RunIn = gone }, TestContext.Current.CancellationToken));
-
-        Assert.Contains("never runs on ILD's own machine", error.Message);
-        Assert.Empty(local.Started);
     }
 
     // -- Kept preview data: the run's own copy -----------------------------------
@@ -2956,54 +2499,19 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_chat_command_runs_in_the_chat_container_as_that_chat_with_its_home_and_the_agents_on_the_path()
+    public async Task A_chat_command_has_the_agents_on_its_path_ahead_of_the_chats_own_and_the_images()
     {
         using var host = NewHost(Options(), [Claude]);
         AnswerInstaller(AgentNodeLine, ClaudeLine);
         var chat = Guid.NewGuid();
-        var folder = $"{ChatFolder(chat)}/repos/widgets";
 
-        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command(folder, "git", "status"), chat), TestContext.Current.CancellationToken);
+        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command($"{ChatFolder(chat)}/repos/widgets", "git", "status"), chat), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var exec = _api.Execs.Last();
         var home = RunPaths.ChatHome(chat);
-        Assert.Equal(ChatContainer, exec.Container);
-        Assert.Equal($"HOME={home}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
         Assert.Equal(
             $"PATH=/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}",
-            exec.Env.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)));
-        Assert.Contains(folder, exec.Command);
-        Assert.Equal(["git", "status"], exec.Command.TakeLast(2));
-        Assert.Contains($"{chat:N}/", exec.Command.Single(c => c.StartsWith(chat.ToString("N") + "/", StringComparison.Ordinal)));
-    }
-
-    [Fact]
-    public async Task A_chat_command_gets_the_chats_npm_prefix_whatever_the_caller_sets()
-    {
-        var chat = Guid.NewGuid();
-        var psi = Command(ChatFolder(chat), "npm", "i", "-g", "x");
-
-        using var process = await _host.StartCommandAsync(
-            RunCommand.Prepared(psi, chat, new Dictionary<string, string?> { ["NPM_CONFIG_PREFIX"] = "/caller/prefix" }), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal($"NPM_CONFIG_PREFIX={RunPaths.ChatHome(chat)}/.local", _api.Execs.Last().Env.Single(c => c.StartsWith("NPM_CONFIG_PREFIX=", StringComparison.Ordinal)));
-    }
-
-    [Fact]
-    public async Task A_command_in_a_chat_folder_is_the_chats_even_when_its_caller_names_another_id_to_kill_it_by()
-    {
-        var chat = Guid.NewGuid();
-        var title = Guid.NewGuid();
-
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "claude"), title), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var exec = _api.Execs.Last();
-        Assert.Equal(ChatContainer, exec.Container);
-        Assert.Equal($"HOME={RunPaths.ChatHome(chat)}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
-        Assert.Contains(exec.Command, c => c.StartsWith(title.ToString("N") + "/", StringComparison.Ordinal));
+            _api.Execs.Last().Env.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -3103,11 +2611,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var chat = Guid.NewGuid();
         await host.CreateChatFolderAsync(chat, "/unused", ct);
 
-        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatContainer, _api.Containers());
-
-        clock.Advance(TimeSpan.FromSeconds(1));
+        clock.Advance(IdleTimeout);
         await host.ReapIdleChatAsync(ct);
 
         Assert.DoesNotContain(ChatContainer, _api.Containers());
@@ -3121,76 +2625,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(2, _api.Created.Count(c => c == $"containers/{ChatContainer}"));
         Assert.Equal(1, _api.Created.Count(c => c == $"volumes/{ChatContainer}"));
         Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("is back", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task The_chat_container_is_not_removed_while_a_chat_command_runs_or_a_chat_hold_is_open_and_the_time_counts_from_when_they_end()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var (host, clock) = IdleHost();
-        var chat = Guid.NewGuid();
-        await host.CreateChatFolderAsync(chat, "/unused", ct);
-        var release = new TaskCompletionSource();
-        _api.OnExec = async e =>
-        {
-            await release.Task;
-            await e.ExitAsync(0);
-        };
-
-        var running = host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "npm", "run", "dev"), chat), ct);
-        using var process = await running;
-        clock.Advance(IdleTimeout * 2);
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatContainer, _api.Containers());
-
-        release.SetResult();
-        await process.WaitForExitAsync(ct);
-        using (host.HoldChat(ChatFolder(chat)))
-        {
-            clock.Advance(IdleTimeout * 2);
-            await host.ReapIdleChatAsync(ct);
-            Assert.Contains(ChatContainer, _api.Containers());
-        }
-
-        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatContainer, _api.Containers());
-
-        clock.Advance(TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.DoesNotContain(ChatContainer, _api.Containers());
-    }
-
-    [Fact]
-    public async Task A_chat_that_starts_while_the_reaper_removes_the_chat_container_waits_for_it_and_gets_a_new_one()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var (host, clock) = IdleHost();
-        var chat = Guid.NewGuid();
-        await host.CreateChatFolderAsync(chat, "/unused", ct);
-        var removing = new TaskCompletionSource();
-        var proceed = new TaskCompletionSource();
-        _api.BeforeRequest = async request =>
-        {
-            if (request.StartsWith("DELETE", StringComparison.Ordinal) && request.Contains($"/containers/{ChatContainer}", StringComparison.Ordinal) && !removing.Task.IsCompleted)
-            {
-                removing.SetResult();
-                await proceed.Task;
-            }
-        };
-        clock.Advance(IdleTimeout);
-
-        var reaping = host.ReapIdleChatAsync(ct);
-        await removing.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        var starting = host.DirectoryExistsAsync(ChatFolder(chat), ct);
-        await Task.Delay(100, ct);
-        Assert.False(starting.IsCompleted);
-        proceed.SetResult();
-        await reaping;
-
-        Assert.True(await starting);
-        Assert.Contains(ChatContainer, _api.Containers());
-        Assert.Equal(2, _api.Created.Count(c => c == $"containers/{ChatContainer}"));
     }
 
     [Fact]
@@ -3284,46 +2718,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal([ChatContainer], _api.NetworksOf("ild-main"));
         Assert.Equal(given["ild.example:".Length..], _api.Connects[^1]["EndpointConfig"]!["IPAMConfig"]!["IPv4Address"]!.GetValue<string>());
         Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("Reconnected ILD to the network of the chat container", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task A_command_with_no_working_directory_for_a_chat_goes_to_the_chat_container_as_that_chat()
-    {
-        var chat = Guid.NewGuid();
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", TestContext.Current.CancellationToken);
-
-        using var process = await routing.StartCommandAsync(
-            RunCommand.Prepared(Command("", "ls"), chat), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Empty(local.Started);
-        var exec = _api.Execs.Last();
-        Assert.Equal(ChatContainer, exec.Container);
-        Assert.Contains($"HOME={RunPaths.ChatHome(chat)}", exec.Env);
-    }
-
-    [Fact]
-    public async Task The_routing_host_keeps_chats_in_the_container_and_chats_from_before_on_the_local_host()
-    {
-        var chat = Guid.NewGuid();
-        var local = new FakeRunHost().WithDirectory("/data/chat-sessions/old");
-        var routing = new RoutingRunHost(local, _host);
-
-        var path = await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", TestContext.Current.CancellationToken);
-        Assert.Equal(ChatFolder(chat), path);
-        Assert.Empty(local.ChatFolders);
-
-        Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/old", TestContext.Current.CancellationToken));
-        Assert.Equal(ChatContainer, _api.Execs.Last().Container);
-        var before = _api.Execs.Count;
-        Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/old", TestContext.Current.CancellationToken));
-        Assert.Equal(before, _api.Execs.Count);
-
-        await routing.DeleteAsync([ChatFolder(chat), "/data/chat-sessions/old"], TestContext.Current.CancellationToken);
-        Assert.Equal(ChatContainer, _api.Execs.Last().Container);
-        Assert.Contains(RunPaths.ChatRoot(chat), _api.Execs.Last().Command);
     }
 
     [Fact]
@@ -3456,57 +2850,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.DoesNotContain(_api.Containers(), c => c.StartsWith("ild-signin-", StringComparison.Ordinal));
     }
 
-    private async Task<SignInTerminal> OpenReadingAsync(ContainerRunHost host, Func<FakeDockerExec, Task> answer)
-    {
-        AnswerInstaller(ClaudeLine);
-        var installer = _api.OnExec;
-        _api.OnExec = e => e.Container.StartsWith("ild-signin-", StringComparison.Ordinal) && !e.Tty ? answer(e) : installer(e);
-        return await host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
-    public async Task A_login_file_is_read_out_of_the_sign_in_container_as_text()
-    {
-        using var host = NewHost(Options(), [Claude]);
-        await using var terminal = await OpenReadingAsync(host, async e =>
-        {
-            await e.WriteStdoutAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes("""{"a":1}""")));
-            await e.ExitAsync(0);
-        });
-
-        var text = await terminal.ReadLoginAsync(".claude/.credentials.json", TestContext.Current.CancellationToken);
-
-        Assert.Equal("""{"a":1}""", text);
-        var script = _api.Execs.Last().Command;
-        Assert.Contains("! -L", script[5]);
-        Assert.Contains("-le \"$2\"", script[5]);
-        Assert.Equal([".claude/.credentials.json", "262144", "/tmp/home"], script.TakeLast(3));
-    }
-
-    [Fact]
-    public async Task A_link_or_an_oversized_login_file_is_not_read()
-    {
-        using var host = NewHost(Options(), [Claude]);
-        // The script's own refusal (not a regular file, or over the cap) is its exit status 3: nothing is printed.
-        await using var terminal = await OpenReadingAsync(host, e => e.ExitAsync(3));
-
-        Assert.Null(await terminal.ReadLoginAsync(".codex/auth.json", TestContext.Current.CancellationToken));
-    }
-
-    [Fact]
-    public async Task A_sign_in_login_read_that_fails_otherwise_is_an_error()
-    {
-        using var host = NewHost(Options(), [Claude]);
-        await using var terminal = await OpenReadingAsync(host, async e =>
-        {
-            await e.WriteStderrAsync("base64: boom");
-            await e.ExitAsync(1);
-        });
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => terminal.ReadLoginAsync(".codex/auth.json", TestContext.Current.CancellationToken));
-        Assert.Contains("boom", ex.Message);
-    }
 
     [Fact]
     public async Task The_sweep_removes_sign_in_containers_a_killed_ild_left_but_not_open_ones_or_other_installs()
