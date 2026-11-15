@@ -157,6 +157,9 @@ function mockServices(runs: LoopRun[] = [makeRun()]) {
   vi.spyOn(authServices.workItemService, "getHistory").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(runs[0] ?? makeRun());
+  vi.spyOn(authServices.loopRunService, "getContainerStats").mockResolvedValue({
+    state: "stopped",
+  });
   vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
     runId,
     messages: [],
@@ -2082,24 +2085,45 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("done")).toBeTruthy();
   });
 
-  const TERMINAL_TAB_CASES: Array<{ name: string; worktreePath: string | null; shown: boolean }> = [
-    {
-      name: "shows a Terminal tab only once the run has a worktree",
-      worktreePath: "/tmp/wt/wi-1",
-      shown: true,
-    },
-    {
-      name: "hides the Terminal tab when the run has no worktree",
-      worktreePath: null,
-      shown: false,
-    },
-  ];
+  const CONTAINER_TAB_CASES: Array<{ name: string; worktreePath: string | null; shown: boolean }> =
+    [
+      {
+        name: "shows a Container tab only once the run has a worktree",
+        worktreePath: "/tmp/wt/wi-1",
+        shown: true,
+      },
+      {
+        name: "hides the Container tab when the run has no worktree",
+        worktreePath: null,
+        shown: false,
+      },
+    ];
 
-  test.each(TERMINAL_TAB_CASES)("$name", async ({ worktreePath, shown }) => {
+  test.each(CONTAINER_TAB_CASES)("$name", async ({ worktreePath, shown }) => {
     mockServices();
     await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath }));
-    if (shown) expect(screen.getByRole("tab", { name: /Terminal/ })).toBeTruthy();
-    else expect(screen.queryByRole("tab", { name: /Terminal/ })).toBeNull();
+    if (shown) expect(screen.getByRole("tab", { name: /Container/ })).toBeTruthy();
+    else expect(screen.queryByRole("tab", { name: /Container/ })).toBeNull();
+  });
+
+  test("the Container tab shows the container stats and reads them only while it is open", async () => {
+    mockServices();
+    const stats = vi.spyOn(authServices.loopRunService, "getContainerStats").mockResolvedValue({
+      state: "running",
+      cpuCores: 1,
+      cpuLimitCores: 4,
+    });
+    await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/tmp/wt/wi-1" }));
+    expect(stats).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Container/ }));
+      await Promise.resolve();
+    });
+
+    expect(stats).toHaveBeenCalledWith("run-1");
+    expect(await screen.findByText("1 / 4 CPU · 25%")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Terminal" })).toBeTruthy();
   });
 
   test("opens the terminal in its tab and keeps the session mounted across tab switches", async () => {
@@ -2107,7 +2131,7 @@ describe("WorkItemModalV2", () => {
     await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/tmp/wt/wi-1" }));
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      fireEvent.click(screen.getByRole("tab", { name: /Container/ }));
       await Promise.resolve();
     });
     // The tab opens on a prompt, not a live session.
@@ -2139,7 +2163,7 @@ describe("WorkItemModalV2", () => {
       makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/ild-run/run1/repo" }),
     );
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      fireEvent.click(screen.getByRole("tab", { name: /Container/ }));
       await Promise.resolve();
     });
   }
@@ -2189,35 +2213,35 @@ describe("WorkItemModalV2", () => {
     expect(openAppLink).not.toHaveBeenCalled();
   });
 
-  test("losing the worktree while on the Terminal tab falls back to Overview, even when running", async () => {
+  test("losing the worktree while on the Container tab falls back to Overview, even when running", async () => {
     mockServices();
     const running = { status: WorkItemStatus.Running, currentLoopRunId: "run-1" };
     const { rerender } = await renderDialog(
       makeWorkItem({ ...running, worktreePath: "/tmp/wt/wi-1" }),
     );
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      fireEvent.click(screen.getByRole("tab", { name: /Container/ }));
       await Promise.resolve();
     });
-    expectOnTab(/Terminal/);
+    expectOnTab(/Container/);
 
     await rerenderDialog(rerender, makeWorkItem({ ...running, worktreePath: null }));
 
-    expect(screen.queryByRole("tab", { name: /Terminal/ })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /Container/ })).toBeNull();
     expectOnTab("Overview");
   });
 
-  test("switching from the Terminal tab to a running item with no worktree opens on Action", async () => {
+  test("switching from the Container tab to a running item with no worktree opens on Action", async () => {
     mockServices();
     const running = { status: WorkItemStatus.Running, currentLoopRunId: "run-1" };
     const { rerender } = await renderDialog(
       makeWorkItem({ ...running, id: "wi-1", worktreePath: "/tmp/wt/wi-1" }),
     );
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      fireEvent.click(screen.getByRole("tab", { name: /Container/ }));
       await Promise.resolve();
     });
-    expectOnTab(/Terminal/);
+    expectOnTab(/Container/);
 
     await rerenderDialog(rerender, makeWorkItem({ ...running, id: "wi-2", worktreePath: null }));
 
@@ -2229,7 +2253,7 @@ describe("WorkItemModalV2", () => {
     await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/tmp/wt/wi-1" }));
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      fireEvent.click(screen.getByRole("tab", { name: /Container/ }));
       await Promise.resolve();
     });
     await act(async () => {
