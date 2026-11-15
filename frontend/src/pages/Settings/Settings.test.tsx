@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, within, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Navigate, Route, Routes } from "react-router";
 import Settings from "./index";
 import * as useAuthHook from "../../hooks/useAuth";
 import * as signalRHook from "../../hooks/useSignalR";
@@ -46,6 +46,7 @@ describe("Settings sections", () => {
     const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
     expect(nav.getAllByRole("link").map((l) => l.getAttribute("href"))).toEqual([
       "/settings/ild",
+      "/settings/global-variables",
       "/settings/user",
       "/settings/network",
       "/settings/package-feeds",
@@ -130,4 +131,27 @@ describe("Settings sections", () => {
       await loaded(spy as never);
     },
   );
+});
+
+describe("the old Global Variables address", () => {
+  test("redirects /global-variables to its Settings section", () => {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      connectionState: "connected",
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+    } as any);
+    render(
+      <MemoryRouter initialEntries={["/global-variables"]}>
+        <Routes>
+          <Route
+            path="/global-variables"
+            element={<Navigate to="/settings/global-variables" replace />}
+          />
+          <Route path="/settings/:section" element={<div>section page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("section page")).toBeTruthy();
+  });
 });

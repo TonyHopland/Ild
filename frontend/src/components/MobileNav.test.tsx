@@ -107,7 +107,6 @@ describe("the phone tab bar", () => {
       "Settings",
       "Repositories",
       "AI Providers",
-      "Global Variables",
     ]);
     expect(menu.getByText("tester")).toBeTruthy();
 

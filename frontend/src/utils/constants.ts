@@ -23,7 +23,7 @@ export const ROUTES = {
   SETTINGS: "/settings",
   REPOSITORIES: "/repositories",
   AI_PROVIDERS: "/ai-providers",
-  GLOBAL_VARIABLES: "/global-variables",
+  GLOBAL_VARIABLES: "/settings/global-variables",
 } as const;
 
 /**
@@ -39,7 +39,6 @@ export const NAV_ITEMS: readonly { label: string; path: string; icon: IconName; 
   { label: "Settings", path: ROUTES.SETTINGS, icon: "gear" },
   { label: "Repositories", path: ROUTES.REPOSITORIES, icon: "repo" },
   { label: "AI Providers", path: ROUTES.AI_PROVIDERS, icon: "chat" },
-  { label: "Global Variables", path: ROUTES.GLOBAL_VARIABLES, icon: "gear" },
 ];
 
 export const DEFAULT_PAGE_SIZE = 20;

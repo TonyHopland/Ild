@@ -524,3 +524,16 @@
 .external-grant-revoked {
   color: #94a3b8;
 }
+
+.settings-nav-badge {
+  margin-left: auto;
+  min-width: 1rem;
+  padding: 0 0.3rem;
+  border-radius: 0.5rem;
+  background: #b91c1c;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1rem;
+  text-align: center;
+}

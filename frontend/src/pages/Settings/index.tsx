@@ -6,6 +6,8 @@ import PackageFeedsSettings from "./sections/PackageFeedsSettings";
 import LoggingSettings from "./sections/LoggingSettings";
 import WorkItemServerSettings from "./sections/WorkItemServerSettings";
 import StorageSettings from "./sections/StorageSettings";
+import GlobalVariables from "../GlobalVariables";
+import { usePendingGlobalVariableProposalCount } from "../../hooks/usePendingGlobalVariableProposalCount";
 import ExternalAccessSettings from "./sections/ExternalAccessSettings";
 import "./Settings.css";
 
@@ -33,6 +35,12 @@ const SECTIONS = [
     label: "General",
     icon: "M12 3v3m0 12v3m9-9h-3M6 12H3m14.5-6.5-2 2m-7 7-2 2m0-11 2 2m7 7 2 2M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
     Component: IldSettings,
+  },
+  {
+    id: "global-variables",
+    label: "Global variables",
+    icon: "M8 4C5.5 4 5 5.5 5 7v2c0 1.5-.5 3-3 3 2.5 0 3 1.5 3 3v2c0 1.5.5 3 3 3m8-16c2.5 0 3 1.5 3 3v2c0 1.5.5 3 3 3-2.5 0-3 1.5-3 3v2c0 1.5-.5 3-3 3",
+    Component: GlobalVariables,
   },
   {
     id: "user",
@@ -87,6 +95,7 @@ export default function Settings() {
   const { section } = useParams<{ section?: string }>();
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
   const Section = active.Component;
+  const pendingSuggestions = usePendingGlobalVariableProposalCount();
 
   return (
     <div className="page-container">
@@ -107,6 +116,12 @@ export default function Settings() {
             >
               <Icon path={s.icon} />
               {s.label}
+              {s.id === "global-variables" && pendingSuggestions > 0 && (
+                <span className="settings-nav-badge">
+                  {pendingSuggestions}
+                  <span className="sr-only"> suggestions waiting</span>
+                </span>
+              )}
             </Link>
           ))}
         </nav>

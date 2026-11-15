@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Global Variables moved from the main menu to Settings → Global variables.** The pending-suggestions count now shows on Settings and on its Global variables section, and the old `/global-variables` address redirects.
+
 ## [0.25.1] - 2026-11-14
 
 ### Fixed

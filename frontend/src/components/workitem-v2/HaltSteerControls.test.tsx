@@ -199,7 +199,7 @@ describe("HaltSteerControls", () => {
     expect(screen.getAllByText(/review_rules/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/writing/).length).toBeGreaterThan(0);
     const links = screen.getAllByRole("link");
-    expect(links.some((a) => a.getAttribute("href") === "/global-variables")).toBe(true);
+    expect(links.some((a) => a.getAttribute("href") === "/settings/global-variables")).toBe(true);
 
     fireEvent.change(screen.getByPlaceholderText(/optional guidance/i), {
       target: { value: "set them now" },

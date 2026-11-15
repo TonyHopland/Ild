@@ -48,9 +48,9 @@ function renderHeader() {
 }
 
 const globalVariablesLink = () =>
-  within(screen.getByRole("navigation")).getByRole("link", { name: /Global Variables/ });
+  within(screen.getByRole("navigation")).getByRole("link", { name: /^Settings/ });
 
-describe("the Global Variables menu entry", () => {
+describe("the Settings menu entry", () => {
   test("carries the number of pending suggestions, follows hints, and shows nothing at zero", async () => {
     const hint = mockHub();
     const server = { count: 3 as number | null };
@@ -66,6 +66,6 @@ describe("the Global Variables menu entry", () => {
 
     server.count = 0;
     await hint("GlobalVariableProposalsChanged", { name: "review_rules" });
-    await waitFor(() => expect(globalVariablesLink().textContent).toBe("Global Variables"));
+    await waitFor(() => expect(globalVariablesLink().textContent).toBe("Settings"));
   });
 });

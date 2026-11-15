@@ -18,7 +18,6 @@ import Chat from "./pages/Chat";
 import Settings from "./pages/Settings";
 import Repositories from "./pages/Repositories";
 import AiProviders from "./pages/AiProviders";
-import GlobalVariables from "./pages/GlobalVariables";
 import "./App.css";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -181,11 +180,7 @@ function AppRoutes() {
               />
               <Route
                 path="/global-variables"
-                element={
-                  <ProtectedRoute>
-                    <GlobalVariables />
-                  </ProtectedRoute>
-                }
+                element={<Navigate to="/settings/global-variables" replace />}
               />
               <Route
                 path="/work-item-server"
