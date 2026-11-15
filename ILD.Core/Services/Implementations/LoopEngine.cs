@@ -626,7 +626,7 @@ public sealed partial class LoopEngine : ILoopEngine
         _ = LaunchAfterAwaitAsync(runId);
     }
 
-    public async Task DeliverHumanFeedbackAsync(Guid runId, Guid runNodeId, NodeSignal signal, string feedback, string? edgeName)
+    public async Task DeliverHumanFeedbackAsync(Guid runId, Guid runNodeId, NodeSignal signal, string feedback, string? edgeName, WorkItemActor? answeredBy)
     {
         using var scope = _sp.CreateScope();
         var sp = scope.ServiceProvider;
@@ -653,7 +653,7 @@ public sealed partial class LoopEngine : ILoopEngine
         try
         {
             await sp.GetRequiredService<IWorkItemManager>().TransitionAsync(
-                RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
+                answeredBy ?? RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
                 reason: "A person answered the run", currentLoopRunId: run.Id);
         }
         catch (Exception ex)

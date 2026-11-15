@@ -1409,6 +1409,19 @@ public class WorkItemManagerTests
         return (id, runId, runNode.Id);
     }
 
+    [Fact]
+    public async Task An_answer_given_for_someone_else_is_handed_to_the_engine_with_who_gave_it()
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, runNodeId) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+        var grant = WorkItemActor.External("admin", "driver", Guid.NewGuid());
+
+        Assert.True(await mgr.SubmitHumanFeedbackInputAsync(id, runId, "ok", grant));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId, It.IsAny<NodeSignal>(), "ok", null, grant), Times.Once);
+    }
+
     [Theory]
     [InlineData(HumanAnswer.Input)]
     [InlineData(HumanAnswer.Respond)]
@@ -1437,7 +1450,7 @@ public class WorkItemManagerTests
         };
 
         Assert.True(accepted);
-        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId, signal, feedback, edge), Times.Once);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId, signal, feedback, edge, It.IsAny<WorkItemActor?>()), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
         eventLog.Verify(e => e.AppendAsync(It.IsAny<Guid>(), EventType.HumanFeedbackReceived, It.IsAny<string>(),
             It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
@@ -1628,18 +1641,18 @@ public class WorkItemManagerTests
         // No branch delete and no loop continuation when the merge fails.
         remote.Verify(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
-            It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
     }
 
     private static void VerifyFiredOnly(Mock<ILoopEngine> engine, Guid runId, Guid runNodeId, string edge)
     {
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId,
             It.Is<NodeSignal>(s => s.EdgeName == edge),
-            It.IsAny<string>(), edge), Times.Once);
+            It.IsAny<string>(), edge, It.IsAny<WorkItemActor?>()), Times.Once);
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(),
-            It.Is<NodeSignal>(s => s.EdgeName == null), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            It.Is<NodeSignal>(s => s.EdgeName == null), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
-            It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Once);
     }
 
     private static void VerifyFallback(Mock<ILoopEngine> engine, Guid runId, Guid runNodeId, string edge, string output, string inputContains)
@@ -1648,9 +1661,9 @@ public class WorkItemManagerTests
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId,
             It.Is<NodeSignal>(s => s.EdgeName == null
                 && (output == "OnSuccess" ? s.Type == ExternalActionResultType.Success : s.Type == ExternalActionResultType.Reject)),
-            It.Is<string>(f => f.Contains(inputContains)), $"{edge} (not wired) → {output}"), Times.Once);
+            It.Is<string>(f => f.Contains(inputContains)), $"{edge} (not wired) → {output}", It.IsAny<WorkItemActor?>()), Times.Once);
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
-            It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Once);
     }
 
     [Theory]
@@ -1776,7 +1789,7 @@ public class WorkItemManagerTests
         Assert.Null(result.FiredEdge);
         Assert.Contains(fragment, result.Error);
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
-            It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
         Assert.Equal(LoopRunStatus.WaitingHuman, db.Context.LoopRuns.AsNoTracking().Single(r => r.Id == runId).Status);
     }
 
@@ -1810,7 +1823,7 @@ public class WorkItemManagerTests
         Assert.Equal(LoopOutputs.OnRejected, wired.SuggestedEdge);
         Assert.NotNull(wired.Error);
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
-            It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
     }
 
     [Fact]
@@ -1851,7 +1864,7 @@ public class WorkItemManagerTests
         Assert.True(result!.Merged);
         Assert.Null(result.Error);
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
-            It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
     }
 
     [Fact]
@@ -1863,7 +1876,7 @@ public class WorkItemManagerTests
 
         Assert.Null(await mgr.MergePullRequestAsync(Guid.NewGuid().ToString(), deleteBranch: true));
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
-            It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
     }
 
     // ---- TransitionAsync (canonical generic transition) ------------------

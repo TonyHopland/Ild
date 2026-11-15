@@ -60,6 +60,30 @@ describe("Share access with an AI", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(instructions.value));
   });
 
+  test("offers control of work, says what it allows before it is picked, and creates with it", async () => {
+    const create = vi
+      .spyOn(externalGrantService, "create")
+      .mockResolvedValue({ grant: grant({ name: "Driver", scope: "Control" }), token: "ildg_ctl" });
+    renderPage();
+
+    expect(screen.queryByText(/answer its human-feedback questions/)).toBeNull();
+    fireEvent.change(screen.getByLabelText("Rights"), { target: { value: "Control" } });
+    expect(screen.getByText(/answer its human-feedback questions/)).toBeTruthy();
+    expect(screen.getByText(/spends AI provider money/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Driver" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create access" }));
+    await screen.findByText("Access for Driver");
+    expect(create).toHaveBeenCalledWith("Driver", expect.any(Number), "Control");
+  });
+
+  test("badges a Control grant on its row", async () => {
+    vi.spyOn(externalGrantService, "list").mockResolvedValue([grant({ scope: "Control" })]);
+    renderPage();
+
+    expect(await screen.findByText("control of work")).toBeTruthy();
+  });
+
   test("will not create an access with no name", () => {
     renderPage();
 

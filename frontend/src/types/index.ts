@@ -1862,7 +1862,7 @@ export interface MergePrResult {
   output?: string;
 }
 
-export type ExternalAgentGrantScope = "Full" | "ReadOnly";
+export type ExternalAgentGrantScope = "Full" | "ReadOnly" | "Control";
 
 export type ExternalAgentGrantStatus = "active" | "expired" | "revoked";
 

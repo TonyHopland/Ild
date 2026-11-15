@@ -71,9 +71,12 @@ namespace ILD.Api.Controllers;
 ///    repository the schedule allows into the chat's scratch folder, with
 ///    credentials that never reach the clone (ADR-0014).
 ///
-/// Crucially, this controller deliberately does NOT expose start,
-/// transition, link-pr, or human-feedback endpoints. Agents are not
-/// allowed to move work items out of Backlog; that gate is human-only.
+/// Crucially, this controller deliberately does NOT expose transitions
+/// (other than into the work queue), link-pr, or merge. Agents are not
+/// allowed to move work items out of Backlog; that gate is human-only,
+/// with one exception: an external-agent grant at the Control level (ADR-0039)
+/// may start work items, queue them and answer human feedback. Run and chat
+/// agents never reach those routes.
 /// </summary>
 [ApiController]
 [Route("api/v1/agent")]
@@ -118,7 +121,7 @@ public class AgentController : ControllerBase, IActionFilter
     private IActionResult? RefuseGrantWrite()
         => User.FindFirstValue(IldAuthentication.GrantScopeClaim) == nameof(ExternalAgentGrantScope.ReadOnly)
            && !HttpMethods.IsGet(Request.Method) && !HttpMethods.IsHead(Request.Method)
-            ? StatusCode(403, new { error = "This grant is read-only: it can read but not create work items or make proposals." })
+            ? StatusCode(403, new { error = "This grant is read-only: it can read but not create work items, make proposals or control work." })
             : null;
 
     private bool HasHeader(string header)
@@ -228,7 +231,15 @@ public class AgentController : ControllerBase, IActionFilter
                     "POST workitems/{id}/edit-proposals, GET workitems/{id}/edit-proposals (propose an edit to any item; a human decides)",
                     "GET repositories, GET loop-templates, GET loop-runs, GET global-variables",
                     "POST global-variables/proposals, POST loop-templates/proposals, POST workitems/{id}/human-input-proposals (a human decides)",
+                    "Control level only: POST workitems/{id}/start (starts a Ready item, any item), POST workitems/{id}/queue (moves an item into the work queue)",
+                    "Control level only: POST workitems/{id}/human-feedback/input, /respond, /reject, /edge (answer a human-feedback stop; body {runId, input}, /edge also {name}; any item)",
                 },
+            },
+            requestFields = new
+            {
+                createWorkItem = "POST workitems: title (required, 1-512 chars), description, repositoryId (required; from GET repositories), tags (a list of strings; the tags pick the loop template that runs the item), dependencies (work item ids), branchNameOverride, baseBranchOverride, loopTemplateId, createdByLoopRunId (ignored for a grant).",
+                updateWorkItem = "PUT workitems/{id}: title, description, tags (replaces the list; picks the loop template), branchNameOverride, baseBranchOverride.",
+                humanFeedback = "runId (required: the run the item is parked on), input (optional text, at most 8192 chars), name (the output name, /edge only).",
             },
             mcp = new
             {
@@ -239,8 +250,9 @@ public class AgentController : ControllerBase, IActionFilter
             rules = new[]
             {
                 "You are your own session: you edit and delete only the work items you created. Everything else is changed by proposing, and a human approves or rejects each proposal.",
-                "You cannot start, transition or merge work, and you have no loop run or chat: loop variables, the current loop and chat clones are not available.",
-                "A read-only grant can read but not create or propose.",
+                "You have no loop run or chat: loop variables, the current loop and chat clones are not available. Transitions other than into the work queue, linking a pull request and merging stay with the operator.",
+                "There are three levels. Read only: reads, nothing else. Read, create and propose: also creates and edits work items of your own and proposes. Control of work: also starts any work item, queues it and answers human-feedback stops, so you can drive an item from Backlog to done. A request above your level answers 403.",
+                "A grant that can start and answer acts on any work item, not only its own, and its starts and answers appear in the item's history under this grant's name.",
                 "Every request is audited under the grant, and each grant has a request budget per minute (429 when it is spent).",
             },
         });
@@ -1477,6 +1489,148 @@ public class AgentController : ControllerBase, IActionFilter
         if (User.IsInRole(IldAuthentication.AgentRole))
             return WorkItemActor.System(_instance.Username, "agent with no run or chat");
         return User.Identity?.Name is { Length: > 0 } name ? WorkItemActor.Human(name) : null;
+    }
+
+    // -- Control of work (ADR-0037, amended by ADR-0039) -------------------------
+    //
+    // A grant at the Control level drives the work it is handed: it starts any
+    // work item, moves one into the work queue, and answers a human-feedback
+    // stop. Run and chat agents and the other grant levels are refused. Nothing
+    // else moves: other transitions, link-pr and merge stay with the operator.
+
+    private async Task<(WorkItemActor? Actor, IActionResult? Error)> ControlActorAsync()
+    {
+        if (!User.IsInRole(IldAuthentication.ExternalAgentRole)
+            || User.FindFirstValue(IldAuthentication.GrantScopeClaim) != nameof(ExternalAgentGrantScope.Control))
+            return (null, StatusCode(403, new { error = "Only an external-agent grant with control of work can start work items, queue them or answer human feedback." }));
+        return await ActorAsync(null, null, CallerGrantId()) is { Kind: RemoteWorkItemActorKind.ExternalAgent } actor
+            ? (actor, null)
+            : (null, StatusCode(403, new { error = "This grant no longer exists." }));
+    }
+
+    /// <summary>Start a Ready item now, as <c>POST /api/v1/workitems/{id}/start</c> does for the operator.</summary>
+    [HttpPost("workitems/{id}/start")]
+    public async Task<IActionResult> StartWorkItem(
+        string id,
+        [FromServices] IRemoteWorkItemCoordinator coordinator,
+        [FromServices] ISchedulerSettingsService schedulerSettings,
+        [FromServices] IWorkItemServerOptionsResolver serverOptions,
+        [FromServices] IWorkItemScheduler scheduler,
+        CancellationToken cancellationToken)
+    {
+        var (actor, error) = await ControlActorAsync();
+        if (actor is null)
+            return error!;
+
+        try
+        {
+            var opts = await serverOptions.ResolveForWorkItemAsync(id, cancellationToken);
+            var maxConcurrent = await schedulerSettings.GetMaxConcurrentAsync(cancellationToken);
+            switch (await coordinator.StartIgnoringRepositoryLimitAsync(opts, id, maxConcurrent, actor, cancellationToken))
+            {
+                case HandStartResult.NotFound:
+                    return NotFound();
+                case HandStartResult.NotReady:
+                    return Conflict(new { error = "Only a Ready item can be started." });
+                case HandStartResult.AtConcurrencyLimit:
+                    return Conflict(new { error = "ILD is already running as many work items as it is allowed to." });
+                case HandStartResult.ShuttingDown:
+                    return Conflict(new { error = "ILD is shutting down." });
+            }
+            scheduler.Pulse();
+            return await _workItems.GetWorkItemAsync(id) is { } started ? Ok(started) : NotFound();
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
+    }
+
+    /// <summary>Move an item into the work queue, where the scheduler picks it up. No other status can be reached from here.</summary>
+    [HttpPost("workitems/{id}/queue")]
+    public async Task<IActionResult> QueueWorkItem(string id)
+    {
+        var (actor, error) = await ControlActorAsync();
+        if (actor is null)
+            return error!;
+
+        try
+        {
+            return await _workItems.MoveAsync(actor, id, RemoteWorkItemStatus.WorkQueue)
+                ? Ok()
+                : BadRequest(new { error = "Transition not allowed" });
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
+    }
+
+    [HttpPost("workitems/{id}/human-feedback/input")]
+    public async Task<IActionResult> HumanFeedbackInput(string id, [FromBody] HumanFeedbackInputRequest request)
+    {
+        var (actor, error) = await ControlActorAsync();
+        if (actor is null)
+            return error!;
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        return await AnswerAsync(request.RunId,
+            runId => _workItems.SubmitHumanFeedbackInputAsync(id, runId, request.Input ?? string.Empty, actor));
+    }
+
+    [HttpPost("workitems/{id}/human-feedback/respond")]
+    public async Task<IActionResult> HumanFeedbackRespond(string id, [FromBody] HumanFeedbackInputRequest request)
+    {
+        var (actor, error) = await ControlActorAsync();
+        if (actor is null)
+            return error!;
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        return await AnswerAsync(request.RunId,
+            runId => _workItems.SubmitHumanFeedbackRespondAsync(id, runId, request.Input ?? string.Empty, actor));
+    }
+
+    [HttpPost("workitems/{id}/human-feedback/reject")]
+    public async Task<IActionResult> HumanFeedbackReject(string id, [FromBody] HumanFeedbackRejectRequest request)
+    {
+        var (actor, error) = await ControlActorAsync();
+        if (actor is null)
+            return error!;
+        if (request.Input is { Length: > 8192 })
+            return BadRequest(new { error = "Input exceeds 8192 characters" });
+
+        return await AnswerAsync(request.RunId,
+            runId => _workItems.RejectHumanFeedbackAsync(id, runId, request.Input, actor));
+    }
+
+    [HttpPost("workitems/{id}/human-feedback/edge")]
+    public async Task<IActionResult> HumanFeedbackEdge(string id, [FromBody] HumanFeedbackEdgeRequest request)
+    {
+        var (actor, error) = await ControlActorAsync();
+        if (actor is null)
+            return error!;
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest(new { error = "Edge name is required" });
+
+        return await AnswerAsync(request.RunId,
+            runId => _workItems.SubmitHumanFeedbackEdgeAsync(id, runId, request.Name, request.Input ?? string.Empty, actor));
+    }
+
+    /// <summary>Deliver an answer to the run it names, as the operator's route does; a stale or closed run is a 409.</summary>
+    private async Task<IActionResult> AnswerAsync(Guid? runId, Func<Guid, Task<bool>> deliver)
+    {
+        if (runId is not { } run || run == Guid.Empty)
+            return BadRequest(new { error = "The answer must name the run it answers (runId)." });
+
+        bool ok;
+        try { ok = await deliver(run); }
+        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
+        catch (HumanFeedbackRefusedException ex) { return Conflict(new { error = ex.Message }); }
+        return ok ? Ok() : NotFound();
     }
 
     // -- Loop Editor context (ADR-0011) ----------------------------------------

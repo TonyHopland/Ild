@@ -161,6 +161,33 @@ public class ExternalAgentMcpTests(ExternalAgentMcpTests.Host host) : IClassFixt
         Assert.NotEqual("text/html", response.Content.Headers.ContentType?.MediaType);
     }
 
+    private static readonly string[] ControlTools =
+        ["start_workitem", "queue_workitem", "human_feedback_input", "human_feedback_respond", "human_feedback_reject", "human_feedback_edge"];
+
+    [Theory]
+    [InlineData("Full", false)]
+    [InlineData("ReadOnly", false)]
+    [InlineData("Control", true)]
+    public async Task The_control_tools_are_listed_to_a_Control_grant_only(string scope, bool offered)
+    {
+        var (_, token) = await CreateGrantAsync(scope);
+        await using var client = await ConnectAsync(token);
+
+        var names = (await client.ListToolsAsync(cancellationToken: Ct)).Select(t => t.Name).ToHashSet();
+
+        foreach (var tool in ControlTools)
+            Assert.Equal(offered, names.Contains(tool));
+        Assert.Contains("create_workitem", names);
+    }
+
+    [Fact]
+    public void ILDs_own_agents_are_not_given_the_control_tools()
+    {
+        Assert.DoesNotContain(typeof(ILD.McpServer.Tools.WorkItemControlTools), ILD.McpServer.ExternalAgentTools.RunAndChatToolTypes);
+        Assert.DoesNotContain(typeof(ILD.McpServer.Tools.WorkItemControlTools), ILD.McpServer.ExternalAgentTools.ToolTypes);
+        Assert.Equal(ControlTools.OrderBy(n => n), ILD.McpServer.ExternalAgentTools.ControlToolNames.OrderBy(n => n));
+    }
+
     [Fact]
     public async Task It_offers_the_tools_that_need_no_run_or_chat_and_none_that_do()
     {
