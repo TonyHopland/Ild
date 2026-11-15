@@ -48,11 +48,11 @@ describe("Settings sections", () => {
     const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
     expect(nav.getAllByRole("link").map((l) => l.getAttribute("href"))).toEqual([
       "/settings/ild",
-      "/settings/global-variables",
       "/settings/user",
       "/settings/network",
       "/settings/package-feeds",
       "/settings/logging",
+      "/settings/global-variables",
       "/settings/work-item-server",
       "/settings/storage",
       "/settings/ai-access",

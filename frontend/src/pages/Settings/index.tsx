@@ -37,12 +37,6 @@ const SECTIONS = [
     Component: IldSettings,
   },
   {
-    id: "global-variables",
-    label: "Global variables",
-    icon: "M8 4C5.5 4 5 5.5 5 7v2c0 1.5-.5 3-3 3 2.5 0 3 1.5 3 3v2c0 1.5.5 3 3 3m8-16c2.5 0 3 1.5 3 3v2c0 1.5.5 3 3 3-2.5 0-3 1.5-3 3v2c0 1.5-.5 3-3 3",
-    Component: GlobalVariables,
-  },
-  {
     id: "user",
     label: "User",
     icon: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 8a8 8 0 0 0-16 0",
@@ -65,6 +59,12 @@ const SECTIONS = [
     label: "Logging",
     icon: "M5 3h9l5 5v13H5V3Zm9 0v5h5M8 13h8m-8 4h5",
     Component: LoggingSettings,
+  },
+  {
+    id: "global-variables",
+    label: "Global variables",
+    icon: "M8 4C5.5 4 5 5.5 5 7v2c0 1.5-.5 3-3 3 2.5 0 3 1.5 3 3v2c0 1.5.5 3 3 3m8-16c2.5 0 3 1.5 3 3v2c0 1.5.5 3 3 3-2.5 0-3 1.5-3 3v2c0 1.5-.5 3-3 3",
+    Component: GlobalVariables,
   },
   {
     id: "work-item-server",
