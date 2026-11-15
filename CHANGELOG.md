@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Frontend tests now run on jsdom 31.**
 - **The work item Terminal tab is now a Container tab.** It keeps the terminal and the VS Code button and adds live CPU, memory, network and disk use against the container's limits.
 - **The work item Overview now lets you approve or reject proposed edits.** Each pending proposal shows its diff, who proposed it and when, a banner counts what awaits you, and decided or stale ones sit in a collapsed history.
 - **Global Variables moved from the main menu to Settings → Global variables.** The pending-suggestions count now shows on Settings and on its Global variables section, and the old `/global-variables` address redirects.
