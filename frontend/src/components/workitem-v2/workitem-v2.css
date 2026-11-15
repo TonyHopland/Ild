@@ -1384,9 +1384,9 @@
   overflow: hidden;
 }
 
-/* The Terminal panel hosts an embedded xterm that fills the column, so drop the
+/* The Container panel stacks the stats over an embedded xterm that fills the rest, so drop the
    default padding/scroll the same way the Files panel does. */
-.wiv2-tabpanel-terminal {
+.wiv2-tabpanel-container {
   padding: 0;
   overflow: hidden;
 }
@@ -2217,4 +2217,81 @@
   min-width: 0;
   color: var(--danger-text);
   font-size: var(--fs-xs);
+}
+
+/* The Container panel: the stats strip on top, the terminal (or its launcher) filling the rest. */
+.wiv2-tabpanel-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.wiv2-tabpanel-container[hidden] {
+  display: none;
+}
+
+.wiv2-container-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wiv2-container-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.wiv2-container-stats {
+  flex: none;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #2a2a3a;
+}
+
+.wiv2-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.75rem 1.5rem;
+}
+
+.wiv2-stats-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #a0a0b0;
+}
+
+.wiv2-stat-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.wiv2-stat-label {
+  color: #a0a0b0;
+}
+
+.wiv2-stat-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.wiv2-stat-note {
+  color: #80808f;
+}
+
+.wiv2-stat-bar {
+  height: 0.4rem;
+  border-radius: 999px;
+  background: #2a2a3a;
+  overflow: hidden;
+}
+
+.wiv2-stat-fill {
+  height: 100%;
+  background: #60a5fa;
+  transition: width 0.3s ease;
+}
+
+.wiv2-stat-fill-high {
+  background: #f87171;
 }

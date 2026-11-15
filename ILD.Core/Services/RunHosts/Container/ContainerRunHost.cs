@@ -517,6 +517,16 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
     // Docker and Podman make the hosts file root's in each container, and root writes it without a capability.
     protected override bool HostsFileIsRoots => true;
 
+    public override async Task<ContainerStats?> GetStatsAsync(Guid owner, CancellationToken ct = default)
+    {
+        var name = Escaped(ObjectName(owner));
+        var inspected = await _api.GetAsync($"/containers/{name}/json", ct, HttpStatusCode.NotFound);
+        if (inspected?["State"]?["Running"]?.GetValue<bool>() != true) return ContainerStats.NotRunning;
+        // Without one-shot the engine samples twice, which is what gives the CPU reading an interval to divide by.
+        var stats = await _api.GetAsync($"/containers/{name}/stats?stream=false", ct, HttpStatusCode.NotFound, HttpStatusCode.Conflict);
+        return stats is null ? ContainerStats.NotRunning : ContainerStatsParser.Parse(stats, inspected);
+    }
+
     private async Task<bool> RunContainerStoppedAsync(Guid owner, CancellationToken ct)
     {
         var container = await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct, HttpStatusCode.NotFound);

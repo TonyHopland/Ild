@@ -10,6 +10,7 @@ import {
   RunHostInfo,
   LoopTemplate,
   NodeOutput,
+  ContainerStats,
   LoopRun,
   TurnVariableChange,
   Repository,
@@ -659,6 +660,11 @@ export const loopRunService = {
    */
   openInEditor: async (id: string): Promise<{ containerName: string; folder: string }> => {
     return api.post<{ containerName: string; folder: string }>(`/loopruns/${id}/editor`, {});
+  },
+
+  /** What the run's container uses of its CPU, memory, network and disk right now. */
+  getContainerStats: async (id: string): Promise<ContainerStats> => {
+    return api.get<ContainerStats>(`/loopruns/${id}/container-stats`);
   },
 
   pause: async (id: string): Promise<void> => {

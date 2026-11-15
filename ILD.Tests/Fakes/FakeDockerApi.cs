@@ -76,6 +76,9 @@ internal sealed class FakeDockerApi : IAsyncDisposable
     /// <summary>What starting an exec answers before the raw stream: Docker's 101 (the default) or Podman's 200.</summary>
     public int HijackStatus { get; set; } = 101;
 
+    /// <summary>What a container's <c>stats</c> answers; an empty object when null.</summary>
+    public JsonNode? Stats { get; set; }
+
     /// <summary>What <c>/info</c> answers; null answers 404.</summary>
     public JsonNode? Info { get; set; }
 
@@ -408,6 +411,7 @@ internal sealed class FakeDockerApi : IAsyncDisposable
                 ("POST", ["containers", "create"]) => CreateContainer(request),
                 ("GET", ["containers", "json"]) => (200, _containers.Values.Where(c => (request.Param("all") is "true" or "1" || c.Running || c.Started) && Matches(request, c.Labels)).Select(c => new { Names = new[] { "/" + c.Name }, c.Labels }).ToList()),
                 ("GET", ["containers", var name, "json"]) => InspectContainer(name),
+                ("GET", ["containers", var name, "stats"]) => !_containers.TryGetValue(name, out var measured) ? Failure(404, $"no such container: {name}") : (200, (Stats ?? new JsonObject()).ToJsonString()),
                 ("POST", ["containers", var name, "start"]) => StartContainer(name),
                 ("POST", ["containers", var name, "stop"]) => StopContainer(name),
                 ("GET", ["images", .. var image, "json"]) => ImageIds.TryGetValue(string.Join('/', image), out var imageId)

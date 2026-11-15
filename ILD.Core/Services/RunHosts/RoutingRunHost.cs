@@ -100,6 +100,8 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     private async Task<IRunHost> HostOf(Guid ownerId, CancellationToken ct)
         => await isolated.HeldOwnerAsync(ownerId, ct) is not null ? isolated : local;
 
+    public Task<ContainerStats?> GetStatsAsync(Guid owner, CancellationToken ct = default) => isolated.GetStatsAsync(owner, ct);
+
     // -- Terminal ----------------------------------------------------------------
 
     public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default)

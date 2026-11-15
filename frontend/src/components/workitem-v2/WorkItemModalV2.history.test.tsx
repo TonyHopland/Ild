@@ -89,7 +89,7 @@ describe("WorkItemModalV2 History tab", () => {
         .replace(/\s*●/, ""),
     );
 
-  test("History is the last tab, after Terminal when there is one", async () => {
+  test("History is the last tab, after Container when there is one", async () => {
     mockServices(async () => []);
     const view = await renderDialog(makeWorkItem());
     expect(tabNames()).toEqual(["Overview", "Action", "Runs", "Files", "Preview", "History"]);
@@ -104,7 +104,7 @@ describe("WorkItemModalV2 History tab", () => {
       "Runs",
       "Files",
       "Preview",
-      "Terminal",
+      "Container",
       "History",
     ]);
   });

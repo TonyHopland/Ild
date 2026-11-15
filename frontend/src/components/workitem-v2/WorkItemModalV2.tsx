@@ -14,6 +14,7 @@ import EditPanel from "./EditPanel";
 import FilesPanel, { workItemKey } from "./FilesPanel";
 import HistoryPanel from "./HistoryPanel";
 import Icon from "../Icon";
+import ContainerStats from "./ContainerStats";
 import { errorMessage } from "../../utils/errorMessage";
 import {
   feedbackReasonLabel,
@@ -27,7 +28,7 @@ import { repositoryName } from "../../utils/repositoryName";
 import { openAppLink, vscodeAttachUri } from "../../utils/vscodeAttachUri";
 import { repositoryHoldOf, startOfferOf } from "./offers";
 
-type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal" | "history";
+type TabId = "overview" | "action" | "runs" | "files" | "preview" | "container" | "history";
 
 /**
  * An item is awaiting human action when it is parked in HumanFeedback with a
@@ -69,7 +70,7 @@ interface WorkItemModalV2Props {
 
 /**
  * Near-fullscreen work item detail dialog: a horizontal tab bar (Overview,
- * Action, Runs, Files, Preview, then Terminal when there is a worktree, and History
+ * Action, Runs, Files, Preview, then Container when there is a worktree, and History
  * last) over the full width, with run
  * history shown inline rather than on a separate page. History is the record of
  * what changed on the item, by whom and why, kept apart from the Action thread's
@@ -217,16 +218,16 @@ export default function WorkItemModalV2({
   // The terminal connects to the run's worktree, so the tab only exists once a
   // run has created one. Gating on the worktree (not the status) keeps the tab —
   // and any live session — stable as the item moves between statuses.
-  const canUseTerminal = Boolean(workItem?.currentLoopRunId && workItem?.worktreePath);
+  const canUseContainer = Boolean(workItem?.currentLoopRunId && workItem?.worktreePath);
 
-  // If the worktree is reclaimed while the Terminal tab is open, the tab (and its
+  // If the worktree is reclaimed while the Container tab is open, the tab (and its
   // panel) disappear — fall back to Overview so the content area is never blank.
   // The updater re-checks the tab because an item switch in the same commit has
   // already queued the new item's opening tab, which must win.
   useEffect(() => {
-    if (activeTab === "terminal" && !canUseTerminal)
-      setActiveTab((tab) => (tab === "terminal" ? "overview" : tab));
-  }, [activeTab, canUseTerminal]);
+    if (activeTab === "container" && !canUseContainer)
+      setActiveTab((tab) => (tab === "container" ? "overview" : tab));
+  }, [activeTab, canUseContainer]);
 
   // Files and Preview are disabled without a worktree; one reclaimed while either
   // is open sends the dialog back to Overview the same way.
@@ -353,8 +354,8 @@ export default function WorkItemModalV2({
       dot: detail.preview?.state === "running" && "running",
       disabledReason: hasWorktree ? undefined : noWorktree,
     },
-    ...(canUseTerminal
-      ? [{ id: "terminal" as TabId, label: "Terminal", dot: showTerminal && "open" }]
+    ...(canUseContainer
+      ? [{ id: "container" as TabId, label: "Container", dot: showTerminal && "open" }]
       : []),
     { id: "history", label: "History" },
   ];
@@ -474,69 +475,75 @@ export default function WorkItemModalV2({
       >
         <PreviewPanel workItem={workItem} detail={detail} />
       </section>
-      {canUseTerminal && workItem.currentLoopRunId && (
+      {canUseContainer && workItem.currentLoopRunId && (
         <section
           role="tabpanel"
-          id="wiv2-panel-terminal"
-          aria-labelledby="wiv2-tab-terminal"
-          className="wiv2-tabpanel wiv2-tabpanel-terminal"
-          hidden={activeTab !== "terminal"}
+          id="wiv2-panel-container"
+          aria-labelledby="wiv2-tab-container"
+          className="wiv2-tabpanel wiv2-tabpanel-container"
+          hidden={activeTab !== "container"}
         >
           {/* The session stays mounted while the panel is merely hidden, so
               switching tabs never tears down the shell — only the Close button
               (or closing the dialog) does. */}
-          {showTerminal ? (
-            <LoopRunTerminal
-              loopRunId={workItem.currentLoopRunId}
-              title={`#${workItem.id} — ${workItem.title}`}
-              embedded
-              onClose={() => setShowTerminal(false)}
-            />
-          ) : (
-            <div className="wiv2-terminal-empty">
-              <p>Open a shell in this worktree</p>
-              <div className="wiv2-terminal-path">
-                <code title={workItem.worktreePath ?? undefined}>{workItem.worktreePath}</code>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => void navigator.clipboard?.writeText(workItem.worktreePath ?? "")}
-                >
-                  <Icon name="copy" size={14} />
-                  Copy path
-                </button>
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => setShowTerminal(true)}
-              >
-                Open Terminal
-              </button>
-              {!editorUnavailable && (
-                <>
+          <ContainerStats
+            loopRunId={workItem.currentLoopRunId}
+            active={activeTab === "container"}
+          />
+          <div className="wiv2-container-body">
+            {showTerminal ? (
+              <LoopRunTerminal
+                loopRunId={workItem.currentLoopRunId}
+                title={`#${workItem.id} — ${workItem.title}`}
+                embedded
+                onClose={() => setShowTerminal(false)}
+              />
+            ) : (
+              <div className="wiv2-terminal-empty">
+                <p>Open a shell in this worktree</p>
+                <div className="wiv2-terminal-path">
+                  <code title={workItem.worktreePath ?? undefined}>{workItem.worktreePath}</code>
                   <button
                     type="button"
-                    className="btn btn-secondary"
-                    disabled={openingEditor}
-                    onClick={() => void openInEditor(workItem.currentLoopRunId!)}
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => void navigator.clipboard?.writeText(workItem.worktreePath ?? "")}
                   >
-                    Open in VS Code
+                    <Icon name="copy" size={14} />
+                    Copy path
                   </button>
-                  <p className="wiv2-terminal-hint">
-                    Needs VS Code with the Dev Containers extension on the machine that runs the
-                    container engine. With Podman, set <code>dev.containers.dockerPath</code> to{" "}
-                    <code>podman</code>.
-                  </p>
-                  {editorError && (
-                    <p className="wiv2-terminal-error" role="alert">
-                      {editorError}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setShowTerminal(true)}
+                >
+                  Open Terminal
+                </button>
+                {!editorUnavailable && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={openingEditor}
+                      onClick={() => void openInEditor(workItem.currentLoopRunId!)}
+                    >
+                      Open in VS Code
+                    </button>
+                    <p className="wiv2-terminal-hint">
+                      Needs VS Code with the Dev Containers extension on the machine that runs the
+                      container engine. With Podman, set <code>dev.containers.dockerPath</code> to{" "}
+                      <code>podman</code>.
                     </p>
-                  )}
-                </>
-              )}
-            </div>
-          )}
+                    {editorError && (
+                      <p className="wiv2-terminal-error" role="alert">
+                        {editorError}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </section>
       )}
       <section

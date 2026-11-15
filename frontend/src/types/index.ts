@@ -697,6 +697,23 @@ export interface ChildWait {
   processes: ChildProcessInfo[];
 }
 
+/**
+ * What a run's container uses, as the container engine reports it. Every figure is absent when the engine does not
+ * expose it, and a limit is null when the container has none.
+ */
+export interface ContainerStats {
+  /** `unavailable` where the run has no Docker or Podman container to ask about. */
+  state: "running" | "stopped" | "unavailable";
+  cpuCores?: number | null;
+  cpuLimitCores?: number | null;
+  memoryBytes?: number | null;
+  memoryLimitBytes?: number | null;
+  networkRxBytes?: number | null;
+  networkTxBytes?: number | null;
+  diskReadBytes?: number | null;
+  diskWriteBytes?: number | null;
+}
+
 export interface LoopRun {
   id: string;
   workItemId: string;
