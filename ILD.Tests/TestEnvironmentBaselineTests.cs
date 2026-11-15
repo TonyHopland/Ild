@@ -3,6 +3,7 @@ using ILD.Data.Security;
 
 namespace ILD.Tests;
 
+[Collection(ProcessGlobalStateCollection.Name)]
 public class TestEnvironmentBaselineTests
 {
     // What TestEnvironmentBaseline deliberately sets; anything else matching is leaked ambient state.

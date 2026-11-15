@@ -18,6 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ILD.Tests;
 
 [SupportedOSPlatform("linux")]
+[Collection(ProcessGlobalStateCollection.Name)]
 public class OpenCodeAdapterTests
 {
     /// <summary>
