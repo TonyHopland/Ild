@@ -79,12 +79,11 @@ jobs:
       - name: Install socat for the forwards test
         run: sudo apt-get update && sudo apt-get install -y socat
 
+      # Runs once, always with a polluted environment, to prove the suite ignores
+      # ambient ILD_*/AGENT_*/proxy variables: a dead-port proxy and an unwritable
+      # read root make any test that reads them fail. The env is on this step only,
+      # so restore and build keep the real proxy.
       - name: Backend tests
-        run: dotnet test --project ILD.Tests/ILD.Tests.csproj --no-build --configuration Release
-
-      # Proves the suite ignores ambient ILD_*/AGENT_*/proxy variables: a dead-port
-      # proxy and an unwritable read root make any test that reads them fail.
-      - name: Backend tests with a polluted environment
         env:
           ILD_AGENT_READ_ROOT: /proc/ild-unwritable
           ILD_AGENT_USER: nobody
