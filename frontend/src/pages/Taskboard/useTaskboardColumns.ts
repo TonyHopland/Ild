@@ -7,6 +7,7 @@ import { matchesTaskboardFilter, type TaskboardFilter } from "../../utils/taskbo
 import {
   appendPage,
   columnOf,
+  evictFromOtherColumns,
   findLoadedItem,
   applyItem as applyItemTo,
   type ApplyOptions,
@@ -242,8 +243,10 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
               ? [copy]
               : [];
           });
+          // The read is newer than any copy it speaks for, so no other column keeps a card it puts here.
+          const placed = evictFromOtherColumns(board, key, new Set(fresh.map((wi) => wi.id)));
           show({
-            ...board,
+            ...placed,
             [key]: {
               items: request.append ? appendPage(column.items, fresh) : fresh,
               total: Math.max(0, page.total - (page.items.length - fresh.length)),
@@ -255,7 +258,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           if (request.refill) refillingRef.current.delete(key);
           if (fresh.length < page.items.length) refillShortColumns();
           // The read's total predates the live changes since it was issued.
-          if (clockRef.current > issuedAt) requestCountsRefresh();
+          if (clockRef.current > issuedAt || placed !== board) requestCountsRefresh();
         })
         .catch((error: unknown) => {
           if (stale()) return;

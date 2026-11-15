@@ -61,10 +61,33 @@ export function insertInServerOrder(items: WorkItem[], item: WorkItem): WorkItem
   return index < 0 ? [...rest, item] : [...rest.slice(0, index), item, ...rest.slice(index)];
 }
 
-function holderOf(board: TaskboardColumns, id: string): TaskboardColumnKey | undefined {
-  return (Object.keys(board) as TaskboardColumnKey[]).find((column) =>
+/** Every column that holds a card for the item: one, unless a read left a stale copy behind. */
+function holdersOf(board: TaskboardColumns, id: string): TaskboardColumnKey[] {
+  return (Object.keys(board) as TaskboardColumnKey[]).filter((column) =>
     board[column].items.some((wi) => wi.id === id),
   );
+}
+
+/** The board with each of `ids` gone from every column but `keep`, those columns' totals lowered by the cards removed. */
+export function evictFromOtherColumns(
+  board: TaskboardColumns,
+  keep: TaskboardColumnKey,
+  ids: ReadonlySet<string>,
+): TaskboardColumns {
+  let next = board;
+  for (const column of Object.keys(board) as TaskboardColumnKey[]) {
+    if (column === keep) continue;
+    const held = board[column];
+    const items = held.items.filter((wi) => !ids.has(wi.id));
+    if (items.length === held.items.length) continue;
+    if (next === board) next = { ...board };
+    next[column] = {
+      ...held,
+      items,
+      total: Math.max(0, held.total - (held.items.length - items.length)),
+    };
+  }
+  return next;
 }
 
 /** How a live copy of an item joins the board. */
@@ -107,18 +130,19 @@ export function applyItem(
   filter: TaskboardFilter,
   { countAsNew, placedAfter }: ApplyOptions,
 ): TaskboardColumns {
-  const holder = holderOf(board, item.id);
+  const holders = holdersOf(board, item.id);
   const matches = matchesTaskboardFilter(item, filter);
   const column = columnOf(item.status);
-  if (holder === column && matches) {
+  if (holders.includes(column) && matches) {
+    const kept = evictFromOtherColumns(board, column, new Set([item.id]));
     return {
-      ...board,
-      [holder]: { ...board[holder], items: placeInColumn(board[holder], item, placedAfter) },
+      ...kept,
+      [column]: { ...kept[column], items: placeInColumn(kept[column], item, placedAfter) },
     };
   }
 
   const next = { ...board };
-  if (holder) {
+  for (const holder of holders) {
     const held = next[holder];
     next[holder] = {
       ...held,
@@ -127,29 +151,30 @@ export function applyItem(
     };
   }
   const target = next[column];
-  if (!matches || !target) return holder ? next : board;
+  if (!matches || !target) return holders.length ? next : board;
 
   next[column] = {
     ...target,
     items: placeInColumn(target, item, placedAfter),
-    total: holder || countAsNew ? target.total + 1 : target.total,
+    total: holders.length || countAsNew ? target.total + 1 : target.total,
   };
   return next;
 }
 
 /** The board without the item, its column's total lowered when it held it. */
 export function removeItem(board: TaskboardColumns, id: string): TaskboardColumns {
-  const holder = holderOf(board, id);
-  if (!holder) return board;
-  const column = board[holder];
-  return {
-    ...board,
-    [holder]: {
+  const holders = holdersOf(board, id);
+  if (!holders.length) return board;
+  const next = { ...board };
+  for (const holder of holders) {
+    const column = next[holder];
+    next[holder] = {
       ...column,
       items: column.items.filter((wi) => wi.id !== id),
       total: Math.max(0, column.total - 1),
-    },
-  };
+    };
+  }
+  return next;
 }
 
 /** The loaded items followed by a further page, skipping cards already loaded. */
@@ -160,6 +185,6 @@ export function appendPage(items: WorkItem[], page: WorkItem[]): WorkItem[] {
 
 /** The loaded card with this id, if any column holds it. */
 export function findLoadedItem(board: TaskboardColumns, id: string): WorkItem | undefined {
-  const holder = holderOf(board, id);
+  const holder = holdersOf(board, id)[0];
   return holder && board[holder].items.find((wi) => wi.id === id);
 }
