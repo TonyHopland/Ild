@@ -26,6 +26,9 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
 
     public RunTermination? RunEndedBy { get; set; }
 
+    /// <summary>Whether the engine has an environment for a run; a chat is never one.</summary>
+    public Func<Guid, bool> HoldsRun { get; set; } = _ => true;
+
     protected override Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct) => Task.FromResult(new RunState(RunPresent, RunEndedBy));
 
     public void RememberTermination(Guid run, RunTermination termination) => Remember(run, termination);
@@ -142,7 +145,7 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
         return Task.CompletedTask;
     }
 
-    protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(!owner.Chat || _chatUp);
+    protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(owner.Chat ? _chatUp : HoldsRun(owner.Id));
     protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => Task.FromResult(true);
     protected override Task<string> RunAddressAsync(Guid run, CancellationToken ct) => Task.FromResult(Address);
 
@@ -150,7 +153,10 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
     public override string LeftoverKind => "in-memory";
     public override TimeSpan SweepInterval => TimeSpan.FromMinutes(1);
     protected override string Noun => "pod";
-    protected override string IldUrl => "http://ild.example:8080";
+    /// <summary>The address ILD is known by to the run.</summary>
+    public string IldAddress { get; init; } = "http://ild.example:8080";
+
+    protected override string IldUrl => IldAddress;
     protected override int EgressProxyPort => 3128;
     protected override bool UsesToolStore => false;
     protected override string ToolZoneName(RunToolMount zone) => zone.Zone.ToString();
@@ -209,7 +215,20 @@ internal sealed class InMemoryExec : IExecStream
         return Task.CompletedTask;
     }
 
-    public Task ResizeAsync(int cols, int rows, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>The sizes the terminal was resized to, as <c>COLSxROWS</c>.</summary>
+    public List<string> Resizes { get; } = [];
+
+    public Task ResizeAsync(int cols, int rows, CancellationToken ct = default)
+    {
+        lock (Resizes) Resizes.Add($"{cols}x{rows}");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>What was written to its input so far, as text.</summary>
+    public string StdinSoFar()
+    {
+        lock (_stdin) return Encoding.UTF8.GetString(_stdin.ToArray());
+    }
 
     /// <summary>What was written to its input, once the input was closed or the command was let go.</summary>
     public async Task<byte[]> ReadStdinToEndAsync()
@@ -230,6 +249,15 @@ internal sealed class InMemoryExec : IExecStream
         _stdout.Complete();
         _stderr?.Complete();
         _status.TrySetResult(code);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Ends the connection with the command still running: its streams end and it has no exit status.</summary>
+    public Task DropAsync()
+    {
+        _stdout.Complete();
+        _stderr?.Complete();
+        _status.TrySetResult(null);
         return Task.CompletedTask;
     }
 
