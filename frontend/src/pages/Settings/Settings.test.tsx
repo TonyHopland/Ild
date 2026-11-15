@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, within, waitFor } from "@testing-library/react";
-import { MemoryRouter, Navigate, Route, Routes } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import Settings from "./index";
+import { globalVariablesRedirect } from "../../utils/legacyRoutes";
 import * as useAuthHook from "../../hooks/useAuth";
 import * as signalRHook from "../../hooks/useSignalR";
+import * as pendingHook from "../../hooks/usePendingGlobalVariableProposalCount";
 import * as services from "../../services/auth";
 import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 
@@ -133,25 +135,41 @@ describe("Settings sections", () => {
   );
 });
 
+function Where() {
+  return <div data-testid="where">{useLocation().pathname}</div>;
+}
+
 describe("the old Global Variables address", () => {
   test("redirects /global-variables to its Settings section", () => {
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      connectionState: "connected",
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(),
-    } as any);
     render(
       <MemoryRouter initialEntries={["/global-variables"]}>
         <Routes>
-          <Route
-            path="/global-variables"
-            element={<Navigate to="/settings/global-variables" replace />}
-          />
-          <Route path="/settings/:section" element={<div>section page</div>} />
+          {globalVariablesRedirect}
+          <Route path="/settings/:section" element={<Where />} />
         </Routes>
       </MemoryRouter>,
     );
-    expect(screen.getByText("section page")).toBeTruthy();
+    expect(screen.getByTestId("where").textContent).toBe("/settings/global-variables");
+  });
+});
+
+describe("the pending suggestions badge in the Settings menu", () => {
+  const pending = (count: number) =>
+    vi.spyOn(pendingHook, "usePendingGlobalVariableProposalCount").mockReturnValue(count);
+  const link = () =>
+    within(screen.getByRole("navigation", { name: /settings sections/i })).getByRole("link", {
+      name: /Global variables/,
+    });
+
+  test("shows the count on Global variables, and nothing at zero", () => {
+    pending(3);
+    renderAt("/settings/ild");
+    expect(link().textContent).toContain("3");
+    expect(link().textContent).toContain("suggestions waiting");
+    cleanup();
+
+    pending(0);
+    renderAt("/settings/ild");
+    expect(link().textContent).toBe("Global variables");
   });
 });
