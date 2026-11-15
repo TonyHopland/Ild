@@ -18,6 +18,11 @@ internal static class TestEnvironmentBaseline
     [ModuleInitializer]
     internal static void Apply()
     {
+        // Everything ILD or an agent pod exports is ambient state a test must not read:
+        // clear it all, then pin the few values the suite deliberately runs with.
+        foreach (var name in AmbientVariableNames())
+            Environment.SetEnvironmentVariable(name, null);
+
         Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, null);
 
         // Not merely defensive: SecretEnvironmentKeys reads this, so a deployment
@@ -42,7 +47,39 @@ internal static class TestEnvironmentBaseline
         // cleanup this class's problem: the preview service caches an npm tree
         // under here, so it is worth removing rather than leaving in TMPDIR.
         AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDelete(privateRoot);
+
+        // Writable, per run: the pod's own read root is orchestrator-owned and
+        // read-only to the agent running the suite.
+        var readRoot = Path.Combine(Path.GetTempPath(), RootPrefix + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(readRoot);
+        Environment.SetEnvironmentVariable(AgentIsolation.AgentReadRootEnvVar, readRoot);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDelete(readRoot);
         SweepStaleRoots();
+    }
+
+    internal static readonly string[] ProxyVariableNames =
+    [
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY",
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy", "node_use_env_proxy",
+    ];
+
+    /// <summary>
+    /// The <c>ILD_*</c>/<c>AGENT_*</c> and proxy variables in this process. Stripped from
+    /// the test host only: <c>dotnet restore</c> runs in another process, so NuGet keeps
+    /// the proxy of the shell that launched it. Tests needing a proxy set their own.
+    /// </summary>
+    internal static List<string> AmbientVariableNames()
+    {
+        var names = new List<string>();
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            var name = (string)entry.Key;
+            if (name.StartsWith("ILD_", StringComparison.Ordinal)
+                || name.StartsWith("AGENT_", StringComparison.Ordinal)
+                || ProxyVariableNames.Contains(name, StringComparer.Ordinal))
+                names.Add(name);
+        }
+        return names;
     }
 
     private const string RootPrefix = "ild-tests-private-";

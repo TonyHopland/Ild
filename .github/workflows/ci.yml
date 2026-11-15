@@ -79,7 +79,21 @@ jobs:
       - name: Install socat for the forwards test
         run: sudo apt-get update && sudo apt-get install -y socat
 
+      # Runs once, always with a polluted environment, to prove the suite ignores
+      # ambient ILD_*/AGENT_*/proxy variables: a dead-port proxy and an unwritable
+      # read root make any test that reads them fail. The env is on this step only,
+      # so restore and build keep the real proxy.
       - name: Backend tests
+        env:
+          ILD_AGENT_READ_ROOT: /proc/ild-unwritable
+          ILD_AGENT_USER: nobody
+          ILD_LOG_LEVEL: Warning
+          ILD_AGENT_SCRATCH_ROOT: /proc/ild-unwritable-scratch
+          AGENT_FOO: bar
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+          NO_PROXY: ""
         run: dotnet test --project ILD.Tests/ILD.Tests.csproj --no-build --configuration Release
 
   # The Dockerfiles are otherwise only exercised at release time by publish.yml,
