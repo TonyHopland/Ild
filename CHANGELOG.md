@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The work item Overview now lets you approve or reject proposed edits.** Each pending proposal shows its diff, who proposed it and when, a banner counts what awaits you, and decided or stale ones sit in a collapsed history.
 - **Global Variables moved from the main menu to Settings → Global variables.** The pending-suggestions count now shows on Settings and on its Global variables section, and the old `/global-variables` address redirects.
 
 ## [0.25.1] - 2026-11-14
