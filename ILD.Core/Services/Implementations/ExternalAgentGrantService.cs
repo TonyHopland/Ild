@@ -46,7 +46,7 @@ public sealed class ExternalAgentGrantService(AppDbContext db) : IExternalAgentG
     }
 
     public async Task<IssuedExternalAgentGrant?> RenewAsync(
-        Guid id, TimeSpan lifetime, ExternalAgentGrantScope scope, string? newName, CancellationToken ct = default)
+        Guid id, TimeSpan lifetime, ExternalAgentGrantScope scope, string? newName, string renewedBy, CancellationToken ct = default)
     {
         if (IExternalAgentGrantService.ValidateLifetime(lifetime) is { } problem)
             throw new ArgumentOutOfRangeException(nameof(lifetime), problem);
@@ -68,7 +68,7 @@ public sealed class ExternalAgentGrantService(AppDbContext db) : IExternalAgentG
         grant.Scope = scope;
         grant.RevokedAt = null;
 
-        var summary = $"renewed: expires {grant.ExpiresAt:O}, scope {scope}"
+        var summary = $"renewed by {renewedBy}: expires {grant.ExpiresAt:O}, scope {scope}"
             + (previous == ExternalAgentGrantStatus.Active ? "" : $", reactivated from {previous.ToString().ToLowerInvariant()}");
         db.ExternalAgentGrantActivities.Add(new ExternalAgentGrantActivity
         {

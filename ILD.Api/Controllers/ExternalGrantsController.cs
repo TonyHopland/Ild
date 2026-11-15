@@ -116,7 +116,10 @@ public class ExternalGrantsController : ControllerBase
         if (IExternalAgentGrantService.ValidateLifetime(lifetime) is { } problem)
             return BadRequest(new { error = problem });
 
-        if (await _grants.RenewAsync(id, lifetime, request.Scope, name, ct) is not { } issued)
+        if (User.Identity?.Name is not { Length: > 0 } renewedBy)
+            return Unauthorized();
+
+        if (await _grants.RenewAsync(id, lifetime, request.Scope, name, renewedBy, ct) is not { } issued)
             return NotFound(new { error = "No grant has this id." });
         return Ok(new { grant = View(issued.Grant), token = issued.Token });
     }

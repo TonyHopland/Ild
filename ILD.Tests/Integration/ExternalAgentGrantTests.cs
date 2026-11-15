@@ -604,6 +604,8 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
         Assert.Equal(JsonValueKind.Null, detail.GetProperty("grant").GetProperty("revokedAt").ValueKind);
         var entry = Assert.Single(detail.GetProperty("activity").EnumerateArray(), a => a.GetProperty("method").GetString() == "RENEW");
         Assert.Contains("reactivated from revoked", entry.GetProperty("path").GetString());
+        var operatorName = detail.GetProperty("grant").GetProperty("createdBy").GetString();
+        Assert.Contains($"renewed by {operatorName}: expires ", entry.GetProperty("path").GetString());
         Assert.Equal(HttpStatusCode.OK, (await SendAsync(renewed, HttpMethod.Get, "/api/v1/agent/repositories")).StatusCode);
     }
 
