@@ -5,7 +5,7 @@ namespace ILD.Data.Stores.Interfaces;
 
 /// <summary>
 /// Human Input Proposals (ADR-0030): agents suggest the answer to the question a
-/// work item's run is parked on at a Human node, and a human approves or rejects
+/// work item's run is parked on at a Human or PR node, and a human approves or rejects
 /// it. The store only moves a suggestion between statuses; delivering the answer
 /// is the decision service's job.
 /// </summary>

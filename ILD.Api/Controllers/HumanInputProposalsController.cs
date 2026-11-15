@@ -8,7 +8,7 @@ namespace ILD.Api.Controllers;
 
 /// <summary>
 /// The suggestions agents made for the question a work item is parked on at a
-/// Human node (ADR-0030), which only a human approves or rejects. User-only,
+/// Human or PR node (ADR-0030), which only a human approves or rejects. User-only,
 /// like everything outside the agent API.
 /// </summary>
 [ApiController]

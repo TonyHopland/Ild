@@ -99,7 +99,8 @@ public class HumanInputProposalApiTests
         LoopRunStatus status = LoopRunStatus.WaitingHuman,
         bool halted = false,
         bool seedRun = true,
-        LoopRunNodeStatus visitStatus = LoopRunNodeStatus.WaitingHuman)
+        LoopRunNodeStatus visitStatus = LoopRunNodeStatus.WaitingHuman,
+        string customEdge = Rework)
     {
         var workItemId = await CreateHumanItemAsync(host);
         using var scope = host.Factory.Services.CreateScope();
@@ -114,7 +115,7 @@ public class HumanInputProposalApiTests
         db.LoopNodeEdges.AddRange(
             new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = node.Id, TargetNodeId = next.Id, EdgeType = EdgeType.OnSuccess, CreatedAt = DateTime.UtcNow },
             new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = node.Id, TargetNodeId = next.Id, EdgeType = EdgeType.OnFailure, CreatedAt = DateTime.UtcNow },
-            new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = node.Id, TargetNodeId = next.Id, EdgeType = EdgeType.Custom, Name = Rework, CreatedAt = DateTime.UtcNow });
+            new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = node.Id, TargetNodeId = next.Id, EdgeType = EdgeType.Custom, Name = customEdge, CreatedAt = DateTime.UtcNow });
         var runId = Guid.NewGuid();
         var visitId = Guid.NewGuid();
         if (seedRun)
@@ -299,13 +300,14 @@ public class HumanInputProposalApiTests
         Assert.Equal(0, host.Hints(parked.WorkItemId));
     }
 
-    public enum NotParked { Running, Done, NoRun, PrNode, OnFailure, Halted, NoWaitingVisit }
+    public enum NotParked { Running, Done, NoRun, PrNodeWithHumanReason, HumanNodeWithPrReason, OnFailure, Halted, NoWaitingVisit }
 
     [Theory]
     [InlineData(NotParked.Running)]
     [InlineData(NotParked.Done)]
     [InlineData(NotParked.NoRun)]
-    [InlineData(NotParked.PrNode)]
+    [InlineData(NotParked.PrNodeWithHumanReason)]
+    [InlineData(NotParked.HumanNodeWithPrReason)]
     [InlineData(NotParked.OnFailure)]
     [InlineData(NotParked.Halted)]
     [InlineData(NotParked.NoWaitingVisit)]
@@ -317,7 +319,8 @@ public class HumanInputProposalApiTests
             NotParked.Running => await SeedParkedAsync(host, status: LoopRunStatus.Running, reason: null),
             NotParked.Done => await SeedParkedAsync(host, status: LoopRunStatus.Completed, reason: null),
             NotParked.NoRun => await SeedParkedAsync(host, seedRun: false),
-            NotParked.PrNode => await SeedParkedAsync(host, nodeType: NodeType.PR, reason: HumanFeedbackReasons.PrAwaitingMerge),
+            NotParked.PrNodeWithHumanReason => await SeedParkedAsync(host, nodeType: NodeType.PR),
+            NotParked.HumanNodeWithPrReason => await SeedParkedAsync(host, reason: HumanFeedbackReasons.PrAwaitingMerge),
             NotParked.OnFailure => await SeedParkedAsync(host, nodeType: NodeType.AI, reason: HumanFeedbackReasons.NodeFailed),
             NotParked.Halted => await SeedParkedAsync(host, halted: true),
             _ => await SeedParkedAsync(host, visitStatus: LoopRunNodeStatus.Succeeded),
@@ -328,6 +331,8 @@ public class HumanInputProposalApiTests
 
         var error = (await ConflictAsync(resp, state.ToString())).GetProperty("error").GetString()!;
         Assert.Contains("waiting for human input", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Human", error);
+        Assert.Contains("PR", error);
         Assert.Empty(await ListAsync(host, parked.WorkItemId));
         Assert.Equal(0, host.Hints(parked.WorkItemId));
     }
@@ -600,6 +605,74 @@ public class HumanInputProposalApiTests
         Assert.Empty(await AnswersAsync(host, parked.RunId));
         Assert.Equal(LoopRunStatus.WaitingHuman, (await RunAsync(host, parked.RunId)).Status);
         Assert.True(host.Hints(parked.WorkItemId) >= 1, "the board was not hinted");
+    }
+
+    // ── A run waiting at a PR node ────────────────────────────────────────
+
+    [Theory]
+    [InlineData("send_back", "Fix the tests.")]
+    [InlineData("OnFailure", "")]
+    public async Task Approving_at_a_pr_node_answers_the_visit_as_the_button_does(string output, string text)
+    {
+        await using var host = await StartHostAsync();
+        var pressed = await SeedParkedAsync(host, nodeType: NodeType.PR, reason: HumanFeedbackReasons.PrAwaitingMerge, customEdge: "send_back");
+        var approved = await SeedParkedAsync(host, nodeType: NodeType.PR, reason: HumanFeedbackReasons.PrAwaitingMerge, customEdge: "send_back");
+        await PressButtonAsync(host, pressed, output, text);
+        var id = await ProposeOkAsync(host.Agent(await SeedRunAsync(host.Factory)), approved.WorkItemId, output, text);
+
+        var resp = await ApproveAsync(host.Human, id);
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.Equal("Approved", Status((await ReadJsonAsync(resp)).GetProperty("proposal")));
+        var byButton = Assert.Single(await AnswersAsync(host, pressed.RunId));
+        var byApproval = Assert.Single(await AnswersAsync(host, approved.RunId));
+        Assert.Equal(approved.RunNodeId, byApproval.GetProperty("runNodeId").GetGuid());
+        Assert.Equal(byButton.GetProperty("payload").GetString(), byApproval.GetProperty("payload").GetString());
+        Assert.Equal(
+            IsNullOrAbsent(byButton, "edgeName") ? null : byButton.GetProperty("edgeName").GetString(),
+            IsNullOrAbsent(byApproval, "edgeName") ? null : byApproval.GetProperty("edgeName").GetString());
+        var buttonRun = await RunAsync(host, pressed.RunId);
+        var approvedRun = await RunAsync(host, approved.RunId);
+        Assert.Equal(buttonRun.Status, approvedRun.Status);
+        Assert.Equal(buttonRun.ExternalActionResult, approvedRun.ExternalActionResult);
+        Assert.Equal(buttonRun.ExternalActionEdgeName, approvedRun.ExternalActionEdgeName);
+        Assert.Equal(buttonRun.HumanFeedbackReason, approvedRun.HumanFeedbackReason);
+        if (output == "send_back")
+        {
+            Assert.Equal("send_back", approvedRun.ExternalActionEdgeName);
+            Assert.Equal(text, approvedRun.ExternalActionResult);
+        }
+    }
+
+    [Fact]
+    public async Task An_output_a_pr_node_does_not_offer_is_a_400_listing_the_offered_ones()
+    {
+        await using var host = await StartHostAsync();
+        var parked = await SeedParkedAsync(host, nodeType: NodeType.PR, reason: HumanFeedbackReasons.PrAwaitingMerge, customEdge: "send_back");
+
+        var resp = await ProposeAsync(host.Agent(await SeedRunAsync(host.Factory)), parked.WorkItemId, "Nope");
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        var error = (await ReadJsonAsync(resp)).GetProperty("error").GetString()!;
+        Assert.All(new[] { "OnSuccess", "OnFailure", "send_back" }, o => Assert.Contains(o, error));
+        Assert.Empty(await ListAsync(host, parked.WorkItemId));
+    }
+
+    [Fact]
+    public async Task Rejecting_a_suggestion_at_a_pr_node_leaves_the_run_waiting()
+    {
+        await using var host = await StartHostAsync();
+        var parked = await SeedParkedAsync(host, nodeType: NodeType.PR, reason: HumanFeedbackReasons.PrAwaitingMerge, customEdge: "send_back");
+        var id = await ProposeOkAsync(host.Agent(await SeedRunAsync(host.Factory)), parked.WorkItemId, "send_back", "Fix it.");
+
+        var resp = await RejectAsync(host.Human, id, "No.");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.Equal("Rejected", await StatusOfAsync(host, parked.WorkItemId, id));
+        Assert.Empty(await AnswersAsync(host, parked.RunId));
+        var run = await RunAsync(host, parked.RunId);
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Equal(HumanFeedbackReasons.PrAwaitingMerge, run.HumanFeedbackReason);
     }
 
     // ── Rejecting ─────────────────────────────────────────────────────────
