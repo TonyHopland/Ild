@@ -45,7 +45,7 @@ jobs:
           - name: ild-workitem-server
             dockerfile: Dockerfile.WorkItemServer
             platform: linux/amd64
-            runner: ubuntu-24.04
+            runner: ubuntu-latest
             extra_cache_from: type=gha,scope=ci-ild
             build_args: ""
           - name: ild-arm64

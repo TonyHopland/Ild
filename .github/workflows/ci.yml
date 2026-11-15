@@ -7,10 +7,8 @@ on:
   pull_request:
 
 jobs:
-  # Runners are pinned to ubuntu-24.04 rather than ubuntu-latest, which moves to
-  # Ubuntu 26 on 2026-10-19. Moving to a newer image is a deliberate later change.
   scripts:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -42,7 +40,7 @@ jobs:
         run: .github/scripts/image-toolchain-pins.test.sh
 
   frontend:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -59,7 +57,7 @@ jobs:
         working-directory: frontend
 
   backend:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -111,7 +109,7 @@ jobs:
   # change, so they live in image-extra.yml behind a paths filter rather than
   # rebuilding the frontend and both dotnet publishes on every PR.
   image-build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -136,7 +134,7 @@ jobs:
   # release-only. Reads the ild scope for the shared stages but writes its own,
   # so it never overwrites ci-ild.
   runner-image-build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
