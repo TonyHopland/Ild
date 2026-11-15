@@ -527,9 +527,32 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
         return stats is null ? ContainerStats.NotRunning : ContainerStatsParser.Parse(stats, inspected);
     }
 
+    protected override async Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct)
+    {
+        var inspected = await _api.GetAsync($"/containers/{Escaped(ObjectName(run))}/json", ct, HttpStatusCode.NotFound);
+        return inspected is null ? new RunState(Found: false, Ended: null) : new RunState(Found: true, TerminationOf(inspected));
+    }
+
+    /// <summary>Why the container ended, from its inspection; null for one that is running.</summary>
+    internal static RunTermination? TerminationOf(JsonNode inspected)
+    {
+        var state = inspected["State"];
+        if (state is null) return null;
+        DateTimeOffset? finished = DateTimeOffset.TryParse(state["FinishedAt"]?.GetValue<string>(), out var at) && at.Year > 1 ? at : null;
+        if (state["OOMKilled"]?.GetValue<bool>() == true)
+        {
+            var limit = inspected["HostConfig"]?["Memory"]?.GetValue<long>() is > 0 and var bytes ? bytes : (long?)null;
+            return new RunTermination(RunTerminationKind.OutOfMemory, limit, EndedAt: finished);
+        }
+        if (state["Status"]?.GetValue<string>() is "exited" or "dead")
+            return new RunTermination(RunTerminationKind.Other, Detail: $"it exited with code {state["ExitCode"]?.GetValue<long>()}", EndedAt: finished);
+        return null;
+    }
+
     private async Task<bool> RunContainerStoppedAsync(Guid owner, CancellationToken ct)
     {
         var container = await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct, HttpStatusCode.NotFound);
+        if (container is not null) Remember(owner, TerminationOf(container));
         return container?["State"]?["Status"]?.GetValue<string>() is "exited" or "stopped" or "created";
     }
 

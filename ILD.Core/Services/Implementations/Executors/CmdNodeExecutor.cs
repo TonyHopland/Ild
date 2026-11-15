@@ -47,16 +47,18 @@ public sealed class CmdNodeExecutor : INodeExecutor
 
         var feeds = await ctx.Services.GetRequiredService<IPackageFeedResolver>()
             .ResolveAsync(await RunRepository.IdOfAsync(ctx.Run, workItems), ctx.CancellationToken);
-        var (ok, output, error) = await RunProcessAsync(host, command, worktree, feeds.Feeds, ctx);
+        var (ok, output, error, termination) = await RunProcessAsync(host, command, worktree, feeds.Feeds, ctx);
         if (!ok)
         {
-            yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "command failed", output);
+            yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "command failed", output, termination);
             yield break;
         }
         yield return new NodeOutcome.Success(EdgeType.OnSuccess, output);
     }
 
-    private async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
+    private sealed record ProcessResult(bool Ok, string Output, string? Error, RunTermination? Termination = null);
+
+    private async Task<ProcessResult> RunProcessAsync(
         IRunHost host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
@@ -83,7 +85,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         }
         catch (Exception ex)
         {
-            return (false, Combined(), ex.Message);
+            return new(false, Combined(), ex.Message);
         }
 
         using var _ = p;
@@ -105,15 +107,17 @@ public sealed class CmdNodeExecutor : INodeExecutor
             // worktree the engine is about to commit and delete. A failed kill
             // means something worth reading, not something to swallow.
             var reaped = await ReapAsync(p);
-            return (false, Combined(), ex.Message + reaped);
+            return new(false, Combined(), ex.Message + reaped);
         }
         catch (Exception ex)
         {
-            return (false, Combined(), ex.Message);
+            return new(false, Combined(), ex.Message);
         }
         if (p.ExitCode != 0)
-            return (false, Combined(), $"exit code {p.ExitCode}");
-        return (true, Combined(), null);
+            return p.Termination is { Kind: not RunTerminationKind.Other } ended
+                ? new(false, Combined(), ended.Describe(), ended)
+                : new(false, Combined(), $"exit code {p.ExitCode}");
+        return new(true, Combined(), null);
     }
 
     private Task PumpAsync(StreamReader reader, StringBuilder into, Func<string, Task>? progress)

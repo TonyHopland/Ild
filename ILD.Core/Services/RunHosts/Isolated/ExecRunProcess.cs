@@ -19,11 +19,15 @@ internal sealed class ExecRunProcess : IRunProcess
     private int _exitCode;
 
     private readonly Action? _onExit;
+    private readonly Func<DateTimeOffset, CancellationToken, Task<RunTermination?>>? _readTermination;
+    private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
+    private volatile bool _killRequested;
 
     /// <param name="onExit">Called once the command has ended, whatever way it did.</param>
-    public ExecRunProcess(IExecStream exec, string where, string commandId, bool redirectInput, Func<string, CancellationToken, Task<bool>> kill, Action? onExit = null)
+    public ExecRunProcess(IExecStream exec, string where, string commandId, bool redirectInput, Func<string, CancellationToken, Task<bool>> kill, Action? onExit = null, Func<DateTimeOffset, CancellationToken, Task<RunTermination?>>? readTermination = null)
     {
         _onExit = onExit;
+        _readTermination = readTermination;
         _exec = exec;
         _where = where;
         CommandId = commandId;
@@ -44,6 +48,8 @@ internal sealed class ExecRunProcess : IRunProcess
     public StreamReader StandardOutput { get; }
     public StreamReader StandardError { get; }
     public StreamWriter StandardInput { get; }
+    public RunTermination? Termination { get; private set; }
+
     public bool HasExited => _exited.Task.IsCompleted;
 
     public int ExitCode => HasExited ? _exitCode : throw new InvalidOperationException("the command has not exited");
@@ -56,6 +62,7 @@ internal sealed class ExecRunProcess : IRunProcess
     {
         failure = null;
         if (HasExited) return true;
+        _killRequested = true;
         try
         {
             using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -89,12 +96,31 @@ internal sealed class ExecRunProcess : IRunProcess
             if (status is null)
                 await AppendNoticeAsync(Encoding.UTF8.GetBytes($"the connection to the run's {_where} ended before the command did\n"));
             _exitCode = status ?? ConnectionLostExitCode;
+            Termination = await ReadTerminationAsync(status);
             _stdout.Complete();
             _stderr.Complete();
             _onExit?.Invoke();
             _exited.TrySetResult();
         }
     }
+
+    // 137 is a command that was killed; the connection lost says nothing. Either may be the container ending, which only the host can tell.
+    private async Task<RunTermination?> ReadTerminationAsync(int? status)
+    {
+        if (_readTermination is null || _killRequested || status is not (null or KilledExitCode)) return null;
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            return await _readTermination(_startedAt, limit.Token);
+        }
+        catch (Exception)
+        {
+            // Why it ended is a courtesy to the reader: the command's own exit stands when the host cannot say.
+            return null;
+        }
+    }
+
+    private const int KilledExitCode = 137;
 
     private static async Task Forward(Stream from, ByteChannelStream to)
     {

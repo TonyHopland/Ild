@@ -727,6 +727,8 @@ export interface LoopRun {
   waitingRunNodeId?: string | null;
   /** Who parked the run, when `isHalted`; absent/null for a human's Halt. */
   haltReason?: HaltReason | string | null;
+  /** Why the run waits for a person, as the engine wrote it ("Out of Memory", "Node Failed", …). */
+  humanFeedbackReason?: string | null;
   /** For a GlobalVariableMissing park, the ones still missing or empty now. */
   missingGlobalVariables?: string[];
   /** The processes the agent left running when its turn ended, while the run waits for them or is parked after the cycle cap; absent when none. */

@@ -42,4 +42,7 @@ public static class HumanFeedbackReasons
 
     /// <summary>The agent ended its turn with child processes still running and ILD is waiting for them.</summary>
     public const string WaitingForChildren = "Waiting for ILD";
+
+    /// <summary>A node failed because the run's container was killed for exceeding its memory limit.</summary>
+    public const string OutOfMemory = "Out of Memory";
 }

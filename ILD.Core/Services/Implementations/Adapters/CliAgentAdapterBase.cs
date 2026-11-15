@@ -230,6 +230,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         if (seenAtTheEnd) liveChildren = await StillRunningAfterExitAsync(ctx, liveChildren);
 
         var result = await turn.CompleteAsync(stderr, process.ExitCode);
+        if (!result.Success && process.Termination is { Kind: not RunTerminationKind.Other } ended)
+            return result with { Error = ended.Describe(), Failure = FailureKind.Failed, Termination = ended };
         return result.Success && seenAtTheEnd ? result with { LiveChildren = liveChildren } : result;
     }
 

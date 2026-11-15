@@ -185,6 +185,18 @@ public interface ILoopEngine
     /// </summary>
     Task ResumeFromNodeAsync(Guid runId, Guid runNodeId);
 
+    /// <summary>
+    /// <b>Retry</b> the node a run is parked on after it failed (an out-of-memory kill, or any failure that parked the run): the node starts over from
+    /// scratch, with the optional <paramref name="note"/> after its prompt, and the way it ended told to the agent when that was running out of memory.
+    /// </summary>
+    Task RetryAfterFailureAsync(Guid runId, string? note, string user);
+
+    /// <summary>
+    /// <b>Resume</b> the node a run is parked on after it failed, in the same agent session from its saved session and the run's files as they were left.
+    /// Refused with the reason when the session cannot be restored.
+    /// </summary>
+    Task ResumeAfterFailureAsync(Guid runId, string? note, string user);
+
     /// <summary>Why the attempt cannot be resumed from its agent session (shown with the disabled button), or null when it can.</summary>
     Task<string?> GetResumeUnavailableReasonAsync(Guid runId, Guid runNodeId);
 

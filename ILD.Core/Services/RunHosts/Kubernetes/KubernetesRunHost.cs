@@ -98,7 +98,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
         try
         {
             // A pod that ended (evicted, its node shut down) is replaced from the manifest as it is now, on the claim it had.
-            await RemoveEndedRunPodAsync(KubernetesNames.ObjectName(owner), ct);
+            await RemoveEndedRunPodAsync(owner, ct);
             var reference = KubernetesManifests.OwnerReference(ownerObject);
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.Claim(owner, reference), _namespace, cancellationToken: ct));
             await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.Policy(owner, reference, request.Dns), _namespace, cancellationToken: ct));
@@ -186,12 +186,46 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     }
 
     /// <summary>Deletes the pod when it has ended or is going away, and waits until it is gone, so a new one can take its name.</summary>
-    private async Task RemoveEndedRunPodAsync(string name, CancellationToken ct)
+    private async Task RemoveEndedRunPodAsync(Guid owner, CancellationToken ct)
     {
+        var name = KubernetesNames.ObjectName(owner);
         var pod = await ReadPodOrNullAsync(name, ct);
         if (pod is null || pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return;
+        Remember(owner, TerminationOf(pod));
         await DeletePodAndWaitAsync(name, ct);
     }
+
+    protected override async Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct)
+    {
+        var pod = await ReadPodOrNullAsync(KubernetesNames.ObjectName(run), ct);
+        return pod is null ? new RunState(Found: false, Ended: null) : new RunState(Found: true, TerminationOf(pod));
+    }
+
+    /// <summary>Why the pod's container ended, from its status; null for a pod whose container has not.</summary>
+    internal static RunTermination? TerminationOf(V1Pod pod)
+    {
+        var terminated = (pod.Status?.ContainerStatuses ?? [])
+            .SelectMany(c => new[] { c.State?.Terminated, c.LastState?.Terminated })
+            .OfType<V1ContainerStateTerminated>()
+            .ToList();
+        var endedAt = terminated.Select(t => t.FinishedAt).Where(at => at is not null).Max();
+        DateTimeOffset? ended = endedAt is { } at ? new DateTimeOffset(at, TimeSpan.Zero) : null;
+
+        if (terminated.FirstOrDefault(t => t.Reason == "OOMKilled") is { } killed)
+            return new RunTermination(RunTerminationKind.OutOfMemory, MemoryLimitOf(pod), EndedAt: killed.FinishedAt is { } finished ? new DateTimeOffset(finished, TimeSpan.Zero) : ended);
+        var detail = pod.Status?.Message;
+        if (pod.Status?.Reason == "Evicted") return new RunTermination(RunTerminationKind.Evicted, Detail: detail, EndedAt: ended);
+        if (pod.Status?.Reason == "NodeLost") return new RunTermination(RunTerminationKind.NodeLost, Detail: detail, EndedAt: ended);
+        if (pod.Metadata?.DeletionTimestamp is { } deleted) return new RunTermination(RunTerminationKind.Deleted, EndedAt: new DateTimeOffset(deleted, TimeSpan.Zero));
+        if (terminated.FirstOrDefault() is { } other)
+            return new RunTermination(RunTerminationKind.Other, Detail: $"{(string.IsNullOrEmpty(other.Reason) ? "terminated" : other.Reason)}, exit code {other.ExitCode}", EndedAt: ended);
+        return null;
+    }
+
+    private static long? MemoryLimitOf(V1Pod pod)
+        => pod.Spec?.Containers?
+            .Select(c => c.Resources?.Limits is { } limits && limits.TryGetValue("memory", out var memory) ? (long?)memory.ToInt64() : null)
+            .FirstOrDefault(limit => limit is not null);
 
     private async Task DeletePodAndWaitAsync(string name, CancellationToken ct)
     {
@@ -215,6 +249,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
             if (IsReady(pod) && pod.Metadata.DeletionTimestamp is null) return true;
             if (pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return false;
 
+            Remember(owner, TerminationOf(pod));
             Logger?.LogInformation("The pod of run {Run} ended ({Why}); making it again on its volume", owner, WhyNotReady(pod));
             await DeletePodAndWaitAsync(name, ct);
             var fresh = new V1Pod

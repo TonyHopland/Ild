@@ -4,6 +4,7 @@ import { EMPTY_TASKBOARD_FILTER } from "../taskboardFilter";
 import {
   applyItem,
   compareServerOrder,
+  evictFromOtherColumns,
   insertInServerOrder,
   removeItem,
   TASKBOARD_COLUMNS,
@@ -313,5 +314,54 @@ describe("removeItem", () => {
     const unchanged = removeItem(next, "ghost");
     expect(ids(unchanged, WorkItemStatus.Backlog)).toEqual(["b7"]);
     expect(unchanged.Backlog.total).toBe(4);
+  });
+});
+
+describe("a card held by two columns", () => {
+  const running = boardItem("a", 0, { status: WorkItemStatus.Running });
+  const needsYou = { ...running, status: WorkItemStatus.HumanFeedback };
+  const twice = () =>
+    boardWith({
+      [WorkItemStatus.Running]: { items: [running], total: 1 },
+      [WorkItemStatus.HumanFeedback]: { items: [needsYou], total: 1 },
+    });
+
+  test("is taken out of both by a live copy that moves it", () => {
+    const next = applyItem(
+      twice(),
+      { ...running, status: WorkItemStatus.Done },
+      EMPTY_TASKBOARD_FILTER,
+      {
+        countAsNew: false,
+      },
+    );
+
+    expect(ids(next, WorkItemStatus.Running)).toEqual([]);
+    expect(ids(next, WorkItemStatus.HumanFeedback)).toEqual([]);
+    expect(ids(next, WorkItemStatus.Done)).toEqual(["a"]);
+  });
+
+  test("stays only in the column of the live copy that keeps it there", () => {
+    const next = applyItem(twice(), needsYou, EMPTY_TASKBOARD_FILTER, { countAsNew: false });
+
+    expect(ids(next, WorkItemStatus.Running)).toEqual([]);
+    expect(next[WorkItemStatus.Running].total).toBe(0);
+    expect(ids(next, WorkItemStatus.HumanFeedback)).toEqual(["a"]);
+  });
+
+  test("is taken out of both when removed", () => {
+    const next = removeItem(twice(), "a");
+
+    expect(ids(next, WorkItemStatus.Running)).toEqual([]);
+    expect(ids(next, WorkItemStatus.HumanFeedback)).toEqual([]);
+  });
+
+  test("evicting it from the other columns leaves the one that keeps it as it was", () => {
+    const board = twice();
+    const next = evictFromOtherColumns(board, WorkItemStatus.HumanFeedback, new Set(["a"]));
+
+    expect(ids(next, WorkItemStatus.Running)).toEqual([]);
+    expect(next[WorkItemStatus.HumanFeedback]).toBe(board[WorkItemStatus.HumanFeedback]);
+    expect(evictFromOtherColumns(next, WorkItemStatus.HumanFeedback, new Set(["a"]))).toBe(next);
   });
 });

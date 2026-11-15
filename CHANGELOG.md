@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **Give a shared AI control of the work.** A new access level lets an outside AI start work items and answer their human-feedback questions, so it can take an item from Backlog to done without you.

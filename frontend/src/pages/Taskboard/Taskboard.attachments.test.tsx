@@ -49,7 +49,7 @@ function mockServices(items: WorkItem[]) {
     invoke: vi.fn(),
     connectionState: "connected",
   } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-  mockTaskboardServer(items);
+  const server = mockTaskboardServer(items);
   vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
@@ -82,6 +82,7 @@ function mockServices(items: WorkItem[]) {
     maxFilesPerRequest: 10,
     maxTotalBytesPerWorkItem: 250 * MB,
   });
+  return server;
 }
 
 function renderBoard(openItemId: string) {
@@ -279,7 +280,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
       latestLoopRunId: "run-1",
     });
     const running = { ...parked, status: WorkItemStatus.Running, humanFeedbackReason: null };
-    mockServices([parked]);
+    const server = mockServices([parked]);
     stageParkedNode();
     let connectionState: "connected" | "disconnected" = "connected";
     const hub = { on: vi.fn(), off: vi.fn(), invoke: vi.fn() };
@@ -288,7 +289,9 @@ describe("a dialog belongs to the work item it was opened for", () => {
     );
     vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
     vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
-    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockImplementation(async () => {
+      server.items[0] = { ...running };
+    });
     // The reconnect's read of the open item is answered with what the server had
     // before the answer, and only after the answer has been taken and read back.
     const reconnectRead = deferred<WorkItem>();

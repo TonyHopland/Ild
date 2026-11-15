@@ -415,6 +415,48 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     protected abstract Task<IExecStream> OpenExecInAsync(
         string name, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct);
 
+    /// <summary>What a host reads of a run's pod or container: whether it is there, and why it ended when it has.</summary>
+    protected sealed record RunState(bool Found, RunTermination? Ended);
+
+    /// <summary>The state of the run's pod or container, read from the host. Called before the host replaces or removes it.</summary>
+    protected virtual Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct) => Task.FromResult(new RunState(Found: true, Ended: null));
+
+    // What ended a run's pod or container, kept past its replacement: the reason goes with the old one.
+    private readonly ConcurrentDictionary<Guid, (RunTermination Termination, DateTimeOffset RecordedAt)> _terminations = new();
+
+    private static readonly TimeSpan TerminationKept = TimeSpan.FromHours(1);
+
+    /// <summary>Keeps <paramref name="termination"/> as what ended the run's pod or container, for a command that ends after it is replaced.</summary>
+    protected void Remember(Guid run, RunTermination? termination)
+    {
+        if (termination is null) return;
+        var now = DateTimeOffset.UtcNow;
+        foreach (var (id, kept) in _terminations)
+            if (now - kept.RecordedAt > TerminationKept) _terminations.TryRemove(id, out _);
+        _terminations[run] = (termination, now);
+    }
+
+    public async Task<RunTermination?> GetTerminationAsync(Guid ownerId, DateTimeOffset? since = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var state = await ReadRunStateAsync(ownerId, ct);
+            Remember(ownerId, state.Ended);
+            if (state.Ended is { } live) return Caused(live, DateTimeOffset.UtcNow, since);
+            if (_terminations.TryGetValue(ownerId, out var kept)) return Caused(kept.Termination, kept.RecordedAt, since);
+            return state.Found ? null : new RunTermination(RunTerminationKind.Deleted);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger?.LogWarning(ex, "Could not ask the {Noun} of {Owner} why it ended", Noun, ownerId);
+            return null;
+        }
+    }
+
+    // An ending before the command started is not what ended it; one with no time is told by when it was recorded.
+    private static RunTermination? Caused(RunTermination termination, DateTimeOffset recordedAt, DateTimeOffset? since)
+        => since is { } started && (termination.EndedAt ?? recordedAt) < started ? null : termination;
+
     /// <summary>What a run's pod or container is called.</summary>
     protected abstract string RunEnvironmentName(Guid run);
 
@@ -503,6 +545,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     {
         await SyncPreviewDataBackAsync(environment, ct);
         await RemoveRunAsync(environment.OwnerId, ct);
+        _terminations.TryRemove(environment.OwnerId, out _);
     }
 
     /// <summary>Whether the run has a pod or container that <see cref="CreateAsync"/> would make no differently: running, and placed as one made now would be.</summary>
@@ -841,7 +884,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
         var exec = await OpenExecOrRemoveFileAsync(owner, wrapped, execEnvironment, envFile, stdin: psi.RedirectStandardInput, tty: false, ct);
         return new ExecRunProcess(exec, Noun, id, psi.RedirectStandardInput, (commandId, token) => KillCommandAsync(owner, commandId, token),
-            direct ? () => EndOff(owner) : null);
+            direct ? () => EndOff(owner) : null, owner.Chat ? null : (since, ct) => GetTerminationAsync(owner.Id, since, ct));
     }
 
     // -- The direct route (network mode Off) ---------------------------------------

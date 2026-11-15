@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { ROUTES } from "../../utils/constants";
+import { FEEDBACK_REASON, RUN_MEMORY_LIMIT_SETTING } from "../../utils/labels";
+import NodeActionButtons, { type NodeAction } from "./NodeActionButtons";
 import {
   HaltReason,
   LoopRun,
@@ -26,6 +28,13 @@ interface HaltSteerControlsProps {
    * gets only the optional note.
    */
   onResumeWaiting?: (note: string) => void | Promise<unknown>;
+  /**
+   * Retry the node a run is parked on after it failed: it starts over from scratch, with the optional note
+   * after its prompt. Offered with `onResumeFailed`, for a run parked as Node Failed or Out of Memory.
+   */
+  onRetryFailed?: (note: string) => void | Promise<unknown>;
+  /** Resume that node in the same agent session, from the run's files as they were left. */
+  onResumeFailed?: (note: string) => void | Promise<unknown>;
   /** Resume a halted run with optional steering guidance. */
   onResumeSteer?: (note: string) => void | Promise<unknown>;
   /** Cleanup handlers reused for a halted run. */
@@ -126,6 +135,8 @@ export default function HaltSteerControls({
   onResumeSteer,
   onRestartWaiting,
   onResumeWaiting,
+  onRetryFailed,
+  onResumeFailed,
   onCleanupDone,
   onCleanupBacklog,
   showAbandon = true,
@@ -136,8 +147,6 @@ export default function HaltSteerControls({
   const [abandoning, setAbandoning] = useState(false);
   const [confirmingAbandon, setConfirmingAbandon] = useState(false);
   const [steerNote, setSteerNote] = useState("");
-  const [confirmingWaiting, setConfirmingWaiting] = useState<"restart" | "resume" | null>(null);
-  const [actingWaiting, setActingWaiting] = useState(false);
   const [errorText, setErrorText] = useState("");
 
   if (!run) return null;
@@ -155,6 +164,17 @@ export default function HaltSteerControls({
   // too many cycles), and the person can restart or resume the node meanwhile.
   const childWait =
     isHalted && !!run.childWait && !!onRestartWaiting && !!onResumeWaiting ? run.childWait : null;
+  // The node the run is parked on after it failed, with what the person can do about it.
+  const failedNode =
+    isWaitingHuman &&
+    !run.isHalted &&
+    (run.humanFeedbackReason === FEEDBACK_REASON.OutOfMemory ||
+      run.humanFeedbackReason === FEEDBACK_REASON.NodeFailed) &&
+    !!onRetryFailed &&
+    !!onResumeFailed
+      ? (run.nodes?.filter((n) => n.status === LoopRunNodeStatus.Failed).pop() ?? null)
+      : null;
+  const outOfMemory = run.humanFeedbackReason === FEEDBACK_REASON.OutOfMemory;
   const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
   // human feedback — so a run heading the wrong way can be dropped without
@@ -163,7 +183,7 @@ export default function HaltSteerControls({
   const canAbandon =
     showAbandon && !!onCleanupBacklog && (isRunningStatus || isWaitingHuman) && !isHalted;
 
-  if (!canHalt && !canAbandon && !isHalted) return null;
+  if (!canHalt && !canAbandon && !isHalted && !failedNode) return null;
 
   const handleHalt = async () => {
     if (!onHalt) return;
@@ -192,22 +212,6 @@ export default function HaltSteerControls({
     }
   };
 
-  const handleWaitingAction = async (action: "restart" | "resume") => {
-    const act = action === "restart" ? onRestartWaiting : onResumeWaiting;
-    if (!act) return;
-    setErrorText("");
-    setActingWaiting(true);
-    try {
-      await act(steerNote);
-      setSteerNote("");
-      setConfirmingWaiting(null);
-    } catch (error) {
-      setErrorText(error instanceof Error ? error.message : `Failed to ${action} the node.`);
-    } finally {
-      setActingWaiting(false);
-    }
-  };
-
   const handleAbandon = async () => {
     if (!onCleanupBacklog) return;
     setErrorText("");
@@ -221,6 +225,70 @@ export default function HaltSteerControls({
       setAbandoning(false);
     }
   };
+
+  const memoryWarning = ` The same work is likely to run out of memory again unless the memory limit (${RUN_MEMORY_LIMIT_SETTING}) is raised or the node does less at once.`;
+  const noteAdded = "anything you typed above is added after its prompt";
+  const waitingActions: [NodeAction, NodeAction] | null =
+    childWait && onRestartWaiting && onResumeWaiting
+      ? [
+          {
+            label: "Restart node",
+            title: "Stop the running processes and start this node again from scratch",
+            confirmLabel: "Confirm restart",
+            pendingLabel: "Restarting…",
+            groupLabel: "Confirm restart node",
+            prompt:
+              "Restart stops the processes that are still running and starts this node again from scratch. The agent is not told about the stopped processes; anything you typed above is added after its prompt.",
+            tone: "danger",
+            act: onRestartWaiting,
+          },
+          {
+            label: "Resume node",
+            title: "Run this node again in the same session, leaving the processes running",
+            confirmLabel: "Confirm resume",
+            pendingLabel: "Resuming…",
+            groupLabel: "Confirm resume node",
+            prompt:
+              "Resume runs this node again in the same session and leaves the processes running. The agent gets only what you typed above (or a plain continue) and what it already knows — nothing about the processes.",
+            tone: "primary",
+            act: onResumeWaiting,
+          },
+        ]
+      : null;
+  const failedActions: [NodeAction, NodeAction] | null =
+    failedNode && onRetryFailed && onResumeFailed
+      ? [
+          {
+            label: "Retry node",
+            title: "Start this node again from scratch",
+            confirmLabel: "Confirm retry",
+            pendingLabel: "Retrying…",
+            groupLabel: "Confirm retry node",
+            prompt: outOfMemory
+              ? `Retry starts this node again from scratch. The agent is told the previous attempt ran out of memory; ${noteAdded}.${memoryWarning}`
+              : `Retry starts this node again from scratch; ${noteAdded}.`,
+            tone: "danger",
+            act: onRetryFailed,
+          },
+          {
+            label: "Resume node",
+            title: "Continue this node in the same agent session",
+            confirmLabel: "Confirm resume",
+            pendingLabel: "Resuming…",
+            groupLabel: "Confirm resume node",
+            prompt: outOfMemory
+              ? `Resume continues this node in the same agent session, from its saved session and the run's files as they were left, so finished work is not redone. The agent is told it ran out of memory; anything you typed above is added.${memoryWarning}`
+              : "Resume continues this node in the same agent session, from its saved session and the run's files as they were left, so finished work is not redone. Anything you typed above is added.",
+            tone: "primary",
+            unavailableReason:
+              failedNode.canResume === false
+                ? `This node cannot be resumed${failedNode.resumeUnavailableReason ? `: ${failedNode.resumeUnavailableReason}` : ""}`
+                : null,
+            act: onResumeFailed,
+          },
+        ]
+      : null;
+  const noteActed = () => setSteerNote("");
 
   return (
     <div className="wiv2-halt-steer">
@@ -281,6 +349,39 @@ export default function HaltSteerControls({
                 Abandon run
               </button>
             ))}
+        </div>
+      )}
+      {failedNode && failedActions && (
+        <div className="wiv2-feedback">
+          <div className="wiv2-feedback-title">
+            {outOfMemory ? "Out of memory — retry or resume" : "Node failed — retry or resume"}
+          </div>
+          {failedNode.error && <div className="feedback-reason">{failedNode.error}</div>}
+          {failedNode.canResume === false && (
+            <div className="feedback-reason">
+              This node cannot be resumed
+              {failedNode.resumeUnavailableReason ? `: ${failedNode.resumeUnavailableReason}` : ""}.
+              Retry starts it over.
+            </div>
+          )}
+          <textarea
+            className="feedback-textarea"
+            value={steerNote}
+            onChange={(e) => setSteerNote(e.target.value)}
+            placeholder="Optional note for the agent — leave blank to add nothing…"
+            rows={3}
+          />
+          <div className="feedback-actions">
+            <NodeActionButtons
+              first={failedActions[0]}
+              second={failedActions[1]}
+              note={steerNote}
+              onStart={() => setErrorText("")}
+              onActed={noteActed}
+              onError={setErrorText}
+              blocked={blocked}
+            />
+          </div>
         </div>
       )}
       {isHalted && (
@@ -361,65 +462,16 @@ export default function HaltSteerControls({
             rows={3}
           />
           <div className="feedback-actions">
-            {childWait ? (
-              confirmingWaiting ? (
-                <span
-                  className="wiv2-abandon-confirm"
-                  role="group"
-                  aria-label={
-                    confirmingWaiting === "restart" ? "Confirm restart node" : "Confirm resume node"
-                  }
-                >
-                  <span className="wiv2-abandon-prompt">
-                    {confirmingWaiting === "restart"
-                      ? "Restart stops the processes that are still running and starts this node again from scratch. The agent is not told about the stopped processes; anything you typed above is added after its prompt."
-                      : "Resume runs this node again in the same session and leaves the processes running. The agent gets only what you typed above (or a plain continue) and what it already knows — nothing about the processes."}
-                  </span>
-                  <button
-                    type="button"
-                    className={`btn btn-sm ${confirmingWaiting === "restart" ? "btn-danger" : "btn-primary"}`}
-                    onClick={() => void handleWaitingAction(confirmingWaiting)}
-                    disabled={actingWaiting || blocked}
-                  >
-                    {confirmingWaiting === "restart"
-                      ? actingWaiting
-                        ? "Restarting…"
-                        : "Confirm restart"
-                      : actingWaiting
-                        ? "Resuming…"
-                        : "Confirm resume"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => setConfirmingWaiting(null)}
-                    disabled={actingWaiting}
-                  >
-                    Cancel
-                  </button>
-                </span>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-danger"
-                    onClick={() => setConfirmingWaiting("restart")}
-                    disabled={blocked}
-                    title="Stop the running processes and start this node again from scratch"
-                  >
-                    Restart node
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    onClick={() => setConfirmingWaiting("resume")}
-                    disabled={blocked}
-                    title="Run this node again in the same session, leaving the processes running"
-                  >
-                    Resume node
-                  </button>
-                </>
-              )
+            {waitingActions ? (
+              <NodeActionButtons
+                first={waitingActions[0]}
+                second={waitingActions[1]}
+                note={steerNote}
+                onStart={() => setErrorText("")}
+                onActed={noteActed}
+                onError={setErrorText}
+                blocked={blocked}
+              />
             ) : (
               <button
                 type="button"

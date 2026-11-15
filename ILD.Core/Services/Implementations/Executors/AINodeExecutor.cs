@@ -307,7 +307,7 @@ public sealed class AINodeExecutor : INodeExecutor
                     InterruptedReason(ctx.Run.CurrentAiSessionId, result.Error), result.Output, resetAt);
                 yield break;
             }
-            yield return new NodeOutcome.Fail(EdgeType.OnFailure, result.Error ?? "AI adapter failed", result.Output);
+            yield return new NodeOutcome.Fail(EdgeType.OnFailure, result.Error ?? "AI adapter failed", result.Output, result.Termination);
         }
     }
 
