@@ -381,7 +381,9 @@ export default function ExternalAccessSettings() {
     if (!renewing) return;
     setRenewBusy(true);
     try {
-      setIssued(await externalGrantService.renew(renewing.id, { lifetimeMinutes, scope: newScope }));
+      setIssued(
+        await externalGrantService.renew(renewing.id, { lifetimeMinutes, scope: newScope }),
+      );
       setRenewing(null);
       setError(null);
       await refresh();
