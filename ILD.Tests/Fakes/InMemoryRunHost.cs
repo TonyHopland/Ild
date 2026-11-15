@@ -47,6 +47,9 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
     public Exception? SignInFailure { get; set; }
     public TaskCompletionSource? MakingChat { get; set; }
 
+    /// <summary>What happens as the chat environment is about to be removed, before it is.</summary>
+    public Func<Task>? BeforeRemovingChat { get; set; }
+
     public IReadOnlyList<InMemoryExec> Execs { get { lock (_gate) return _execs.ToList(); } }
     public List<Guid> Revived { get; } = [];
     public HashSet<Guid> Ready { get; } = [];
@@ -138,11 +141,11 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
         _chatUp = true;
     }
 
-    protected override Task RemoveChatAsync(CancellationToken ct)
+    protected override async Task RemoveChatAsync(CancellationToken ct)
     {
+        if (BeforeRemovingChat is { } before) await before();
         ChatsRemoved++;
         _chatUp = false;
-        return Task.CompletedTask;
     }
 
     protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(owner.Chat ? _chatUp : HoldsRun(owner.Id));

@@ -2499,54 +2499,19 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_chat_command_runs_in_the_chat_container_as_that_chat_with_its_home_and_the_agents_on_the_path()
+    public async Task A_chat_command_has_the_agents_on_its_path_ahead_of_the_chats_own_and_the_images()
     {
         using var host = NewHost(Options(), [Claude]);
         AnswerInstaller(AgentNodeLine, ClaudeLine);
         var chat = Guid.NewGuid();
-        var folder = $"{ChatFolder(chat)}/repos/widgets";
 
-        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command(folder, "git", "status"), chat), TestContext.Current.CancellationToken);
+        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command($"{ChatFolder(chat)}/repos/widgets", "git", "status"), chat), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        var exec = _api.Execs.Last();
         var home = RunPaths.ChatHome(chat);
-        Assert.Equal(ChatContainer, exec.Container);
-        Assert.Equal($"HOME={home}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
         Assert.Equal(
             $"PATH=/opt/ild-tools/agents/claude-code/2.1.0/wrap:{home}/.local/bin:/opt/ild-tools/mise/installs/node/24/bin:{RunToolEnvironment.ImagePath}",
-            exec.Env.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)));
-        Assert.Contains(folder, exec.Command);
-        Assert.Equal(["git", "status"], exec.Command.TakeLast(2));
-        Assert.Contains($"{chat:N}/", exec.Command.Single(c => c.StartsWith(chat.ToString("N") + "/", StringComparison.Ordinal)));
-    }
-
-    [Fact]
-    public async Task A_chat_command_gets_the_chats_npm_prefix_whatever_the_caller_sets()
-    {
-        var chat = Guid.NewGuid();
-        var psi = Command(ChatFolder(chat), "npm", "i", "-g", "x");
-
-        using var process = await _host.StartCommandAsync(
-            RunCommand.Prepared(psi, chat, new Dictionary<string, string?> { ["NPM_CONFIG_PREFIX"] = "/caller/prefix" }), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal($"NPM_CONFIG_PREFIX={RunPaths.ChatHome(chat)}/.local", _api.Execs.Last().Env.Single(c => c.StartsWith("NPM_CONFIG_PREFIX=", StringComparison.Ordinal)));
-    }
-
-    [Fact]
-    public async Task A_command_in_a_chat_folder_is_the_chats_even_when_its_caller_names_another_id_to_kill_it_by()
-    {
-        var chat = Guid.NewGuid();
-        var title = Guid.NewGuid();
-
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "claude"), title), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var exec = _api.Execs.Last();
-        Assert.Equal(ChatContainer, exec.Container);
-        Assert.Equal($"HOME={RunPaths.ChatHome(chat)}", exec.Env.Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
-        Assert.Contains(exec.Command, c => c.StartsWith(title.ToString("N") + "/", StringComparison.Ordinal));
+            _api.Execs.Last().Env.Single(c => c.StartsWith("PATH=", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -2646,11 +2611,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var chat = Guid.NewGuid();
         await host.CreateChatFolderAsync(chat, "/unused", ct);
 
-        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatContainer, _api.Containers());
-
-        clock.Advance(TimeSpan.FromSeconds(1));
+        clock.Advance(IdleTimeout);
         await host.ReapIdleChatAsync(ct);
 
         Assert.DoesNotContain(ChatContainer, _api.Containers());
@@ -2664,76 +2625,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.Equal(2, _api.Created.Count(c => c == $"containers/{ChatContainer}"));
         Assert.Equal(1, _api.Created.Count(c => c == $"volumes/{ChatContainer}"));
         Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("is back", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task The_chat_container_is_not_removed_while_a_chat_command_runs_or_a_chat_hold_is_open_and_the_time_counts_from_when_they_end()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var (host, clock) = IdleHost();
-        var chat = Guid.NewGuid();
-        await host.CreateChatFolderAsync(chat, "/unused", ct);
-        var release = new TaskCompletionSource();
-        _api.OnExec = async e =>
-        {
-            await release.Task;
-            await e.ExitAsync(0);
-        };
-
-        var running = host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "npm", "run", "dev"), chat), ct);
-        using var process = await running;
-        clock.Advance(IdleTimeout * 2);
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatContainer, _api.Containers());
-
-        release.SetResult();
-        await process.WaitForExitAsync(ct);
-        using (host.HoldChat(ChatFolder(chat)))
-        {
-            clock.Advance(IdleTimeout * 2);
-            await host.ReapIdleChatAsync(ct);
-            Assert.Contains(ChatContainer, _api.Containers());
-        }
-
-        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatContainer, _api.Containers());
-
-        clock.Advance(TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.DoesNotContain(ChatContainer, _api.Containers());
-    }
-
-    [Fact]
-    public async Task A_chat_that_starts_while_the_reaper_removes_the_chat_container_waits_for_it_and_gets_a_new_one()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var (host, clock) = IdleHost();
-        var chat = Guid.NewGuid();
-        await host.CreateChatFolderAsync(chat, "/unused", ct);
-        var removing = new TaskCompletionSource();
-        var proceed = new TaskCompletionSource();
-        _api.BeforeRequest = async request =>
-        {
-            if (request.StartsWith("DELETE", StringComparison.Ordinal) && request.Contains($"/containers/{ChatContainer}", StringComparison.Ordinal) && !removing.Task.IsCompleted)
-            {
-                removing.SetResult();
-                await proceed.Task;
-            }
-        };
-        clock.Advance(IdleTimeout);
-
-        var reaping = host.ReapIdleChatAsync(ct);
-        await removing.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        var starting = host.DirectoryExistsAsync(ChatFolder(chat), ct);
-        await Task.Delay(100, ct);
-        Assert.False(starting.IsCompleted);
-        proceed.SetResult();
-        await reaping;
-
-        Assert.True(await starting);
-        Assert.Contains(ChatContainer, _api.Containers());
-        Assert.Equal(2, _api.Created.Count(c => c == $"containers/{ChatContainer}"));
     }
 
     [Fact]
@@ -2959,57 +2850,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.DoesNotContain(_api.Containers(), c => c.StartsWith("ild-signin-", StringComparison.Ordinal));
     }
 
-    private async Task<SignInTerminal> OpenReadingAsync(ContainerRunHost host, Func<FakeDockerExec, Task> answer)
-    {
-        AnswerInstaller(ClaudeLine);
-        var installer = _api.OnExec;
-        _api.OnExec = e => e.Container.StartsWith("ild-signin-", StringComparison.Ordinal) && !e.Tty ? answer(e) : installer(e);
-        return await host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
-    public async Task A_login_file_is_read_out_of_the_sign_in_container_as_text()
-    {
-        using var host = NewHost(Options(), [Claude]);
-        await using var terminal = await OpenReadingAsync(host, async e =>
-        {
-            await e.WriteStdoutAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes("""{"a":1}""")));
-            await e.ExitAsync(0);
-        });
-
-        var text = await terminal.ReadLoginAsync(".claude/.credentials.json", TestContext.Current.CancellationToken);
-
-        Assert.Equal("""{"a":1}""", text);
-        var script = _api.Execs.Last().Command;
-        Assert.Contains("! -L", script[5]);
-        Assert.Contains("-le \"$2\"", script[5]);
-        Assert.Equal([".claude/.credentials.json", "262144", "/tmp/home"], script.TakeLast(3));
-    }
-
-    [Fact]
-    public async Task A_link_or_an_oversized_login_file_is_not_read()
-    {
-        using var host = NewHost(Options(), [Claude]);
-        // The script's own refusal (not a regular file, or over the cap) is its exit status 3: nothing is printed.
-        await using var terminal = await OpenReadingAsync(host, e => e.ExitAsync(3));
-
-        Assert.Null(await terminal.ReadLoginAsync(".codex/auth.json", TestContext.Current.CancellationToken));
-    }
-
-    [Fact]
-    public async Task A_sign_in_login_read_that_fails_otherwise_is_an_error()
-    {
-        using var host = NewHost(Options(), [Claude]);
-        await using var terminal = await OpenReadingAsync(host, async e =>
-        {
-            await e.WriteStderrAsync("base64: boom");
-            await e.ExitAsync(1);
-        });
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => terminal.ReadLoginAsync(".codex/auth.json", TestContext.Current.CancellationToken));
-        Assert.Contains("boom", ex.Message);
-    }
 
     [Fact]
     public async Task The_sweep_removes_sign_in_containers_a_killed_ild_left_but_not_open_ones_or_other_installs()

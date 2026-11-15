@@ -325,13 +325,11 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     private string SignInPod() => Assert.Single(_api.Names("pods"), n => n.StartsWith("ild-signin-", StringComparison.Ordinal));
 
     [Fact]
-    public async Task The_sign_in_terminal_runs_in_a_pod_of_its_own_and_reads_the_login_from_its_home()
+    public async Task The_sign_in_terminal_runs_in_a_pod_of_its_own_with_its_home()
     {
         _api.OnExec = async e =>
         {
             if (e.WantsStdin && !e.Tty) await e.ReadStdinToEndAsync();
-            if (e.Joined.Contains("base64", StringComparison.Ordinal))
-                await e.WriteStdoutAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes("{\"token\":\"x\"}")));
             if (!e.Tty) await e.ExitAsync(0);
         };
         var ct = TestContext.Current.CancellationToken;
@@ -347,8 +345,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Empty(pod.Spec.Volumes ?? []);
         var shell = Assert.Single(_api.Execs, e => e.Pod == name && e.Tty);
         Assert.Equal(["claude", "setup-token"], shell.Command.TakeLast(2));
-
-        Assert.Equal("{\"token\":\"x\"}", await terminal.ReadLoginAsync(".claude/.credentials.json", ct));
 
         await terminal.DisposeAsync();
         Assert.Contains($"pods/{name}", _api.Deleted);
@@ -1553,11 +1549,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var chat = Guid.NewGuid();
         await host.CreateChatFolderAsync(chat, "/unused", ct);
 
-        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatPodName, _api.Names("pods"));
-
-        clock.Advance(TimeSpan.FromSeconds(1));
+        clock.Advance(IdleTimeout);
         await host.ReapIdleChatAsync(ct);
 
         Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
@@ -1571,75 +1563,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(2, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
         Assert.Equal(1, _api.Created.Count(c => c == $"persistentvolumeclaims/{ChatPodName}"));
         Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("is back", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task The_chat_pod_is_not_deleted_while_a_chat_command_runs_or_a_chat_hold_is_open_and_the_time_counts_from_when_they_end()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var (host, clock) = IdleHost();
-        var chat = Guid.NewGuid();
-        await host.CreateChatFolderAsync(chat, "/unused", ct);
-        var release = new TaskCompletionSource();
-        _api.OnExec = async e =>
-        {
-            await release.Task;
-            await e.ExitAsync(0);
-        };
-
-        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "npm", "run", "dev"), chat), ct);
-        clock.Advance(IdleTimeout * 2);
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatPodName, _api.Names("pods"));
-
-        release.SetResult();
-        await process.WaitForExitAsync(ct);
-        using (host.HoldChat(ChatFolder(chat)))
-        {
-            clock.Advance(IdleTimeout * 2);
-            await host.ReapIdleChatAsync(ct);
-            Assert.Contains(ChatPodName, _api.Names("pods"));
-        }
-
-        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatPodName, _api.Names("pods"));
-
-        clock.Advance(TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
-    }
-
-    [Fact]
-    public async Task A_chat_that_starts_while_the_reaper_deletes_the_chat_pod_waits_for_it_and_gets_a_new_one()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var (host, clock) = IdleHost();
-        var chat = Guid.NewGuid();
-        await host.CreateChatFolderAsync(chat, "/unused", ct);
-        var deleting = new TaskCompletionSource();
-        var proceed = new TaskCompletionSource();
-        _api.BeforeDelete = async what =>
-        {
-            if (what == $"pods/{ChatPodName}" && !deleting.Task.IsCompleted)
-            {
-                deleting.SetResult();
-                await proceed.Task;
-            }
-        };
-        clock.Advance(IdleTimeout);
-
-        var reaping = host.ReapIdleChatAsync(ct);
-        await deleting.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        var starting = host.DirectoryExistsAsync(ChatFolder(chat), ct);
-        await Task.Delay(100, ct);
-        Assert.False(starting.IsCompleted);
-        proceed.SetResult();
-        await reaping;
-
-        Assert.True(await starting);
-        Assert.Contains(ChatPodName, _api.Names("pods"));
-        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
     }
 
     [Fact]
