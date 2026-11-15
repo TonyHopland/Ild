@@ -28,7 +28,7 @@ export default function Header() {
             const badge =
               item.path === ROUTES.CHAT && unreadCount > 0
                 ? { id: unreadBadgeId, count: unreadCount }
-                : item.path === ROUTES.GLOBAL_VARIABLES && pendingSuggestions > 0
+                : item.path === ROUTES.SETTINGS && pendingSuggestions > 0
                   ? { id: suggestionsBadgeId, count: pendingSuggestions }
                   : null;
             return (

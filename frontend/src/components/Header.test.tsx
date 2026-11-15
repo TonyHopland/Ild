@@ -40,11 +40,7 @@ describe("Header nav items", () => {
       "Settings",
       "Repositories",
       "AI Providers",
-      "Global Variables",
     ]);
-    expect(nav.getByRole("link", { name: "Global Variables" }).getAttribute("href")).toBe(
-      "/global-variables",
-    );
   });
 });
 

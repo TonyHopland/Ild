@@ -3,6 +3,7 @@ import { render, screen, cleanup, within, waitFor, fireEvent } from "@testing-li
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../hooks/useAuth";
 import * as signalRHook from "../hooks/useSignalR";
+import * as pendingHook from "../hooks/usePendingGlobalVariableProposalCount";
 import MobileTabBar from "./MobileNav";
 import { fakeHub, reply, stubFetch, routeEveryHub } from "../test-support";
 import { WorkItemHubProvider } from "../hooks/useWorkItemHub";
@@ -107,7 +108,6 @@ describe("the phone tab bar", () => {
       "Settings",
       "Repositories",
       "AI Providers",
-      "Global Variables",
     ]);
     expect(menu.getByText("tester")).toBeTruthy();
 
@@ -118,5 +118,28 @@ describe("the phone tab bar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     expect(logout).toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Menu" })).toBeNull();
+  });
+});
+
+describe("the menu's pending suggestions badge", () => {
+  const settingsRow = () =>
+    within(screen.getByRole("dialog", { name: "Menu" })).getByRole("link", { name: /Settings/ });
+
+  test("shows the count on Settings, and nothing at zero", () => {
+    mockHub();
+    stubCounts({ needsYou: null });
+    const pending = vi
+      .spyOn(pendingHook, "usePendingGlobalVariableProposalCount")
+      .mockReturnValue(2);
+    renderTabBar("/taskboard");
+    fireEvent.click(tabBar().getByRole("button", { name: "More" }));
+    expect(settingsRow().textContent).toContain("2");
+    expect(settingsRow().textContent).toContain("suggestions waiting");
+    cleanup();
+
+    pending.mockReturnValue(0);
+    renderTabBar("/taskboard");
+    fireEvent.click(tabBar().getByRole("button", { name: "More" }));
+    expect(settingsRow().textContent).toBe("Settings");
   });
 });

@@ -135,17 +135,15 @@ export default function GlobalVariables() {
     );
 
   if (isLoading) {
-    return (
-      <div className="page-container">
-        <p>Loading...</p>
-      </div>
-    );
+    return <p>Loading...</p>;
   }
 
   return (
-    <div className="page-container">
+    <>
       <div className="gv-header">
-        <h1 className="page-title">Global Variables</h1>
+        <div className="settings-pane-header">
+          <h2>Global variables</h2>
+        </div>
         <button className="btn btn-primary" onClick={() => setDialog({ variable: null })}>
           New variable
         </button>
@@ -315,6 +313,6 @@ export default function GlobalVariables() {
           resize: vertical;
         }
       `}</style>
-    </div>
+    </>
   );
 }

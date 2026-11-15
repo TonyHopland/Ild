@@ -25,7 +25,7 @@ export function MenuSheet({ onClose }: { onClose: () => void }) {
           <NavLink key={item.path} to={item.path} className="sheet-row" onClick={onClose}>
             <Icon name={item.icon} size={18} />
             {item.label}
-            {item.path === ROUTES.GLOBAL_VARIABLES && pendingSuggestions > 0 && (
+            {item.path === ROUTES.SETTINGS && pendingSuggestions > 0 && (
               <span className="sheet-row-badge">
                 {pendingSuggestions}
                 <span className="sr-only"> suggestions waiting</span>

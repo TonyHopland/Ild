@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
+import { ROUTES } from "../../../utils/constants";
 import { externalGrantService } from "../../../services/externalGrants";
 import type {
   ExternalAgentGrant,
@@ -37,7 +38,7 @@ function proposalLink(proposal: ExternalGrantProposal): string {
     case "loopTemplate":
       return `/loop-editor/${encodeURIComponent(proposal.target)}`;
     case "globalVariable":
-      return "/global-variables";
+      return ROUTES.GLOBAL_VARIABLES;
   }
 }
 

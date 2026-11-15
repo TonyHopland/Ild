@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
+import { ROUTES } from "../../utils/constants";
 import {
   HaltReason,
   LoopRun,
@@ -309,13 +310,13 @@ export default function HaltSteerControls({
                       <code>{name}</code>
                     </span>
                   ))}
-                  . Set them on the <Link to="/global-variables">Global Variables page</Link>, then
-                  resume.
+                  . Set them on the <Link to={ROUTES.GLOBAL_VARIABLES}>Global Variables page</Link>,
+                  then resume.
                 </>
               ) : (
                 <>
                   The next step uses global variables that were missing or empty. Set them on the{" "}
-                  <Link to="/global-variables">Global Variables page</Link>, then resume.
+                  <Link to={ROUTES.GLOBAL_VARIABLES}>Global Variables page</Link>, then resume.
                 </>
               )}
             </div>

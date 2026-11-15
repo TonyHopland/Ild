@@ -1657,7 +1657,7 @@ public sealed partial class LoopEngine : ILoopEngine
         await ParkForHumanAsync(run, node.Id, node.Label, HaltReason.GlobalVariableMissing,
             HumanFeedbackReasons.GlobalVariableMissing,
             $"Global variable(s) {string.Join(", ", missing)} used by \"{node.Label}\" are missing or empty. "
-                + "Set them on the Global Variables page (/global-variables), then resume.",
+                + "Set them under Settings → Global variables (/settings/global-variables), then resume.",
             store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId: null);
         return ParkResult.Stop;
     }
