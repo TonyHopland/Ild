@@ -376,6 +376,7 @@ export default function HaltSteerControls({
               first={failedActions[0]}
               second={failedActions[1]}
               note={steerNote}
+              onStart={() => setErrorText("")}
               onActed={noteActed}
               onError={setErrorText}
               blocked={blocked}
@@ -466,6 +467,7 @@ export default function HaltSteerControls({
                 first={waitingActions[0]}
                 second={waitingActions[1]}
                 note={steerNote}
+                onStart={() => setErrorText("")}
                 onActed={noteActed}
                 onError={setErrorText}
                 blocked={blocked}

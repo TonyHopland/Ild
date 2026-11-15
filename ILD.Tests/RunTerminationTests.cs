@@ -15,7 +15,7 @@ public sealed class RunTerminationTests
     private const long FourGi = 4L * 1024 * 1024 * 1024;
 
     [Fact]
-    public void An_out_of_memory_kill_is_described_with_the_limit_and_the_peak_when_known()
+    public void An_out_of_memory_kill_is_described_with_the_limit_when_known()
     {
         Assert.Equal(
             "The run ran out of memory: its container was killed at the 4Gi limit (`ILD_RUN_MEMORY_LIMIT`).",

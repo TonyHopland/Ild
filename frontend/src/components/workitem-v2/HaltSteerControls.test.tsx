@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import HaltSteerControls from "./HaltSteerControls";
 import {
@@ -630,6 +630,27 @@ describe("HaltSteerControls after a node failed", () => {
       expect(
         (screen.getByRole("button", { name: "Retry node" }) as HTMLButtonElement).disabled,
       ).toBe(false);
+    },
+  );
+
+  test.each(["Out of Memory", "Node Failed"])(
+    "a failed action shows its error and the next attempt clears it (%s)",
+    async (reason) => {
+      const onRetryFailed = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("The run is not parked on a failed node"))
+        .mockResolvedValue(undefined);
+      renderParked(reason, { onRetryFailed });
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry node" }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "not parked on a failed node",
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      expect(onRetryFailed).toHaveBeenCalledTimes(2);
     },
   );
 

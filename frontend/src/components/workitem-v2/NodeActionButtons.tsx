@@ -22,6 +22,8 @@ interface NodeActionButtonsProps {
   second: NodeAction;
   /** What the person typed for the agent; cleared by `onActed` once an action went through. */
   note: string;
+  /** Called when an action starts, so what a failed one left on screen is cleared. */
+  onStart: () => void;
   onActed: () => void;
   onError: (message: string) => void;
   /** Another action on this run is in flight. */
@@ -36,6 +38,7 @@ export default function NodeActionButtons({
   first,
   second,
   note,
+  onStart,
   onActed,
   onError,
   blocked,
@@ -44,6 +47,7 @@ export default function NodeActionButtons({
   const [acting, setActing] = useState(false);
 
   const confirm = async (action: NodeAction) => {
+    onStart();
     setActing(true);
     try {
       await action.act(note);

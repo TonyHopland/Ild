@@ -46,19 +46,19 @@ export function workItemStatusTone(status: WorkItemStatus | string): Tone {
   return WORK_ITEM_STATUS[status as WorkItemStatus]?.tone ?? "muted";
 }
 
-/**
- * Why an item waits in Needs you. The reasons are a fixed set the engine writes
- * (HumanFeedbackReasons); an unknown one is shown as written.
- */
-/** The reasons the UI acts on, as the engine writes them. */
+/** The feedback reasons the UI acts on, as the engine writes them. */
 export const FEEDBACK_REASON = {
   NodeFailed: "Node Failed",
   OutOfMemory: "Out of Memory",
 } as const;
 
-/** The setting that gives a run's memory limit, which an out-of-memory failure tells a person to raise. */
+/** The setting that sets a run's memory limit. */
 export const RUN_MEMORY_LIMIT_SETTING = "ILD_RUN_MEMORY_LIMIT";
 
+/**
+ * Why an item waits in Needs you. The reasons are a fixed set the engine writes
+ * (HumanFeedbackReasons); an unknown one is shown as written.
+ */
 const FEEDBACK_REASON_DISPLAY: Record<string, { label: string; tone: Tone }> = {
   "Human Input Needed": { label: "Human input needed", tone: "attention" },
   [FEEDBACK_REASON.NodeFailed]: { label: "Node failed", tone: "danger" },
