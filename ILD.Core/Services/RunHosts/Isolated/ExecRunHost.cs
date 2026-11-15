@@ -275,6 +275,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// </summary>
     protected virtual bool HostsFileIsRoots => false;
 
+    /// <inheritdoc cref="IRunHost.GetStatsAsync"/>
+    public virtual Task<ContainerStats?> GetStatsAsync(Guid owner, CancellationToken ct = default) => Task.FromResult<ContainerStats?>(null);
+
     /// <summary>What ILD's own execs as root start with: the environment's PATH has directories the agent writes, which root must not run from.</summary>
     protected static readonly IReadOnlyDictionary<string, string> RootEnvironment = new Dictionary<string, string> { ["PATH"] = FixedPath };
 

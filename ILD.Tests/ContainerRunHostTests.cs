@@ -320,6 +320,51 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Stats_of_a_running_container_are_read_against_its_limits()
+    {
+        await CreateRunAsync();
+        _api.Stats = JsonNode.Parse("""
+            {
+              "cpu_stats": { "cpu_usage": { "total_usage": 3000 }, "system_cpu_usage": 20000, "online_cpus": 4 },
+              "precpu_stats": { "cpu_usage": { "total_usage": 1000 }, "system_cpu_usage": 16000 },
+              "memory_stats": { "usage": 600, "limit": 1000000, "stats": { "inactive_file": 100 } },
+              "networks": { "eth0": { "rx_bytes": 7, "tx_bytes": 3 } }
+            }
+            """);
+
+        var stats = await _host.GetStatsAsync(_run, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(stats);
+        Assert.True(stats.Running);
+        Assert.Equal(2.0, stats.CpuCores);
+        Assert.Equal(2.0, stats.CpuLimitCores);
+        Assert.Equal(500, stats.MemoryBytes);
+        Assert.Equal(7, stats.NetworkRxBytes);
+        Assert.Null(stats.DiskReadBytes);
+        Assert.Contains(_api.Requests, r => r.StartsWith($"GET /v1.41/containers/ild-run-{_run:N}/stats", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Stats_of_a_stopped_container_say_it_is_not_running_without_asking_for_stats()
+    {
+        await CreateRunAsync();
+        await _host.ShutdownAsync(TestContext.Current.CancellationToken);
+
+        var stats = await _host.GetStatsAsync(_run, TestContext.Current.CancellationToken);
+
+        Assert.False(stats!.Running);
+        Assert.DoesNotContain(_api.Requests, r => r.Contains("/stats"));
+    }
+
+    [Fact]
+    public async Task Stats_of_a_container_that_is_gone_say_it_is_not_running()
+    {
+        var stats = await _host.GetStatsAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        Assert.False(stats!.Running);
+    }
+
+    [Fact]
     public async Task Create_takes_a_container_that_is_already_running_as_it_is()
     {
         await CreateRunAsync();

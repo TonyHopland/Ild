@@ -731,4 +731,40 @@ public class LoopRunsController : ControllerBase
 
         return Ok(new { containerName = ContainerRunHost.ObjectName(owner), folder = run.WorktreePath });
     }
+
+    /// <summary>
+    /// What the run's container uses of its CPU, memory, network and disk, for the work item's Container tab. <c>state</c> is
+    /// <c>running</c> with the figures the engine exposes, <c>stopped</c> when the container is not running, and <c>unavailable</c>
+    /// on a host with no container to ask or an engine that does not answer.
+    /// </summary>
+    [HttpGet("{id}/container-stats")]
+    public async Task<IActionResult> GetContainerStats(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var run = await _loopRunStore.GetByIdAsync(guid);
+        if (run is null) return NotFound();
+        var host = HttpContext.RequestServices.GetRunHost();
+        if (host.Kind != RunHostKind.Container || RunPaths.OwnerOf(run.WorktreePath) is not { } owner)
+            return Ok(new { state = "unavailable" });
+
+        ContainerStats? stats;
+        try { stats = await host.GetStatsAsync(owner, HttpContext.RequestAborted); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { stats = null; }
+        if (stats is null) return Ok(new { state = "unavailable" });
+        if (!stats.Running) return Ok(new { state = "stopped" });
+        return Ok(new
+        {
+            state = "running",
+            cpuCores = stats.CpuCores,
+            cpuLimitCores = stats.CpuLimitCores,
+            memoryBytes = stats.MemoryBytes,
+            memoryLimitBytes = stats.MemoryLimitBytes,
+            networkRxBytes = stats.NetworkRxBytes,
+            networkTxBytes = stats.NetworkTxBytes,
+            diskReadBytes = stats.DiskReadBytes,
+            diskWriteBytes = stats.DiskWriteBytes,
+        });
+    }
 }

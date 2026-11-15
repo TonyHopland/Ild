@@ -174,6 +174,9 @@ public interface IRunHost
     /// <summary>Counts the chat that holds <paramref name="chatPath"/> as busy until the result is disposed, for work that is not a command in its container (a clone). A host that removes nothing for idleness does nothing.</summary>
     IDisposable HoldChat(string chatPath) => NoHold.Instance;
 
+    /// <summary>What the engine says the run's container uses, or null when this host has no container to ask (only a Docker or Podman container host does).</summary>
+    Task<ContainerStats?> GetStatsAsync(Guid owner, CancellationToken ct = default) => Task.FromResult<ContainerStats?>(null);
+
     /// <summary>The names of the directories directly below <paramref name="directory"/>, leaving out links and names starting with '.'; none when there is no such directory.</summary>
     Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default);
 

@@ -117,6 +117,75 @@ public class LoopRunsControllerTests
     }
 
     [Fact]
+    public async Task ContainerStats_report_the_figures_of_a_running_container()
+    {
+        var run = ContainerRun();
+        var host = EditorHost(RunHostKind.Container);
+        host.Setup(h => h.GetStatsAsync(run.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContainerStats(true, CpuCores: 1.2, CpuLimitCores: 4, MemoryBytes: 100, MemoryLimitBytes: 200, NetworkRxBytes: 5));
+
+        var result = await EditorController(run, host).GetContainerStats(run.Id.ToString());
+
+        var payload = Assert.IsType<OkObjectResult>(result).Value!;
+        object? Field(string name) => payload.GetType().GetProperty(name)!.GetValue(payload);
+        Assert.Equal("running", Field("state"));
+        Assert.Equal(1.2, Field("cpuCores"));
+        Assert.Equal(4.0, Field("cpuLimitCores"));
+        Assert.Equal(100L, Field("memoryBytes"));
+        Assert.Equal(5L, Field("networkRxBytes"));
+        Assert.Null(Field("diskReadBytes"));
+    }
+
+    [Fact]
+    public async Task ContainerStats_say_stopped_for_a_container_that_is_not_running()
+    {
+        var run = ContainerRun();
+        var host = EditorHost(RunHostKind.Container);
+        host.Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(ContainerStats.NotRunning);
+
+        var result = await EditorController(run, host).GetContainerStats(run.Id.ToString());
+
+        var payload = Assert.IsType<OkObjectResult>(result).Value!;
+        Assert.Equal("stopped", payload.GetType().GetProperty("state")!.GetValue(payload));
+    }
+
+    [Theory]
+    [InlineData(RunHostKind.Local)]
+    [InlineData(RunHostKind.Container)]
+    public async Task ContainerStats_are_unavailable_where_the_host_has_none_to_ask(RunHostKind kind)
+    {
+        var run = ContainerRun();
+        var host = EditorHost(kind);
+        host.Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((ContainerStats?)null);
+
+        var result = await EditorController(run, host).GetContainerStats(run.Id.ToString());
+
+        var payload = Assert.IsType<OkObjectResult>(result).Value!;
+        Assert.Equal("unavailable", payload.GetType().GetProperty("state")!.GetValue(payload));
+    }
+
+    [Fact]
+    public async Task ContainerStats_are_unavailable_when_the_engine_fails()
+    {
+        var run = ContainerRun();
+        var host = EditorHost(RunHostKind.Container);
+        host.Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ThrowsAsync(new IOException("socket gone"));
+
+        var result = await EditorController(run, host).GetContainerStats(run.Id.ToString());
+
+        var payload = Assert.IsType<OkObjectResult>(result).Value!;
+        Assert.Equal("unavailable", payload.GetType().GetProperty("state")!.GetValue(payload));
+    }
+
+    [Fact]
+    public async Task ContainerStats_is_not_found_for_an_unknown_run()
+    {
+        var result = await EditorController(null, EditorHost(RunHostKind.Container)).GetContainerStats(Guid.NewGuid().ToString());
+
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
     public async Task OpenInEditor_names_the_run_container_and_its_worktree_after_checking_the_worktree_there()
     {
         var run = ContainerRun();
