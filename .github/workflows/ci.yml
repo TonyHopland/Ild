@@ -82,6 +82,21 @@ jobs:
       - name: Backend tests
         run: dotnet test --project ILD.Tests/ILD.Tests.csproj --no-build --configuration Release
 
+      # Proves the suite ignores ambient ILD_*/AGENT_*/proxy variables: a dead-port
+      # proxy and an unwritable read root make any test that reads them fail.
+      - name: Backend tests with a polluted environment
+        env:
+          ILD_AGENT_READ_ROOT: /proc/ild-unwritable
+          ILD_AGENT_USER: nobody
+          ILD_LOG_LEVEL: Warning
+          ILD_AGENT_SCRATCH_ROOT: /proc/ild-unwritable-scratch
+          AGENT_FOO: bar
+          HTTPS_PROXY: http://127.0.0.1:9
+          HTTP_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+          NO_PROXY: ""
+        run: dotnet test --project ILD.Tests/ILD.Tests.csproj --no-build --configuration Release
+
   # The Dockerfiles are otherwise only exercised at release time by publish.yml,
   # so a broken one fails the tag rather than the PR that broke it. Build here
   # (never push) to close that gap.

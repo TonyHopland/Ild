@@ -46,7 +46,7 @@ cd frontend && vp check                # format + lint + type-check
 
 A frontend lint warning fails `vp check` and `vp lint` just as an error does, so fix it rather than suppress it.
 
-.NET tests: `dotnet test ILD.Tests/ILD.Tests.csproj`. A compiler or analyzer warning fails the build in every configuration, so fix it rather than suppress it.
+.NET tests: `dotnet test ILD.Tests/ILD.Tests.csproj`. A compiler or analyzer warning fails the build in every configuration, so fix it rather than suppress it. The suite ignores ambient `ILD_*`, `AGENT_*` and proxy variables (`ILD.Tests/TestEnvironmentBaseline.cs` clears them); a test that needs one must set it itself and restore it.
 
 ## Changelog Entries
 
