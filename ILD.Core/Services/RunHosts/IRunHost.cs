@@ -82,10 +82,10 @@ public interface IRunHost
     Task<string?> ReadTailAsync(Guid ownerId, string path, int maxBytes, CancellationToken ct = default) => Task.FromResult<string?>(null);
 
     /// <summary>
-    /// Why the pod or container of run <paramref name="ownerId"/> ended, as its host reports it, or null when it is running or the host cannot say.
+    /// Why the pod or container of run <paramref name="ownerId"/> ended, as its host reports it, or null when it is running or the host cannot say. An ending before <paramref name="since"/> is not reported.
     /// Read when a command ends because its container died, before the host removes or replaces it.
     /// </summary>
-    Task<RunTermination?> GetTerminationAsync(Guid ownerId, CancellationToken ct = default) => Task.FromResult<RunTermination?>(null);
+    Task<RunTermination?> GetTerminationAsync(Guid ownerId, DateTimeOffset? since = null, CancellationToken ct = default) => Task.FromResult<RunTermination?>(null);
 
     // -- Terminal ----------------------------------------------------------------
 

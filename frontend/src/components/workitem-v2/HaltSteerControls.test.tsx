@@ -539,19 +539,19 @@ describe("HaltSteerControls while a node is Waiting for ILD", () => {
   });
 });
 
-describe("HaltSteerControls after an out-of-memory kill", () => {
+describe("HaltSteerControls after a node failed", () => {
   const OOM_ERROR =
     "The run ran out of memory: its container was killed at the 4Gi limit (`ILD_RUN_MEMORY_LIMIT`).";
 
-  function parked(nodeOverrides: Partial<LoopRunNode> = {}) {
+  function parked(reason: string, nodeOverrides: Partial<LoopRunNode> = {}) {
     return run({
       status: LoopRunStatus.WaitingHuman,
       isHalted: false,
-      humanFeedbackReason: "Out of Memory",
+      humanFeedbackReason: reason,
       nodes: [
         node({
           status: LoopRunNodeStatus.Failed,
-          error: OOM_ERROR,
+          error: reason === "Out of Memory" ? OOM_ERROR : "exit code 2",
           canResume: true,
           ...nodeOverrides,
         }),
@@ -559,12 +559,15 @@ describe("HaltSteerControls after an out-of-memory kill", () => {
     });
   }
 
-  function renderParked(props: Partial<Parameters<typeof HaltSteerControls>[0]> = {}) {
+  function renderParked(
+    reason: string,
+    props: Partial<Parameters<typeof HaltSteerControls>[0]> = {},
+  ) {
     const onRetryFailed = vi.fn();
     const onResumeFailed = vi.fn();
     render(
       <HaltSteerControls
-        run={parked()}
+        run={parked(reason)}
         workItemStatus={WorkItemStatus.HumanFeedback}
         onRetryFailed={onRetryFailed}
         onResumeFailed={onResumeFailed}
@@ -575,13 +578,15 @@ describe("HaltSteerControls after an out-of-memory kill", () => {
     return { onRetryFailed, onResumeFailed };
   }
 
-  test("shows the error with Retry and Resume, and retries with the note after confirming", () => {
-    const { onRetryFailed, onResumeFailed } = renderParked();
+  test("an out-of-memory failure shows the error and warns it will likely happen again", () => {
+    const { onRetryFailed, onResumeFailed } = renderParked("Out of Memory");
 
+    expect(screen.getByText("Out of memory — retry or resume")).toBeTruthy();
     expect(screen.getByText(OOM_ERROR)).toBeTruthy();
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "one project at a time" } });
     fireEvent.click(screen.getByRole("button", { name: "Retry node" }));
     expect(screen.getByText(/likely to run out of memory again/i)).toBeTruthy();
+    expect(screen.getAllByText(/ILD_RUN_MEMORY_LIMIT/).length).toBeGreaterThan(1);
     expect(onRetryFailed).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
 
@@ -589,33 +594,61 @@ describe("HaltSteerControls after an out-of-memory kill", () => {
     expect(onResumeFailed).not.toHaveBeenCalled();
   });
 
-  test("resumes after confirming, and says it keeps the session and the run's files", () => {
-    const { onResumeFailed } = renderParked();
+  test("a failed node shows neutral wording with its error, and no memory advice", () => {
+    renderParked("Node Failed");
 
+    expect(screen.getByText("Node failed — retry or resume")).toBeTruthy();
+    expect(screen.getByText("exit code 2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry node" }));
+    expect(screen.queryByText(/out of memory/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Resume node" }));
     expect(screen.getByText(/same agent session/i)).toBeTruthy();
+    expect(screen.queryByText(/out of memory/i)).toBeNull();
+  });
+
+  test.each(["Out of Memory", "Node Failed"])("resumes after confirming (%s)", (reason) => {
+    const { onResumeFailed } = renderParked(reason);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume node" }));
+    expect(screen.getByText(/saved session and the run.s files/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Confirm resume" }));
 
     expect(onResumeFailed).toHaveBeenCalledWith("");
   });
 
-  test("offers Retry only when the session cannot be restored, and says why", () => {
-    renderParked({
-      run: parked({ canResume: false, resumeUnavailableReason: "no session recorded" }),
+  test.each(["Out of Memory", "Node Failed"])(
+    "offers Retry only when the session cannot be restored, and says why (%s)",
+    (reason) => {
+      renderParked(reason, {
+        run: parked(reason, { canResume: false, resumeUnavailableReason: "no session recorded" }),
+      });
+
+      const resume = screen.getByRole("button", { name: "Resume node" }) as HTMLButtonElement;
+      expect(resume.disabled).toBe(true);
+      expect(screen.getByText(/no session recorded/)).toBeTruthy();
+      expect(
+        (screen.getByRole("button", { name: "Retry node" }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+    },
+  );
+
+  test("a failure is shown only for a parked run that is not halted and has a failed node", () => {
+    renderParked("Node Failed", { run: { ...parked("Node Failed"), isHalted: true } });
+    expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
+    cleanup();
+
+    renderParked("Node Failed", { run: { ...parked("Node Failed"), nodes: [node()] } });
+    expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
+    cleanup();
+
+    renderParked("Node Failed", {
+      run: { ...parked("Node Failed"), status: LoopRunStatus.Running },
     });
+    expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
+    cleanup();
 
-    expect(
-      (screen.getByRole("button", { name: "Resume node" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect(screen.getByText(/no session recorded/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Retry node" }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-  });
-
-  test("is not shown for a run parked for another reason", () => {
-    renderParked({ run: { ...parked(), humanFeedbackReason: "Node Failed" } });
-
+    renderParked("Human Input Needed", { run: parked("Human Input Needed") });
     expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
   });
 });

@@ -15,12 +15,11 @@ public enum RunTerminationKind
 
 /// <summary>
 /// What the run's host says ended the run's container: read before the host removes or replaces it, since the reason is gone
-/// with it. <see cref="LimitBytes"/> and <see cref="PeakBytes"/> are null when the host cannot report them.
+/// with it. <see cref="LimitBytes"/> is null when the host cannot report it.
 /// </summary>
 public sealed record RunTermination(
     RunTerminationKind Kind,
     long? LimitBytes = null,
-    long? PeakBytes = null,
     string? Detail = null,
     DateTimeOffset? EndedAt = null)
 {
@@ -40,13 +39,9 @@ public sealed record RunTermination(
     public string HumanFeedbackReason => Kind == RunTerminationKind.OutOfMemory ? HumanFeedbackReasons.OutOfMemory : HumanFeedbackReasons.NodeFailed;
 
     private string OutOfMemoryText()
-    {
-        var text = LimitBytes is { } limit
-            ? $"The run ran out of memory: its container was killed at the {FormatBytes(limit)} limit (`{LimitSetting}`)"
-            : $"The run ran out of memory: its container was killed for exceeding its memory limit (`{LimitSetting}`)";
-        if (PeakBytes is { } peak) text += $", with a peak use of {FormatBytes(peak)}";
-        return text + ".";
-    }
+        => LimitBytes is { } limit
+            ? $"The run ran out of memory: its container was killed at the {FormatBytes(limit)} limit (`{LimitSetting}`)."
+            : $"The run ran out of memory: its container was killed for exceeding its memory limit (`{LimitSetting}`).";
 
     private static string With(string text, string? detail)
         => string.IsNullOrWhiteSpace(detail) ? text + "." : $"{text}: {detail.Trim()}.";

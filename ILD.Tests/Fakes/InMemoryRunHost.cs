@@ -21,6 +21,15 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
     private readonly List<InMemoryExec> _execs = [];
     private bool _chatUp;
 
+    /// <summary>What the engine says about the run's pod or container: whether it is there, and why it ended when it has.</summary>
+    public bool RunPresent { get; set; } = true;
+
+    public RunTermination? RunEndedBy { get; set; }
+
+    protected override Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct) => Task.FromResult(new RunState(RunPresent, RunEndedBy));
+
+    public void RememberTermination(Guid run, RunTermination termination) => Remember(run, termination);
+
     /// <summary>What a command does once it is started. By default it reads its input to the end and exits 0.</summary>
     public Func<InMemoryExec, Task> OnExec { get; set; } = async exec =>
     {

@@ -102,7 +102,7 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     public Task<ContainerStats?> GetStatsAsync(Guid owner, CancellationToken ct = default) => isolated.GetStatsAsync(owner, ct);
 
-    public Task<RunTermination?> GetTerminationAsync(Guid ownerId, CancellationToken ct = default) => isolated.GetTerminationAsync(ownerId, ct);
+    public Task<RunTermination?> GetTerminationAsync(Guid ownerId, DateTimeOffset? since = null, CancellationToken ct = default) => isolated.GetTerminationAsync(ownerId, since, ct);
 
     // -- Terminal ----------------------------------------------------------------
 

@@ -322,7 +322,9 @@ interface RunsPanelProps {
   onHalt?: () => void | Promise<unknown>;
   /** Restart a node that is Waiting for ILD, stopping its processes. */
   onRestartWaiting?: (note: string) => void | Promise<unknown>;
+  /** Retry the node the current run is parked on after it failed (Node Failed, Out of Memory): it starts over from scratch. */
   onRetryFailed?: (note: string) => void | Promise<unknown>;
+  /** Resume that failed node in the same agent session, from the run's files as they were left. */
   onResumeFailed?: (note: string) => void | Promise<unknown>;
   /** Resume a node that is Waiting for ILD, leaving its processes running. */
   onResumeWaiting?: (note: string) => void | Promise<unknown>;

@@ -56,7 +56,9 @@ public sealed class CmdNodeExecutor : INodeExecutor
         yield return new NodeOutcome.Success(EdgeType.OnSuccess, output);
     }
 
-    private async Task<(bool Ok, string Output, string? Error, RunTermination? Termination)> RunProcessAsync(
+    private sealed record ProcessResult(bool Ok, string Output, string? Error, RunTermination? Termination = null);
+
+    private async Task<ProcessResult> RunProcessAsync(
         IRunHost host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
@@ -83,7 +85,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
         }
         catch (Exception ex)
         {
-            return (false, Combined(), ex.Message, null);
+            return new(false, Combined(), ex.Message);
         }
 
         using var _ = p;
@@ -105,17 +107,17 @@ public sealed class CmdNodeExecutor : INodeExecutor
             // worktree the engine is about to commit and delete. A failed kill
             // means something worth reading, not something to swallow.
             var reaped = await ReapAsync(p);
-            return (false, Combined(), ex.Message + reaped, null);
+            return new(false, Combined(), ex.Message + reaped);
         }
         catch (Exception ex)
         {
-            return (false, Combined(), ex.Message, null);
+            return new(false, Combined(), ex.Message);
         }
         if (p.ExitCode != 0)
             return p.Termination is { Kind: not RunTerminationKind.Other } ended
-                ? (false, Combined(), ended.Describe(), ended)
-                : (false, Combined(), $"exit code {p.ExitCode}", null);
-        return (true, Combined(), null, null);
+                ? new(false, Combined(), ended.Describe(), ended)
+                : new(false, Combined(), $"exit code {p.ExitCode}");
+        return new(true, Combined(), null);
     }
 
     private Task PumpAsync(StreamReader reader, StringBuilder into, Func<string, Task>? progress)

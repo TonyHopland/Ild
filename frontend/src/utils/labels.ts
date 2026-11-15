@@ -50,21 +50,30 @@ export function workItemStatusTone(status: WorkItemStatus | string): Tone {
  * Why an item waits in Needs you. The reasons are a fixed set the engine writes
  * (HumanFeedbackReasons); an unknown one is shown as written.
  */
-const FEEDBACK_REASON: Record<string, { label: string; tone: Tone }> = {
+/** The reasons the UI acts on, as the engine writes them. */
+export const FEEDBACK_REASON = {
+  NodeFailed: "Node Failed",
+  OutOfMemory: "Out of Memory",
+} as const;
+
+/** The setting that gives a run's memory limit, which an out-of-memory failure tells a person to raise. */
+export const RUN_MEMORY_LIMIT_SETTING = "ILD_RUN_MEMORY_LIMIT";
+
+const FEEDBACK_REASON_DISPLAY: Record<string, { label: string; tone: Tone }> = {
   "Human Input Needed": { label: "Human input needed", tone: "attention" },
-  "Node Failed": { label: "Node failed", tone: "danger" },
-  "Out of Memory": { label: "Out of memory", tone: "danger" },
+  [FEEDBACK_REASON.NodeFailed]: { label: "Node failed", tone: "danger" },
+  [FEEDBACK_REASON.OutOfMemory]: { label: "Out of memory", tone: "danger" },
   "PR Awaiting Merge": { label: "PR awaiting merge", tone: "info" },
   "Rebase Conflict": { label: "Rebase conflict", tone: "attention" },
   "Waiting for ILD": { label: "Waiting for ILD", tone: "info" },
 };
 
 export function feedbackReasonLabel(reason: string): string {
-  return FEEDBACK_REASON[reason]?.label ?? reason;
+  return FEEDBACK_REASON_DISPLAY[reason]?.label ?? reason;
 }
 
 export function feedbackReasonTone(reason: string): Tone {
-  return FEEDBACK_REASON[reason]?.tone ?? "attention";
+  return FEEDBACK_REASON_DISPLAY[reason]?.tone ?? "attention";
 }
 
 const RUN_STATUS: Record<LoopRunStatus, { label: string; tone: Tone }> = {

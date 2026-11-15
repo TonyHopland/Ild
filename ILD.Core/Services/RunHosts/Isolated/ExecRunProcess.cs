@@ -19,12 +19,12 @@ internal sealed class ExecRunProcess : IRunProcess
     private int _exitCode;
 
     private readonly Action? _onExit;
-    private readonly Func<CancellationToken, Task<RunTermination?>>? _readTermination;
+    private readonly Func<DateTimeOffset, CancellationToken, Task<RunTermination?>>? _readTermination;
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
     private volatile bool _killRequested;
 
     /// <param name="onExit">Called once the command has ended, whatever way it did.</param>
-    public ExecRunProcess(IExecStream exec, string where, string commandId, bool redirectInput, Func<string, CancellationToken, Task<bool>> kill, Action? onExit = null, Func<CancellationToken, Task<RunTermination?>>? readTermination = null)
+    public ExecRunProcess(IExecStream exec, string where, string commandId, bool redirectInput, Func<string, CancellationToken, Task<bool>> kill, Action? onExit = null, Func<DateTimeOffset, CancellationToken, Task<RunTermination?>>? readTermination = null)
     {
         _onExit = onExit;
         _readTermination = readTermination;
@@ -111,11 +111,11 @@ internal sealed class ExecRunProcess : IRunProcess
         using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         try
         {
-            var termination = await _readTermination(limit.Token);
-            return termination?.EndedAt is { } endedAt && endedAt < _startedAt ? null : termination;
+            return await _readTermination(_startedAt, limit.Token);
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
+        catch (Exception)
         {
+            // Why it ended is a courtesy to the reader: the command's own exit stands when the host cannot say.
             return null;
         }
     }

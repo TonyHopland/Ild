@@ -4,6 +4,7 @@ using ILD.Core.Services.RunHosts.Container;
 using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Kubernetes;
 using ILD.Data.Enums;
+using ILD.Tests.Fakes;
 using k8s.Models;
 
 namespace ILD.Tests;
@@ -19,9 +20,6 @@ public sealed class RunTerminationTests
         Assert.Equal(
             "The run ran out of memory: its container was killed at the 4Gi limit (`ILD_RUN_MEMORY_LIMIT`).",
             new RunTermination(RunTerminationKind.OutOfMemory, FourGi).Describe());
-        Assert.Equal(
-            "The run ran out of memory: its container was killed at the 4Gi limit (`ILD_RUN_MEMORY_LIMIT`), with a peak use of 3.5Gi.",
-            new RunTermination(RunTerminationKind.OutOfMemory, FourGi, PeakBytes: 3584L * 1024 * 1024).Describe());
         Assert.StartsWith("The run ran out of memory: its container was killed for exceeding its memory limit", new RunTermination(RunTerminationKind.OutOfMemory).Describe());
     }
 
@@ -56,7 +54,7 @@ public sealed class RunTerminationTests
     {
         var reads = 0;
         using var process = new ExecRunProcess(new StubExec(status), "pod", "owner/id", redirectInput: false, (_, _) => Task.FromResult(true),
-            readTermination: _ => { reads++; return Task.FromResult(reported); });
+            readTermination: (_, _) => { reads++; return Task.FromResult(reported); });
         await process.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         return (process.Termination, reads);
     }
@@ -85,19 +83,50 @@ public sealed class RunTerminationTests
         Assert.Equal(0, reads);
     }
 
-    [Fact]
-    public async Task A_termination_that_predates_the_command_is_not_its_cause()
-    {
-        var (termination, _) = await EndedWith(137, new RunTermination(RunTerminationKind.OutOfMemory, FourGi, EndedAt: DateTimeOffset.UtcNow.AddHours(-1)));
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-        Assert.Null(termination);
+    [Fact]
+    public async Task An_old_out_of_memory_kill_is_not_reported_for_a_later_unrelated_exit_after_the_pod_is_replaced()
+    {
+        var host = new InMemoryRunHost();
+        var run = Guid.NewGuid();
+        host.RememberTermination(run, new RunTermination(RunTerminationKind.OutOfMemory, FourGi, EndedAt: DateTimeOffset.UtcNow.AddMinutes(-5)));
+        var laterCommandStarted = DateTimeOffset.UtcNow.AddMinutes(-1);
+
+        Assert.Null(await host.GetTerminationAsync(run, laterCommandStarted, Ct));
+        Assert.Equal(RunTerminationKind.OutOfMemory, (await host.GetTerminationAsync(run, DateTimeOffset.UtcNow.AddMinutes(-10), Ct))!.Kind);
+    }
+
+    [Fact]
+    public async Task A_remembered_ending_with_no_time_is_not_used_for_a_command_that_started_after_it_was_recorded()
+    {
+        var host = new InMemoryRunHost();
+        var run = Guid.NewGuid();
+        var earlier = DateTimeOffset.UtcNow.AddSeconds(-1);
+        host.RememberTermination(run, new RunTermination(RunTerminationKind.OutOfMemory, FourGi));
+
+        Assert.NotNull(await host.GetTerminationAsync(run, earlier, Ct));
+        Assert.Null(await host.GetTerminationAsync(run, DateTimeOffset.UtcNow.AddSeconds(1), Ct));
+    }
+
+    [Fact]
+    public async Task A_live_ending_is_read_and_a_run_that_is_gone_is_reported_deleted()
+    {
+        var host = new InMemoryRunHost();
+        var run = Guid.NewGuid();
+        host.RunEndedBy = new RunTermination(RunTerminationKind.OutOfMemory, FourGi);
+        Assert.Equal(RunTerminationKind.OutOfMemory, (await host.GetTerminationAsync(run, ct: Ct))!.Kind);
+
+        host.RunEndedBy = null;
+        host.RunPresent = false;
+        Assert.Equal(RunTerminationKind.Deleted, (await host.GetTerminationAsync(Guid.NewGuid(), ct: Ct))!.Kind);
     }
 
     [Fact]
     public async Task A_host_that_cannot_answer_leaves_the_command_as_it_ended()
     {
         using var process = new ExecRunProcess(new StubExec(137), "pod", "owner/id", redirectInput: false, (_, _) => Task.FromResult(true),
-            readTermination: _ => throw new InvalidOperationException("unreachable"));
+            readTermination: (_, _) => throw new InvalidOperationException("unreachable"));
 
         await process.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 

@@ -29,9 +29,6 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     // One replacement of an ended run pod at a time, so concurrent commands on a dead pod make it once.
     private readonly SemaphoreSlim _runPodGate = new(1, 1);
 
-    // What ended a run's pod, kept when the pod is replaced: its record, and the reason in it, goes with the pod.
-    private readonly ConcurrentDictionary<Guid, RunTermination> _terminations = new();
-
     public KubernetesRunHost(
         IKubernetes client, KubernetesRunHostOptions options, string namespaceName, IProcessRunner runner, ILogger? logger = null)
         : base(runner, logger)
@@ -194,21 +191,14 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
         var name = KubernetesNames.ObjectName(owner);
         var pod = await ReadPodOrNullAsync(name, ct);
         if (pod is null || pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return;
-        Remember(owner, pod);
+        Remember(owner, TerminationOf(pod));
         await DeletePodAndWaitAsync(name, ct);
     }
 
-    private void Remember(Guid owner, V1Pod pod)
-    {
-        if (TerminationOf(pod) is { } termination) _terminations[owner] = termination;
-    }
-
-    protected override async Task<RunTermination?> ReadTerminationAsync(Guid run, CancellationToken ct)
+    protected override async Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct)
     {
         var pod = await ReadPodOrNullAsync(KubernetesNames.ObjectName(run), ct);
-        if (pod is null) return _terminations.TryGetValue(run, out var gone) ? gone : new RunTermination(RunTerminationKind.Deleted);
-        Remember(run, pod);
-        return TerminationOf(pod) ?? (_terminations.TryGetValue(run, out var kept) ? kept : null);
+        return pod is null ? new RunState(Found: false, Ended: null) : new RunState(Found: true, TerminationOf(pod));
     }
 
     /// <summary>Why the pod's container ended, from its status; null for a pod whose container has not.</summary>
@@ -259,7 +249,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
             if (IsReady(pod) && pod.Metadata.DeletionTimestamp is null) return true;
             if (pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return false;
 
-            Remember(owner, pod);
+            Remember(owner, TerminationOf(pod));
             Logger?.LogInformation("The pod of run {Run} ended ({Why}); making it again on its volume", owner, WhyNotReady(pod));
             await DeletePodAndWaitAsync(name, ct);
             var fresh = new V1Pod

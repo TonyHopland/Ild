@@ -527,20 +527,10 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
         return stats is null ? ContainerStats.NotRunning : ContainerStatsParser.Parse(stats, inspected);
     }
 
-    // What ended a run's container, kept when it is started again: its state, and the reason in it, goes with the start.
-    private readonly ConcurrentDictionary<Guid, RunTermination> _terminations = new();
-
-    protected override async Task<RunTermination?> ReadTerminationAsync(Guid run, CancellationToken ct)
+    protected override async Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct)
     {
         var inspected = await _api.GetAsync($"/containers/{Escaped(ObjectName(run))}/json", ct, HttpStatusCode.NotFound);
-        if (inspected is null) return _terminations.TryGetValue(run, out var gone) ? gone : new RunTermination(RunTerminationKind.Deleted);
-        Remember(run, inspected);
-        return TerminationOf(inspected) ?? (_terminations.TryGetValue(run, out var kept) ? kept : null);
-    }
-
-    private void Remember(Guid run, JsonNode inspected)
-    {
-        if (TerminationOf(inspected) is { } termination) _terminations[run] = termination;
+        return inspected is null ? new RunState(Found: false, Ended: null) : new RunState(Found: true, TerminationOf(inspected));
     }
 
     /// <summary>Why the container ended, from its inspection; null for one that is running.</summary>
@@ -562,7 +552,7 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
     private async Task<bool> RunContainerStoppedAsync(Guid owner, CancellationToken ct)
     {
         var container = await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct, HttpStatusCode.NotFound);
-        if (container is not null) Remember(owner, container);
+        if (container is not null) Remember(owner, TerminationOf(container));
         return container?["State"]?["Status"]?.GetValue<string>() is "exited" or "stopped" or "created";
     }
 
