@@ -25,8 +25,7 @@ public sealed class ExternalAgentGrantService(AppDbContext db) : IExternalAgentG
         if (trimmed.Length > IExternalAgentGrantService.MaxNameLength)
             throw new ArgumentException($"A name may be at most {IExternalAgentGrantService.MaxNameLength} characters.", nameof(name));
 
-        var token = TokenPrefix + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
-            .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+        var token = NewToken();
         var now = DateTime.UtcNow;
         var grant = new ExternalAgentGrant
         {
@@ -45,6 +44,48 @@ public sealed class ExternalAgentGrantService(AppDbContext db) : IExternalAgentG
         await db.ExternalAgentGrantActivities.Where(a => a.At < activityCutoff).ExecuteDeleteAsync(ct);
         return new IssuedExternalAgentGrant(grant, token);
     }
+
+    public async Task<IssuedExternalAgentGrant?> RenewAsync(
+        Guid id, TimeSpan lifetime, ExternalAgentGrantScope scope, string? newName, CancellationToken ct = default)
+    {
+        if (IExternalAgentGrantService.ValidateLifetime(lifetime) is { } problem)
+            throw new ArgumentOutOfRangeException(nameof(lifetime), problem);
+        var trimmed = newName?.Trim();
+        if (trimmed is { Length: > IExternalAgentGrantService.MaxNameLength })
+            throw new ArgumentException($"A name may be at most {IExternalAgentGrantService.MaxNameLength} characters.", nameof(newName));
+
+        var grant = await db.ExternalAgentGrants.FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (grant is null)
+            return null;
+
+        var now = DateTime.UtcNow;
+        var previous = IExternalAgentGrantService.StatusOf(grant, now);
+        var token = NewToken();
+        if (!string.IsNullOrEmpty(trimmed))
+            grant.Name = trimmed;
+        grant.TokenHash = SessionTokenHasher.Hash(token);
+        grant.ExpiresAt = now + lifetime;
+        grant.Scope = scope;
+        grant.RevokedAt = null;
+
+        var summary = $"renewed: expires {grant.ExpiresAt:O}, scope {scope}"
+            + (previous == ExternalAgentGrantStatus.Active ? "" : $", reactivated from {previous.ToString().ToLowerInvariant()}");
+        db.ExternalAgentGrantActivities.Add(new ExternalAgentGrantActivity
+        {
+            Id = Guid.NewGuid(),
+            GrantId = id,
+            At = now,
+            Method = "RENEW",
+            Path = Truncate(summary, 512),
+            StatusCode = 200,
+        });
+        await db.SaveChangesAsync(ct);
+        return new IssuedExternalAgentGrant(grant, token);
+    }
+
+    private static string NewToken()
+        => TokenPrefix + Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=');
 
     public async Task<ExternalAgentGrantIdentity?> AuthenticateAsync(string token, CancellationToken ct = default)
     {

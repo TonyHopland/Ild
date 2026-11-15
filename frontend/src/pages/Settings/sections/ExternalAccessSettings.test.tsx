@@ -156,6 +156,50 @@ describe("Share access with an AI", () => {
     expect(within(activity).getByText("403")).toBeTruthy();
   });
 
+  test("renews a grant with a new lifetime and rights and shows the new token once", async () => {
+    const list = vi
+      .spyOn(externalGrantService, "list")
+      .mockResolvedValueOnce([
+        grant({ status: "revoked", revokedAt: new Date().toISOString(), scope: "Full" }),
+      ])
+      .mockResolvedValue([grant({ scope: "ReadOnly" })]);
+    const renew = vi.spyOn(externalGrantService, "renew").mockResolvedValue({
+      grant: grant({ scope: "ReadOnly" }),
+      token: "ildg_renewed",
+    });
+    renderPage();
+    await screen.findByText("Claude Code");
+
+    fireEvent.click(screen.getByRole("button", { name: "Renew Claude Code" }));
+    const dialog = await screen.findByRole("dialog", { name: "Renew Claude Code" });
+    expect(within(dialog).getByText(/previous token stops working immediately/)).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText("Lasts"), { target: { value: "10080" } });
+    fireEvent.change(within(dialog).getByLabelText("Rights"), { target: { value: "ReadOnly" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Renew and show new token" }));
+
+    await screen.findByText("ildg_renewed");
+    expect(renew).toHaveBeenCalledWith("g1", { lifetimeMinutes: 10080, scope: "ReadOnly" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText("active")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByText("ildg_renewed")).toBeNull();
+  });
+
+  test("cancelling the renewal leaves the grant alone", async () => {
+    vi.spyOn(externalGrantService, "list").mockResolvedValue([grant()]);
+    const renew = vi.spyOn(externalGrantService, "renew");
+    renderPage();
+    await screen.findByText("Claude Code");
+
+    fireEvent.click(screen.getByRole("button", { name: "Renew Claude Code" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(renew).not.toHaveBeenCalled();
+  });
+
   test("says so when loading fails", async () => {
     vi.spyOn(externalGrantService, "list").mockRejectedValue(new Error("boom"));
 

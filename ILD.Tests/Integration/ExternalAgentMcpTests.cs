@@ -83,6 +83,21 @@ public class ExternalAgentMcpTests(ExternalAgentMcpTests.Host host) : IClassFixt
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+
+    [Fact]
+    public async Task A_renewed_token_works_on_the_endpoint_and_the_old_one_is_refused()
+    {
+        var (id, oldToken) = await CreateGrantAsync();
+        var response = await host.Operator.PostAsJsonAsync($"/api/v1/external-grants/{id}/renew", new { lifetimeMinutes = 60, scope = "Full" }, Ct);
+        var newToken = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct)).RootElement.GetProperty("token").GetString()!;
+
+        var old = host.Factory.CreateClient();
+        old.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", oldToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await old.PostAsync("/mcp", new StringContent("{}", System.Text.Encoding.UTF8, "application/json"), Ct)).StatusCode);
+
+        await using var client = await ConnectAsync(newToken);
+        Assert.NotEmpty(await client.ListToolsAsync(cancellationToken: Ct));
+    }
     [Fact]
     public async Task A_get_or_delete_on_the_endpoint_is_a_405_and_not_a_403()
     {

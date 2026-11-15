@@ -521,4 +521,157 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
         for (var i = 0; i < 5; i++)
             Assert.Equal(HttpStatusCode.OK, (await operatorClient.GetAsync("/api/v1/agent/repositories", Ct)).StatusCode);
     }
+
+    private async Task<HttpResponseMessage> RenewAsync(Guid id, object body)
+        => await host.Operator.PostAsJsonAsync($"/api/v1/external-grants/{id}/renew", body, Ct);
+
+    private async Task<Issued> RenewedAsync(Issued grant, int lifetimeMinutes = 120, string scope = "Full", string? name = null)
+    {
+        var response = await RenewAsync(grant.Id, new { name, lifetimeMinutes, scope });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await ReadAsync(response);
+        return new Issued(json.GetProperty("grant").GetProperty("id").GetGuid(), json.GetProperty("token").GetString()!);
+    }
+
+    [Fact]
+    public async Task Renewing_replaces_the_token_and_keeps_the_session()
+    {
+        var grant = await CreateGrantAsync("renew-me");
+        var item = await CreateItemAsync(grant, "mine");
+        var other = await CreateOperatorItemAsync();
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(grant, HttpMethod.Get, "/api/v1/agent/repositories")).StatusCode);
+        var before = (await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{grant.Id}", Ct))).GetProperty("grant");
+
+        var renewed = await RenewedAsync(grant);
+
+        Assert.Equal(grant.Id, renewed.Id);
+        Assert.NotEqual(grant.Token, renewed.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await SendAsync(grant, HttpMethod.Get, "/api/v1/agent/repositories")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(renewed, HttpMethod.Get, "/api/v1/agent/repositories")).StatusCode);
+
+        var after = (await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{grant.Id}", Ct))).GetProperty("grant");
+        Assert.Equal("renew-me", after.GetProperty("name").GetString());
+        Assert.Equal(before.GetProperty("createdAt").GetDateTime(), after.GetProperty("createdAt").GetDateTime());
+        Assert.NotEqual(JsonValueKind.Null, after.GetProperty("lastUsedAt").ValueKind);
+
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(renewed, HttpMethod.Put, $"/api/v1/agent/workitems/{item}", new { title = "edited", description = "" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(renewed, HttpMethod.Put, $"/api/v1/agent/workitems/{other}", new { title = "nope", description = "" })).StatusCode);
+        var proposal = await SendAsync(renewed, HttpMethod.Post, $"/api/v1/agent/workitems/{other}/edit-proposals", new { description = "better", rationale = "clearer" });
+        Assert.Equal(HttpStatusCode.Created, proposal.StatusCode);
+    }
+
+    [Fact]
+    public async Task Renewing_does_not_reset_last_used()
+    {
+        var grant = await CreateGrantAsync();
+        await SendAsync(grant, HttpMethod.Get, "/api/v1/agent/repositories", null, ("X-Forwarded-For", "203.0.113.9"));
+        var before = (await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{grant.Id}", Ct))).GetProperty("grant");
+
+        await RenewedAsync(grant);
+
+        var after = (await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{grant.Id}", Ct))).GetProperty("grant");
+        Assert.Equal(before.GetProperty("lastUsedAt").GetDateTime(), after.GetProperty("lastUsedAt").GetDateTime());
+        Assert.Equal(before.GetProperty("lastUsedFrom").ValueKind, after.GetProperty("lastUsedFrom").ValueKind);
+        Assert.Equal(before.GetProperty("lastUsedFrom").GetString(), after.GetProperty("lastUsedFrom").GetString());
+    }
+
+    [Fact]
+    public async Task Rights_and_expiry_come_from_the_renewal_and_a_name_can_change()
+    {
+        var grant = await CreateGrantAsync("old-name", 60, "Full");
+
+        var renewed = await RenewedAsync(grant, 600, "ReadOnly", " new-name ");
+
+        var view = (await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{grant.Id}", Ct))).GetProperty("grant");
+        Assert.Equal("ReadOnly", view.GetProperty("scope").GetString());
+        Assert.Equal("new-name", view.GetProperty("name").GetString());
+        var left = view.GetProperty("expiresAt").GetDateTime() - DateTime.UtcNow;
+        Assert.InRange(left, TimeSpan.FromMinutes(595), TimeSpan.FromMinutes(601));
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(renewed, HttpMethod.Post, "/api/v1/agent/workitems",
+            new { title = "x", description = "", repositoryId = host.RepositoryId.ToString() })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Renewing_a_revoked_grant_makes_it_active_and_is_logged()
+    {
+        var grant = await CreateGrantAsync();
+        await host.Operator.PostAsync($"/api/v1/external-grants/{grant.Id}/revoke", null, Ct);
+
+        var renewed = await RenewedAsync(grant);
+
+        var detail = await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{grant.Id}", Ct));
+        Assert.Equal("active", detail.GetProperty("grant").GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, detail.GetProperty("grant").GetProperty("revokedAt").ValueKind);
+        var entry = Assert.Single(detail.GetProperty("activity").EnumerateArray(), a => a.GetProperty("method").GetString() == "RENEW");
+        Assert.Contains("reactivated from revoked", entry.GetProperty("path").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(renewed, HttpMethod.Get, "/api/v1/agent/repositories")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Renewing_an_expired_grant_makes_it_active_and_an_active_one_is_logged_without_reactivation()
+    {
+        var expired = await CreateGrantAsync();
+        using (var scope = host.Factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.ExternalAgentGrants.Where(g => g.Id == expired.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(g => g.ExpiresAt, DateTime.UtcNow.AddSeconds(-1)), Ct);
+        }
+        var active = await CreateGrantAsync();
+
+        var renewed = await RenewedAsync(expired);
+        await RenewedAsync(active);
+
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(renewed, HttpMethod.Get, "/api/v1/agent/repositories")).StatusCode);
+        var expiredDetail = await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{expired.Id}", Ct));
+        Assert.Equal("active", expiredDetail.GetProperty("grant").GetProperty("status").GetString());
+        Assert.Contains("reactivated from expired", Assert.Single(expiredDetail.GetProperty("activity").EnumerateArray(), a => a.GetProperty("method").GetString() == "RENEW").GetProperty("path").GetString());
+        var activeDetail = await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{active.Id}", Ct));
+        Assert.DoesNotContain("reactivated", Assert.Single(activeDetail.GetProperty("activity").EnumerateArray()).GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public async Task Renewing_stores_only_the_hash_of_the_new_token()
+    {
+        var grant = await CreateGrantAsync();
+
+        var renewed = await RenewedAsync(grant);
+
+        using var scope = host.Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var row = await db.ExternalAgentGrants.AsNoTracking().SingleAsync(g => g.Id == grant.Id, Ct);
+        Assert.Equal(SessionTokenHasher.Hash(renewed.Token), row.TokenHash);
+        var detail = await host.Operator.GetStringAsync($"/api/v1/external-grants/{grant.Id}", Ct);
+        Assert.DoesNotContain(renewed.Token, detail);
+        Assert.DoesNotContain(renewed.Token, await host.Operator.GetStringAsync("/api/v1/external-grants", Ct));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    [InlineData(7 * 24 * 60 + 1)]
+    public async Task A_renewal_lifetime_that_is_not_positive_or_longer_than_a_week_is_refused_and_changes_nothing(int minutes)
+    {
+        var grant = await CreateGrantAsync();
+
+        var response = await RenewAsync(grant.Id, new { lifetimeMinutes = minutes, scope = "Full" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(grant, HttpMethod.Get, "/api/v1/agent/repositories")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Renewing_an_unknown_grant_is_a_404()
+        => Assert.Equal(HttpStatusCode.NotFound, (await RenewAsync(Guid.NewGuid(), new { lifetimeMinutes = 60, scope = "Full" })).StatusCode);
+
+    [Fact]
+    public async Task A_grant_token_and_an_anonymous_caller_cannot_renew()
+    {
+        var grant = await CreateGrantAsync();
+        var body = new { lifetimeMinutes = 60, scope = "Full" };
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/external-grants/{grant.Id}/renew", body)).StatusCode);
+        var anonymous = await host.Factory.CreateClient().PostAsJsonAsync($"/api/v1/external-grants/{grant.Id}/renew", body, Ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+    }
 }
