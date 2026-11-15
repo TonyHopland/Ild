@@ -327,9 +327,14 @@ describe("a card held by two columns", () => {
     });
 
   test("is taken out of both by a live copy that moves it", () => {
-    const next = applyItem(twice(), { ...running, status: WorkItemStatus.Done }, EMPTY_TASKBOARD_FILTER, {
-      countAsNew: false,
-    });
+    const next = applyItem(
+      twice(),
+      { ...running, status: WorkItemStatus.Done },
+      EMPTY_TASKBOARD_FILTER,
+      {
+        countAsNew: false,
+      },
+    );
 
     expect(ids(next, WorkItemStatus.Running)).toEqual([]);
     expect(ids(next, WorkItemStatus.HumanFeedback)).toEqual([]);

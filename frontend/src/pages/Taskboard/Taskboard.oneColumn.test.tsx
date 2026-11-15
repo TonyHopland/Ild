@@ -119,7 +119,11 @@ function board() {
 }
 
 /** Every read the server answers by hand: its answer is what the server holds when it is released, or when it was asked. */
-function holdReads(server: ReturnType<typeof board>["server"], held: HeldRead[], random: () => number) {
+function holdReads(
+  server: ReturnType<typeof board>["server"],
+  held: HeldRead[],
+  random: () => number,
+) {
   const hold = <T,>(label: string, read: () => T): Promise<T> => {
     const asked = read();
     const askedFirst = random() < 0.5;

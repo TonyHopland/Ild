@@ -33,6 +33,7 @@ describe("labels", () => {
     expect(feedbackReasonLabel("Waiting for ILD")).toBe("Waiting for ILD");
     expect(feedbackReasonLabel("Node Failed")).toBe("Node failed");
     expect(feedbackReasonTone("Node Failed")).toBe("danger");
+    expect(feedbackReasonLabel("Out of Memory")).toBe("Out of memory");
     expect(feedbackReasonTone("PR Awaiting Merge")).toBe("info");
     expect(feedbackReasonLabel("Something New")).toBe("Something New");
   });

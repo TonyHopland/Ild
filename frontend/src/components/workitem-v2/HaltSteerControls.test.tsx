@@ -538,3 +538,84 @@ describe("HaltSteerControls while a node is Waiting for ILD", () => {
     expect(screen.queryByRole("button", { name: "Restart node" })).toBeNull();
   });
 });
+
+describe("HaltSteerControls after an out-of-memory kill", () => {
+  const OOM_ERROR =
+    "The run ran out of memory: its container was killed at the 4Gi limit (`ILD_RUN_MEMORY_LIMIT`).";
+
+  function parked(nodeOverrides: Partial<LoopRunNode> = {}) {
+    return run({
+      status: LoopRunStatus.WaitingHuman,
+      isHalted: false,
+      humanFeedbackReason: "Out of Memory",
+      nodes: [
+        node({
+          status: LoopRunNodeStatus.Failed,
+          error: OOM_ERROR,
+          canResume: true,
+          ...nodeOverrides,
+        }),
+      ],
+    });
+  }
+
+  function renderParked(props: Partial<Parameters<typeof HaltSteerControls>[0]> = {}) {
+    const onRetryFailed = vi.fn();
+    const onResumeFailed = vi.fn();
+    render(
+      <HaltSteerControls
+        run={parked()}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onRetryFailed={onRetryFailed}
+        onResumeFailed={onResumeFailed}
+        {...props}
+      />,
+      { wrapper: MemoryRouter },
+    );
+    return { onRetryFailed, onResumeFailed };
+  }
+
+  test("shows the error with Retry and Resume, and retries with the note after confirming", () => {
+    const { onRetryFailed, onResumeFailed } = renderParked();
+
+    expect(screen.getByText(OOM_ERROR)).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "one project at a time" } });
+    fireEvent.click(screen.getByRole("button", { name: "Retry node" }));
+    expect(screen.getByText(/likely to run out of memory again/i)).toBeTruthy();
+    expect(onRetryFailed).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm retry" }));
+
+    expect(onRetryFailed).toHaveBeenCalledWith("one project at a time");
+    expect(onResumeFailed).not.toHaveBeenCalled();
+  });
+
+  test("resumes after confirming, and says it keeps the session and the run's files", () => {
+    const { onResumeFailed } = renderParked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume node" }));
+    expect(screen.getByText(/same agent session/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm resume" }));
+
+    expect(onResumeFailed).toHaveBeenCalledWith("");
+  });
+
+  test("offers Retry only when the session cannot be restored, and says why", () => {
+    renderParked({
+      run: parked({ canResume: false, resumeUnavailableReason: "no session recorded" }),
+    });
+
+    expect(
+      (screen.getByRole("button", { name: "Resume node" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/no session recorded/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Retry node" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  test("is not shown for a run parked for another reason", () => {
+    renderParked({ run: { ...parked(), humanFeedbackReason: "Node Failed" } });
+
+    expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
+  });
+});

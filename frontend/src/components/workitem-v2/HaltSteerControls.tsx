@@ -26,6 +26,13 @@ interface HaltSteerControlsProps {
    * gets only the optional note.
    */
   onResumeWaiting?: (note: string) => void | Promise<unknown>;
+  /**
+   * Retry the node a run is parked on after its container ran out of memory: it starts over from scratch, with the
+   * optional note after its prompt. Offered with `onResumeFailed`.
+   */
+  onRetryFailed?: (note: string) => void | Promise<unknown>;
+  /** Resume that node in the same agent session, from the run's files as they were left. */
+  onResumeFailed?: (note: string) => void | Promise<unknown>;
   /** Resume a halted run with optional steering guidance. */
   onResumeSteer?: (note: string) => void | Promise<unknown>;
   /** Cleanup handlers reused for a halted run. */
@@ -40,6 +47,8 @@ interface HaltSteerControlsProps {
   /** Another action on this run is in flight: every control here waits for it. */
   blocked?: boolean;
 }
+
+const OUT_OF_MEMORY = "Out of Memory";
 
 // The run/node status fields arrive as strings from the API but can be numeric
 // in some payloads; normalize both so the control shows reliably.
@@ -126,6 +135,8 @@ export default function HaltSteerControls({
   onResumeSteer,
   onRestartWaiting,
   onResumeWaiting,
+  onRetryFailed,
+  onResumeFailed,
   onCleanupDone,
   onCleanupBacklog,
   showAbandon = true,
@@ -138,6 +149,7 @@ export default function HaltSteerControls({
   const [steerNote, setSteerNote] = useState("");
   const [confirmingWaiting, setConfirmingWaiting] = useState<"restart" | "resume" | null>(null);
   const [actingWaiting, setActingWaiting] = useState(false);
+  const [confirmingFailed, setConfirmingFailed] = useState<"retry" | "resume" | null>(null);
   const [errorText, setErrorText] = useState("");
 
   if (!run) return null;
@@ -155,6 +167,15 @@ export default function HaltSteerControls({
   // too many cycles), and the person can restart or resume the node meanwhile.
   const childWait =
     isHalted && !!run.childWait && !!onRestartWaiting && !!onResumeWaiting ? run.childWait : null;
+  // The node the run is parked on after its container ran out of memory.
+  const outOfMemory =
+    isWaitingHuman &&
+    !run.isHalted &&
+    run.humanFeedbackReason === OUT_OF_MEMORY &&
+    !!onRetryFailed &&
+    !!onResumeFailed
+      ? (run.nodes?.filter((n) => n.status === LoopRunNodeStatus.Failed).pop() ?? null)
+      : null;
   const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
   // human feedback — so a run heading the wrong way can be dropped without
@@ -163,7 +184,7 @@ export default function HaltSteerControls({
   const canAbandon =
     showAbandon && !!onCleanupBacklog && (isRunningStatus || isWaitingHuman) && !isHalted;
 
-  if (!canHalt && !canAbandon && !isHalted) return null;
+  if (!canHalt && !canAbandon && !isHalted && !outOfMemory) return null;
 
   const handleHalt = async () => {
     if (!onHalt) return;
@@ -201,6 +222,22 @@ export default function HaltSteerControls({
       await act(steerNote);
       setSteerNote("");
       setConfirmingWaiting(null);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : `Failed to ${action} the node.`);
+    } finally {
+      setActingWaiting(false);
+    }
+  };
+
+  const handleFailedAction = async (action: "retry" | "resume") => {
+    const act = action === "retry" ? onRetryFailed : onResumeFailed;
+    if (!act) return;
+    setErrorText("");
+    setActingWaiting(true);
+    try {
+      await act(steerNote);
+      setSteerNote("");
+      setConfirmingFailed(null);
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : `Failed to ${action} the node.`);
     } finally {
@@ -281,6 +318,94 @@ export default function HaltSteerControls({
                 Abandon run
               </button>
             ))}
+        </div>
+      )}
+      {outOfMemory && (
+        <div className="wiv2-feedback">
+          <div className="wiv2-feedback-title">Out of memory — retry or resume</div>
+          <div className="feedback-reason">{outOfMemory.error}</div>
+          {!outOfMemory.canResume && (
+            <div className="feedback-reason">
+              This node cannot be resumed
+              {outOfMemory.resumeUnavailableReason
+                ? `: ${outOfMemory.resumeUnavailableReason}`
+                : ""}
+              . Retry starts it over.
+            </div>
+          )}
+          <textarea
+            className="feedback-textarea"
+            value={steerNote}
+            onChange={(e) => setSteerNote(e.target.value)}
+            placeholder="Optional note for the agent — leave blank to add nothing…"
+            rows={3}
+          />
+          <div className="feedback-actions">
+            {confirmingFailed ? (
+              <span
+                className="wiv2-abandon-confirm"
+                role="group"
+                aria-label={
+                  confirmingFailed === "retry" ? "Confirm retry node" : "Confirm resume node"
+                }
+              >
+                <span className="wiv2-abandon-prompt">
+                  {confirmingFailed === "retry"
+                    ? "Retry starts this node again from scratch. The agent is told the previous attempt ran out of memory; anything you typed above is added after its prompt."
+                    : "Resume continues this node in the same agent session, from its saved session and the run's files as they were left, so finished work is not redone. The agent is told it ran out of memory; anything you typed above is added."}{" "}
+                  The same work is likely to run out of memory again unless the memory limit
+                  (ILD_RUN_MEMORY_LIMIT) is raised or the node does less at once.
+                </span>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${confirmingFailed === "retry" ? "btn-danger" : "btn-primary"}`}
+                  onClick={() => void handleFailedAction(confirmingFailed)}
+                  disabled={actingWaiting || blocked}
+                >
+                  {confirmingFailed === "retry"
+                    ? actingWaiting
+                      ? "Retrying…"
+                      : "Confirm retry"
+                    : actingWaiting
+                      ? "Resuming…"
+                      : "Confirm resume"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => setConfirmingFailed(null)}
+                  disabled={actingWaiting}
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  onClick={() => setConfirmingFailed("retry")}
+                  disabled={blocked}
+                  title="Start this node again from scratch"
+                >
+                  Retry node
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={() => setConfirmingFailed("resume")}
+                  disabled={blocked || !outOfMemory.canResume}
+                  title={
+                    outOfMemory.canResume
+                      ? "Continue this node in the same agent session"
+                      : (outOfMemory.resumeUnavailableReason ?? "This node cannot be resumed")
+                  }
+                >
+                  Resume node
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
       {isHalted && (

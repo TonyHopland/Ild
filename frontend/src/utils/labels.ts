@@ -53,6 +53,7 @@ export function workItemStatusTone(status: WorkItemStatus | string): Tone {
 const FEEDBACK_REASON: Record<string, { label: string; tone: Tone }> = {
   "Human Input Needed": { label: "Human input needed", tone: "attention" },
   "Node Failed": { label: "Node failed", tone: "danger" },
+  "Out of Memory": { label: "Out of memory", tone: "danger" },
   "PR Awaiting Merge": { label: "PR awaiting merge", tone: "info" },
   "Rebase Conflict": { label: "Rebase conflict", tone: "attention" },
   "Waiting for ILD": { label: "Waiting for ILD", tone: "info" },

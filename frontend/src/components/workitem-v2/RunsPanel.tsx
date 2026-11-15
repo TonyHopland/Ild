@@ -322,6 +322,8 @@ interface RunsPanelProps {
   onHalt?: () => void | Promise<unknown>;
   /** Restart a node that is Waiting for ILD, stopping its processes. */
   onRestartWaiting?: (note: string) => void | Promise<unknown>;
+  onRetryFailed?: (note: string) => void | Promise<unknown>;
+  onResumeFailed?: (note: string) => void | Promise<unknown>;
   /** Resume a node that is Waiting for ILD, leaving its processes running. */
   onResumeWaiting?: (note: string) => void | Promise<unknown>;
   /** Resume a halted run with optional steering guidance. */
@@ -407,6 +409,8 @@ function RunDetail({
   onHalt,
   onResumeSteer,
   onRestartWaiting,
+  onRetryFailed,
+  onResumeFailed,
   onResumeWaiting,
   onCleanupDone,
   onCleanupBacklog,
@@ -723,6 +727,8 @@ function RunDetail({
         onHalt={holdingCurrentRun("halt", onHalt)}
         onResumeSteer={holdingCurrentRun("steer", onResumeSteer)}
         onRestartWaiting={holdingCurrentRun("steer", onRestartWaiting)}
+        onRetryFailed={holdingCurrentRun("steer", onRetryFailed)}
+        onResumeFailed={holdingCurrentRun("steer", onResumeFailed)}
         onResumeWaiting={holdingCurrentRun("steer", onResumeWaiting)}
         onCleanupDone={holdingCurrentRun("abandon", onCleanupDone)}
         onCleanupBacklog={holdingCurrentRun("abandon", onCleanupBacklog)}

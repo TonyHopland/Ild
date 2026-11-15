@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **Give a shared AI control of the work.** A new access level lets an outside AI start work items and answer their human-feedback questions, so it can take an item from Backlog to done without you.
@@ -69,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **On Kubernetes, Settings warns when the run namespace has no default-deny NetworkPolicy.**
 - **A failed or interrupted AI step can be resumed, not only retried.** Resume continues the agent's earlier session where it left off; Retry starts the step over.
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **BREAKING — Docker Compose now needs your container engine's socket.** Set `ILD_CONTAINER_SOCKET_HOST` in `.env` before you upgrade.
@@ -110,6 +118,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Edit a network rule or forward in place instead of removing and re-adding it.**
 - **A new Off network mode lets agents connect directly to any host and port, without the proxy.**
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **Links to other sites and to previews open in a new tab.**
@@ -129,6 +141,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Files an agent saves into a worktree, such as screenshots, open in the Files tab instead of failing, and a file that still cannot be read says so.**
 
 ## [0.22.0] - 2026-10-27
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -155,6 +171,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.21.0] - 2026-10-23
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **A run's worktree, local branch and AI session data are removed as soon as it ends, and the run itself is kept for 14 days by default.** This replaces 0.19.0's default of 0: installs that never changed the retention setting move from 0 to 14 days.
@@ -170,6 +190,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node tools an agent runs, corepack among them, reach the network through the egress proxy instead of timing out.**
 
 ## [0.20.0] - 2026-10-22
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -190,6 +214,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Going Back right after starting a chat shows the start form, not the new chat.**
 
 ## [0.19.0] - 2026-10-21
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -263,6 +291,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A searchable list of your chats sits beside the chat, marks unread ones, lets you star favourites, and replaces the Back button.**
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **Remote providers and repositories share one page, with each provider's repositories listed in its card.**
@@ -311,6 +343,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A pushed branch's name on a work item's Overview opens the branch on its forge.**
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **AI and Condition node settings no longer list outputs: they come from the match rules, cases and default.**
@@ -347,6 +383,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Repositories and remote providers have a Test button that tells you whether the server can't be reached, the API key is missing or wrong, or something else is failing.**
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **Cmd nodes now run as the agent user and can no longer read ILD's own secrets.** A command that relied on ILD's environment or on files only ILD can read must now be given its own configuration.
@@ -360,6 +400,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Opening a work item now shows its Action tab while it is running, waiting on you or waiting on ILD, and its Overview tab otherwise.**
 
 ## [0.14.0] - 2026-09-24
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -384,6 +428,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **You can now attach images and files to a work item when you create or edit it, and download or remove them from the work item.**
 
 - **A loop now answers the review comments on its pull request by itself, and you can read each answer and drop any of it before it is sent.**
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -422,6 +470,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Coding agents that honour the do-not-track convention no longer send usage telemetry home.**
 
 - **The agent traffic log now forgets old destinations instead of growing forever; set how long it keeps them in Settings.**
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -477,6 +529,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Name a work item's branch yourself.** A **Branch name** field makes every run of that item use the name you give it instead of a generated one, and a run whose branch is already in use parks for you rather than starting on top of existing work.
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **A coding agent reaching for something meant for you is refused rather than crashing the request.**
@@ -511,6 +567,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Stop a chat reply mid-flight.** The chat bubble shows a red stop square to the left of **Send** for exactly as long as a turn is in progress, cancelling it over the new `POST /api/v1/chat/{id}/interrupt`. The cancel primitive already existed — it was reachable only by sending another message or deleting the chat, so there was no way to just make the agent stop. The endpoint checks ownership before cancelling, exactly as the per-chat delete does, and the button does not clear the busy state itself: the server persists the partial reply and announces it, so an interrupted turn ends through the same hub events as one that finished on its own and the transcript keeps what the agent had produced (flagged `interrupted`). A stop that loses the race to the turn finishing is a no-op rather than an error.
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **The loop authoring guide a chat agent is given in the Loop Editor now covers the rules that make a hand-written loop fail.** It described the document shape and little else, so an agent could compose a well-formed loop that the save rejected outright, or one that saved and then ran wrong. The save-time rules are now stated: an edge whose `sourceNodeId` or `targetNodeId` names no node in the same document is dropped **silently**, with no error and no validation failure, so a structural edit has to be read back and checked; every node must be reachable from `Start` or the whole save is rejected, which is the rule a hand-written document fails most often; an AI node's `matchRules` and its Custom edges must correspond both ways; and `useSession` requires a non-empty `sessionPlaceholder`, so a fork-only configuration is refused. Field semantics come with them — `toolAllowlist` has exactly four keys (`read`, `write`, `execute`, `ild`), honoured only by the opencode/pi/claude-code providers, and an empty, omitted or fully-filtered list means the **provider defaults** rather than "no tools", which the field cannot express at all; an unset or non-GUID `aiProviderId` falls back to the default provider, while a GUID that no longer exists fails the run outright, and there is no endpoint an agent can list providers from. Routing is now described against what it actually matches: AI `matchRules` take the **last** match against the entire node output, Condition cases the **first** against that case's own rendered subject, both case-insensitively and with neither `Multiline` nor `Singleline` set — so `^` and `$` bind to the whole string rather than to a line, which is why the form to recommend is `(?m)^TO_REVIEW$` and why a bare `^TO_REVIEW$` never matches an agent that explains itself before the verdict. Only AI `matchRules` are probed at save for zero-width and catastrophically slow patterns; a zero-width Condition case compiles, saves cleanly and then matches everything, and as the first case it wins forever, so no later case or `defaultEdge` is ever reached. Four authoring practices are added, the headline one being that an AI node re-renders and re-sends `config.prompt` on **every** visit, so the brief belongs in an upstream Prompt node rather than inlined where each pass around the loop pays for it again. Nothing about loop execution or the document format changes — this is only what the agent is told about them, and it is the same constant the new `get_loop_authoring_guide` tool below serves. See [ADR-0011](docs/adr/0011-context-aware-chat.md).
@@ -541,6 +601,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Worktree previews are reachable through ILD's own port, on wildcard subdomains.** A preview binds its services to ports allocated at runtime inside the container, so the `http://<publicHost>:<port>` URL the Preview tab has always produced is unreachable the moment ILD sits behind an ingress or a container boundary — the URL was there, it just resolved to nothing. Setting the new `ILD_PREVIEW_PROXY_BASE` (e.g. `http://ild.localhost:8080`) makes ILD serve previews itself: `wi-<workItemId>.<base>` reaches the profile's `"public": true` service and `wi-<workItemId>-<serviceName>.<base>` reaches any one service by name, hyphens in the name included (the work item id is the digits right after `wi-`, so the split is unambiguous). Mark exactly one service `"public": true`: a profile with several has each advertised as `wi-<workItemId>-<serviceName>` instead, since the bare form names only one. Requests are forwarded with `X-Forwarded-Proto`/`-Host`/`-For`, redirect `Location` headers and `Set-Cookie` domains rewritten onto the preview hostname, and no response buffering, so streaming endpoints, every HTTP method, large bodies and WebSocket upgrades pass through. The base also declares the scheme browsers use — set it to `https://…` behind a TLS-terminating ingress, since ILD listens on plain HTTP and the incoming request cannot tell it how the browser arrived. The `Host` header is rewritten to the loopback target by default — host-checking dev servers reject the preview hostname outright — and a service that would rather see the browser-facing hostname opts out with the new `"rewriteHost": false` in `ild.config.json`. `publicUrl` in the Preview tab now follows an explicit precedence: an authored `publicUrl` template, then the proxy origin, then the historical direct URL; with the variable unset every URL is byte-for-byte what it was. Anything the proxy will not forward — an unknown work item, a preview nobody started, a crashed service — answers with one indistinguishable 404, so the response reveals nothing about ILD's internal state; the reason goes to the log instead. Two things are needed outside this repository before a browser can reach a preview in a cluster: wildcard DNS for `*.<base>` and a wildcard SAN on the ingress certificate. Note that neither is access control — the hostname travels in a client-supplied `Host` header — and **a running proxied preview is unauthenticated**, since the proxy must run ahead of authentication for a foreign app with no ILD session. Network access to ILD's port is the boundary; `ILD_PREVIEW_PROXY_BASE` remains the switch that turns the whole path off. See [ADR-0015](docs/adr/0015-wildcard-subdomain-preview-routing.md) for why subdomains rather than path prefixes, and [Deployment](docs/deployment.md#worktree-preview-proxy) for the security model and the per-framework hot-reload caveat (pages load; live reload needs its own configuration).
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **Compose publishes only `8080`, and enables the preview proxy by default.** The `3100:3100` and `5100:5100` mappings existed to make previews reachable, and only ever worked for the two ports this repository's own preview profile happens to suggest — never for a second concurrent run, and never for another repository. Previews now go through `8080` via the preview proxy above, which compose points at `http://ild.localhost:8080` (browsers resolve `*.localhost` to loopback with no `/etc/hosts` entry). The ILD UI is unaffected on `http://localhost:8080`. **This does widen the default unauthenticated surface**, from two published ports that only ever served one repository's profile to every running preview for every repository, on the port operators actually publish. What bounds it is that nothing is served unless someone started that preview — every preview hostname with no running preview behind it is a flat 404 — so the exposure lasts as long as the preview does, and network access to ILD's port is the boundary. Set `ILD_PREVIEW_PROXY_BASE=` in your `.env` to turn it off.
@@ -567,6 +631,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Adding a repository auto-fills its name and default branch from the remote's advertised `HEAD` (`git ls-remote --symref`, honoring the same credentials as clone) when the clone URL loses focus. Both stay editable, and an unreachable remote degrades quietly to manual entry.
 - Pi agents now receive `ild_get_loop_variables` and `ild_set_loop_variable` alongside the MCP tools, so a Pi node can read and write per-run loop variables like the other adapters.
 - A **DevTeam** experimental loop template — a 25-node orchestrator/explorer/developer/QA/reviewer loop with an optional HIL-tag gate that inserts human approval before the PR is opened. It lives in `experimental-loops/`, so it is not seeded as a template.
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -625,6 +693,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Automatic agent provisioning** — a `ManagedAgentProvisioner` hosted service installs every agent an existing provider uses at startup, and on demand when a provider for a not-yet-installed agent is added or changed, so a fresh or freshly upgraded deployment no longer fails its first AI run on a missing CLI. Installs run detached and best-effort, never blocking host startup or the HTTP request.
 - Chat now shows an in-progress indicator for the whole turn — "Thinking" before any tokens, "Responding" while text streams — with an animated pulsing dot that respects `prefers-reduced-motion`, so an in-flight reply is no longer indistinguishable from a finished one.
 
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
+
 ### Changed
 
 - **Coding agents are no longer baked into the container image** — the `WITH_OPENCODE` / `WITH_PI` / `WITH_CLAUDE_CODE` build args and their Dockerfile install blocks are removed, and dropped from `docker-compose.yml`, `.env.example`, the publish workflow, and the configuration docs. A fresh deployment installs each agent once from the AI Provider page, and installs persist on `/data` across redeploys. `WITH_NODE` stays — Node/npm is what the runtime installs and version checks use.
@@ -654,6 +726,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Node transitions are now marked in the live output stream.
 - The viewed loop template now persists in the URL so it can be linked and survives a reload.
 - **Container image publishing** — CI builds and pushes both deployable images (`ghcr.io/tonyhopland/ild` and `ghcr.io/tonyhopland/ild-workitem-server`) to GHCR from a build-gated job, and both report their stamped version on `/health`. See [ADR-0012](docs/adr/0012-ghcr-image-tagging-strategy.md).
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -702,6 +778,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Provider API keys and webhook secrets (`RemoteProvider.ApiKey`/`WebhookSecret`, `AiProvider.ApiKey`) are now encrypted at rest with AES-256-GCM when the new `ILD_SECRET_KEY` environment variable is set. Behaviour is backwards-compatible: when the key is unset, secrets are stored as plaintext and a startup warning is logged; legacy plaintext rows remain readable after a key is added. See [docs/configuration.md](docs/configuration.md#secret-encryption-at-rest).
 - Webhook secrets are now masked (`***`) in `GET /api/v1/remote-providers` responses, matching the existing treatment of API keys, and a `hasWebhookSecret` flag indicates whether one is set.
 - Added [SECURITY.md](SECURITY.md) documenting the trust model and vulnerability reporting process.
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 
@@ -770,6 +850,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP server proxy fixes for work item operations
 - Ellipsing of input/output textboxes in live loop run view
 - Session handling and live view stability during running loops
+
+### Fixed
+
+- **A run killed for running out of memory says so, and you can Retry or Resume it.** A work item's card also no longer shows in two board columns at once.
 
 ### Changed
 

@@ -697,6 +697,16 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/waiting-ild/resume`, { note: note ?? null });
   },
 
+  /** Retry the node a run is parked on after it failed: it starts over from scratch, with the optional note after its prompt. */
+  retryFailedNode: async (id: string, note?: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/failed-node/retry`, { note: note ?? null });
+  },
+
+  /** Resume the node a run is parked on after it failed, in the same agent session and the run's files as they were left. */
+  resumeFailedNode: async (id: string, note?: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/failed-node/resume`, { note: note ?? null });
+  },
+
   /**
    * Drops one of the pull-request writes the round intends to make, before the
    * PR node makes it. The thread stays open and the finding stays undelivered,
