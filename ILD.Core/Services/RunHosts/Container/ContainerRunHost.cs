@@ -527,9 +527,42 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
         return stats is null ? ContainerStats.NotRunning : ContainerStatsParser.Parse(stats, inspected);
     }
 
+    // What ended a run's container, kept when it is started again: its state, and the reason in it, goes with the start.
+    private readonly ConcurrentDictionary<Guid, RunTermination> _terminations = new();
+
+    protected override async Task<RunTermination?> ReadTerminationAsync(Guid run, CancellationToken ct)
+    {
+        var inspected = await _api.GetAsync($"/containers/{Escaped(ObjectName(run))}/json", ct, HttpStatusCode.NotFound);
+        if (inspected is null) return _terminations.TryGetValue(run, out var gone) ? gone : new RunTermination(RunTerminationKind.Deleted);
+        Remember(run, inspected);
+        return TerminationOf(inspected) ?? (_terminations.TryGetValue(run, out var kept) ? kept : null);
+    }
+
+    private void Remember(Guid run, JsonNode inspected)
+    {
+        if (TerminationOf(inspected) is { } termination) _terminations[run] = termination;
+    }
+
+    /// <summary>Why the container ended, from its inspection; null for one that is running.</summary>
+    internal static RunTermination? TerminationOf(JsonNode inspected)
+    {
+        var state = inspected["State"];
+        if (state is null) return null;
+        DateTimeOffset? finished = DateTimeOffset.TryParse(state["FinishedAt"]?.GetValue<string>(), out var at) && at.Year > 1 ? at : null;
+        if (state["OOMKilled"]?.GetValue<bool>() == true)
+        {
+            var limit = inspected["HostConfig"]?["Memory"]?.GetValue<long>() is > 0 and var bytes ? bytes : (long?)null;
+            return new RunTermination(RunTerminationKind.OutOfMemory, limit, EndedAt: finished);
+        }
+        if (state["Status"]?.GetValue<string>() is "exited" or "dead")
+            return new RunTermination(RunTerminationKind.Other, Detail: $"it exited with code {state["ExitCode"]?.GetValue<long>()}", EndedAt: finished);
+        return null;
+    }
+
     private async Task<bool> RunContainerStoppedAsync(Guid owner, CancellationToken ct)
     {
         var container = await _api.GetAsync($"/containers/{Escaped(ObjectName(owner))}/json", ct, HttpStatusCode.NotFound);
+        if (container is not null) Remember(owner, container);
         return container?["State"]?["Status"]?.GetValue<string>() is "exited" or "stopped" or "created";
     }
 

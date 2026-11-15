@@ -172,6 +172,7 @@ public sealed class OutputCappedRunProcess : IRunProcess
     public Task WaitForExitAsync(CancellationToken ct = default) => _inner.WaitForExitAsync(ct);
     public bool TryKill() => _inner.TryKill();
     public bool TryKill(out string? failure) => _inner.TryKill(out failure);
+    public RunTermination? Termination => _inner.Termination;
     public void Dispose() => _inner.Dispose();
 }
 

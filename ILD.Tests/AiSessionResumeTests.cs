@@ -1,6 +1,8 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -198,6 +200,112 @@ public class AiSessionResumeTests
 
     private static readonly NodeOutcome[] Finishes =
         [new NodeOutcome.NodeStarting("continue"), new NodeOutcome.Terminal("done")];
+
+    // ---- out of memory ----
+
+    private static readonly RunTermination OomAt4Gi = new(RunTerminationKind.OutOfMemory, 4L * 1024 * 1024 * 1024);
+
+    private static NodeOutcome[] KilledForMemory =>
+        [new NodeOutcome.NodeStarting("work"), new NodeOutcome.Fail(EdgeType.OnFailure, OomAt4Gi.Describe(), Termination: OomAt4Gi)];
+
+    [Fact]
+    public async Task A_node_whose_container_ran_out_of_memory_parks_the_run_with_its_own_reason_and_logs_it()
+    {
+        using var h = EngineWith(CanResume, out _, KilledForMemory);
+
+        await h.RunAsync();
+
+        var run = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Equal(HumanFeedbackReasons.OutOfMemory, run.HumanFeedbackReason);
+        Assert.Equal(
+            "The run ran out of memory: its container was killed at the 4Gi limit (`ILD_RUN_MEMORY_LIMIT`).",
+            Assert.Single(h.ReloadRunNodes()).Error);
+        Assert.Contains("4Gi", Assert.Single(RunTimeline.Events(h.Db, h.RunId, EventType.RunContainerEnded)).Data);
+        h.WorkItemsMock.Verify(m => m.TransitionAsync(
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<string?>(), It.IsAny<string?>(), h.RunId, HumanFeedbackReasons.OutOfMemory), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task Retrying_after_an_out_of_memory_kill_starts_over_and_tells_the_agent_with_the_note_and_logs_the_action()
+    {
+        using var h = EngineWith(CanResume, out var agent, KilledForMemory, Finishes);
+        await h.RunAsync();
+
+        await h.Engine.RetryAfterFailureAsync(h.RunId, "Run the tests one project at a time.", "ada");
+        await h.WaitUntilIdleAsync();
+
+        var (session, note) = agent.Seen[1];
+        Assert.Null(session);
+        Assert.Contains("ran out of memory", note);
+        Assert.Contains("4Gi limit", note);
+        Assert.Contains("side by side", note);
+        Assert.EndsWith("Run the tests one project at a time.", note);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+        var taken = Assert.Single(RunTimeline.Events(h.Db, h.RunId, EventType.FailedNodeActionTaken));
+        Assert.Equal("ada chose Retry for the failed node; input given: yes", taken.Data);
+    }
+
+    [Fact]
+    public async Task Resuming_after_an_out_of_memory_kill_continues_the_session_and_tells_the_agent_it_ran_out_of_memory()
+    {
+        using var h = EngineWith(CanResume, out var agent, KilledForMemory, Finishes);
+        await h.RunAsync();
+        RecordSession(h, "sess-7");
+
+        await h.Engine.ResumeAfterFailureAsync(h.RunId, null, "ada");
+        await h.WaitUntilIdleAsync();
+
+        var (session, note) = agent.Seen[1];
+        Assert.Equal("sess-7", session);
+        Assert.Contains("previous attempt ran out of memory", note);
+        Assert.Contains("4Gi limit", note);
+        Assert.Contains("side by side", note);
+        Assert.Equal("ada chose Resume for the failed node; input given: no",
+            Assert.Single(RunTimeline.Events(h.Db, h.RunId, EventType.FailedNodeActionTaken)).Data);
+    }
+
+    [Fact]
+    public async Task Resuming_after_an_out_of_memory_kill_is_refused_with_the_reason_when_the_session_cannot_be_restored_and_retry_still_works()
+    {
+        using var h = EngineWith(CanResume, out var agent, KilledForMemory, Finishes);
+        await h.RunAsync();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => h.Engine.ResumeAfterFailureAsync(h.RunId, null, "ada"));
+        Assert.Contains("no session recorded", ex.Message);
+        Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
+        Assert.Empty(RunTimeline.Events(h.Db, h.RunId, EventType.FailedNodeActionTaken));
+
+        await h.Engine.RetryAfterFailureAsync(h.RunId, null, "ada");
+        await h.WaitUntilIdleAsync();
+        Assert.Equal(2, agent.Invocations);
+    }
+
+    [Fact]
+    public async Task A_node_that_runs_out_of_memory_again_after_a_retry_is_parked_again()
+    {
+        using var h = EngineWith(CanResume, out var agent, KilledForMemory, KilledForMemory);
+        await h.RunAsync();
+
+        await h.Engine.RetryAfterFailureAsync(h.RunId, null, "ada");
+        await h.WaitUntilIdleAsync();
+
+        Assert.Equal(2, agent.Invocations);
+        var run = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Equal(HumanFeedbackReasons.OutOfMemory, run.HumanFeedbackReason);
+    }
+
+    [Fact]
+    public async Task Retry_and_resume_after_a_failure_are_refused_when_the_run_is_not_parked_on_one()
+    {
+        using var h = EngineWith(CanResume, out _, Finishes);
+        await h.RunAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.Engine.RetryAfterFailureAsync(h.RunId, null, "ada"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.Engine.ResumeAfterFailureAsync(h.RunId, null, "ada"));
+    }
 
     private static void RecordSession(LoopEngineHarness h, string sessionId)
     {

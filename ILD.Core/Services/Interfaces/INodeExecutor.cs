@@ -41,7 +41,7 @@ public enum FailureKind
 /// outcome of an inner unit of work (e.g. an LLM call, a process). Executors
 /// translate this into the higher-level <see cref="NodeOutcome"/>.
 /// </summary>
-public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null, ILD.Data.DTOs.TokenUsage? Usage = null, FailureKind Failure = FailureKind.Unknown, IReadOnlyList<RunChildProcess>? LiveChildren = null)
+public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null, ILD.Data.DTOs.TokenUsage? Usage = null, FailureKind Failure = FailureKind.Unknown, IReadOnlyList<RunChildProcess>? LiveChildren = null, RunTermination? Termination = null)
 {
     public static NodeExecutionResult Ok(string? output = null, string? resolvedPrompt = null, string? sessionId = null, string? incomingSessionId = null, ILD.Data.DTOs.TokenUsage? usage = null) => new(true, output, null, resolvedPrompt, sessionId, incomingSessionId, usage);
     public static NodeExecutionResult Fail(string error, string? output = null, FailureKind failure = FailureKind.Unknown) => new(false, output, error, Failure: failure);
@@ -76,7 +76,7 @@ public abstract record NodeOutcome
     public sealed record Success(EdgeType Edge, string? Output = null, string? EdgeName = null, ILD.Data.DTOs.TokenUsage? Usage = null) : NodeOutcome;
 
     /// <summary>Node failed; engine follows the fallback (<see cref="EdgeType.OnFailure"/>) edge.</summary>
-    public sealed record Fail(EdgeType Edge, string Reason, string? Output = null) : NodeOutcome;
+    public sealed record Fail(EdgeType Edge, string Reason, string? Output = null, RunTermination? Termination = null) : NodeOutcome;
 
     /// <summary>
     /// The AI provider interrupted the node instead of the work failing (see

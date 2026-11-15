@@ -772,6 +772,7 @@ public sealed partial class LoopEngine : ILoopEngine
         var eventLog = scope.ServiceProvider.GetRequiredService<IEventLogService>();
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run is null) return;
+        var outOfMemory = run.HumanFeedbackReason == HumanFeedbackReasons.OutOfMemory;
         var oldStatus = run.Status;
         var ended = !IsAlive(run.Status) || await eventLog.HasRunEndedAsync(runId);
         if (ended && !EndedOnFailedNode(run))
@@ -798,7 +799,7 @@ public sealed partial class LoopEngine : ILoopEngine
         {
             if (await ResumeUnavailableReasonAsync(scope.ServiceProvider, runId, runNodeId) is { } why)
                 throw new InvalidOperationException($"Cannot resume this attempt: {why}");
-            resume = (target.AiSessionId!, ResumeNote(target.Error));
+            resume = (target.AiSessionId!, WithNote(outOfMemory ? OutOfMemoryNote(target.Error, resumed: true) : ResumeNote(target.Error), note));
         }
 
         if (ChildWaitState.TryParse(run.ChildWaitJson) is not null)
@@ -815,9 +816,10 @@ public sealed partial class LoopEngine : ILoopEngine
         else
         {
             PrepareRetry(run, target, prevOutput, resume);
-            if (!string.IsNullOrWhiteSpace(note) && resume is null)
+            var retryNote = resume is not null ? null : WithNote(outOfMemory && await IsAiNodeAsync(scope.ServiceProvider, run, target) ? OutOfMemoryNote(target.Error, resumed: false) : "", note);
+            if (!string.IsNullOrWhiteSpace(retryNote))
             {
-                run.SteeringNote = note;
+                run.SteeringNote = retryNote;
                 run.CurrentAiSessionId = null;
             }
             await loopRunStore.UpdateRunAsync(run);
@@ -873,6 +875,22 @@ public sealed partial class LoopEngine : ILoopEngine
         if (reason.Length == 0) reason = "unknown";
         return $"You were interrupted (reason: {reason}). Continue the task from where you left off.";
     }
+
+    private static string WithNote(string text, string? note)
+        => string.IsNullOrWhiteSpace(note) ? text : text.Length == 0 ? note : $"{text}\n\n{note}";
+
+    private static string OutOfMemoryNote(string? error, bool resumed)
+    {
+        var cause = AiFailureClassifier.FirstLine(error, 300);
+        var heavy = "Do not run heavy commands side by side (for example whole test suites at once, or in the background): run them one at a time, and do less at once.";
+        return resumed
+            ? $"Your previous attempt ran out of memory ({cause}). {heavy} Continue the task from where you left off."
+            : $"The previous attempt at this task ran out of memory ({cause}). {heavy}";
+    }
+
+    private static async Task<bool> IsAiNodeAsync(IServiceProvider sp, LoopRun run, LoopRunNode target)
+        => (await sp.GetRequiredService<ILoopTemplateStore>().GetNodesForVersionAsync(run.LoopTemplateVersionId))
+            .FirstOrDefault(n => n.Id == target.LoopNodeId)?.NodeType == NodeType.AI;
 
     private const string RetryOfEndedRunRefused = "Cannot retry a node of a run that has ended; start a new run instead";
 
@@ -1248,6 +1266,8 @@ public sealed partial class LoopEngine : ILoopEngine
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Failed, f.Output, f.Reason);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
+                        if (eventLog is not null && runNodeId is Guid endedId && f.Termination is { } ended)
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunContainerEnded, ended.Describe(), node.Id, runNodeId: endedId));
                         if (eventLog is not null && runNodeId is Guid id)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeFailed, f.Reason, node.Id, runNodeId: id));
                         if (!stillCurrent)
@@ -1260,7 +1280,7 @@ public sealed partial class LoopEngine : ILoopEngine
                         var failEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, f.Edge);
                         if (failEdge is null)
                         {
-                            await ParkOnFailedNodeAsync(run, f.Reason, loopRunStore, sp, node, runNodeId);
+                            await ParkOnFailedNodeAsync(run, f.Reason, loopRunStore, sp, node, runNodeId, f.Termination?.HumanFeedbackReason ?? HumanFeedbackReasons.NodeFailed);
                             return ParkResult.Stop;
                         }
                         run.CurrentNodeId = failEdge.TargetNodeId;
@@ -1740,10 +1760,10 @@ public sealed partial class LoopEngine : ILoopEngine
     /// to life past the checks a reopen makes.
     /// </summary>
     private async Task ParkOnFailedNodeAsync(
-        LoopRun run, string reason, ILoopRunStore store, IServiceProvider sp, LoopNode node, Guid? runNodeId)
+        LoopRun run, string reason, ILoopRunStore store, IServiceProvider sp, LoopNode node, Guid? runNodeId, string humanFeedbackReason = HumanFeedbackReasons.NodeFailed)
     {
         if (!IsAlive(run.Status)) return;
-        await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, HumanFeedbackReasons.NodeFailed,
+        await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, humanFeedbackReason,
             reason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
     }
 

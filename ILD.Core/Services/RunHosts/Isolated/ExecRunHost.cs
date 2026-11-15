@@ -415,6 +415,22 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     protected abstract Task<IExecStream> OpenExecInAsync(
         string name, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct);
 
+    /// <summary>Why the run's pod or container ended, read from the host; null when it is running or the host cannot say. Called before the host replaces or removes it.</summary>
+    protected virtual Task<RunTermination?> ReadTerminationAsync(Guid run, CancellationToken ct) => Task.FromResult<RunTermination?>(null);
+
+    public async Task<RunTermination?> GetTerminationAsync(Guid ownerId, CancellationToken ct = default)
+    {
+        try
+        {
+            return await ReadTerminationAsync(ownerId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger?.LogWarning(ex, "Could not ask the {Noun} of {Owner} why it ended", Noun, ownerId);
+            return null;
+        }
+    }
+
     /// <summary>What a run's pod or container is called.</summary>
     protected abstract string RunEnvironmentName(Guid run);
 
@@ -841,7 +857,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
         var exec = await OpenExecOrRemoveFileAsync(owner, wrapped, execEnvironment, envFile, stdin: psi.RedirectStandardInput, tty: false, ct);
         return new ExecRunProcess(exec, Noun, id, psi.RedirectStandardInput, (commandId, token) => KillCommandAsync(owner, commandId, token),
-            direct ? () => EndOff(owner) : null);
+            direct ? () => EndOff(owner) : null, owner.Chat ? null : ct => GetTerminationAsync(owner.Id, ct));
     }
 
     // -- The direct route (network mode Off) ---------------------------------------

@@ -85,4 +85,10 @@ public enum EventType
 
     /// <summary>A person chose Restart or Resume for a node that was Waiting for ILD (who, which, and whether they gave input).</summary>
     ChildWaitActionTaken = 27,
+
+    /// <summary>The run's container was killed for exceeding its memory limit, or ended another way its host could name; carries what the host said.</summary>
+    RunContainerEnded = 28,
+
+    /// <summary>A person chose Retry or Resume for a node that failed because the run's container ended (who, which, and whether they gave input).</summary>
+    FailedNodeActionTaken = 29,
 }

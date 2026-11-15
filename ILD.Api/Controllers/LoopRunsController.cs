@@ -195,6 +195,7 @@ public class LoopRunsController : ControllerBase
             isHalted = run.IsHalted,
             waitingRunNodeId = ParkedNode.WaitingVisitOf(run, runNodes)?.Id,
             haltReason = run.HaltReason?.ToString(),
+            humanFeedbackReason = run.HumanFeedbackReason,
             childWait = ChildWaitOf(run),
             // Read now, not at the park, so it drops each one a person has set since.
             missingGlobalVariables = missingGlobals,
@@ -394,7 +395,7 @@ public class LoopRunsController : ControllerBase
     /// </summary>
     [HttpPost("{id}/waiting-ild/restart")]
     public Task<IActionResult> RestartWaitingForChildren(string id, [FromBody] ResumeSteerRequest? request)
-        => ActOnWaitingForChildrenAsync(id, (guid, user) => _loopEngine.RestartWaitingForChildrenAsync(guid, request?.Note, user));
+        => ActOnParkedRunAsync(id, (guid, user) => _loopEngine.RestartWaitingForChildrenAsync(guid, request?.Note, user));
 
     /// <summary>
     /// <b>Resume</b> a node that is Waiting for ILD: the same agent session runs again without stopping its children. The agent gets only the
@@ -402,9 +403,9 @@ public class LoopRunsController : ControllerBase
     /// </summary>
     [HttpPost("{id}/waiting-ild/resume")]
     public Task<IActionResult> ResumeWaitingForChildren(string id, [FromBody] ResumeSteerRequest? request)
-        => ActOnWaitingForChildrenAsync(id, (guid, user) => _loopEngine.ResumeWaitingForChildrenAsync(guid, request?.Note, user));
+        => ActOnParkedRunAsync(id, (guid, user) => _loopEngine.ResumeWaitingForChildrenAsync(guid, request?.Note, user));
 
-    private async Task<IActionResult> ActOnWaitingForChildrenAsync(string id, Func<Guid, string, Task> act)
+    private async Task<IActionResult> ActOnParkedRunAsync(string id, Func<Guid, string, Task> act)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
@@ -421,6 +422,22 @@ public class LoopRunsController : ControllerBase
         }
         return Ok();
     }
+
+    /// <summary>
+    /// <b>Retry</b> the node a run is parked on after it failed, such as an out-of-memory kill: it starts over from scratch, with the optional <c>note</c>
+    /// after its prompt.
+    /// </summary>
+    [HttpPost("{id}/failed-node/retry")]
+    public Task<IActionResult> RetryAfterFailure(string id, [FromBody] ResumeSteerRequest? request)
+        => ActOnParkedRunAsync(id, (guid, user) => _loopEngine.RetryAfterFailureAsync(guid, request?.Note, user));
+
+    /// <summary>
+    /// <b>Resume</b> the node a run is parked on after it failed, in the same agent session and the run's files as they were left, with the optional
+    /// <c>note</c>. Refused (409) with the reason when the session cannot be restored; retry is then the way on.
+    /// </summary>
+    [HttpPost("{id}/failed-node/resume")]
+    public Task<IActionResult> ResumeAfterFailure(string id, [FromBody] ResumeSteerRequest? request)
+        => ActOnParkedRunAsync(id, (guid, user) => _loopEngine.ResumeAfterFailureAsync(guid, request?.Note, user));
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id, CancellationToken cancellationToken = default)
