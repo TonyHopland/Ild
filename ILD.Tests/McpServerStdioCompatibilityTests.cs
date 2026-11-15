@@ -65,7 +65,7 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
 
         var tools = await ListToolsAsync(ct);
         Assert.Equal(
-            McpToolInvoker.Names().OrderBy(n => n, StringComparer.Ordinal),
+            McpToolInvoker.Names().Except(ILD.McpServer.ExternalAgentTools.ControlToolNames).OrderBy(n => n, StringComparer.Ordinal),
             tools.Keys.OrderBy(n => n, StringComparer.Ordinal));
 
         var expected = JsonNode.Parse(RepositoryFiles.ReadAllText(
