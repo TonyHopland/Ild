@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Chats can now suggest the answer to a work item waiting at a PR node.** The suggestion is approved or rejected in the Action tab, as for a Human node.
 
 - **Renew a shared AI access with a new token.** An expired, revoked or live access keeps its name and the work items it created.
 - **Frontend tests now run on jsdom 31.**
