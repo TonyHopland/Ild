@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.RunHosts.Isolated;
@@ -11,21 +12,47 @@ namespace ILD.Core.Services.RunHosts;
 /// but never execute: a call that would start a process there is refused. What a call is about is told by the path it
 /// names, which for a run or chat is below its directory, or by the run it is for.
 /// </summary>
-public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunHost
+public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunHost, IRunHostOperator, IRunSweep, ISignInTerminalHost
 {
     public RunHostKind Kind => isolated.Kind;
 
-    public ExecRunHost Isolated => isolated;
-
-    // For ILD's own base clones only, which the repository manager finds by the repository's row: no call that names a path reaches this host for execution.
-    public IRunHost OwnDisk => local;
-
-    private static bool InRun(string? path) => RunPaths.OwnerOf(path) is not null;
-
     // A chat's folder is in the isolated host only when it keeps chats; a chat from before, or on a host that does not, has a path on this disk.
-    private bool OnIsolated(string? path) => InRun(path) || isolated.HostsChats && RunPaths.ChatOf(path) is not null;
+    private bool OnIsolated(string? path) => !RunHolders.FromPath(path, isolated.HostsChats).IsOwnDisk;
 
-    public bool HoldsPath(string? path) => OnIsolated(path);
+    public bool PredatesContainers(string? path) => !string.IsNullOrEmpty(path) && !OnIsolated(path);
+
+    // For ILD's own base clones only, which the repository manager finds by the repository's row: no call that names a path reaches this disk for execution.
+    public IRunRepositories? OwnDiskHostFor(string? path) => OnIsolated(path) ? null : local;
+
+    public string? AttachTargetFor(string? path) => isolated.AttachTargetFor(path);
+
+    // -- What the isolated host says of itself --------------------------------------
+
+    public TimeSpan SweepInterval => isolated.SweepInterval;
+
+    public Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default) => isolated.IsolatedRangesAsync(ct);
+
+    public Task<IReadOnlyList<System.Net.IPAddress>> ControlPlaneAddressesAsync(CancellationToken ct = default) => isolated.ControlPlaneAddressesAsync(ct);
+
+    public Task<string?> WarningAsync(CancellationToken ct = default) => isolated.WarningAsync(ct);
+
+    public Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => isolated.DirectRoutesAsync(ct);
+
+    public Task<SignInTerminal> OpenSignInAsync(ManagedAgent? agent, string command, IReadOnlyList<string> arguments, int cols, int rows, CancellationToken ct)
+        => isolated.OpenSignInAsync(agent, command, arguments, cols, rows, ct);
+
+    public Task ShutdownAsync(CancellationToken ct) => isolated.ShutdownAsync(ct);
+
+    public Task CheckAsync(CancellationToken ct = default) => isolated.CheckAsync(ct);
+
+    public Task WarmAgentToolsAsync(CancellationToken ct = default) => isolated.WarmAgentToolsAsync(ct);
+
+    public Task ReapIdleChatAsync(CancellationToken ct = default) => isolated.ReapIdleChatAsync(ct);
+
+    // The sweep of a host with environments of its own looks at those alone; what is left on ILD's own disk is found at startup (IRunLeftovers).
+    Task<IReadOnlyList<RunLeftover>> IRunSweep.ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct) => isolated.ListLeftoversAsync(liveIds, ct);
+
+    Task<bool> IRunSweep.DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct) => isolated.DeleteLeftoverAsync(leftover, ct);
 
     private IRunHost For(string? path) => OnIsolated(path) ? isolated : local;
 
@@ -51,31 +78,11 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     // One that must run in a run goes to that run or nowhere: never to this machine, whatever its directory says.
     public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
-        if (command.RunIn is { } runIn)
-            return await isolated.StartCommandAsync(await InRunAsync(command, runIn, ct), ct);
-        var directory = command.Start.WorkingDirectory;
-        var onIsolated = string.IsNullOrEmpty(directory) && command.OwnerId != Guid.Empty
-            ? await isolated.HeldOwnerAsync(command.OwnerId, ct) is not null
-            : OnIsolated(directory);
-        if (!onIsolated)
+        var holder = await RunHolders.ForCommandAsync(command, isolated.HostsChats, routed: true, isolated.Kind.ToString().ToLowerInvariant(), isolated.HeldOwnerAsync, ct);
+        if (holder.IsOwnDisk)
             throw new PredatesContainersException();
-        return await isolated.StartCommandAsync(command, ct);
+        return await isolated.StartResolvedAsync(command, holder, ct);
     }
-
-    private async Task<RunCommand> InRunAsync(RunCommand command, Guid runIn, CancellationToken ct)
-    {
-        var directory = command.Start.WorkingDirectory;
-        if (command.AsAgent && !string.IsNullOrEmpty(directory) && RunPaths.HolderOf(Path.GetFullPath(directory)) is null)
-            throw new PredatesContainersException();
-        var owner = await isolated.HeldOwnerAsync(runIn, ct)
-            ?? throw new InvalidOperationException($"refusing to run {command.Start.FileName} in {directory}: the {isolated.Kind.ToString().ToLowerInvariant()} run host holds no run or chat {runIn:N}, and a command of a run never runs on ILD's own machine");
-        var root = owner.Chat ? RunPaths.ChatRoot(runIn) : RunPaths.RunRoot(runIn);
-        if (!string.IsNullOrEmpty(directory) && !Within(Path.GetFullPath(directory), root))
-            throw new InvalidOperationException($"refusing to run {command.Start.FileName} in {directory}, which is outside run {runIn:N}");
-        return command;
-    }
-
-    private static bool Within(string path, string root) => path == root || path.StartsWith(root + "/", StringComparison.Ordinal);
 
     // Ends processes: the local host has none of a run or chat any more, and ending is never executing.
     public async Task<int> KillAllAsync(Guid ownerId, CancellationToken ct = default)
@@ -109,10 +116,6 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default)
         => ForExecution(options.Cwd).OpenTerminalAsync(options, mode, ct);
 
-    // Only builds a command; the sign-in terminal that runs it goes through ISignInTerminalHost, and a run's terminal is refused in OpenTerminalAsync.
-    public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, NetworkMode mode)
-        => local.RouteTerminalCommand(fileName, arguments, providerId, mode);
-
     // -- Bundles -----------------------------------------------------------------
 
     public Task<RunHostResult> PushBundleAsync(string targetPath, string originUrl, Stream bundle, CancellationToken ct = default)
@@ -143,8 +146,6 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task<Stream> OpenFileForWriteAsync(string path, CancellationToken ct = default) => For(path).OpenFileForWriteAsync(path, ct);
 
     public Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default) => For(path).GetFileLengthAsync(path, ct);
-
-    public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default) => For(path).OpenReadAsync(path, ct);
 
     public Task ReadFileRangeAsync(string path, long offset, long count, Func<Stream, Task> consume)
         => For(path).ReadFileRangeAsync(path, offset, count, consume);

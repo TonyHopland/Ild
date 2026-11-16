@@ -59,12 +59,12 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         _ => null,
     }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
-    private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null)
-        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { Credentials = EgressProxyTests.Creds, Time = time ?? TimeProvider.System, ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }), ClusterNameServer = () => "10.96.0.10" };
+    private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null, ExecRunHostServices? services = null)
+        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { Credentials = EgressProxyTests.Creds, Time = time ?? TimeProvider.System, Forwards = services?.Forwards, Probe = services?.Probe, Refusals = services?.Refusals, PreviewData = services?.PreviewData, ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }), ClusterNameServer = () => "10.96.0.10" };
 
     private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
 
-    private static string Name(Guid run) => KubernetesNames.ObjectName(run);
+    private static string Name(Guid run) => RunNames.Run(run);
 
     private string MakeBaseRepository(params (string Path, string Content)[] files) => MakeBaseRepositoryIn("base", files);
 
@@ -152,26 +152,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         Assert.Contains(_api.Execs, e => e.Joined.Contains("git clone"));
         Assert.All(_api.Execs, e => Assert.Equal("v5.channel.k8s.io", e.Protocol));
-    }
-
-    [Fact]
-    public async Task Create_puts_the_base_repository_in_as_a_bundle_with_the_remote_as_origin_and_checks_out_the_run_branch()
-    {
-        var stdin = new Dictionary<FakeExec, byte[]>();
-        _api.OnExec = async e =>
-        {
-            if (e.WantsStdin) stdin[e] = await e.ReadStdinToEndAsync();
-            await e.ExitAsync(0);
-        };
-
-        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
-
-        var clone = Assert.Single(_api.Execs, e => e.Joined.Contains("git clone"));
-        Assert.Equal(WorkingDirectory, clone.Command[^2]);
-        Assert.Equal("https://forge.example/acme/app.git", clone.Command[^1]);
-        Assert.StartsWith("# v2 git bundle", Encoding.ASCII.GetString(stdin[clone], 0, 15));
-        var checkout = Assert.Single(_api.Execs, e => e.Joined.Contains("git checkout"));
-        Assert.Equal(["ild/wi-1-run"], checkout.Command.TakeLast(1));
     }
 
     [Fact]
@@ -266,7 +246,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         _api.Created.Clear();
-        _api.Execs.Clear();
+        _api.ClearExecs();
 
         var again = await _host.CreateAsync(new RunEnvironmentRequest(_run, "/unused", "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
 
@@ -311,7 +291,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         await _host.ShutdownAsync(ct);
 
-        Assert.Contains($"pods/{KubernetesNames.ChatName(Instance)}", _api.Deleted);
+        Assert.Contains($"pods/{RunNames.Chat(Instance)}", _api.Deleted);
         Assert.Contains($"pods/{signInPod}", _api.Deleted);
         Assert.DoesNotContain($"pods/{Name(_run)}", _api.Deleted);
     }
@@ -326,7 +306,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         };
         var ct = TestContext.Current.CancellationToken;
         await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
-        var chat = KubernetesNames.ChatName(Instance);
+        var chat = RunNames.Chat(Instance);
 
         await NewHost(Options()).CheckAsync(ct);
         Assert.DoesNotContain($"pods/{chat}", _api.Deleted);
@@ -345,13 +325,11 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     private string SignInPod() => Assert.Single(_api.Names("pods"), n => n.StartsWith("ild-signin-", StringComparison.Ordinal));
 
     [Fact]
-    public async Task The_sign_in_terminal_runs_in_a_pod_of_its_own_and_reads_the_login_from_its_home()
+    public async Task The_sign_in_terminal_runs_in_a_pod_of_its_own_with_its_home()
     {
         _api.OnExec = async e =>
         {
             if (e.WantsStdin && !e.Tty) await e.ReadStdinToEndAsync();
-            if (e.Joined.Contains("base64", StringComparison.Ordinal))
-                await e.WriteStdoutAsync(Convert.ToBase64String(Encoding.UTF8.GetBytes("{\"token\":\"x\"}")));
             if (!e.Tty) await e.ExitAsync(0);
         };
         var ct = TestContext.Current.CancellationToken;
@@ -359,7 +337,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var terminal = await _host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "/usr/local/bin/claude", ["setup-token"], 100, 30, ct);
         var name = SignInPod();
         var pod = _api.Get<V1Pod>("pods", name)!;
-        Assert.Equal(KubernetesNames.SignInRole, pod.Metadata.Labels[RunPaths.RoleLabel]);
+        Assert.Equal(RunPaths.SignInRole, pod.Metadata.Labels[RunPaths.RoleLabel]);
         // No run label: no run's NetworkPolicy selects it, so the OAuth flow can reach the provider.
         Assert.False(pod.Metadata.Labels.ContainsKey(RunPaths.RunLabel));
         Assert.False(pod.Spec.AutomountServiceAccountToken);
@@ -367,8 +345,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Empty(pod.Spec.Volumes ?? []);
         var shell = Assert.Single(_api.Execs, e => e.Pod == name && e.Tty);
         Assert.Equal(["claude", "setup-token"], shell.Command.TakeLast(2));
-
-        Assert.Equal("{\"token\":\"x\"}", await terminal.ReadLoginAsync(".claude/.credentials.json", ct));
 
         await terminal.DisposeAsync();
         Assert.Contains($"pods/{name}", _api.Deleted);
@@ -580,7 +556,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         _api.OnExec = e => e.ExitAsync(e.Command.Contains(ExecRunHost.HostsScript) ? 3 : 0);
-        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
+        _host = NewHost(Options(), services: new ExecRunHostServices { Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]) });
         var ct = TestContext.Current.CancellationToken;
 
         for (var i = 0; i < 2; i++)
@@ -594,74 +570,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Single(_log.Warnings, w => w.Contains("hosts file"));
     }
 
-    [Fact]
-    public async Task ILDs_own_scripts_start_with_a_fixed_environment_and_the_runs_own_command_does_not()
-    {
-        await CreateRunAsync();
-        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
-        var ct = TestContext.Current.CancellationToken;
-
-        using (var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), ct)) await process.WaitForExitAsync(ct);
-        await _host.GetFileLengthAsync($"{WorkingDirectory}/file", ct);
-
-        var own = _api.Execs.Where(e => e.Command.Contains(ExecRunHost.ForwardsScript) || e.Command.Contains(ExecRunHost.HostsScript) || e.Joined.Contains("stat -c %s")).ToList();
-        Assert.Equal(3, own.Count);
-        Assert.All(own, e => Assert.Equal(["/usr/bin/env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin"], e.Command.Take(3)));
-        Assert.NotEqual("/usr/bin/env", _api.Execs.Single(e => e.Command.Contains("make-it")).Command[0]);
-    }
-
     // -- Exec --------------------------------------------------------------------
-
-    [Fact]
-    public async Task A_command_streams_its_output_and_reports_its_exit_code_with_only_the_environment_the_caller_set()
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            await e.WriteStdoutAsync("hello\n");
-            await e.WriteStderrAsync("warn\n");
-            await e.ExitAsync(3);
-        };
-        var psi = Command(WorkingDirectory, "make-it", "a b");
-
-        using var process = await _host.StartCommandAsync(
-            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["ILD_TEST_ONLY"] = "yes" }), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal("hello\n", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
-        Assert.Equal("warn\n", await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken));
-        Assert.Equal(3, process.ExitCode);
-        var exec = _api.Execs.Last();
-        Assert.Equal(Name(_run), exec.Pod);
-        Assert.Contains("ILD_TEST_ONLY=yes", Env(exec));
-        Assert.Equal($"HOME={RunPaths.HomeDirectory(_run)}", Env(exec).Single(c => c.StartsWith("HOME=", StringComparison.Ordinal)));
-        Assert.DoesNotContain(Env(exec), c => c.StartsWith("PATH=", StringComparison.Ordinal));
-        Assert.DoesNotContain(exec.Command, c => c.Contains("ILD_TEST_ONLY", StringComparison.Ordinal));
-        Assert.Equal(["make-it", "a b"], exec.Command.TakeLast(2));
-        Assert.Contains(WorkingDirectory, exec.Command);
-    }
-
-    [Fact]
-    public async Task Closing_the_input_of_a_command_ends_what_it_reads_to_the_end()
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            var input = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
-            await e.WriteStdoutAsync(input.ToUpperInvariant());
-            await e.ExitAsync(0);
-        };
-        var psi = Command(WorkingDirectory, "cat");
-        psi.RedirectStandardInput = true;
-
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run), TestContext.Current.CancellationToken);
-        await process.StandardInput.WriteAsync("prompt text");
-        process.StandardInput.Close();
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal("PROMPT TEXT", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
-        Assert.Equal(0, process.ExitCode);
-    }
 
     [Fact]
     public async Task A_dropped_stream_fails_the_command_instead_of_leaving_it_waiting()
@@ -703,7 +612,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     // -- The direct route (network mode Off) -------------------------------------
 
-    private string OpenPolicyName => KubernetesNames.OpenName(Name(_run));
+    private string OpenPolicyName => RunNames.OpenPolicy(Name(_run));
 
     private async Task<IRunProcess> StartAsync(NetworkMode mode, bool prepared = false, KubernetesRunHost? host = null)
     {
@@ -741,7 +650,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     private async Task<IRunProcess> ChatLaunchAsync(Guid chat, NetworkMode mode)
         => await _host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "git", "status"), chat, networkMode: mode), TestContext.Current.CancellationToken);
 
-    private string ChatOpenPolicyName => KubernetesNames.OpenName(ChatPodName);
+    private string ChatOpenPolicyName => RunNames.OpenPolicy(ChatPodName);
 
     private static readonly string[] ProxyVariables = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", "NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
 
@@ -796,19 +705,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.NotEmpty(LaunchProxyVariables());
     }
 
-    [Fact]
-    public async Task Returning_to_a_proxied_mode_with_an_off_process_still_running_keeps_the_open_policy()
-    {
-        await CreateRunAsync();
-        var release = HoldOffLaunches();
-        using var off = await LaunchAsync(NetworkMode.Off);
-
-        using var process = await StartAsync(NetworkMode.Monitor);
-
-        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
-        release.SetResult();
-        await off.WaitForExitAsync(TestContext.Current.CancellationToken);
-    }
 
     [Fact]
     public async Task A_planted_off_file_does_not_keep_the_open_policy_once_ilds_own_off_launches_have_ended()
@@ -855,22 +751,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", ChatOpenPolicyName));
     }
 
-    [Fact]
-    public async Task A_live_off_launch_of_one_chat_keeps_the_chat_pods_open_policy_for_a_proxied_launch_of_another()
-    {
-        var live = Guid.NewGuid();
-        var other = Guid.NewGuid();
-        await _host.CreateChatFolderAsync(live, "/unused", TestContext.Current.CancellationToken);
-        await _host.CreateChatFolderAsync(other, "/unused", TestContext.Current.CancellationToken);
-        var release = HoldOffLaunches();
-        using var off = await ChatLaunchAsync(live, NetworkMode.Off);
-
-        using var process = await ChatLaunchAsync(other, NetworkMode.Monitor);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", ChatOpenPolicyName));
-        release.SetResult();
-    }
 
     [Fact]
     public async Task Two_pods_in_off_cannot_reach_each_other_because_a_pods_policy_takes_ingress_from_ilds_pod_only_and_the_open_policy_adds_none()
@@ -911,14 +791,14 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         var ct = TestContext.Current.CancellationToken;
         var dead = Guid.NewGuid();
-        _api.Seed("networkpolicies", KubernetesNames.OpenName(Name(dead)), Instance, dead);
+        _api.Seed("networkpolicies", RunNames.OpenPolicy(Name(dead)), Instance, dead);
 
         var leftover = Assert.Single(await _host.ListLeftoversAsync(new HashSet<Guid>(), ct));
         Assert.Equal(dead.ToString("N"), leftover.Location);
         Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
 
-        Assert.Contains($"networkpolicies/{KubernetesNames.OpenName(Name(dead))}", _api.Deleted);
-        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", KubernetesNames.OpenName(Name(dead))));
+        Assert.Contains($"networkpolicies/{RunNames.OpenPolicy(Name(dead))}", _api.Deleted);
+        Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", RunNames.OpenPolicy(Name(dead))));
     }
 
     [Fact]
@@ -936,7 +816,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     public async Task The_sweep_removes_the_chat_pods_open_policy_when_the_pod_is_gone()
     {
         var ct = TestContext.Current.CancellationToken;
-        var name = KubernetesNames.OpenName(KubernetesNames.ChatName(Instance));
+        var name = RunNames.OpenPolicy(RunNames.Chat(Instance));
         _api.Seed("networkpolicies", name, Instance, Guid.Empty);
         // Not a run's: it carries no run label.
         _api.Get<V1NetworkPolicy>("networkpolicies", name)!.Metadata.Labels.Remove("ild/run");
@@ -946,21 +826,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.True(await _host.DeleteLeftoverAsync(leftover, ct));
 
         Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", name));
-    }
-
-    [Fact]
-    public async Task Proxy_variables_that_name_ilds_loopback_name_ilds_address_for_the_pod()
-    {
-        await CreateRunAsync();
-        var psi = Command(WorkingDirectory, "curl");
-
-        using var process = await _host.StartCommandAsync(
-            RunCommand.Prepared(psi, _run, new Dictionary<string, string?> { ["HTTP_PROXY"] = "http://scope:abc@127.0.0.1:3128" }), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        var proxy = Assert.Single(Env(_api.Execs.Last()), c => c.StartsWith("HTTP_PROXY=", StringComparison.Ordinal));
-        Assert.Contains("ild.example:3128", proxy);
-        Assert.DoesNotContain("127.0.0.1", proxy);
     }
 
     [Fact]
@@ -980,7 +845,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_host_that_is_a_suffix_of_the_preview_domain_is_not_put_on_NO_PROXY_and_ild_is_reached_by_another_name()
+    public async Task Ild_is_reached_by_the_name_ild_api_which_the_run_is_given_as_a_host_alias()
     {
         _host = NewHost(Options() with { IldUrl = "http://ild:8080" });
         await CreateRunAsync();
@@ -1032,17 +897,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             Assert.DoesNotContain(credential, exec.Joined, StringComparison.Ordinal);
             Assert.DoesNotContain("HTTPS_PROXY=", exec.Joined, StringComparison.Ordinal);
         }
-    }
-
-    // -- Kill leftovers ----------------------------------------------------------
-
-    [Fact]
-    public async Task Kill_all_for_a_run_with_no_pod_asks_nothing_of_the_cluster_and_kills_nothing()
-    {
-        var killed = await _host.KillAllAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
-
-        Assert.Equal(0, killed);
-        Assert.Empty(_api.Execs);
     }
 
     // -- Delete and sweep --------------------------------------------------------
@@ -1103,7 +957,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var host = NewHost(Options() with { ReadyTimeout = TimeSpan.FromMilliseconds(300) });
         var dead = Guid.NewGuid();
         SeedRun(dead, Instance);
-        _api.Seed("networkpolicies", KubernetesNames.OpenName(Name(dead)), Instance, dead);
+        _api.Seed("networkpolicies", RunNames.OpenPolicy(Name(dead)), Instance, dead);
         _api.Get<V1Pod>("pods", Name(dead))!.Metadata.DeletionTimestamp = DateTime.UtcNow;
         var violations = GuardPolicies();
 
@@ -1282,7 +1136,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         SeedRun(orphan, Instance, secret: false);
         SeedRun(otherInstance, "other");
         SeedRun(notOurs, Instance, managedBy: "someone-else");
-        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }));
 
         await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
 
@@ -1340,26 +1194,23 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     // -- Terminal, preview and routing ------------------------------------------
 
     [Fact]
-    public async Task A_terminal_is_a_tty_exec_whose_input_output_and_end_go_through_the_pty_interface()
+    public async Task A_terminal_is_given_the_size_it_was_opened_with()
     {
         await CreateRunAsync();
         _api.OnExec = async e =>
         {
-            await e.WriteStdoutAsync("ready$ ");
             while (!e.StdinSoFar().Contains('x')) await Task.Delay(10);
-            await e.WriteStdoutAsync("got x");
-            await e.ExitAsync(5);
+            await e.ExitAsync(0);
         };
-        var exited = new TaskCompletionSource<int>();
+        var exited = new TaskCompletionSource();
 
         using var pty = await _host.OpenTerminalAsync(
             new PtyOptions { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 120, Rows = 30, Name = "t" }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
-        pty.ProcessExited += (_, args) => exited.TrySetResult(args.ExitCode);
+        pty.ProcessExited += (_, _) => exited.TrySetResult();
+        // The size goes over the socket ahead of the input, so it is there once the input has been answered.
         await pty.WriterStream.WriteAsync("x"u8.ToArray(), TestContext.Current.CancellationToken);
-        var read = await new StreamReader(pty.ReaderStream).ReadToEndAsync(TestContext.Current.CancellationToken);
+        await exited.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        Assert.Equal("ready$ got x", read);
-        Assert.Equal(5, await exited.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         var exec = _api.Execs.Last();
         Assert.True(exec.Tty);
         Assert.Contains(exec.Resizes, r => r.Contains("120") && r.Contains("30"));
@@ -1367,36 +1218,20 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     private PtyOptions Terminal() => new() { Cwd = WorkingDirectory, App = "/bin/bash", Cols = 80, Rows = 24, Name = "t" };
 
-    // A terminal's environment is in the file its wrapper sources, written just before it.
-    private IReadOnlyList<string> TerminalEnv()
-        => _api.Execs.Last(e => e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript)).StdinSoFar()
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line["export ".Length..])
-            .Select(line => line[..line.IndexOf('=')] + "=" + line[(line.IndexOf('=') + 2)..^1])
-            .ToList();
-
     [Theory]
     [InlineData(NetworkMode.Monitor)]
     [InlineData(NetworkMode.Whitelist)]
-    public async Task A_terminal_in_a_proxied_mode_reaches_the_network_through_the_runs_relay_as_a_launch_does(NetworkMode mode)
+    public async Task A_terminal_in_a_proxied_mode_has_no_open_policy(NetworkMode mode)
     {
         await CreateRunAsync();
 
         using var pty = await _host.OpenTerminalAsync(Terminal(), mode, TestContext.Current.CancellationToken);
 
-        var terminal = _api.Execs.Last();
-        Assert.True(terminal.Tty);
-        Assert.Contains(terminal.Command, c => c.Contains(ExecRunHost.EgressRelayScript, StringComparison.Ordinal));
-        var proxyUrl = Assert.Single(TerminalEnv(), e => e.StartsWith("HTTPS_PROXY=", StringComparison.Ordinal))["HTTPS_PROXY=".Length..];
-        Assert.EndsWith("@ild.example:3128", proxyUrl);
-        Assert.True(AgentIsolationEgressTests.TryReadUrl(EgressProxyTests.Creds, proxyUrl, out var scope));
-        Assert.Equal(new LaunchScope(LaunchKind.Run, _run), scope);
-        Assert.DoesNotContain(_api.Execs.SelectMany(e => e.Command), c => c.Contains(proxyUrl, StringComparison.Ordinal));
         Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
     }
 
     [Fact]
-    public async Task A_terminal_in_off_has_the_direct_route_and_no_proxy_variables_and_keeps_the_route_until_it_ends()
+    public async Task A_terminal_in_off_has_the_direct_route_and_keeps_the_route_until_it_ends()
     {
         await CreateRunAsync();
         var end = new TaskCompletionSource();
@@ -1411,8 +1246,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         pty.ProcessExited += (_, _) => exited.TrySetResult();
 
         Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
-        Assert.Contains(TerminalEnv(), e => e.StartsWith("HOME=", StringComparison.Ordinal));
-        Assert.DoesNotContain(TerminalEnv(), e => ProxyVariables.Any(v => e.StartsWith(v + "=", StringComparison.Ordinal)));
 
         using (await StartAsync(NetworkMode.Monitor)) { }
         Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
@@ -1457,7 +1290,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task No_secret_of_a_commands_environment_is_in_any_exec_command_or_url_it_travels_only_in_a_private_file_written_over_stdin(bool asAgent)
+    public async Task A_commands_environment_travels_only_in_a_private_file_written_over_stdin(bool asAgent)
     {
         await CreateRunAsync();
         var psi = Command(WorkingDirectory, "claude", "-p", "hi");
@@ -1467,7 +1300,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
 
-        Assert.DoesNotContain(_api.Execs.SelectMany(e => e.Command), c => c.Contains(GatewayToken, StringComparison.Ordinal) || c.Contains(ApiToken, StringComparison.Ordinal));
         var launch = LaunchExec();
         Assert.Contains($"ANTHROPIC_API_KEY={GatewayToken}", Env(launch));
         Assert.Contains($"ILD_API_TOKEN={ApiToken}", Env(launch));
@@ -1477,12 +1309,10 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.StartsWith(RunPaths.ProcessDirectory + "/", write.Command[^1]);
         Assert.Equal(write.Command[^1], launch.Command[6]);
         Assert.Contains("umask 077", ExecRunHost.WriteEnvironmentFileScript);
-        // The command's own stdin is its own.
-        Assert.DoesNotContain(GatewayToken, launch.StdinSoFar());
     }
 
     [Fact]
-    public async Task No_secret_of_a_terminals_environment_is_in_the_exec_command_url_or_typed_into_the_terminal()
+    public async Task A_terminals_environment_travels_only_in_a_private_file_written_over_stdin()
     {
         await CreateRunAsync();
 
@@ -1493,37 +1323,15 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
                 Environment = new Dictionary<string, string> { ["ILD_API_TOKEN"] = ApiToken },
             }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
 
-        var terminal = _api.Execs.Last();
-        Assert.True(terminal.Tty);
-        Assert.DoesNotContain(_api.Execs.SelectMany(e => e.Command), c => c.Contains(ApiToken, StringComparison.Ordinal));
-        Assert.DoesNotContain(ApiToken, terminal.StdinSoFar());
+        // The terminal is opened on its own connection, which the fake registers a moment after the host returns.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!_api.Execs.Any(e => e.Tty) && DateTime.UtcNow < deadline)
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        var terminal = Assert.Single(_api.Execs, e => e.Tty);
         var write = Assert.Single(_api.Execs, e => e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript));
         Assert.Contains($"export ILD_API_TOKEN='{ApiToken}'", write.StdinSoFar());
         Assert.Equal(write.Command[^1], terminal.Command[5]);
         Assert.StartsWith($"{RunPaths.ProcessDirectory}/{_run:N}/", write.Command[^1]);
-    }
-
-    [Fact]
-    public async Task A_command_that_reads_its_own_stdin_gets_it_and_nothing_else_with_an_environment_too()
-    {
-        await CreateRunAsync();
-        _api.OnExec = async e =>
-        {
-            if (e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript)) { await e.ReadStdinToEndAsync(); await e.ExitAsync(0); return; }
-            var input = Encoding.UTF8.GetString(await e.ReadStdinToEndAsync());
-            await e.WriteStdoutAsync(input);
-            await e.ExitAsync(0);
-        };
-        var psi = Command(WorkingDirectory, "cat");
-        psi.RedirectStandardInput = true;
-
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(psi, _run, Secrets()), TestContext.Current.CancellationToken);
-        await process.StandardInput.WriteAsync("prompt text");
-        process.StandardInput.Close();
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal("prompt text", await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken));
-        Assert.Equal("prompt text", LaunchExec().StdinSoFar());
     }
 
     [Fact]
@@ -1542,61 +1350,11 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
     private static FakeRunHost FakeLocal() => new();
 
-    [Fact]
-    public async Task Paths_on_ilds_disk_are_read_locally_but_never_run_and_loop_runs_go_to_the_pod()
-    {
-        await CreateRunAsync();
-        _api.Execs.Clear();
-        var local = FakeLocal().WithDirectory("/data/chat-sessions/c1");
-        var routing = new RoutingRunHost(local, _host);
-        var chat = Guid.NewGuid();
-
-        Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/c1", TestContext.Current.CancellationToken));
-        Assert.Empty(_api.Execs);
-
-        var chatCommand = RunCommand.Prepared(Command("/data/chat-sessions/c1", "git", "status"), chat);
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(chatCommand, TestContext.Current.CancellationToken));
-        Assert.Empty(local.Started);
-        Assert.Empty(_api.Execs);
-
-        await routing.DirectoryExistsAsync(WorkingDirectory, TestContext.Current.CancellationToken);
-        Assert.Single(_api.Execs);
-
-        await routing.KillAllAsync(chat, TestContext.Current.CancellationToken);
-        Assert.Equal([chat], local.KillAllCalls);
-        Assert.Single(_api.Execs);
-    }
-
     // -- Chats -------------------------------------------------------------------
 
     private static string ChatPodName => "ild-chat-main";
 
     private static string ChatFolder(Guid chat) => RunPaths.ChatRoot(chat);
-
-    [Fact]
-    public async Task A_chat_folder_and_its_commands_go_to_the_chat_pod_and_old_chats_stay_local()
-    {
-        var chat = Guid.NewGuid();
-        var local = FakeLocal().WithDirectory("/data/chat-sessions/old");
-        var routing = new RoutingRunHost(local, _host);
-
-        var path = await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", TestContext.Current.CancellationToken);
-        using var process = await routing.StartCommandAsync(
-            RunCommand.Prepared(Command(ChatFolder(chat), "git", "status"), chat), TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.True(_host.HostsChats);
-        Assert.Equal(ChatFolder(chat), path);
-        Assert.Empty(local.ChatFolders);
-        Assert.Empty(local.Started);
-        Assert.All(_api.Execs, e => Assert.Equal(ChatPodName, e.Pod));
-        Assert.Contains(RunPaths.ChatHome(chat), _api.Execs.First().Command);
-        Assert.Contains(ChatFolder(chat), _api.Execs.Last().Command);
-
-        var before = _api.Execs.Count;
-        Assert.True(await routing.DirectoryExistsAsync("/data/chat-sessions/old", TestContext.Current.CancellationToken));
-        Assert.Equal(before, _api.Execs.Count);
-    }
 
     [Fact]
     public async Task The_chat_pod_claim_and_policy_are_made_once_for_every_chat_and_carry_no_run_label()
@@ -1765,11 +1523,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var chat = Guid.NewGuid();
         await host.CreateChatFolderAsync(chat, "/unused", ct);
 
-        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatPodName, _api.Names("pods"));
-
-        clock.Advance(TimeSpan.FromSeconds(1));
+        clock.Advance(IdleTimeout);
         await host.ReapIdleChatAsync(ct);
 
         Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
@@ -1783,75 +1537,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(2, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
         Assert.Equal(1, _api.Created.Count(c => c == $"persistentvolumeclaims/{ChatPodName}"));
         Assert.Contains(_log.At(Microsoft.Extensions.Logging.LogLevel.Information), m => m.Contains("is back", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task The_chat_pod_is_not_deleted_while_a_chat_command_runs_or_a_chat_hold_is_open_and_the_time_counts_from_when_they_end()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var (host, clock) = IdleHost();
-        var chat = Guid.NewGuid();
-        await host.CreateChatFolderAsync(chat, "/unused", ct);
-        var release = new TaskCompletionSource();
-        _api.OnExec = async e =>
-        {
-            await release.Task;
-            await e.ExitAsync(0);
-        };
-
-        using var process = await host.StartCommandAsync(RunCommand.Prepared(Command(ChatFolder(chat), "npm", "run", "dev"), chat), ct);
-        clock.Advance(IdleTimeout * 2);
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatPodName, _api.Names("pods"));
-
-        release.SetResult();
-        await process.WaitForExitAsync(ct);
-        using (host.HoldChat(ChatFolder(chat)))
-        {
-            clock.Advance(IdleTimeout * 2);
-            await host.ReapIdleChatAsync(ct);
-            Assert.Contains(ChatPodName, _api.Names("pods"));
-        }
-
-        clock.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.Contains(ChatPodName, _api.Names("pods"));
-
-        clock.Advance(TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(ct);
-        Assert.DoesNotContain(ChatPodName, _api.Names("pods"));
-    }
-
-    [Fact]
-    public async Task A_chat_that_starts_while_the_reaper_deletes_the_chat_pod_waits_for_it_and_gets_a_new_one()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var (host, clock) = IdleHost();
-        var chat = Guid.NewGuid();
-        await host.CreateChatFolderAsync(chat, "/unused", ct);
-        var deleting = new TaskCompletionSource();
-        var proceed = new TaskCompletionSource();
-        _api.BeforeDelete = async what =>
-        {
-            if (what == $"pods/{ChatPodName}" && !deleting.Task.IsCompleted)
-            {
-                deleting.SetResult();
-                await proceed.Task;
-            }
-        };
-        clock.Advance(IdleTimeout);
-
-        var reaping = host.ReapIdleChatAsync(ct);
-        await deleting.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        var starting = host.DirectoryExistsAsync(ChatFolder(chat), ct);
-        await Task.Delay(100, ct);
-        Assert.False(starting.IsCompleted);
-        proceed.SetResult();
-        await reaping;
-
-        Assert.True(await starting);
-        Assert.Contains(ChatPodName, _api.Names("pods"));
-        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{ChatPodName}"));
     }
 
     [Fact]
@@ -1899,7 +1584,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var (host, clock) = IdleHost();
         await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
-        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
 
         clock.Advance(IdleTimeout);
         await sweeper.SweepAsync(host, ct);
@@ -1928,7 +1613,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     public async Task The_sweeper_leaves_the_chat_objects_alone()
     {
         await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
-        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
 
         await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
 

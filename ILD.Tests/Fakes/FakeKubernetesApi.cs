@@ -43,7 +43,12 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     /// <summary>Every delete a client asked for, as <c>kind/name</c>, in order; the garbage collection that follows is not in it.</summary>
     public List<string> Deleted { get; } = [];
 
-    public List<FakeExec> Execs { get; } = [];
+    private readonly List<FakeExec> _execs = [];
+
+    /// <summary>The commands started so far; a copy, since a command may start while a test reads them.</summary>
+    public IReadOnlyList<FakeExec> Execs { get { lock (_gate) return _execs.ToList(); } }
+
+    public void ClearExecs() { lock (_gate) _execs.Clear(); }
 
     /// <summary>The environment files commands were given, by path in the pod: <c>export NAME='value'</c> lines.</summary>
     public Dictionary<string, string> EnvironmentFiles { get; } = [];
@@ -337,7 +342,7 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
         var socket = await http.WebSockets.AcceptWebSocketAsync(_offerV5 ? offered.FirstOrDefault(p => p == "v5.channel.k8s.io") ?? offered.First() : null);
         var exec = new FakeExec(pod, http.Request.Query["command"].Select(c => c!).ToList(), Flag(http, "stdin"), Flag(http, "tty"), socket);
         exec.Protocol = socket.SubProtocol ?? string.Empty;
-        lock (_gate) Execs.Add(exec);
+        lock (_gate) _execs.Add(exec);
         var receive = exec.ReceiveAsync();
         try
         {

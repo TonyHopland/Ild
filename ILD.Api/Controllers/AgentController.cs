@@ -1,9 +1,7 @@
 using System.Data;
-using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using ILD.Api.Authentication;
 using ILD.Api.Configuration;
 using ILD.Api.Contracts;
@@ -130,52 +128,35 @@ public class AgentController : ControllerBase, IActionFilter
     private bool HeaderDisagrees(string header, AgentTokenSource source)
         => Request.Headers.TryGetValue(header, out var sent)
            && !string.IsNullOrWhiteSpace(sent.ToString())
-           && !(TrySessionClaim(source, out var own) && Guid.TryParse(sent.ToString(), out var named) && named == own);
-
-    // Upper bound on a pushed loop document (~1 MB). A real ild-loop-template/v2 is
-    // a few KB; this stops a rogue agent from shoving megabytes over the chat hub.
-    private const int MaxLoopDocumentChars = 1_000_000;
-
-    /// <summary>What <see cref="string.Trim()"/> trims, spelled out: SQL's own trim takes spaces only.</summary>
-    private static readonly char[] Whitespace = Enumerable.Range(char.MinValue, char.MaxValue + 1)
-        .Select(c => (char)c).Where(char.IsWhiteSpace).ToArray();
+           && !(Caller.SessionClaim(source) is { } own && Guid.TryParse(sent.ToString(), out var named) && named == own);
 
     private readonly IWorkItemManager _workItems;
     private readonly ILoopTemplateManager _templates;
     private readonly ILoopRunStore _runs;
     private readonly AppDbContext _db;
-    private readonly IProviderStore _providerStore;
-    private readonly IPackageFeedResolver _packageFeeds;
-    private readonly IWorktreePreviewService _preview;
+    private readonly IWorkItemPreview _preview;
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IChatNotifier _chatNotifier;
-    private readonly IWorkItemNotifier _notifier;
-    private readonly BootstrapCredentials _instance;
+    private readonly IAgentSessionResolver _sessions;
 
     public AgentController(
         IWorkItemManager workItems,
         ILoopTemplateManager templates,
         ILoopRunStore runs,
         AppDbContext db,
-        IProviderStore providerStore,
-        IPackageFeedResolver packageFeeds,
-        IWorktreePreviewService preview,
+        IWorkItemPreview preview,
         IChatLoopScratchpad loopScratchpad,
         IChatNotifier chatNotifier,
-        BootstrapCredentials instance,
-        IWorkItemNotifier? notifier = null)
+        IAgentSessionResolver sessions)
     {
         _workItems = workItems;
         _templates = templates;
         _runs = runs;
         _db = db;
-        _providerStore = providerStore;
-        _packageFeeds = packageFeeds;
         _preview = preview;
         _loopScratchpad = loopScratchpad;
         _chatNotifier = chatNotifier;
-        _notifier = notifier ?? new NoopWorkItemNotifier();
-        _instance = instance;
+        _sessions = sessions;
     }
 
     /// <summary>
@@ -334,7 +315,7 @@ public class AgentController : ControllerBase, IActionFilter
         }
         catch (HttpRequestException ex)
         {
-            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+            return WorkItemServerUnreachable(ex);
         }
     }
 
@@ -362,7 +343,7 @@ public class AgentController : ControllerBase, IActionFilter
         }
         catch (HttpRequestException ex)
         {
-            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+            return WorkItemServerUnreachable(ex);
         }
     }
 
@@ -482,7 +463,7 @@ public class AgentController : ControllerBase, IActionFilter
             // The same shape this surface answers every other WorkItem-server
             // outage with, so an agent can tell a missing file from an
             // unreachable one.
-            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+            return WorkItemServerUnreachable(ex);
         }
     }
 
@@ -574,7 +555,7 @@ public class AgentController : ControllerBase, IActionFilter
         [FromServices] IChatRepositoryCloner cloner,
         CancellationToken cancellationToken)
     {
-        if (!TryResolveChatSessionId(out var chatSessionId))
+        if (Caller.ChatSessionId is not { } chatSessionId)
             return BadRequest(new { error = "A chat-session id is required. Only an agent launched for a chat has one." });
 
         return ChatRepositoryCloneHttpResult.ToActionResult(
@@ -590,9 +571,8 @@ public class AgentController : ControllerBase, IActionFilter
     /// </summary>
     private async Task<WorktreePreviewResponse> ForCallerAsync(string workItemId, WorktreePreviewResponse response)
     {
-        var runId = CallerRunId();
-        var ownRun = runId is Guid id
-            && await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == id && r.WorkItemId == workItemId);
+        var runId = Caller.RunId;
+        var ownRun = runId is Guid id && await _sessions.RunWorksOnAsync(id, workItemId);
 
         var proxyBase = HttpContext?.RequestServices?.GetService<PreviewProxyBase>() ?? PreviewProxyBase.Disabled;
         var egress = HttpContext?.RequestServices?.GetService<EgressProxyOptions>() ?? EgressProxyOptions.Disabled;
@@ -601,6 +581,9 @@ public class AgentController : ControllerBase, IActionFilter
             service.AgentUrl = ownRun ? service.LocalUrl ?? service.PublicUrl : AgentPreviewUrl(service.PublicUrl, proxyBase, egress);
         return copy;
     }
+
+    private async Task<IActionResult> ForCallerAsync(string workItemId, Task<PreviewResult<WorktreePreviewResponse>> preview)
+        => (await (await preview).MapAsync(response => ForCallerAsync(workItemId, response))).ToActionResult();
 
     /// <summary>
     /// The address an agent outside the work item's run opens <paramref name="publicUrl"/> at. A preview the proxy
@@ -627,16 +610,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            return Ok(await ForCallerAsync(id, await _preview.GetStatusAsync(workItem!.WorktreePath!)));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return await ForCallerAsync(id, _preview.GetStatusAsync(id));
     }
 
     [HttpPost("workitems/{id}/preview/start")]
@@ -645,21 +619,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var options = await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds);
-            var response = request?.Wait == false
-                ? await _preview.BeginStartAsync(workItem!.WorktreePath!, options)
-                : await _preview.StartAsync(workItem!.WorktreePath!, options);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(await ForCallerAsync(id, response));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return await ForCallerAsync(id, _preview.StartAsync(id, request));
     }
 
     [HttpPost("workitems/{id}/preview/stop")]
@@ -668,18 +628,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _preview.StopAsync(workItem!.WorktreePath!);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(await ForCallerAsync(id, response));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return await ForCallerAsync(id, _preview.StopAsync(id));
     }
 
     [HttpPost("workitems/{id}/preview/services/{service}/start")]
@@ -688,24 +637,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _preview.StartServiceAsync(
-                workItem!.WorktreePath!,
-                service,
-                await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(await ForCallerAsync(id, response));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return await ForCallerAsync(id, _preview.StartServiceAsync(id, service, request, startDependencies: false));
     }
 
     [HttpPost("workitems/{id}/preview/services/{service}/stop")]
@@ -714,21 +646,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _preview.StopServiceAsync(workItem!.WorktreePath!, service);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(await ForCallerAsync(id, response));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return await ForCallerAsync(id, _preview.StopServiceAsync(id, service));
     }
 
     [HttpGet("workitems/{id}/preview/services/{service}/config")]
@@ -737,22 +655,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var config = await _preview.GetServiceConfigAsync(workItem!.WorktreePath!, service);
-            if (config == null)
-                return NotFound(new { error = $"No preview config found for service '{service}'." });
-            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await _preview.GetServiceConfigAsync(id, service)).ToActionResult();
     }
 
     [HttpPut("workitems/{id}/preview/services/{service}/config")]
@@ -761,23 +664,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-        if (request == null || string.IsNullOrWhiteSpace(request.Config))
-            return BadRequest(new { error = "config is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            await _preview.UpdateServiceConfigAsync(workItem!.WorktreePath!, service, request.Config);
-            var config = await _preview.GetServiceConfigAsync(workItem!.WorktreePath!, service);
-            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await _preview.UpdateServiceConfigAsync(id, service, request)).ToActionResult();
     }
 
     [HttpGet("workitems/{id}/preview/logs")]
@@ -786,20 +673,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var content = await _preview.GetServiceLogAsync(workItem!.WorktreePath!, service);
-            return Ok(new WorktreePreviewLogResponse { Service = service, Content = content });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await _preview.GetLogAsync(id, service)).ToActionResult();
     }
 
     /// <summary>
@@ -862,7 +736,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (workItem == null)
             return NotFound();
 
-        var ledger = await reviews.ReadAsync(id, sinceCommit, CallerRunId());
+        var ledger = await reviews.ReadAsync(id, sinceCommit, Caller.RunId);
         return Ok(new
         {
             headSha = ledger.HeadSha,
@@ -919,7 +793,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.ReplyAsync(id, request.CommentId, request.Body, CallerRunId(), CallerChatSessionId());
+        var result = await reviews.ReplyAsync(id, request.CommentId, request.Body, Caller.RunId, Caller.ChatSessionId);
         return Ok(new { ok = result.Ok, commentId = result.Id, writeId = result.Id, message = result.Message });
     }
 
@@ -940,7 +814,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.ResolveAsync(id, request.ThreadId, CallerRunId(), CallerChatSessionId());
+        var result = await reviews.ResolveAsync(id, request.ThreadId, Caller.RunId, Caller.ChatSessionId);
         return Ok(new { ok = result.Ok, threadId = request.ThreadId, writeId = result.Id, message = result.Message });
     }
 
@@ -967,7 +841,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.CommentAsync(id, request.Body, CallerRunId(), CallerChatSessionId());
+        var result = await reviews.CommentAsync(id, request.Body, Caller.RunId, Caller.ChatSessionId);
         return Ok(new { ok = result.Ok, writeId = result.Id, message = result.Message });
     }
 
@@ -994,7 +868,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.CloseAsync(id, request.CommentId, request.Resolve, CallerRunId(), CallerChatSessionId());
+        var result = await reviews.CloseAsync(id, request.CommentId, request.Resolve, Caller.RunId, Caller.ChatSessionId);
         return Ok(new { ok = result.Ok, commentId = request.CommentId, writeId = result.Id, message = result.Message });
     }
 
@@ -1013,7 +887,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (workItem == null)
             return NotFound();
 
-        var view = await reviews.ListQueuedAsync(id, CallerRunId(), CallerChatSessionId());
+        var view = await reviews.ListQueuedAsync(id, Caller.RunId, Caller.ChatSessionId);
         return Ok(new
         {
             message = view.Message,
@@ -1047,7 +921,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.WithdrawAsync(id, writeId, CallerRunId(), CallerChatSessionId());
+        var result = await reviews.WithdrawAsync(id, writeId, Caller.RunId, Caller.ChatSessionId);
         return Ok(new { ok = result.Ok, writeId, message = result.Message });
     }
 
@@ -1098,7 +972,8 @@ public class AgentController : ControllerBase, IActionFilter
     /// the candidates. No <paramref name="version"/> means the latest.
     /// </summary>
     [HttpGet("loop-templates/document")]
-    public async Task<IActionResult> GetLoopTemplateDocument([FromQuery] string? nameOrId = null, [FromQuery] int? version = null)
+    public async Task<IActionResult> GetLoopTemplateDocument(
+        [FromServices] ILoopTemplateLookup lookup, [FromQuery] string? nameOrId = null, [FromQuery] int? version = null)
     {
         if (string.IsNullOrWhiteSpace(nameOrId))
             return BadRequest(new { error = "nameOrId is required: a loop template id or name." });
@@ -1107,7 +982,7 @@ public class AgentController : ControllerBase, IActionFilter
 
         // One snapshot: a save writes the template's name and policy with its new version, so separate reads could mix them.
         await using var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead);
-        var (template, notFound) = await FindLoopTemplateAsync(nameOrId);
+        var (template, notFound) = await FindLoopTemplateAsync(lookup, nameOrId);
         if (template == null)
             return notFound!;
 
@@ -1139,69 +1014,23 @@ public class AgentController : ControllerBase, IActionFilter
         });
     }
 
-    /// <summary>
-    /// The template <paramref name="nameOrId"/> names: its id, or else its exact
-    /// name (case and surrounding whitespace ignored, archived templates
-    /// included). Unknown is 404; a name more than one template has is 409 with
-    /// the candidates.
-    /// </summary>
-    private async Task<(LoopTemplate? Template, IActionResult? Error)> FindLoopTemplateAsync(string nameOrId)
+    private async Task<(LoopTemplate? Template, IActionResult? Error)> FindLoopTemplateAsync(ILoopTemplateLookup lookup, string nameOrId)
     {
-        var key = nameOrId.Trim();
-        // An id wins; a value that only looks like one may still be a template's name.
-        var template = Guid.TryParse(key, out var templateId)
-            ? await _db.LoopTemplates.AsNoTracking().SingleOrDefaultAsync(t => t.Id == templateId)
-            : null;
-        if (template != null)
+        var found = await lookup.FindAsync(nameOrId);
+        if (found.Template is { } template)
             return (template, null);
-
-        var lowered = key.ToLowerInvariant();
-        var named = await _db.LoopTemplates.AsNoTracking()
-            .Where(t => t.Name.Trim(Whitespace).ToLower() == lowered)
-            .ToListAsync();
-        if (named.Count > 1)
-            return (null, Conflict(new
-            {
-                error = $"{named.Count} loop templates are named '{key}'; pass the id of the one you mean.",
-                candidates = named.OrderBy(t => t.IsArchived).ThenBy(t => t.Name, StringComparer.Ordinal)
-                    .Select(t => new { id = t.Id, name = t.Name, isArchived = t.IsArchived }),
-            }));
-        return named.Count == 1
-            ? (named[0], null)
-            : (null, NotFound(new { error = $"Loop template not found: {key}" }));
+        return found.Outcome == LoopTemplateLookupOutcome.Ambiguous
+            ? (null, AmbiguousLoopTemplateName(found.Error!, found.Candidates!))
+            : (null, NotFound(new { error = found.Error }));
     }
 
-    /// <summary>
-    /// The Edit List as stored: the edits as the server parsed them, re-serialised
-    /// without null members. Not the document format, so not <see cref="LoopTemplateDocument.Render()"/>.
-    /// </summary>
-    private static readonly JsonSerializerOptions EditListJson = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
-    private ConflictObjectResult NotLatestLoopTemplateVersion(LoopTemplate template, int baseVersion, int? latestVersion)
+    private ConflictObjectResult AmbiguousLoopTemplateName(string error, IReadOnlyList<LoopTemplate> candidates)
         => Conflict(new
         {
-            error = $"Version {baseVersion} is not the latest version of loop template '{template.Name}'; the latest is version {latestVersion}. "
-                + "Read it with get_loop_template, make your change to that document and propose again.",
-            latestVersion,
+            error,
+            candidates = candidates.OrderBy(t => t.IsArchived).ThenBy(t => t.Name, StringComparer.Ordinal)
+                .Select(t => new { id = t.Id, name = t.Name, isArchived = t.IsArchived }),
         });
-
-    private static BadRequestObjectResult TooLarge(string member, int length)
-        => new(new { error = $"{member} is too large ({length} chars); the limit is {MaxLoopDocumentChars}." });
-
-    private static string EditListFailureMessage(LoopEditListFailure failure)
-    {
-        var names = new[]
-        {
-            failure.Op,
-            failure.NodeId is null ? null : $"node '{failure.NodeId}'",
-            failure.Field is null ? null : $"field '{failure.Field}'",
-        }.OfType<string>().ToList();
-        var named = names.Count == 0 ? string.Empty : $" ({string.Join(", ", names)})";
-        return $"edits[{failure.Index}]{named}: {failure.Message}";
-    }
 
     /// <summary>
     /// The analytics dashboard's per-template rows for the same filters, each with
@@ -1394,7 +1223,7 @@ public class AgentController : ControllerBase, IActionFilter
     [HttpGet("variables")]
     public async Task<IActionResult> ListVariables()
     {
-        if (!TryResolveRunId(out var runId))
+        if (Caller.RunId is not { } runId)
             return BadRequest(new { error = "A loop-run id is required. Only an agent launched for a run has one." });
 
         var variables = await _runs.GetVariablesAsync(runId);
@@ -1412,83 +1241,17 @@ public class AgentController : ControllerBase, IActionFilter
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        if (!TryResolveRunId(out var runId))
+        if (Caller.RunId is not { } runId)
             return BadRequest(new { error = "A loop-run id is required. Only an agent launched for a run has one." });
 
         if (!PromptPlaceholderRegistry.IsValidVariableName(name))
             return BadRequest(new { error = "Variable name must start with a letter and contain only letters, digits, and underscores." });
 
-        var runExists = await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == runId);
-        if (!runExists)
+        if (!await _sessions.RunExistsAsync(runId))
             return NotFound(new { error = $"Loop run not found: {runId}" });
 
         await _runs.SetVariableAsync(runId, name, request.Value ?? string.Empty);
         return Ok(new { name, value = request.Value ?? string.Empty });
-    }
-
-    private bool TryResolveRunId(out Guid runId)
-    {
-        runId = Guid.Empty;
-        return TrySessionClaim(AgentTokenSource.Run, out runId);
-    }
-
-    private bool TrySessionClaim(AgentTokenSource source, out Guid id)
-    {
-        id = Guid.Empty;
-        return (User.IsInRole(IldAuthentication.AgentRole) || User.IsInRole(IldAuthentication.ExternalAgentRole))
-            && User.FindFirstValue(IldAuthentication.SessionSourceClaim) == source.ToString().ToLowerInvariant()
-            && Guid.TryParse(User.FindFirstValue(IldAuthentication.SessionIdClaim), out id);
-    }
-
-    /// <summary>
-    /// The run this call came from, or null when its token is not a run's —
-    /// a chat agent borrows the agent API without being a loop run, and that
-    /// difference decides whether a review read consumes what it returned.
-    /// </summary>
-    private Guid? CallerRunId() => TryResolveRunId(out var runId) ? runId : null;
-
-    /// <summary>
-    /// The chat session this call came from, or null. With <see cref="CallerRunId"/>
-    /// it names who owns a queued pull-request write; the run wins when both are sent.
-    /// </summary>
-    private Guid? CallerChatSessionId() => TryResolveChatSessionId(out var chatSessionId) ? chatSessionId : null;
-
-    private Guid? CallerGrantId() => TrySessionClaim(AgentTokenSource.Grant, out var grantId) ? grantId : null;
-
-    private bool TryResolveChatSessionId(out Guid chatSessionId)
-    {
-        chatSessionId = Guid.Empty;
-        return TrySessionClaim(AgentTokenSource.Chat, out chatSessionId);
-    }
-
-    /// <summary>Who the changes this call makes are for, from the run or chat its token names.</summary>
-    private Task<WorkItemActor?> CallerActorAsync() => ActorAsync(CallerRunId(), CallerChatSessionId(), CallerGrantId());
-
-    /// <summary>
-    /// Who a change is for: a loop run as this instance's user, named by the step
-    /// it is running and tied to the work item it works on; else a chat session
-    /// as the user it belongs to; else the signed-in person, or this instance for
-    /// an agent token that names neither (none is issued today). Null for a signed-in session
-    /// whose user can no longer be resolved.
-    /// </summary>
-    private async Task<WorkItemActor?> ActorAsync(Guid? runId, Guid? chatSessionId, Guid? grantId = null)
-    {
-        if (runId is { } run && await _runs.GetByIdAsync(run) is { } loopRun)
-        {
-            var step = await _runs.GetRunningNodeIdAsync(run) is { } runNodeId
-                ? (await _runs.GetRunNodeByIdAsync(runNodeId))?.NodeLabel
-                : null;
-            return WorkItemActor.Agent(_instance.Username, run, step, loopRun.WorkItemId);
-        }
-        if (chatSessionId is { } chat
-            && await _db.ChatSessions.AsNoTracking().Where(c => c.Id == chat).Select(c => c.UserId).FirstOrDefaultAsync() is { } chatUser)
-            return WorkItemActor.Chat(chatUser, chat);
-        if (grantId is { } grant
-            && await _db.ExternalAgentGrants.AsNoTracking().Where(g => g.Id == grant).Select(g => g.Name).FirstOrDefaultAsync() is { } grantName)
-            return WorkItemActor.External(_instance.Username, grantName, grant);
-        if (User.IsInRole(IldAuthentication.AgentRole))
-            return WorkItemActor.System(_instance.Username, "agent with no run or chat");
-        return User.Identity?.Name is { Length: > 0 } name ? WorkItemActor.Human(name) : null;
     }
 
     // -- Control of work (ADR-0037, amended by ADR-0039) -------------------------
@@ -1500,10 +1263,9 @@ public class AgentController : ControllerBase, IActionFilter
 
     private async Task<(WorkItemActor? Actor, IActionResult? Error)> ControlActorAsync()
     {
-        if (!User.IsInRole(IldAuthentication.ExternalAgentRole)
-            || User.FindFirstValue(IldAuthentication.GrantScopeClaim) != nameof(ExternalAgentGrantScope.Control))
+        if (!Caller.HasControlGrant)
             return (null, StatusCode(403, new { error = "Only an external-agent grant with control of work can start work items, queue them or answer human feedback." }));
-        return await ActorAsync(null, null, CallerGrantId()) is { Kind: RemoteWorkItemActorKind.ExternalAgent } actor
+        return await _sessions.ActorAsync(Caller) is { Kind: RemoteWorkItemActorKind.ExternalAgent } actor
             ? (actor, null)
             : (null, StatusCode(403, new { error = "This grant no longer exists." }));
     }
@@ -1542,7 +1304,7 @@ public class AgentController : ControllerBase, IActionFilter
         }
         catch (HttpRequestException ex)
         {
-            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+            return WorkItemServerUnreachable(ex);
         }
     }
 
@@ -1562,7 +1324,7 @@ public class AgentController : ControllerBase, IActionFilter
         }
         catch (HttpRequestException ex)
         {
-            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+            return WorkItemServerUnreachable(ex);
         }
     }
 
@@ -1672,8 +1434,8 @@ public class AgentController : ControllerBase, IActionFilter
         if (error != null) return error;
         if (request == null || string.IsNullOrWhiteSpace(request.Document))
             return BadRequest(new { error = "document is required — pass a complete ild-loop-template/v2 document." });
-        if (request.Document.Length > MaxLoopDocumentChars)
-            return BadRequest(new { error = $"document is too large ({request.Document.Length} chars); the limit is {MaxLoopDocumentChars}." });
+        if (request.Document.Length > LoopTemplateProposalService.MaxLoopDocumentChars)
+            return BadRequest(new { error = $"document is too large ({request.Document.Length} chars); the limit is {LoopTemplateProposalService.MaxLoopDocumentChars}." });
 
         // Retrofit (ADR-0011): the server now validates the full replacement itself
         // (reject-on-invalid) and returns the same synchronous ack as the scoped
@@ -1792,13 +1554,13 @@ public class AgentController : ControllerBase, IActionFilter
     {
         if (result is { Applied: true, Document: not null })
         {
-            if (result.Document.Length > MaxLoopDocumentChars)
+            if (result.Document.Length > LoopTemplateProposalService.MaxLoopDocumentChars)
                 return Ok(new
                 {
                     applied = false,
                     matchCount = result.MatchCount,
                     validationErrors = Array.Empty<string>(),
-                    error = $"The edited document is too large ({result.Document.Length} chars); the limit is {MaxLoopDocumentChars}.",
+                    error = $"The edited document is too large ({result.Document.Length} chars); the limit is {LoopTemplateProposalService.MaxLoopDocumentChars}.",
                     summary = (string?)null,
                 });
 
@@ -1820,16 +1582,15 @@ public class AgentController : ControllerBase, IActionFilter
     /// Resolve the caller's chat session for the loop-editor endpoints: the
     /// caller's token must be a chat's AND name a chat session that still
     /// exists. This is the loop-tool equivalent of
-    /// <see cref="CallerOwns"/> — the MCP server is scoped to one session, so a
+    /// <see cref="IAgentSessionResolver.Owns"/> — the MCP server is scoped to one session, so a
     /// token naming no session is not the caller's to act on (403).
     /// </summary>
     private async Task<(Guid ChatSessionId, IActionResult? Error)> ResolveChatSessionAsync()
     {
-        if (!TryResolveChatSessionId(out var chatSessionId))
+        if (Caller.ChatSessionId is not { } chatSessionId)
             return (Guid.Empty, BadRequest(new { error = "A chat-session id is required. Only an agent launched for a chat has one." }));
 
-        var exists = await _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == chatSessionId);
-        if (!exists)
+        if (!await _sessions.ChatSessionExistsAsync(chatSessionId))
             return (Guid.Empty, StatusCode(403, new { error = "Unknown or inactive chat session." }));
 
         return (chatSessionId, null);
@@ -1852,30 +1613,25 @@ public class AgentController : ControllerBase, IActionFilter
             return BadRequest(new { error = $"Repository not found: {repositoryId}" });
 
         // A custom branch name is used verbatim as a branch and a worktree
-        // directory, so an illegal one is refused rather than mangled.
-        var branchNameOverride = BranchNameRules.Normalize(request.BranchNameOverride);
-        if (branchNameOverride is not null && BranchNameRules.Validate(branchNameOverride) is { } branchError)
+        // directory, so an illegal one is refused rather than mangled. The base
+        // branch is a ref too; whether it exists on origin is settled at run start.
+        if (BranchNameRules.ValidateOverrides(request.BranchNameOverride, request.BaseBranchOverride) is { } branchError)
             return BadRequest(new { error = branchError });
-
-        // The base branch is a ref too. Whether it exists on origin is settled
-        // at run start, not here.
+        var branchNameOverride = BranchNameRules.Normalize(request.BranchNameOverride);
         var baseBranchOverride = BranchNameRules.Normalize(request.BaseBranchOverride);
-        if (baseBranchOverride is not null
-            && BranchNameRules.Validate(baseBranchOverride, BranchNameRules.BaseBranchSubject) is { } baseError)
-            return BadRequest(new { error = baseError });
 
         // Legacy `loopTemplateId` (if any) is ignored — template is now
         // resolved from tags at run start (PRD §3.7).
 
         // The originating run or chat is the caller's own, from its token. A body that names another run is refused.
-        var createdByLoopRunId = CallerRunId();
+        var createdByLoopRunId = Caller.RunId;
         if (Guid.TryParse(request.CreatedByLoopRunId, out var bodyRun) && bodyRun != createdByLoopRunId)
             return StatusCode(403, new { error = "createdByLoopRunId is not the calling run." });
 
         // A standalone Chat Session (ADR-0010) stamps through its own token.
         // It is never both: a token is for a run or a chat.
-        var createdByChatSessionId = CallerChatSessionId();
-        var createdByExternalGrantId = CallerGrantId();
+        var createdByChatSessionId = Caller.ChatSessionId;
+        var createdByExternalGrantId = Caller.GrantId;
 
         // Validate dependencies up-front so we don't half-create.
         var dependencyIds = new List<string>();
@@ -1893,7 +1649,7 @@ public class AgentController : ControllerBase, IActionFilter
             }
         }
 
-        if (await ActorAsync(createdByLoopRunId, createdByChatSessionId, createdByExternalGrantId) is not { } actor)
+        if (await _sessions.ActorAsync(Caller) is not { } actor)
             return Unauthorized();
 
         string id;
@@ -1942,18 +1698,13 @@ public class AgentController : ControllerBase, IActionFilter
 
         var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
-        if (!CallerOwns(wi))
+        if (!_sessions.Owns(Caller, wi))
             return StatusCode(403, new { error = "You can only edit work items your own session created. To suggest an edit to this one, use propose_workitem_edit: a human approves or rejects it." });
 
-        if (BranchNameRules.Normalize(request.BranchNameOverride) is { } branchName
-            && BranchNameRules.Validate(branchName) is { } branchError)
+        if (BranchNameRules.ValidateOverrides(request.BranchNameOverride, request.BaseBranchOverride) is { } branchError)
             return BadRequest(new { error = branchError });
 
-        if (BranchNameRules.Normalize(request.BaseBranchOverride) is { } baseBranch
-            && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
-            return BadRequest(new { error = baseError });
-
-        if (await CallerActorAsync() is not { } actor)
+        if (await _sessions.ActorAsync(Caller) is not { } actor)
             return Unauthorized();
         var ok = await _workItems.UpdateAsync(
             actor, id, request.Title, request.Description ?? string.Empty, request.Tags,
@@ -1979,10 +1730,10 @@ public class AgentController : ControllerBase, IActionFilter
     {
         var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
-        if (!CallerOwns(wi))
+        if (!_sessions.Owns(Caller, wi))
             return StatusCode(403, new { error = "You can only delete work items your own session created." });
 
-        if (await CallerActorAsync() is not { } actor)
+        if (await _sessions.ActorAsync(Caller) is not { } actor)
             return Unauthorized();
         var ok = await _workItems.DeleteAsync(actor, id);
         if (!ok) return NotFound();
@@ -2008,7 +1759,7 @@ public class AgentController : ControllerBase, IActionFilter
         {
             var wi = await _workItems.GetWorkItemAsync(id);
             if (wi == null) return NotFound();
-            if (!CallerOwns(wi))
+            if (!_sessions.Owns(Caller, wi))
                 return StatusCode(403, new { error = "You can only change the dependencies of work items your own session created. To suggest this change, use propose_workitem_edit with addDependencies or removeDependencies: a human approves or rejects it." });
 
             var dependsOn = rawDependsOn?.Trim() ?? string.Empty;
@@ -2028,7 +1779,7 @@ public class AgentController : ControllerBase, IActionFilter
                 return Ok(DependencyChange(id, dependsOn, changed: false, unchanged, before));
             }
 
-            if (await CallerActorAsync() is not { } actor)
+            if (await _sessions.ActorAsync(Caller) is not { } actor)
                 return Unauthorized();
             bool ok;
             try
@@ -2051,7 +1802,7 @@ public class AgentController : ControllerBase, IActionFilter
         }
         catch (HttpRequestException ex)
         {
-            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+            return WorkItemServerUnreachable(ex);
         }
     }
 
@@ -2073,110 +1824,46 @@ public class AgentController : ControllerBase, IActionFilter
 
     [HttpPost("workitems/{id}/edit-proposals")]
     public async Task<IActionResult> ProposeWorkItemEdit(
-        string id, [FromBody] AgentWorkItemEditProposalRequest request, CancellationToken cancellationToken)
+        string id,
+        [FromBody] AgentWorkItemEditProposalRequest request,
+        [FromServices] IWorkItemEditProposalService proposals,
+        CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
+        var (proposer, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
-        if (request.Title is null && request.Description is null && request.Tags is null
-            && request.BranchNameOverride is null && request.BaseBranchOverride is null
-            && request.AddDependencies is null && request.RemoveDependencies is null)
-            return BadRequest(new { error = "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, addDependencies or removeDependencies." });
-        if (request.Title is not null && string.IsNullOrWhiteSpace(request.Title))
-            return BadRequest(new { error = "A proposed title cannot be blank." });
-
-        // The same branch rules update_workitem applies, so a proposal that could
-        // never be applied is refused now rather than when a human approves it.
-        if (BranchNameRules.Normalize(request.BranchNameOverride) is { } branchName
-            && BranchNameRules.Validate(branchName) is { } branchError)
-            return BadRequest(new { error = branchError });
-        if (BranchNameRules.Normalize(request.BaseBranchOverride) is { } baseBranch
-            && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
-            return BadRequest(new { error = baseError });
-
-        var addDependencies = TrimIds(request.AddDependencies);
-        var removeDependencies = TrimIds(request.RemoveDependencies);
-
-        EditProposalCreateResult result;
+        WorkItemEditProposalResult result;
         try
         {
-            if (await CheckProposedDependenciesAsync(id, addDependencies, removeDependencies) is { } dependencyError)
-                return dependencyError;
-
-            if (await ActorAsync(runId, chatSessionId, grantId) is not { } actor)
-                return Unauthorized();
-            result = await _workItems.ProposeEditAsync(actor, id, new RemoteCreateEditProposalRequest
-            {
-                Title = request.Title,
-                Description = request.Description,
-                Tags = request.Tags,
-                BranchNameOverride = request.BranchNameOverride,
-                BaseBranchOverride = request.BaseBranchOverride,
-                AddDependencies = addDependencies,
-                RemoveDependencies = removeDependencies,
-                Rationale = request.Rationale,
-                CreatedByLoopRunId = runId,
-                CreatedByChatSessionId = chatSessionId,
-                CreatedByExternalGrantId = grantId,
-                CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
-                ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
-            }, cancellationToken);
+            result = await proposals.ProposeAsync(id, request, Caller, proposer!, cancellationToken);
         }
         catch (HttpRequestException ex)
         {
-            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+            return WorkItemServerUnreachable(ex);
         }
 
         switch (result.Outcome)
         {
-            case EditProposalCreateOutcome.Created:
-                if (chatSessionId is { } chat)
-                    await _chatNotifier.EditProposalsChangedAsync(chat);
+            case WorkItemEditProposalOutcome.Created:
                 return CreatedAtAction(nameof(ListWorkItemEditProposals), new { id }, new
                 {
                     id = result.Proposal!.Id,
                     workItemId = id,
                     status = result.Proposal.Status.ToString(),
                 });
-            case EditProposalCreateOutcome.NotFound:
+            case WorkItemEditProposalOutcome.NotFound:
                 return NotFound();
-            case EditProposalCreateOutcome.TooManyPending:
+            case WorkItemEditProposalOutcome.Unauthorized:
+                return Unauthorized();
+            case WorkItemEditProposalOutcome.TooManyPending:
                 return Conflict(new { error = result.Error });
             default:
                 return BadRequest(new { error = result.Error });
         }
-    }
-
-    private static List<string>? TrimIds(List<string>? ids) => ids?.Select(i => i?.Trim() ?? string.Empty).ToList();
-
-    private async Task<IActionResult?> CheckProposedDependenciesAsync(string id, List<string>? add, List<string>? remove)
-    {
-        if (add is null && remove is null) return null;
-        var named = (add ?? []).Concat(remove ?? []).ToList();
-        if (named.Any(d => d.Length == 0))
-            return BadRequest(new { error = "A dependency id cannot be blank." });
-        if (named.Distinct().Count() != named.Count)
-            return BadRequest(new { error = "Each dependency may appear only once across addDependencies and removeDependencies." });
-
-        if (await _workItems.GetWorkItemAsync(id) == null) return NotFound();
-        var current = (await _workItems.GetDependenciesAsync(id)).Select(d => d.Id).ToHashSet();
-        foreach (var dep in remove ?? [])
-        {
-            if (!current.Contains(dep))
-                return BadRequest(new { error = $"Work item {id} does not depend on {dep}, so there is nothing to remove." });
-        }
-        foreach (var dep in add ?? [])
-        {
-            if (current.Contains(dep))
-                return BadRequest(new { error = $"Work item {id} already depends on {dep}." });
-            if (await _workItems.CheckNewDependencyAsync(id, dep) is { } problem)
-                return BadRequest(new { error = problem });
-        }
-        return null;
     }
 
     /// <summary>
@@ -2193,7 +1880,7 @@ public class AgentController : ControllerBase, IActionFilter
         }
         catch (HttpRequestException ex)
         {
-            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+            return WorkItemServerUnreachable(ex);
         }
     }
 
@@ -2215,50 +1902,21 @@ public class AgentController : ControllerBase, IActionFilter
     [HttpPost("global-variables/proposals")]
     public async Task<IActionResult> ProposeGlobalVariableChange(
         [FromBody] AgentGlobalVariableProposalRequest request,
-        [FromServices] IGlobalVariableProposalStore proposals,
-        [FromServices] ISchedulerSettingsService settings,
+        [FromServices] IGlobalVariableProposalService proposals,
         CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
+        var (proposer, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
-        var name = (request.Name ?? string.Empty).Trim();
-        if (!PromptPlaceholderRegistry.IsValidVariableName(name))
-            return BadRequest(new { error = "A name is a letter followed by up to 127 letters, digits or underscores, e.g. review_rules." });
-        if (request.Value is null)
-            return BadRequest(new { error = "Suggest a value: the complete new text, which may be empty." });
-        // Checked as they will be stored: the save drops NUL characters.
-        var value = AppDbContext.WithoutNul(request.Value);
-        var rationale = AppDbContext.WithoutNul(request.Rationale ?? string.Empty).Trim();
-        if (rationale.Length == 0)
-            return BadRequest(new { error = "Give a rationale: why the variable should say this." });
-        var limit = await settings.GetGlobalVariableMaxLengthAsync(cancellationToken);
-        if (value.Length > limit)
-            return BadRequest(new
-            {
-                error = string.Create(CultureInfo.InvariantCulture,
-                    $"The value is {value.Length:N0} / {limit:N0} characters; consolidate it and suggest it again."),
-            });
+        var result = await proposals.ProposeAsync(request, proposer!, cancellationToken);
+        if (result.Outcome == GlobalVariableProposalOutcome.Invalid)
+            return BadRequest(new { error = result.Error });
 
-        var proposal = await proposals.ProposeAsync(new GlobalVariableProposal
-        {
-            Name = name,
-            Value = value,
-            Rationale = rationale,
-            CreatedByLoopRunId = runId,
-            CreatedByChatSessionId = chatSessionId,
-            CreatedByExternalGrantId = grantId,
-            CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
-            ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
-        }, cancellationToken);
-
-        await _notifier.GlobalVariableProposalsChangedAsync(proposal.Name);
-        if (chatSessionId is { } chat)
-            await _chatNotifier.GlobalVariableProposalsChangedAsync(chat);
+        var proposal = result.Proposal!;
         return CreatedAtAction(nameof(ListGlobalVariableProposals), null, new
         {
             id = proposal.Id,
@@ -2275,12 +1933,12 @@ public class AgentController : ControllerBase, IActionFilter
     public async Task<IActionResult> ListGlobalVariableProposals(
         [FromServices] IGlobalVariableProposalStore proposals, CancellationToken cancellationToken)
     {
-        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
+        var (proposer, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
         var own = await proposals.ListAsync(
-            new GlobalVariableProposalQuery(CreatedByLoopRunId: runId, CreatedByChatSessionId: chatSessionId, CreatedByExternalGrantId: grantId),
+            new GlobalVariableProposalQuery(CreatedByLoopRunId: proposer!.RunId, CreatedByChatSessionId: proposer.ChatSessionId, CreatedByExternalGrantId: proposer.GrantId),
             cancellationToken);
         return Ok(own.Select(e => new
         {
@@ -2307,7 +1965,7 @@ public class AgentController : ControllerBase, IActionFilter
         [FromServices] IHumanInputProposalService proposals,
         CancellationToken cancellationToken)
     {
-        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
+        var (proposer, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
@@ -2324,7 +1982,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (rationale.Length > HumanInputProposal.MaxRationaleLength)
             return BadRequest(new { error = $"The rationale is {rationale.Length:N0} / {HumanInputProposal.MaxRationaleLength:N0} characters; shorten it." });
 
-        var result = await proposals.ProposeAsync(id, output, text, rationale, runId, chatSessionId, cancellationToken, grantId);
+        var result = await proposals.ProposeAsync(id, output, text, rationale, proposer!.RunId, proposer.ChatSessionId, cancellationToken, proposer.GrantId);
         return result.Outcome switch
         {
             HumanInputProposalOutcome.Created => StatusCode(StatusCodes.Status201Created, new
@@ -2352,105 +2010,41 @@ public class AgentController : ControllerBase, IActionFilter
     [HttpPost("loop-templates/proposals")]
     public async Task<IActionResult> ProposeLoopTemplateChange(
         [FromBody] AgentLoopTemplateProposalRequest request,
-        [FromServices] ILoopTemplateProposalStore proposals,
+        [FromServices] ILoopTemplateProposalService proposals,
         CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
+        var (proposer, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
-        if (string.IsNullOrWhiteSpace(request.NameOrId))
-            return BadRequest(new { error = "nameOrId is required: the loop template's id or name, as get_loop_template takes it." });
-        if (request.BaseVersion is not { } baseVersion || baseVersion < 1)
-            return BadRequest(new { error = "baseVersion is required: the version get_loop_template returned with the document, 1 or greater." });
-        string? edits = null;
-        if (request.Edits is not null)
-        {
-            if (request.Document is not null)
-                return BadRequest(new { error = "Send either document or edits, not both: edits for most changes, a whole document only for a rewrite." });
-            if (request.Edits.Count == 0)
-                return BadRequest(new { error = "edits is empty: send at least one edit, or a whole document." });
-            edits = JsonSerializer.Serialize(request.Edits, EditListJson);
-            if (edits.Length > MaxLoopDocumentChars)
-                return TooLarge("edits", edits.Length);
-        }
-        else if (string.IsNullOrWhiteSpace(request.Document))
-            return BadRequest(new { error = "document or edits is required: an Edit List to apply to the latest version, or the complete ild-loop-template/v2 document, as JSON text." });
-        else if (request.Document.Length > MaxLoopDocumentChars)
-            return TooLarge("document", request.Document.Length);
-        // Checked as it will be stored: the save drops NUL characters.
-        var rationale = AppDbContext.WithoutNul(request.Rationale ?? string.Empty).Trim();
-        if (rationale.Length == 0)
-            return BadRequest(new { error = "Give a rationale: why the loop should change this way." });
-        if (rationale.Length > LoopTemplateProposal.MaxRationaleLength)
-            return BadRequest(new { error = $"The rationale is {rationale.Length} characters; keep it to {LoopTemplateProposal.MaxRationaleLength}." });
-
-        var (template, notFound) = await FindLoopTemplateAsync(request.NameOrId);
-        if (template == null)
-            return notFound!;
-
-        string document;
-        if (request.Edits is null)
-            document = request.Document!;
-        else
-        {
-            var latest = await _templates.GetLatestDocumentAsync(template);
-            if (latest is not { Version: var latestVersion, Document: var latestDocument } || latestVersion != baseVersion)
-                return NotLatestLoopTemplateVersion(template, baseVersion, latest?.Version ?? 0);
-
-            var applied = LoopDocumentEditor.ApplyEditList(latestDocument, request.Edits);
-            if (applied.Failure is { } failure)
-                return BadRequest(new { error = EditListFailureMessage(failure), editIndex = failure.Index });
-            document = applied.Document!;
-            if (document.Length > MaxLoopDocumentChars)
-                return TooLarge("document", document.Length);
-        }
-
-        var proposed = _templates.CheckProposedDocument(document);
-        if (proposed.Error is { } documentError)
-            return BadRequest(new { error = documentError });
-        if (proposed.ValidationErrors.Count > 0)
-            return BadRequest(new
-            {
-                error = "A save would refuse this loop. Fix every error listed and propose again.",
-                validationErrors = proposed.ValidationErrors,
-            });
-
-        var result = await proposals.ProposeAsync(new LoopTemplateProposal
-        {
-            LoopTemplateId = template.Id,
-            BaseVersion = baseVersion,
-            Document = proposed.Document!,
-            Edits = edits,
-            Rationale = rationale,
-            CreatedByLoopRunId = runId,
-            CreatedByChatSessionId = chatSessionId,
-            CreatedByExternalGrantId = grantId,
-            CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
-            ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
-        }, cancellationToken);
-
+        var result = await proposals.ProposeAsync(request, proposer!, cancellationToken);
         switch (result.Outcome)
         {
-            case LoopTemplateProposeOutcome.TemplateNotFound:
-                return NotFound(new { error = $"Loop template not found: {request.NameOrId.Trim()}" });
-            case LoopTemplateProposeOutcome.NotLatest:
-                return NotLatestLoopTemplateVersion(template, baseVersion, result.LatestVersion);
+            case LoopTemplateProposalOutcome.Created:
+                var proposal = result.Proposal!;
+                return CreatedAtAction(nameof(ListLoopTemplateProposals), null, new
+                {
+                    id = proposal.Id,
+                    templateId = proposal.LoopTemplateId,
+                    baseVersion = proposal.BaseVersion,
+                    status = proposal.Status.ToString(),
+                });
+            case LoopTemplateProposalOutcome.TemplateNotFound:
+                return NotFound(new { error = result.Error });
+            case LoopTemplateProposalOutcome.AmbiguousName:
+                return AmbiguousLoopTemplateName(result.Error!, result.Candidates!);
+            case LoopTemplateProposalOutcome.NotLatest:
+                return Conflict(new { error = result.Error, latestVersion = result.LatestVersion });
+            default:
+                if (result.EditIndex is { } editIndex)
+                    return BadRequest(new { error = result.Error, editIndex });
+                if (result.ValidationErrors is { } validationErrors)
+                    return BadRequest(new { error = result.Error, validationErrors });
+                return BadRequest(new { error = result.Error });
         }
-
-        var proposal = result.Proposal!;
-        await LoopTemplateProposalHints.SendAsync(
-            _notifier, _chatNotifier, proposal.LoopTemplateId, 1, chatSessionId is { } chat ? [chat] : []);
-        return CreatedAtAction(nameof(ListLoopTemplateProposals), null, new
-        {
-            id = proposal.Id,
-            templateId = proposal.LoopTemplateId,
-            baseVersion = proposal.BaseVersion,
-            status = proposal.Status.ToString(),
-        });
     }
 
     /// <summary>
@@ -2461,12 +2055,12 @@ public class AgentController : ControllerBase, IActionFilter
     public async Task<IActionResult> ListLoopTemplateProposals(
         [FromServices] ILoopTemplateProposalStore proposals, CancellationToken cancellationToken)
     {
-        var (runId, chatSessionId, grantId, sessionError) = await ResolveProposingSessionAsync();
+        var (proposer, sessionError) = await ResolveProposingSessionAsync();
         if (sessionError is not null)
             return sessionError;
 
         var own = await proposals.ListAsync(
-            new LoopTemplateProposalQuery(CreatedByLoopRunId: runId, CreatedByChatSessionId: chatSessionId, CreatedByExternalGrantId: grantId),
+            new LoopTemplateProposalQuery(CreatedByLoopRunId: proposer!.RunId, CreatedByChatSessionId: proposer.ChatSessionId, CreatedByExternalGrantId: proposer.GrantId),
             cancellationToken);
         return Ok(own.Select(e => new
         {
@@ -2485,91 +2079,30 @@ public class AgentController : ControllerBase, IActionFilter
         }));
     }
 
-    /// <summary>
-    /// The session a proposal is stamped with, resolved the way create-time
-    /// stamping is — the run id wins, and never both — but required to exist:
-    /// the decision is fed back to that session, so a proposal from nowhere
-    /// would have nowhere to go.
-    /// </summary>
-    private async Task<(Guid? RunId, Guid? ChatSessionId, Guid? GrantId, IActionResult? Error)> ResolveProposingSessionAsync()
+    private AgentCaller Caller => new(
+        IsAgent: User.IsInRole(IldAuthentication.AgentRole),
+        IsExternalAgent: User.IsInRole(IldAuthentication.ExternalAgentRole),
+        SessionSource: User.FindFirstValue(IldAuthentication.SessionSourceClaim),
+        SessionId: Guid.TryParse(User.FindFirstValue(IldAuthentication.SessionIdClaim), out var sessionId) ? sessionId : null,
+        GrantScope: User.FindFirstValue(IldAuthentication.GrantScopeClaim),
+        UserName: User.Identity?.Name);
+
+    private async Task<(AgentProposer? Proposer, IActionResult? Error)> ResolveProposingSessionAsync()
     {
-        if (TryResolveRunId(out var runId))
-            return await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == runId)
-                ? (runId, null, null, null)
-                : (null, null, null, StatusCode(403, new { error = "Unknown loop run." }));
-
-        if (TryResolveChatSessionId(out var chatSessionId))
-            return await _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == chatSessionId)
-                ? (null, chatSessionId, null, null)
-                : (null, null, null, StatusCode(403, new { error = "Unknown or inactive chat session." }));
-
-        if (TrySessionClaim(AgentTokenSource.Grant, out var grantId))
-            return await _db.ExternalAgentGrants.AsNoTracking().AnyAsync(g => g.Id == grantId)
-                ? (null, null, grantId, null)
-                : (null, null, null, StatusCode(403, new { error = "Unknown external-agent grant." }));
-
-        return (null, null, null, BadRequest(new
+        var resolution = await _sessions.ResolveProposerAsync(Caller);
+        return resolution.Outcome switch
         {
-            error = "A proposal needs the proposing session. Only an agent launched for a run or a chat, or an external-agent grant, has one.",
-        }));
+            ProposerOutcome.Resolved => (resolution.Proposer, null),
+            ProposerOutcome.Unknown => (null, StatusCode(403, new { error = resolution.Error })),
+            _ => (null, BadRequest(new { error = resolution.Error })),
+        };
     }
 
-    /// <summary>
-    /// The sequence of the reply a chat proposal follows. A chat persists the
-    /// user's message before its turn starts, so a newest user message means
-    /// the proposal comes from that turn, whose reply takes the next sequence.
-    /// </summary>
-    private async Task<int?> ResolveChatReplySequenceAsync(Guid chatSessionId)
-    {
-        var newest = await _db.ChatMessages.AsNoTracking()
-            .Where(m => m.ChatSessionId == chatSessionId)
-            .OrderByDescending(m => m.Sequence)
-            .ThenByDescending(m => m.CreatedAt)
-            .Select(m => new { m.Role, m.Sequence })
-            .FirstOrDefaultAsync();
-        if (newest is null) return null;
-        return newest.Role == "user" ? newest.Sequence + 1 : newest.Sequence;
-    }
-
-    /// <summary>
-    /// Null when the caller may act on the work item's worktree, preview, pull request, conversation or attachments, else
-    /// a 403. A run reaches only its own run's work item and the items that run created; a chat, driven by the
-    /// operator, and a user reach any. An unknown item passes, for the route to answer 404.
-    /// </summary>
     private async Task<IActionResult?> CallerMayTouchAsync(string workItemId)
-    {
-        if (CallerGrantId() is { } grantId)
-            return await _workItems.GetWorkItemAsync(workItemId) is { } own && own.CreatedByExternalGrantId != grantId
-                ? StatusCode(403, new { error = "A grant reaches only the work items it created for this route." })
-                : null;
-        if (!TryResolveRunId(out var runId))
-            return null;
-        if (await _workItems.GetWorkItemAsync(workItemId) is not { } workItem)
-            return null;
-        if (workItem.CreatedByLoopRunId == runId)
-            return null;
-        var ownWorkItemId = await _db.LoopRuns.AsNoTracking().Where(r => r.Id == runId).Select(r => r.WorkItemId).FirstOrDefaultAsync();
-        return ownWorkItemId == workItem.Id
-            ? null
-            : StatusCode(403, new { error = "This work item belongs to another run." });
-    }
+        => await _sessions.ReachRefusalAsync(Caller, workItemId) is { } refusal
+            ? StatusCode(403, new { error = refusal })
+            : null;
 
-    /// <summary>
-    /// True iff <paramref name="wi"/> was created by the caller's current
-    /// session — the loop run its token names, or
-    /// the chat session its token names. This is the gate that limits an
-    /// agent to editing or deleting only the items it created during its own
-    /// session, never pre-existing items or items from other sessions. A token
-    /// is for a run or a chat, never both.
-    /// </summary>
-    private bool CallerOwns(WorkItemView wi)
-    {
-        if (TryResolveRunId(out var runId))
-            return wi.CreatedByLoopRunId == runId;
-        if (TryResolveChatSessionId(out var chatId))
-            return wi.CreatedByChatSessionId == chatId;
-        if (TrySessionClaim(AgentTokenSource.Grant, out var grantId))
-            return wi.CreatedByExternalGrantId == grantId;
-        return false;
-    }
+    private static ObjectResult WorkItemServerUnreachable(HttpRequestException ex)
+        => new(new { error = "WorkItemServer unreachable", detail = ex.Message }) { StatusCode = 503 };
 }

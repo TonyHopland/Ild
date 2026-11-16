@@ -42,7 +42,7 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
     [Fact]
     public void ResolveIldMcpServerDll_returns_override()
     {
-        var resolved = OpenCodeAdapter.ResolveIldMcpServerDll(_environment);
+        var resolved = IldMcpServer.ResolveServerDll(_environment);
         Assert.NotNull(resolved);
         Assert.True(File.Exists(resolved));
     }

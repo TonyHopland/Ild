@@ -202,7 +202,8 @@ public sealed class CodexAdapterTests : IDisposable
         var result = await Adapter().ExecuteAsync(Context(script));
 
         Assert.False(result.Success);
-        Assert.Contains(ProviderMessage, result.Error);
+        Assert.Equal($"[codex-error] {ProviderMessage}", result.Error);
+        Assert.Equal("Halfway.", result.Output);
         Assert.Equal(AiFailureClassifier.ClassifyProviderMessage(ProviderMessage), result.Failure);
         Assert.Equal(FailureKind.Interrupted, result.Failure);
         // ILD is on by default, so its settings file was written; it is gone with the failed turn.
@@ -793,7 +794,7 @@ public sealed class CodexAdapterTests : IDisposable
         if (store is null)
             return new CodexAdapter(_logger, _environment, EgressProxyTests.Creds);
         var services = new ServiceCollection();
-        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunWorkspace>(LocalRunHost.Shared);
         store.Register(services);
         var provider = services.BuildServiceProvider();
         return new CodexAdapter(provider.GetRequiredService<IServiceScopeFactory>(), _logger, _environment, EgressProxyTests.Creds);

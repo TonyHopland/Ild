@@ -85,12 +85,20 @@ public sealed class RunTerminationTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    // The host keeps what it read of a pod that has ended, for after the pod is replaced.
+    private static async Task RememberAsync(InMemoryRunHost host, Guid run, RunTermination termination)
+    {
+        host.RunEndedBy = termination;
+        await host.GetTerminationAsync(run, null, Ct);
+        host.RunEndedBy = null;
+    }
+
     [Fact]
     public async Task An_old_out_of_memory_kill_is_not_reported_for_a_later_unrelated_exit_after_the_pod_is_replaced()
     {
         var host = new InMemoryRunHost();
         var run = Guid.NewGuid();
-        host.RememberTermination(run, new RunTermination(RunTerminationKind.OutOfMemory, FourGi, EndedAt: DateTimeOffset.UtcNow.AddMinutes(-5)));
+        await RememberAsync(host, run, new RunTermination(RunTerminationKind.OutOfMemory, FourGi, EndedAt: DateTimeOffset.UtcNow.AddMinutes(-5)));
         var laterCommandStarted = DateTimeOffset.UtcNow.AddMinutes(-1);
 
         Assert.Null(await host.GetTerminationAsync(run, laterCommandStarted, Ct));
@@ -103,7 +111,7 @@ public sealed class RunTerminationTests
         var host = new InMemoryRunHost();
         var run = Guid.NewGuid();
         var earlier = DateTimeOffset.UtcNow.AddSeconds(-1);
-        host.RememberTermination(run, new RunTermination(RunTerminationKind.OutOfMemory, FourGi));
+        await RememberAsync(host, run, new RunTermination(RunTerminationKind.OutOfMemory, FourGi));
 
         Assert.NotNull(await host.GetTerminationAsync(run, earlier, Ct));
         Assert.Null(await host.GetTerminationAsync(run, DateTimeOffset.UtcNow.AddSeconds(1), Ct));

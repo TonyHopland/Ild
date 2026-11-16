@@ -34,7 +34,7 @@ public sealed class WorktreePreviewServiceHealthUrlTests
     [InlineData("http://0.0.0.0:3000/health")]
     public async Task A_loopback_health_url_is_checked_at_the_runs_address(string healthUrl)
     {
-        var probed = await WorktreePreviewService.ReachableHealthUrlAsync(HostAnswering("10.89.3.2"), healthUrl, Worktree, CancellationToken.None);
+        var probed = await HttpPreviewHealthProbe.ReachableHealthUrlAsync(HostAnswering("10.89.3.2"), healthUrl, Worktree, CancellationToken.None);
 
         Assert.Equal("http://10.89.3.2:3000/health", probed);
     }
@@ -42,7 +42,7 @@ public sealed class WorktreePreviewServiceHealthUrlTests
     [Fact]
     public async Task On_ilds_own_machine_the_url_is_checked_as_written()
     {
-        var probed = await WorktreePreviewService.ReachableHealthUrlAsync(HostAnswering("127.0.0.1"), "http://127.0.0.1:3000/health?deep=1", Worktree, CancellationToken.None);
+        var probed = await HttpPreviewHealthProbe.ReachableHealthUrlAsync(HostAnswering("127.0.0.1"), "http://127.0.0.1:3000/health?deep=1", Worktree, CancellationToken.None);
 
         Assert.Equal("http://127.0.0.1:3000/health?deep=1", probed);
     }
@@ -51,7 +51,7 @@ public sealed class WorktreePreviewServiceHealthUrlTests
     public async Task A_health_url_on_another_host_is_refused()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            WorktreePreviewService.ReachableHealthUrlAsync(HostAnswering("10.89.3.2"), "https://status.example.test/ping", Worktree, TestContext.Current.CancellationToken));
+            HttpPreviewHealthProbe.ReachableHealthUrlAsync(HostAnswering("10.89.3.2"), "https://status.example.test/ping", Worktree, TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -78,7 +78,7 @@ public sealed class WorktreePreviewServiceHealthUrlTests
     {
         var result = await ValidateAsync(healthUrl);
 
-        Assert.True(result.Configured);
+        Assert.Equal("app", result.Name);
     }
 
     [Fact]
@@ -125,9 +125,9 @@ public sealed class WorktreePreviewServiceHealthUrlTests
         try
         {
             var services = new ServiceCollection();
-            WorktreePreviewService.ConfigureHealthProbeClient(services.AddHttpClient(WorktreePreviewService.HealthProbeClientName));
+            PreviewHealthProbeClient.Configure(services.AddHttpClient(PreviewHealthProbeClient.Name));
             using var provider = services.BuildServiceProvider();
-            using var client = provider.GetRequiredService<IHttpClientFactory>().CreateClient(WorktreePreviewService.HealthProbeClientName);
+            using var client = provider.GetRequiredService<IHttpClientFactory>().CreateClient(PreviewHealthProbeClient.Name);
 
             using var response = await client.GetAsync($"http://127.0.0.1:{redirectingPort}/", TestContext.Current.CancellationToken);
 
@@ -151,7 +151,7 @@ public sealed class WorktreePreviewServiceHealthUrlTests
         return port;
     }
 
-    private static async Task<WorktreePreviewValidationResult> ValidateAsync(string healthUrl)
+    private static async Task<PreviewProfile> ValidateAsync(string healthUrl)
     {
         var worktree = Path.Combine(Path.GetTempPath(), "ild-health-url-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
@@ -174,9 +174,9 @@ public sealed class WorktreePreviewServiceHealthUrlTests
                 },
             };
             File.WriteAllText(Path.Combine(worktree, "ild.config.json"), config.ToJsonString());
-            var service = new WorktreePreviewService(new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(),
-                PreviewProxyBase.Disabled, NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
-            return await service.ValidateConfigAsync(worktree, cancellationToken: CancellationToken.None);
+            return PreviewConfigLoader.Resolve(
+                PreviewConfigLoader.RequireConfigured(await new PreviewConfigLoader(LocalRunHost.Shared).LoadAsync(worktree, CancellationToken.None)),
+                null);
         }
         finally
         {

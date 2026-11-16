@@ -31,7 +31,8 @@ public class AiProvidersControllerTagConflictTests
             db.Context,
             store,
             new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance),
-            Mock.Of<IManagedAgentProvisioner>());
+            Mock.Of<IManagedAgentProvisioner>(),
+            db.NetworkEdits());
     }
 
     /// <summary>A store whose create fails after <paramref name="meanwhile"/> ran.</summary>

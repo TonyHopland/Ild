@@ -7,273 +7,112 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
-/// The agent-facing preview endpoints must broadcast PreviewStateChanged just like
-/// the human WorkItemsController, so an open Preview tab live-updates when an AI
-/// agent starts or stops the preview through the agent API. These tests pin that
-/// contract (and that read-only / rejected calls stay silent).
+/// The agent's preview routes are glue over <see cref="IWorkItemPreview"/> (see <see cref="WorkItemPreviewTests"/>):
+/// the reach check first, then the module, then the caller's address on the preview a route answers with.
 /// </summary>
 public class AgentControllerPreviewTests
 {
     private const string WorktreePath = "/tmp/worktrees/agent-preview-wi";
 
-    private static AgentController BuildController(
-        WorkItemView? workItem,
-        Mock<IWorktreePreviewService> preview,
-        Mock<IWorkItemNotifier> notifier,
-        TestDb db)
+    private static AgentController BuildController(Mock<IWorkItemPreview> preview, TestDb db, System.Security.Claims.ClaimsPrincipal? user = null)
     {
         var workItems = new Mock<IWorkItemManager>();
-        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
-
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync((string id) => new WorkItemView { Id = id, WorktreePath = WorktreePath });
         var controller = new AgentController(
             workItems.Object,
             new Mock<ILoopTemplateManager>().Object,
             db.LoopRuns,
             db.Context,
-            db.Providers,
-            NoPackageFeeds.Resolver,
             preview.Object,
             new Mock<IChatLoopScratchpad>().Object,
             new Mock<IChatNotifier>().Object,
-            TestActors.Instance,
-            notifier.Object);
-        controller.ControllerContext = new ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() };
+            AgentSessions.Resolver(db, workItems.Object));
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext { User = user ?? new System.Security.Claims.ClaimsPrincipal() },
+        };
         return controller;
     }
 
-    private static WorkItemView ItemWithWorktree(string id) => new()
+    private static WorktreePreviewResponse Running() => new()
     {
-        Id = id,
+        State = "running",
         WorktreePath = WorktreePath,
+        Services =
+        {
+            new WorktreePreviewServiceResponse
+            {
+                Name = "web",
+                Port = 5173,
+                PublicUrl = "http://wi-7.ild.localhost:8080",
+                LocalUrl = "http://127.0.0.1:5173",
+            },
+        },
     };
 
-    [Fact]
-    public async Task StartPreview_broadcasts_preview_state_changed()
-    {
-        using var db = new TestDb();
-        var id = Guid.NewGuid().ToString();
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.StartAsync(WorktreePath, It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
-        var notifier = new Mock<IWorkItemNotifier>();
-        var controller = BuildController(ItemWithWorktree(id), preview, notifier, db);
-
-        var result = await controller.StartPreview(id, new WorktreePreviewStartRequest());
-
-        Assert.IsType<OkObjectResult>(result);
-        notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
-    }
+    private static PreviewResult<WorktreePreviewResponse> Answer() => PreviewResult<WorktreePreviewResponse>.Ok(Running());
 
     [Fact]
-    public async Task StopPreview_broadcasts_preview_state_changed()
+    public async Task Every_route_hands_its_arguments_to_the_module_and_answers_with_what_it_returns()
     {
         using var db = new TestDb();
-        var id = Guid.NewGuid().ToString();
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.StopAsync(WorktreePath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "stopped", WorktreePath = WorktreePath });
-        var notifier = new Mock<IWorkItemNotifier>();
-        var controller = BuildController(ItemWithWorktree(id), preview, notifier, db);
+        var preview = new Mock<IWorkItemPreview>();
+        var request = new WorktreePreviewStartRequest { StartDependencies = true };
+        var update = new WorktreePreviewServiceConfigUpdateRequest { Config = "{}" };
+        preview.Setup(p => p.GetStatusAsync("w")).ReturnsAsync(Answer());
+        preview.Setup(p => p.StartAsync("w", request)).ReturnsAsync(Answer());
+        preview.Setup(p => p.StopAsync("w")).ReturnsAsync(Answer());
+        preview.Setup(p => p.StartServiceAsync("w", "web", request, false)).ReturnsAsync(Answer());
+        preview.Setup(p => p.StopServiceAsync("w", "web")).ReturnsAsync(Answer());
+        preview.Setup(p => p.GetServiceConfigAsync("w", "web"))
+            .ReturnsAsync(PreviewResult<WorktreePreviewServiceConfigResponse>.Ok(new() { Service = "web", Config = "{}" }));
+        preview.Setup(p => p.UpdateServiceConfigAsync("w", "web", update))
+            .ReturnsAsync(PreviewResult<WorktreePreviewServiceConfigResponse>.Failed(PreviewRefusal.Refused, "no"));
+        preview.Setup(p => p.GetLogAsync("w", "web"))
+            .ReturnsAsync(PreviewResult<WorktreePreviewLogResponse>.Failed(PreviewRefusal.WorkItemNotFound));
+        var controller = BuildController(preview, db);
 
-        var result = await controller.StopPreview(id);
-
-        Assert.IsType<OkObjectResult>(result);
-        notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
+        Assert.IsType<OkObjectResult>(await controller.GetPreview("w"));
+        Assert.IsType<OkObjectResult>(await controller.StartPreview("w", request));
+        Assert.IsType<OkObjectResult>(await controller.StopPreview("w"));
+        // The agent has no start-dependencies option: whatever the request says, the module is told false.
+        Assert.IsType<OkObjectResult>(await controller.StartPreviewService("w", "web", request));
+        Assert.IsType<OkObjectResult>(await controller.StopPreviewService("w", "web"));
+        Assert.IsType<OkObjectResult>(await controller.GetPreviewServiceConfig("w", "web"));
+        Assert.IsType<BadRequestObjectResult>(await controller.UpdatePreviewServiceConfig("w", "web", update));
+        Assert.IsType<NotFoundResult>(await controller.GetPreviewLog("w", "web"));
     }
 
-    [Fact]
-    public async Task StartPreviewService_broadcasts_preview_state_changed()
-    {
-        using var db = new TestDb();
-        var id = Guid.NewGuid().ToString();
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.StartServiceAsync(WorktreePath, "web", It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
-        var notifier = new Mock<IWorkItemNotifier>();
-        var controller = BuildController(ItemWithWorktree(id), preview, notifier, db);
-
-        var result = await controller.StartPreviewService(id, "web", new WorktreePreviewStartRequest());
-
-        Assert.IsType<OkObjectResult>(result);
-        notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
-    }
-
-    [Fact]
-    public async Task StopPreviewService_broadcasts_preview_state_changed()
-    {
-        using var db = new TestDb();
-        var id = Guid.NewGuid().ToString();
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.StopServiceAsync(WorktreePath, "web", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "stopped", WorktreePath = WorktreePath });
-        var notifier = new Mock<IWorkItemNotifier>();
-        var controller = BuildController(ItemWithWorktree(id), preview, notifier, db);
-
-        var result = await controller.StopPreviewService(id, "web");
-
-        Assert.IsType<OkObjectResult>(result);
-        notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
-    }
-
-    [Fact]
-    public async Task GetPreview_does_not_broadcast()
-    {
-        using var db = new TestDb();
-        var id = Guid.NewGuid().ToString();
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.GetStatusAsync(WorktreePath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "stopped", WorktreePath = WorktreePath });
-        var notifier = new Mock<IWorkItemNotifier>();
-        var controller = BuildController(ItemWithWorktree(id), preview, notifier, db);
-
-        var result = await controller.GetPreview(id);
-
-        Assert.IsType<OkObjectResult>(result);
-        // Reading status must not tell every board client the preview changed.
-        notifier.Verify(n => n.PreviewStateChangedAsync(It.IsAny<string>()), Times.Never);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task StartPreview_threads_the_repository_custom_env_into_start_options(bool itemRepointed)
-    {
-        using var db = new TestDb();
-        var id = Guid.NewGuid().ToString();
-
-        // Seed a repository carrying a custom .env, and point the work item at it.
-        var repoId = Guid.NewGuid();
-        var provider = new ILD.Data.Entities.RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "https://e" };
-        db.Context.RemoteProviders.Add(provider);
-        db.Context.Repositories.Add(new ILD.Data.Entities.Repository
-        {
-            Id = repoId,
-            Name = "r",
-            CloneUrl = "https://e/r.git",
-            RemoteProviderId = provider.Id,
-            PreviewEnv = "API_TOKEN=from-repo",
-        });
-        // Re-pointing the item since must not reach the run it already has.
-        var editedRepoId = Guid.NewGuid();
-        db.Context.Repositories.Add(new ILD.Data.Entities.Repository
-        {
-            Id = editedRepoId,
-            Name = "b",
-            CloneUrl = "https://e/b.git",
-            RemoteProviderId = provider.Id,
-            PreviewEnv = "API_TOKEN=from-edited-repo",
-        });
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        WorktreePreviewStartOptions? captured = null;
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.StartAsync(WorktreePath, It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, WorktreePreviewStartOptions?, CancellationToken>((_, o, _) => captured = o)
-            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
-        var notifier = new Mock<IWorkItemNotifier>();
-        var workItem = itemRepointed
-            ? new WorkItemView { Id = id, WorktreePath = WorktreePath, RepositoryId = editedRepoId, RunRepositoryId = repoId }
-            : new WorkItemView { Id = id, WorktreePath = WorktreePath, RepositoryId = repoId };
-        var controller = BuildController(workItem, preview, notifier, db);
-
-        var result = await controller.StartPreview(id, new WorktreePreviewStartRequest());
-
-        Assert.IsType<OkObjectResult>(result);
-        Assert.NotNull(captured);
-        Assert.Equal("API_TOKEN=from-repo", captured!.CustomEnv);
-    }
-
-    [Fact]
-    public async Task Preview_starts_carry_the_volume_scope_of_the_runs_repository_or_none_without_one()
-    {
-        using var db = new TestDb();
-        var id = Guid.NewGuid().ToString();
-        var provider = new ILD.Data.Entities.RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "https://e" };
-        db.Context.RemoteProviders.Add(provider);
-        var runRepoId = Guid.NewGuid();
-        var editedRepoId = Guid.NewGuid();
-        db.Context.Repositories.Add(new ILD.Data.Entities.Repository
-        {
-            Id = runRepoId, Name = "r", CloneUrl = "https://e/r.git", RemoteProviderId = provider.Id, KeepPreviewData = true,
-        });
-        db.Context.Repositories.Add(new ILD.Data.Entities.Repository
-        {
-            Id = editedRepoId, Name = "b", CloneUrl = "https://e/b.git", RemoteProviderId = provider.Id, KeepPreviewData = false,
-        });
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        var captured = new List<WorktreePreviewStartOptions?>();
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.StartAsync(WorktreePath, It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, WorktreePreviewStartOptions?, CancellationToken>((_, o, _) => captured.Add(o))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
-        preview.Setup(p => p.StartServiceAsync(WorktreePath, "web", It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, string, WorktreePreviewStartOptions?, CancellationToken>((_, _, o, _) => captured.Add(o))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
-        var withRepository = BuildController(
-            new WorkItemView { Id = id, Title = "Agent title", WorktreePath = WorktreePath, RepositoryId = editedRepoId, RunRepositoryId = runRepoId },
-            preview, new Mock<IWorkItemNotifier>(), db);
-        var withoutRepository = BuildController(
-            new WorkItemView { Id = id, Title = "Agent title", WorktreePath = WorktreePath },
-            preview, new Mock<IWorkItemNotifier>(), db);
-
-        Assert.IsType<OkObjectResult>(await withRepository.StartPreview(id, new WorktreePreviewStartRequest()));
-        Assert.IsType<OkObjectResult>(await withRepository.StartPreviewService(id, "web", new WorktreePreviewStartRequest()));
-        Assert.IsType<OkObjectResult>(await withoutRepository.StartPreview(id, new WorktreePreviewStartRequest()));
-
-        var expected = new PreviewVolumeScope(runRepoId, true, id, "Agent title");
-        Assert.Equal(3, captured.Count);
-        Assert.Equal(expected, captured[0]!.Volumes);
-        Assert.Equal(expected, captured[1]!.Volumes);
-        Assert.Null(captured[2]!.Volumes);
-    }
-
-    [Fact]
-    public async Task StartPreview_for_item_without_worktree_does_not_broadcast()
-    {
-        using var db = new TestDb();
-        var id = Guid.NewGuid().ToString();
-        var preview = new Mock<IWorktreePreviewService>();
-        var notifier = new Mock<IWorkItemNotifier>();
-        // No worktree => the preview surface refuses with 400 before doing anything,
-        // so nothing changed and no broadcast should fire.
-        var controller = BuildController(new WorkItemView { Id = id, WorktreePath = null }, preview, notifier, db);
-
-        var result = await controller.StartPreview(id, new WorktreePreviewStartRequest());
-
-        Assert.IsType<BadRequestObjectResult>(result);
-        preview.Verify(p => p.StartAsync(It.IsAny<string>(), It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()), Times.Never);
-        notifier.Verify(n => n.PreviewStateChangedAsync(It.IsAny<string>()), Times.Never);
-    }
+    private static async Task<WorktreePreviewServiceResponse> ServiceOf(IActionResult result)
+        => Assert.Single(Assert.IsType<WorktreePreviewResponse>(Assert.IsType<OkObjectResult>(result).Value).Services);
 
     private static async Task<WorktreePreviewServiceResponse> GetAgentService(
-        string workItemId, string? runHeader, string? chatHeader, TestDb db)
+        string workItemId, System.Security.Claims.ClaimsPrincipal? user, TestDb db)
     {
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.GetStatusAsync(WorktreePath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new WorktreePreviewResponse
-            {
-                State = "running",
-                WorktreePath = WorktreePath,
-                Services =
-                {
-                    new WorktreePreviewServiceResponse
-                    {
-                        Name = "web",
-                        Port = 5173,
-                        PublicUrl = "http://wi-7.ild.localhost:8080",
-                        LocalUrl = "http://127.0.0.1:5173",
-                    },
-                },
-            });
-        var controller = BuildController(ItemWithWorktree(workItemId), preview, new Mock<IWorkItemNotifier>(), db);
-        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
-        if (runHeader != null) http.User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, Guid.Parse(runHeader));
-        else if (chatHeader != null) http.User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Chat, Guid.Parse(chatHeader));
-        controller.ControllerContext = new ControllerContext { HttpContext = http };
+        var preview = new Mock<IWorkItemPreview>();
+        preview.Setup(p => p.GetStatusAsync(workItemId)).ReturnsAsync(Answer());
+        return await ServiceOf(await BuildController(preview, db, user).GetPreview(workItemId));
+    }
 
-        var ok = Assert.IsType<OkObjectResult>(await controller.GetPreview(workItemId));
-        return Assert.Single(Assert.IsType<WorktreePreviewResponse>(ok.Value).Services);
+    [Fact]
+    public async Task The_callers_address_is_applied_to_every_route_that_answers_with_a_preview()
+    {
+        using var db = new TestDb();
+        var preview = new Mock<IWorkItemPreview>();
+        preview.Setup(p => p.StartAsync("w", null)).ReturnsAsync(Answer());
+        preview.Setup(p => p.StopAsync("w")).ReturnsAsync(Answer());
+        preview.Setup(p => p.StartServiceAsync("w", "web", null, false)).ReturnsAsync(Answer());
+        preview.Setup(p => p.StopServiceAsync("w", "web")).ReturnsAsync(Answer());
+        var controller = BuildController(preview, db);
+
+        foreach (var result in new[]
+        {
+            await controller.StartPreview("w", null),
+            await controller.StopPreview("w"),
+            await controller.StartPreviewService("w", "web", null),
+            await controller.StopPreviewService("w", "web"),
+        })
+            Assert.Equal("http://wi-7.ild.localhost:8080", (await ServiceOf(result)).AgentUrl);
     }
 
     private static Guid SeedRun(TestDb db, string workItemId)
@@ -295,46 +134,49 @@ public class AgentControllerPreviewTests
         return run.Id;
     }
 
+
     [Fact]
     public async Task A_run_on_the_same_work_item_gets_the_local_address_as_agentUrl()
     {
         using var db = new TestDb();
         var id = Guid.NewGuid().ToString();
         var runId = SeedRun(db, id);
+        var run = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, runId);
 
-        var service = await GetAgentService(id, runId.ToString(), null, db);
+        var service = await GetAgentService(id, run, db);
 
         Assert.Equal("http://127.0.0.1:5173", service.AgentUrl);
         Assert.Equal("http://wi-7.ild.localhost:8080", service.PublicUrl);
     }
 
     [Fact]
-    public async Task A_run_on_another_work_item_is_refused_its_preview()
+    public async Task A_run_on_another_work_item_is_refused_before_the_module_is_called()
     {
         using var db = new TestDb();
         var id = Guid.NewGuid().ToString();
         var runId = SeedRun(db, Guid.NewGuid().ToString());
-        var preview = new Mock<IWorktreePreviewService>();
-        var controller = BuildController(ItemWithWorktree(id), preview, new Mock<IWorkItemNotifier>(), db);
-        controller.ControllerContext = new ControllerContext
-        {
-            HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
-            {
-                User = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, runId),
-            },
-        };
+        var preview = new Mock<IWorkItemPreview>();
+        var controller = BuildController(
+            preview, db, ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Run, runId));
 
-        var result = await controller.GetPreview(id);
-
-        Assert.Equal(403, Assert.IsType<ObjectResult>(result).StatusCode);
-        preview.Verify(p => p.GetStatusAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.GetPreview(id)).StatusCode);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.StartPreview(id, null)).StatusCode);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.StopPreview(id)).StatusCode);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.StartPreviewService(id, "web", null)).StatusCode);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.StopPreviewService(id, "web")).StatusCode);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.GetPreviewServiceConfig(id, "web")).StatusCode);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.UpdatePreviewServiceConfig(id, "web", null)).StatusCode);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.GetPreviewLog(id, "web")).StatusCode);
+        Assert.Empty(preview.Invocations);
     }
 
     [Fact]
     public async Task A_chat_session_gets_the_public_address_as_agentUrl()
     {
         using var db = new TestDb();
-        var service = await GetAgentService(Guid.NewGuid().ToString(), null, Guid.NewGuid().ToString(), db);
+        var chat = ILD.Tests.Integration.AgentTokenTestExtensions.AgentPrincipal(ILD.Data.Entities.AgentTokenSource.Chat, Guid.NewGuid());
+
+        var service = await GetAgentService(Guid.NewGuid().ToString(), chat, db);
 
         Assert.Equal("http://wi-7.ild.localhost:8080", service.AgentUrl);
     }
@@ -343,7 +185,7 @@ public class AgentControllerPreviewTests
     public async Task A_call_without_headers_gets_the_public_address_as_agentUrl()
     {
         using var db = new TestDb();
-        var service = await GetAgentService(Guid.NewGuid().ToString(), null, null, db);
+        var service = await GetAgentService(Guid.NewGuid().ToString(), null, db);
 
         Assert.Equal("http://wi-7.ild.localhost:8080", service.AgentUrl);
     }

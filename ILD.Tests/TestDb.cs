@@ -1,3 +1,5 @@
+using ILD.Core.Services.Implementations.Network;
+using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
@@ -88,6 +90,10 @@ public sealed class TestDb : IDisposable
         _ownsServer = server is null;
         Server = server ?? new FakeWorkItemServerHarness();
     }
+
+    /// <summary>The network policy module over this database; the policy and notifier default to ones that do nothing.</summary>
+    public NetworkPolicyEdits NetworkEdits(IEgressPolicy? policy = null, INetworkNotifier? notifier = null)
+        => new(Network, NetworkForwards, Providers, Settings, Context, policy ?? Moq.Mock.Of<IEgressPolicy>(), notifier ?? new NoopNetworkNotifier());
 
     public AppDbContext Fresh()
     {

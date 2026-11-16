@@ -80,11 +80,10 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     private sealed class Turn(OpenCodeAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
     {
-        private string? _sessionIdToUse = ctx.SessionId;
-        private string _model = string.Empty;
-        private string _configJson = string.Empty;
+        private (string Model, string ConfigJson)? _config;
         private IReadOnlyList<string> _extraArgs = [];
         private string _stdout = string.Empty;
+        private JsonEvents _events = new(string.Empty, null, null, false);
 
         // A call without tools leaves a session nobody resumes, which is deleted afterwards. Its id
         // comes from the stream, so a call that timed out is cleaned up too.
@@ -95,19 +94,26 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         public override string BinaryPath { get; } = adapter.ResolveBinaryPath(ctx);
 
-        public override async Task PrepareAsync()
+        public override Task PrepareAsync()
         {
-            await adapter.ForkManagedSessionAsync(ctx);
-            if (ctx.ManageSession && !string.IsNullOrEmpty(_sessionIdToUse))
-            {
-                var restored = await adapter.RestoreManagedSessionAsync(BinaryPath, worktreePath, ctx, _sessionIdToUse);
-                if (!string.IsNullOrEmpty(restored.Error))
-                    throw Failed(restored.Error);
-                _sessionIdToUse = restored.SessionIdToUse;
-            }
-
-            (_model, _configJson) = BuildOpenCodeConfig(ctx.Provider, adapter.RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway.Value);
             _extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger);
+            return Task.CompletedTask;
+        }
+
+        // opencode keeps its sessions itself: the stored one is imported when it has none of its own.
+        public override async Task<bool> RestoreSessionAsync(string sessionId)
+        {
+            var restored = await adapter.RestoreManagedSessionAsync(BinaryPath, worktreePath, ctx, sessionId);
+            return restored.SessionIdToUse is not null;
+        }
+
+        // The session is exported, which is also where the answer is read back from when the stream carried none.
+        public override async Task<string?> SaveSessionAsync(string sessionId)
+        {
+            var (exportError, sessionJson) = await adapter.PersistManagedSessionAsync(BinaryPath, worktreePath, ctx, sessionId);
+            return string.IsNullOrEmpty(exportError) && string.IsNullOrEmpty(_events.Text) && !string.IsNullOrWhiteSpace(sessionJson)
+                ? ExtractLatestAssistantTextFromSessionJson(sessionJson)
+                : null;
         }
 
         public override Task<AgentLaunch> LaunchAsync() => Task.FromResult(Launch(useWorktreeAsWorkingDirectory: true));
@@ -117,12 +123,18 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 ? Launch(useWorktreeAsWorkingDirectory: false)
                 : null;
 
+        // The config carries the gateway lease, which is first read here: the fork and the restore before the launch hold none.
         private AgentLaunch Launch(bool useWorktreeAsWorkingDirectory)
-            => new(
+        {
+            var (model, configJson) = _config ??= BuildOpenCodeConfig(
+                ctx.Provider, adapter.RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId,
+                ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway.Value);
+            return new(
                 BuildRunProcessStartInfo(
-                    BinaryPath, worktreePath, ctx.Prompt, _model, _configJson, _sessionIdToUse,
+                    BinaryPath, worktreePath, ctx.Prompt, model, configJson, ResumeSessionId,
                     useWorktreeAsWorkingDirectory: useWorktreeAsWorkingDirectory, extraArgs: _extraArgs),
-                BuildRunEnvironment(_configJson));
+                BuildRunEnvironment(configJson));
+        }
 
         public override async Task ReadStdoutAsync(StreamReader stdout)
         {
@@ -153,21 +165,14 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             catch (OperationCanceledException) { }
         }
 
-        public override async Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
+        public override StreamResult ParseStream()
         {
-            var events = ExtractTextAndSessionIdFromJsonEvents(_stdout);
-            if (ctx.NoTools && events.SessionId is not null) _sessionToDelete ??= events.SessionId;
-            var effectiveSessionId = events.SessionId ?? _sessionIdToUse;
-            string? exportedSessionJson = null;
-            if (ctx.ManageSession && exitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
-            {
-                var (exportError, sessionJson) = await adapter.PersistManagedSessionAsync(BinaryPath, worktreePath, ctx, effectiveSessionId);
-                if (string.IsNullOrEmpty(exportError))
-                    exportedSessionJson = sessionJson;
-            }
-
-            return AssembleResult(_stdout, events, stderr, exitCode, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, exportedSessionJson);
+            _events = ExtractTextAndSessionIdFromJsonEvents(_stdout);
+            if (ctx.NoTools && _events.SessionId is not null) _sessionToDelete ??= _events.SessionId;
+            return new StreamResult(_events.Text, _events.SessionId, _events.Error, _events.SawJsonEvents, _stdout);
         }
+
+        public override Task<TokenUsage?> UsageAsync() => Task.FromResult(AdapterUsageParser.ParseOpenCode(_stdout));
 
         public override async ValueTask DisposeAsync()
         {
@@ -175,67 +180,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             if (_sessionToDelete is not null)
                 await adapter.DeleteSessionAsync(ctx, _sessionToDelete);
         }
-    }
-
-    /// <summary>Turns a finished run's stdout, stderr and exit code into the node's result.</summary>
-    /// <remarks>
-    /// opencode --format json emits a stream of typed events (step_start,
-    /// tool_use, text, error, ...). Only `text` events carry assistant
-    /// output, and `error` events surface session failures. When no text
-    /// comes through, the response is a diagnostic rather than the raw
-    /// NDJSON, which is unreadable as AI node output. When
-    /// stdout is not JSON at all (e.g. tests using a stub binary), keep
-    /// the raw stdout as the response.
-    /// </remarks>
-    /// <param name="events">What <paramref name="stdout"/> says, parsed once by the caller.</param>
-    /// <param name="sessionId">The session the run ended on: the one its stream named, else the one it was started with.</param>
-    /// <param name="exportedSessionJson">The session as exported afterwards, read for the answer when the stream carried no text.</param>
-    internal static NodeExecutionResult AssembleResult(
-        string stdout, JsonEvents events, string stderr, int exitCode, string prompt,
-        string? sessionId, string? incomingSessionId, string? exportedSessionJson)
-    {
-        var (response, _, jsonError, sawJsonEvents) = events;
-
-        if (string.IsNullOrEmpty(response) && !string.IsNullOrWhiteSpace(exportedSessionJson))
-        {
-            response = ExtractLatestAssistantTextFromSessionJson(exportedSessionJson!);
-        }
-
-        // Snapshot before applying fallback error strings so we can tell below whether
-        // the model actually produced text.
-        var modelProducedText = !string.IsNullOrEmpty(response);
-
-        if (string.IsNullOrEmpty(response))
-        {
-            if (!string.IsNullOrEmpty(jsonError))
-                response = $"[opencode-error] {jsonError}";
-            else if (!sawJsonEvents)
-                response = stdout;
-            else if (!string.IsNullOrEmpty(stderr))
-                response = $"[opencode] no text response. stderr: {stderr.Trim()}";
-            else
-                response = "[opencode] no text response from model";
-        }
-
-        if (exitCode == 0 && !string.IsNullOrEmpty(jsonError))
-            // opencode's `{"type":"error"}` event isolates the provider's own
-            // message, so classify from that rather than leaving the executor
-            // to read it back out of a prefixed error string next to a page of
-            // agent narration. Unknown is passed through deliberately: the
-            // executor's fallback still gets its turn.
-            return NodeExecutionResult.Fail(
-                $"opencode session error: {jsonError}", response,
-                AiFailureClassifier.ClassifyProviderMessage(jsonError));
-
-        // Model produced no text despite a clean exit — treat as retryable
-        // failure so the on_failure edge can recover instead of propagating
-        // the error string as real AI output.
-        if (exitCode == 0 && sawJsonEvents && !modelProducedText)
-            return NodeExecutionResult.Fail(response);
-
-        return exitCode == 0
-            ? NodeExecutionResult.Ok(response, prompt, sessionId, incomingSessionId, AdapterUsageParser.ParseOpenCode(stdout))
-            : NodeExecutionResult.Fail(AdapterFailureText.NonZeroExit(exitCode, stderr, jsonError, response), response);
     }
 
     private async Task<ManagedSessionRestoreResult> RestoreManagedSessionAsync(
@@ -385,11 +329,11 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     private sealed record OpencodeCommandResult(int ExitCode, string Stdout, string Stderr);
 
-    private sealed record ManagedSessionRestoreResult(string? Error, string? SessionIdToUse)
+    private sealed record ManagedSessionRestoreResult(string? SessionIdToUse)
     {
-        public static ManagedSessionRestoreResult Use(string sessionId) => new(null, sessionId);
+        public static ManagedSessionRestoreResult Use(string sessionId) => new(sessionId);
 
-        public static ManagedSessionRestoreResult StartFresh() => new(null, null);
+        public static ManagedSessionRestoreResult StartFresh() => new((string?)null);
     }
 
     private static bool IsValidJson(string value)
@@ -776,17 +720,15 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // ignored — we have to add every entry here ourselves.
         var mcp = new Dictionary<string, object?>();
 
-        var ildMcp = !noTools && enabled.Contains(AiToolCatalog.Ild)
-            ? BuildIldMcpEntry(runContext, chatSessionId, environment)
-            : null;
+        var selected = SelectMcpServers(TypeTraits, provider, selectedToolKeys, noTools, environment);
+        var ildMcp = selected.Ild ? BuildIldMcpEntry(runContext, chatSessionId, environment) : null;
         if (ildMcp != null)
             mcp["ild"] = ildMcp;
 
         // Provider-scoped custom MCP servers apply to every repo this provider
         // runs in. The parser reserves the "ild" name, so these can never clobber
         // the entry above.
-        var customServers = noTools ? [] : CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson);
-        foreach (var server in customServers)
+        foreach (var server in selected.Custom)
             mcp[server.Name] = BuildCustomMcpEntry(server);
 
         if (mcp.Count > 0)
@@ -877,13 +819,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         return entry;
     }
-
-    /// <summary>
-    /// Locate the published <c>ild-mcp-server.dll</c>. Retained as a stable
-    /// entry point (covered by tests); delegates to <see cref="IldMcpServer"/>.
-    /// </summary>
-    /// <param name="environment">Where the override is read; the process environment by default.</param>
-    public static string? ResolveIldMcpServerDll(IProcessEnvironment? environment = null) => IldMcpServer.ResolveServerDll(environment);
 
     private static string SanitizeProviderId(string name)
     {

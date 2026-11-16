@@ -6,13 +6,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations.Network;
 
-/// <summary>
-/// Keeps the model gateway's upstream hosts on the whitelist, scoped to the provider that uses them (ADR-0031, ADR-0019): the
-/// gateway is judged by the network policy, so without these entries <c>whitelist</c> mode would stop every model call. The
-/// entries ILD adds are marked <see cref="NetworkPolicyEntry.AddedForProvider"/>; an entry the operator made for the same host
-/// stays the operator's and is neither replaced nor removed. An operator who deletes one gets the refusal, which is the point.
-/// </summary>
-public sealed class ProviderNetworkEntries(AppDbContext db, IEgressPolicy? policy = null)
+// The entries ILD keeps for the model gateway's upstream hosts, scoped to the provider that uses them (ADR-0031, ADR-0019): the
+// gateway is judged by the network policy, so without them whitelist mode would stop every model call. The entries ILD adds are
+// marked AddedForProvider; an entry the operator made for the same host stays the operator's and is neither replaced nor
+// removed. An operator who deletes one gets the refusal, which is the point.
+public sealed partial class NetworkPolicyEdits
 {
     /// <summary>Set once the entries of the providers that existed before this feature have been added.</summary>
     public const string SeededKey = "network.gatewayEntriesSeeded";
@@ -21,15 +19,19 @@ public sealed class ProviderNetworkEntries(AppDbContext db, IEgressPolicy? polic
     /// Makes the provider's ILD-added entries exactly the hosts its type and base URL need: adds the missing ones and removes
     /// the ones that no longer apply. Returns whether anything changed.
     /// </summary>
-    public async Task<bool> SyncAsync(AiProvider provider, CancellationToken ct = default)
+    public async Task<bool> SyncProviderAsync(AiProvider provider, CancellationToken ct = default)
     {
         var changed = Apply(provider, await ScopedEntriesAsync(provider.Id, ct));
-        if (changed) await SaveAsync(ct);
+        if (changed)
+        {
+            await db.SaveChangesAsync(ct);
+            await ChangedAsync();
+        }
         return changed;
     }
 
     /// <summary>The upgrade path: syncs every existing provider, once per database. Returns the number of providers that gained or lost an entry.</summary>
-    public async Task<int> SeedAsync(CancellationToken ct = default)
+    public async Task<int> SeedProviderEntriesAsync(CancellationToken ct = default)
     {
         if (await db.AppSettings.AnyAsync(s => s.Key == SeededKey, ct)) return 0;
 
@@ -42,7 +44,7 @@ public sealed class ProviderNetworkEntries(AppDbContext db, IEgressPolicy? polic
             if (Apply(provider, entries[provider.Id].ToList())) changed++;
         db.AppSettings.Add(new AppSetting { Id = Guid.NewGuid(), Key = SeededKey, Value = "done" });
         await db.SaveChangesAsync(ct);
-        if (changed > 0) policy?.Invalidate();
+        if (changed > 0) await ChangedAsync();
         return changed;
     }
 
@@ -74,11 +76,5 @@ public sealed class ProviderNetworkEntries(AppDbContext db, IEgressPolicy? polic
             changed = true;
         }
         return changed;
-    }
-
-    private async Task SaveAsync(CancellationToken ct)
-    {
-        await db.SaveChangesAsync(ct);
-        policy?.Invalidate();
     }
 }

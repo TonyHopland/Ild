@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -1221,6 +1222,39 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task The_gateway_lease_is_opened_after_the_stored_session_is_restored_and_before_the_run()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-lease-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var journalPath = Path.Combine(worktreeDir, "journal.log");
+        var scriptPath = Path.Combine(worktreeDir, "journal.sh");
+        File.WriteAllText(scriptPath, $"#!/bin/sh\necho \"$1\" >> '{journalPath}'\nexit 0\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync(new JournalingGateway(journalPath));
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "resume-session", "{\"id\":\"resume-session\",\"messages\":[]}");
+
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath, worktreePath: worktreeDir, apiKey: "sk-test", sessionId: "resume-session", runId: runId, manageSession: true));
+
+            var journal = File.ReadAllLines(journalPath).ToList();
+            var lease = journal.IndexOf("lease");
+            Assert.Contains("import", journal.Take(lease));
+            Assert.Equal("run", journal[lease + 1]);
+            Assert.Single(journal, line => line == "lease");
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_forks_source_snapshot_under_new_id_leaving_source_unchanged()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-fork-{Guid.NewGuid():N}");
@@ -1312,15 +1346,33 @@ public class OpenCodeAdapterTests
             OnSessionId: onSessionId);
     }
 
-    private static async Task<SessionHarness> CreateSessionHarnessAsync()
+    private sealed class JournalingGateway(string journalPath) : IModelGatewayRegistry
+    {
+        public ModelGatewayLease Open(Guid providerId, Guid ownerId, string apiUrl, IReadOnlyList<string> modelHosts)
+        {
+            File.AppendAllText(journalPath, "lease\n");
+            return new ModelGatewayLease("token", apiUrl, () => { });
+        }
+
+        public GatewayTokenState Lookup(string? presented, out GatewayGrant? grant)
+        {
+            grant = null;
+            return GatewayTokenState.Unknown;
+        }
+
+        public bool BlocksHost(Guid? providerId, string host) => false;
+    }
+
+    private static async Task<SessionHarness> CreateSessionHarnessAsync(IModelGatewayRegistry? gateway = null)
     {
         var connection = new SqliteConnection("Filename=:memory:");
         await connection.OpenAsync();
 
         var services = new ServiceCollection();
-        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunWorkspace>(LocalRunHost.Shared);
         services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
+        if (gateway is not null) services.AddSingleton(gateway);
 
         var provider = services.BuildServiceProvider();
         await using (var scope = provider.CreateAsyncScope())

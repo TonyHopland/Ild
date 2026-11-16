@@ -138,7 +138,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
         public override Task PrepareAsync()
         {
-            _mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx));
+            _mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx), ctx.NoTools);
             return Task.CompletedTask;
         }
 
@@ -160,34 +160,10 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         public override async Task ReadStdoutAsync(StreamReader stdout)
             => _stdout = await ReadStreamAsync(stdout, ctx.ProgressCallback, ctx.Cancel);
 
-        public override Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
-        {
-            // Strip NUL bytes as the raw CLI stream is captured. Unlike the
-            // claude-code/opencode/pi adapters — which parse a JSON event
-            // stream and surface only clean assistant text — this adapter
-            // forwards copilot's raw terminal stdout/stderr verbatim, and a
-            // raw stream can carry a NUL (U+0000). A NUL cannot be stored in
-            // a PostgreSQL text/varchar column, so leaving it in the node's
-            // output/error makes the engine's persistence SaveChanges throw a
-            // DbUpdateException, crashing the run before its result is
-            // recorded. Removing it keeps every visible character intact.
-            var stdout = StripNullChars(_stdout);
-            stderr = StripNullChars(stderr);
+        // Copilot's stdout is plain text: all of it is the answer. Single-turn: no session id is bound (see class remarks).
+        public override StreamResult ParseStream() => new(_stdout.Trim(), null, null, SawJsonEvents: false, RawStdout: _stdout);
 
-            var response = stdout.Trim();
-            if (string.IsNullOrWhiteSpace(response))
-            {
-                response = !string.IsNullOrWhiteSpace(stderr)
-                    ? $"[copilot] no assistant text response. stderr: {stderr.Trim()}"
-                    : "[copilot] no assistant text response from model";
-            }
-
-            // Single-turn: no session id is bound (see class remarks), so the
-            // result carries none and the run does not chain to a later --resume.
-            return Task.FromResult(exitCode == 0
-                ? NodeExecutionResult.Ok(response, ctx.Prompt)
-                : NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response));
-        }
+        public override BlankOutput BlankOutput => BlankOutput.Diagnostic;
 
         public override ValueTask DisposeAsync()
         {
@@ -306,17 +282,15 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     /// </param>
     public static string? TryWriteMcpConfig(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null,
-        ILogger? logger = null, IProcessEnvironment? environment = null)
+        ILogger? logger = null, IProcessEnvironment? environment = null, bool noTools = false)
     {
+        var selected = SelectMcpServers(TypeTraits, provider, allowlist, noTools, environment);
         var servers = new Dictionary<string, object?>();
 
-        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, allowlist);
-        if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
-            && ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment) is { } ild)
+        if (selected.Ild && ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment) is { } ild)
             servers["ild"] = WithCopilotKeys(ild);
 
-        // The parser reserves the "ild" name, so these can never clobber it.
-        foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
+        foreach (var server in selected.Custom)
             servers[server.Name] = WithCopilotKeys(CustomMcpServers.BuildCustomMcpEntry(server));
 
         return servers.Count == 0

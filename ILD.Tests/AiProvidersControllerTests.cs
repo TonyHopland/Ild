@@ -1,6 +1,7 @@
 using System.Text;
 using ILD.Api.Controllers;
 using ILD.Api.Services;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -49,7 +50,8 @@ public class AiProvidersControllerTests : IDisposable
             _db,
             new ProviderStore(_db),
             new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance),
-            _provisioner);
+            _provisioner,
+            new NetworkPolicyEdits(new NetworkPolicyStore(_db), new NetworkForwardStore(_db), new ProviderStore(_db), new AppSettingStore(_db), _db, Mock.Of<IEgressPolicy>(), new NoopNetworkNotifier()));
 
     /// <summary>Captures the provider types the controller asks to provision.</summary>
     private sealed class RecordingProvisioner : IManagedAgentProvisioner

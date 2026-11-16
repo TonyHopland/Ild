@@ -103,7 +103,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         var target = RunBaseBranch.Resolve(ctx.Run, repo);
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
-        if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && await sp.GetRunHost().DirectoryExistsAsync(ctx.Run.WorktreePath, ctx.CancellationToken))
+        if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && await sp.GetRunFiles().DirectoryExistsAsync(ctx.Run.WorktreePath, ctx.CancellationToken))
         {
             string? prepError = null;
             var pushed = false;

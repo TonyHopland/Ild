@@ -69,9 +69,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         private readonly string _worktreePath;
         private readonly PiAdapterSettings _settings;
         private readonly string _sessionDirectory;
-        private string? _sessionIdToUse;
-        private string? _sessionPathToUse;
-        private PiExecutionOutput? _stdout;
+        private string? _sessionPath;
+        private StreamResult? _stdout;
 
         public Turn(PiAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         {
@@ -84,7 +83,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
             _sessionDirectory = runHome is not null
                 ? Path.Combine(runHome, ".pi", "sessions")
                 : Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
-            _sessionIdToUse = ctx.SessionId;
         }
 
         public override string BinaryPath => _settings.BinaryPath;
@@ -103,19 +101,35 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
             await _adapter.RunHost.CreateDirectoryAsync(_sessionDirectory, _ctx.Cancel);
             await _adapter.PrepareRuntimeFilesAsync(_settings, _ctx.Cancel);
+        }
 
-            await _adapter.ForkManagedSessionAsync(_ctx);
-            if (_ctx.ManageSession && !string.IsNullOrWhiteSpace(_sessionIdToUse))
+        // Reuses the file pi already has for the session, else writes the stored one back; false when there is neither.
+        public override async Task<bool> RestoreSessionAsync(string sessionId)
+        {
+            var localSessionPath = await _adapter.FindSessionFileAsync(_sessionDirectory, sessionId, _ctx.Cancel);
+            if (localSessionPath is not null)
             {
-                var restored = await _adapter.RestoreManagedSessionAsync(_sessionDirectory, _ctx, _sessionIdToUse);
-                _sessionIdToUse = restored.SessionIdToUse;
-                _sessionPathToUse = restored.SessionPathToUse;
+                _sessionPath = localSessionPath;
+                return true;
             }
+
+            var restoredPath = BuildSnapshotPath(_sessionDirectory, sessionId);
+            if (!await _adapter.RestoreSessionFileAsync(_ctx, sessionId, restoredPath, SessionSnapshotFormats.PiJsonl))
+                return false;
+            _sessionPath = restoredPath;
+            return true;
+        }
+
+        public override async Task<string?> SaveSessionAsync(string sessionId)
+        {
+            if (await _adapter.FindSessionFileAsync(_sessionDirectory, sessionId, _ctx.Cancel) is { } sessionPath)
+                await _adapter.PersistSessionFileAsync(_ctx, sessionId, sessionPath, SessionSnapshotFormats.PiJsonl, _adapter._logger);
+            return null;
         }
 
         public override Task<AgentLaunch> LaunchAsync()
             => Task.FromResult(new AgentLaunch(
-                BuildRunProcessStartInfo(_settings, _worktreePath, _sessionDirectory, _sessionIdToUse, _sessionPathToUse, ExtraCliArgs.ForLaunch(_ctx.Provider, _adapter._logger)),
+                BuildRunProcessStartInfo(_settings, _worktreePath, _sessionDirectory, ResumeSessionId, _sessionPath, ExtraCliArgs.ForLaunch(_ctx.Provider, _adapter._logger)),
                 BuildRunEnvironment(_settings, _sessionDirectory),
                 [_settings.IldExtensionPath]));
 
@@ -138,51 +152,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
         public override async Task ReadStdoutAsync(StreamReader stdout)
             => _stdout = await PiAdapter.ReadStdoutAsync(stdout, _ctx.ProgressCallback, _ctx.OnSessionId, _ctx.Cancel);
 
-        public override async Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
-        {
-            var effectiveSessionId = _stdout!.SessionId ?? _sessionIdToUse;
-            if (_ctx.ManageSession && exitCode == 0 && !string.IsNullOrWhiteSpace(effectiveSessionId))
-                await _adapter.PersistManagedSessionAsync(_sessionDirectory, effectiveSessionId!, _ctx);
+        public override StreamResult ParseStream() => _stdout!;
 
-            return AssembleResult(_stdout, stderr, exitCode, _ctx.Prompt, effectiveSessionId, _ctx.IncomingSessionId);
-        }
-    }
-
-    /// <summary>Turns a finished run's parsed output, stderr and exit code into the node's result.</summary>
-    internal static NodeExecutionResult AssembleResult(
-        PiExecutionOutput stdout, string stderr, int exitCode, string prompt, string? effectiveSessionId, string? incomingSessionId)
-    {
-        var response = stdout.Content;
-        if (string.IsNullOrWhiteSpace(response))
-        {
-            if (!stdout.SawJsonEvents)
-                response = stdout.RawStdout;
-            else if (!string.IsNullOrWhiteSpace(stderr))
-                response = $"[pi] no assistant text response. stderr: {stderr.Trim()}";
-            else
-                response = "[pi] no assistant text response from model";
-        }
-
-        // Pi sometimes exits 0 mid-turn (e.g. provider closed the stream
-        // early) leaving the assistant message truncated. Without a
-        // message_end/turn_end marker we cannot trust the partial text as
-        // the final response; surface it as a retryable failure rather
-        // than letting downstream nodes consume half a sentence.
-        if (exitCode == 0 && stdout.SawJsonEvents && !stdout.SawTurnEnd)
-            return NodeExecutionResult.Fail(
-                "pi stream ended before message_end/turn_end (assistant turn was truncated)",
-                response);
-
-        // Turn completed cleanly but model produced no text — e.g. the
-        // provider silently dropped the request. Treat as retryable failure
-        // so the on_failure edge can recover rather than propagating the
-        // error string as real AI output.
-        if (exitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
-            return NodeExecutionResult.Fail(response);
-
-        return exitCode == 0
-            ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParsePi(stdout.RawStdout))
-            : NodeExecutionResult.Fail(AdapterFailureText.NonZeroExit(exitCode, stderr, null, response), response);
+        public override Task<TokenUsage?> UsageAsync() => Task.FromResult(AdapterUsageParser.ParsePi(_stdout!.RawStdout));
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
@@ -305,31 +277,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         return psi;
     }
 
-    private async Task<ManagedSessionRestoreResult> RestoreManagedSessionAsync(string sessionDirectory, AgentExecutionContext ctx, string sessionId)
-    {
-        var localSessionPath = await FindSessionFileAsync(sessionDirectory, sessionId, ctx.Cancel);
-        if (localSessionPath is not null)
-            return ManagedSessionRestoreResult.Use(sessionId, localSessionPath);
-
-        var restoredPath = BuildSnapshotPath(sessionDirectory, sessionId);
-        return await RestoreSessionFileAsync(ctx, sessionId, restoredPath, SessionSnapshotFormats.PiJsonl)
-            ? ManagedSessionRestoreResult.Use(sessionId, restoredPath)
-            : ManagedSessionRestoreResult.StartFresh();
-    }
-
-    private async Task PersistManagedSessionAsync(string sessionDirectory, string sessionId, AgentExecutionContext ctx)
-    {
-        if (ScopeFactory is null)
-            return;
-
-        var sessionPath = await FindSessionFileAsync(sessionDirectory, sessionId, ctx.Cancel);
-        if (sessionPath is null)
-            return;
-
-        await PersistSessionFileAsync(ctx, sessionId, sessionPath, SessionSnapshotFormats.PiJsonl, _logger);
-    }
-
-    internal static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, Action<string>? onSessionId, CancellationToken ct)
+    internal static async Task<StreamResult> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, Action<string>? onSessionId, CancellationToken ct)
     {
         var raw = new StringBuilder();
         var content = new StringBuilder();
@@ -409,7 +357,14 @@ public sealed class PiAdapter : CliAgentAdapterBase
             ? content.ToString()
             : completedAssistantText ?? string.Empty;
 
-        return new PiExecutionOutput(raw.ToString(), finalContent, sessionId, sawJsonEvents, sawTurnEnd);
+        // Pi sometimes exits 0 mid-turn (e.g. provider closed the stream
+        // early) leaving the assistant message truncated. Without a
+        // message_end/turn_end marker we cannot trust the partial text as
+        // the final response; the base fails the turn rather than letting
+        // downstream nodes consume half a sentence.
+        return new StreamResult(
+            finalContent, sessionId, null, sawJsonEvents, raw.ToString(),
+            Truncation: sawJsonEvents && !sawTurnEnd ? "pi stream ended before message_end/turn_end (assistant turn was truncated)" : null);
     }
 
     private static string? ExtractAssistantText(JsonElement message)
@@ -621,7 +576,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var api = config.Api ?? "openai-completions";
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
         var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, selectedToolKeys);
-        var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
+        // Pi reaches only the ild server, through its generated extension (ADR-0024): the custom servers of the set are not its to attach.
+        var ildServer = SelectMcpServers(TypeTraits, provider, selectedToolKeys, noTools, environment).Ild
             ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
         // The DLL its tool names are read from, whether the entry starts it through dotnet or its apphost.
@@ -834,15 +790,4 @@ public sealed class PiAdapter : CliAgentAdapterBase
         IReadOnlyList<string> ToolNames,
         bool NoTools,
         string? ReadOnlyAuthJson = null);
-
-    internal sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents, bool SawTurnEnd);
-
-    private sealed record ManagedSessionRestoreResult(string? SessionIdToUse, string? SessionPathToUse)
-    {
-        public static ManagedSessionRestoreResult Use(string sessionId, string sessionPath)
-            => new(sessionId, sessionPath);
-
-        public static ManagedSessionRestoreResult StartFresh()
-            => new(null, null);
-    }
 }

@@ -12,8 +12,8 @@ namespace ILD.Tests;
 /// <summary>
 /// Keeps the <c>get_preview_config_schema</c> MCP tool honest: the starter it
 /// ships to enrolling agents must actually parse and validate against the real
-/// <see cref="WorktreePreviewService"/> that consumes ild.config.json. If the
-/// config model or <c>ValidateProfile</c> rules change without the tool's schema
+/// <see cref="PreviewConfigLoader"/> that consumes ild.config.json. If the
+/// config model or <c>PreviewConfigLoader.ValidateProfile</c> rules change without the tool's schema
 /// keeping up, these tests fail instead of agents silently producing a config
 /// that installs or previews nothing.
 /// </summary>
@@ -60,7 +60,7 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
         Assert.Equal("ild.config.json", doc.GetProperty("configFileName").GetString());
 
         var tokens = doc.GetProperty("templateTokens");
-        // Every token the resolver in WorktreePreviewService.ResolveTemplate supports
+        // Every token the resolver in PreviewTemplates.Resolve supports
         // must be documented, or agents will avoid tokens that actually work.
         foreach (var token in new[] { "${WORKTREE}", "${STATE_DIR}", "${HOST}", "${PUBLIC_HOST}", "${PORT}", "${PORT:<alias>}" })
         {
@@ -91,20 +91,23 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
         }
     }
 
+    private async Task<PreviewProfile> LoadProfileAsync()
+        => PreviewConfigLoader.Resolve(
+            PreviewConfigLoader.RequireConfigured(await new PreviewConfigLoader(LocalRunHost.Shared).LoadAsync(_worktree, CancellationToken.None)),
+            null);
+
     [Fact]
     public async Task Starter_validates_through_the_real_preview_parser_and_validator()
     {
         WriteStarterConfig();
-        var service = BuildService();
 
-        var result = await service.ValidateConfigAsync(_worktree, cancellationToken: CancellationToken.None);
+        var profile = await LoadProfileAsync();
 
-        Assert.True(result.Configured);
-        Assert.Equal("app", result.ProfileName);
-        // The starter demonstrates two wired services; ValidateConfigAsync runs the
-        // same per-service checks (name/command/port/healthUrl/suggestedPort) the
-        // preview-start path uses, so reaching here proves every required rule passes.
-        Assert.Equal(new[] { "backend", "app" }, result.Services);
+        Assert.Equal("app", profile.Name);
+        // The starter demonstrates two wired services; loading a profile runs the same per-service checks
+        // (name/command/port/healthUrl/suggestedPort) the preview-start path uses, so reaching here proves
+        // every required rule passes.
+        Assert.Equal(new[] { "backend", "app" }, profile.Services.Select(service => service.Name));
     }
 
     [Fact]
@@ -133,8 +136,8 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
         starter["preview"]!["profiles"]!["app"]!["services"]![0]!["healthTimeoutSeconds"] = 600;
         File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), starter.ToJsonString());
 
-        var result = await BuildService().ValidateConfigAsync(_worktree, cancellationToken: CancellationToken.None);
+        var profile = await LoadProfileAsync();
 
-        Assert.True(result.Configured);
+        Assert.Equal("app", profile.Name);
     }
 }

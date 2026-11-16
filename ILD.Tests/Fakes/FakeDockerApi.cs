@@ -736,11 +736,6 @@ internal sealed class FakeDockerExec(string container, IReadOnlyList<string> com
         lock (_stdin) return _stdin.ToArray();
     }
 
-    public string StdinSoFar()
-    {
-        lock (_stdin) return Encoding.UTF8.GetString(_stdin.ToArray());
-    }
-
     public Task WriteStdoutAsync(string text) => SendAsync(1, Encoding.UTF8.GetBytes(text));
 
     public Task WriteStdoutAsync(byte[] bytes) => SendAsync(1, bytes);

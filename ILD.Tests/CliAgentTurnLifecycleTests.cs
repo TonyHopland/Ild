@@ -44,16 +44,16 @@ public class CliAgentTurnLifecycleTests
             NoTools: noTools);
 
     [Fact]
-    public async Task A_turn_ends_with_what_the_cli_printed_and_how_it_exited()
+    public async Task A_turn_ends_with_what_the_cli_printed()
     {
-        _host.Script = _ => FakeCommandScript.Prints("answer", "noise", 3);
+        _host.Script = _ => FakeCommandScript.Prints("answer", "noise");
         var adapter = Adapter();
 
         var result = await adapter.ExecuteAsync(Context());
 
         Assert.True(result.Success);
-        Assert.Equal("answer|noise|3", result.Output);
-        Assert.Equal(["prepare", "launch", "input", "stdout", "complete", "dispose"], adapter.Turn!.Steps);
+        Assert.Equal("answer", result.Output);
+        Assert.Equal(["prepare", "launch", "input", "stdout", "parse", "dispose"], adapter.Turn!.Steps);
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class CliAgentTurnLifecycleTests
         var result = await adapter.ExecuteAsync(Context());
 
         Assert.True(result.Success);
-        Assert.Equal("second||0", result.Output);
+        Assert.Equal("second", result.Output);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class CliAgentTurnLifecycleTests
     public async Task Anything_else_that_goes_wrong_fails_the_turn_under_the_clis_name()
     {
         var adapter = Adapter();
-        adapter.CompleteThrows = new FormatException("unreadable");
+        adapter.ParseThrows = new FormatException("unreadable");
 
         var result = await adapter.ExecuteAsync(Context());
 
@@ -220,7 +220,7 @@ public class CliAgentTurnLifecycleTests
         var adapter = Adapter();
         adapter.Fingerprint = "--fingerprint";
         adapter.AfterTurnEnded = () => _host.RunningPids.Remove(4242);
-        adapter.OnComplete = () => _host.StillRunningFailure = new OperationCanceledException();
+        adapter.OnParse = () => _host.StillRunningFailure = new OperationCanceledException();
 
         var result = await adapter.ExecuteAsync(Context());
 
@@ -234,7 +234,7 @@ public class CliAgentTurnLifecycleTests
         _host.LeaveRunning(4242, "dotnet test");
         var adapter = Adapter();
         adapter.Fingerprint = "--fingerprint";
-        adapter.Succeeds = false;
+        _host.Script = _ => FakeCommandScript.Prints("", "", 1);
 
         var result = await adapter.ExecuteAsync(Context());
 
@@ -257,123 +257,5 @@ public class CliAgentTurnLifecycleTests
         Assert.Empty(_host.ListChildrenCalls);
         Assert.All(_host.Started, launch => Assert.False(launch.Environment!.ContainsKey(AgentChildren.LaunchVariable)));
         Assert.Null(chat.Turn!.TurnEnded);
-    }
-
-    private sealed class CountingGateway : IModelGatewayRegistry
-    {
-        public int Opened { get; private set; }
-        public int Ended { get; private set; }
-
-        public ModelGatewayLease Open(Guid providerId, Guid ownerId, string apiUrl, IReadOnlyList<string> modelHosts)
-        {
-            Opened++;
-            return new ModelGatewayLease("token", apiUrl, () => Ended++);
-        }
-
-        public GatewayTokenState Lookup(string? presented, out GatewayGrant? grant)
-        {
-            grant = null;
-            return GatewayTokenState.Unknown;
-        }
-
-        public bool BlocksHost(Guid? providerId, string host) => false;
-    }
-
-    private sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGateway gateway) : CliAgentAdapterBase(scopes)
-    {
-        public CountingGateway Gateway => gateway;
-        public bool SupportsNoTools { get; set; } = true;
-        public bool OffersRetry { get; set; }
-        public bool Succeeds { get; set; } = true;
-        public string? Fingerprint { get; set; }
-        public string? PrepareFailure { get; set; }
-        public Exception? CompleteThrows { get; set; }
-        public Action? AfterTurnEnded { get; set; }
-        public Action? OnComplete { get; set; }
-        public ScriptedTurn? Turn { get; private set; }
-
-        public override string Name => "Scripted";
-        public override string[] SupportedProviderTypes => ["scripted"];
-        public override AgentAdapterTraits Traits
-            => ClaudeCodeAdapter.TypeTraits with { DisplayName = "Scripted", SupportsNoTools = SupportsNoTools };
-
-        protected override string CliName => "scripted";
-        protected override string StartHelp => "install it.";
-        protected override string? LaunchFingerprint => Fingerprint;
-
-        protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
-            => Turn = new ScriptedTurn(this, worktreePath, gateway);
-
-        public sealed class ScriptedTurn(ScriptedAdapter adapter, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
-        {
-            private string _stdout = string.Empty;
-
-            public List<string> Steps { get; } = [];
-
-            /// <summary>How many leases the gateway had opened by the end of each step; this turn reads its own when it launches.</summary>
-            public List<string> LeasesOpened { get; } = [];
-
-            public override string BinaryPath => "/bin/scripted";
-
-            public override Task PrepareAsync()
-            {
-                Steps.Add("prepare");
-                LeasesOpened.Add($"prepare:{adapter.Gateway.Opened}");
-                return adapter.PrepareFailure is { } failure ? throw Failed(failure) : Task.CompletedTask;
-            }
-
-            public override Task<AgentLaunch> LaunchAsync()
-            {
-                Steps.Add("launch");
-                _ = gateway.Value;
-                LeasesOpened.Add($"launch:{adapter.Gateway.Opened}");
-                return Task.FromResult(Launch());
-            }
-
-            public override Task<AgentLaunch?> RetryLaunchAsync(Exception failure)
-                => Task.FromResult(adapter.OffersRetry ? Launch("retry") : null);
-
-            private AgentLaunch Launch(params string[] arguments)
-            {
-                var psi = new ProcessStartInfo(BinaryPath) { WorkingDirectory = worktreePath };
-                foreach (var argument in arguments) psi.ArgumentList.Add(argument);
-                return new AgentLaunch(psi, new Dictionary<string, string?> { ["FROM_TURN"] = "1" });
-            }
-
-            public override Task SendInputAsync(IRunProcess process)
-            {
-                Steps.Add("input");
-                return Task.CompletedTask;
-            }
-
-            public override async Task ReadStdoutAsync(StreamReader stdout)
-            {
-                Steps.Add("stdout");
-                _stdout = await stdout.ReadToEndAsync();
-                if (TurnEnded is not null) await TurnEnded();
-                adapter.AfterTurnEnded?.Invoke();
-            }
-
-            public override Task AfterTimeoutAsync(Task stdout)
-            {
-                Steps.Add("timeout");
-                return Task.CompletedTask;
-            }
-
-            public override Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
-            {
-                Steps.Add("complete");
-                adapter.OnComplete?.Invoke();
-                if (adapter.CompleteThrows is { } failure) throw failure;
-                var output = $"{_stdout}|{stderr}|{exitCode}";
-                return Task.FromResult(adapter.Succeeds ? NodeExecutionResult.Ok(output) : NodeExecutionResult.Fail("failed", output));
-            }
-
-            public override ValueTask DisposeAsync()
-            {
-                Steps.Add("dispose");
-                return ValueTask.CompletedTask;
-            }
-        }
     }
 }

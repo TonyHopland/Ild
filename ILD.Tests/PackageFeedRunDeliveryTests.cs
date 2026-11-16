@@ -277,16 +277,15 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
     {
         var run = Guid.NewGuid();
         var worktree = ILD.Core.Services.RunHosts.Isolated.RunPaths.WorkingDirectory(run);
+        var launcher = new PreviewLauncher(
+            LocalRunHost.Shared, null, null, ProcessEnvironment.Current, new PreviewNotifier(null, NullLogger.Instance), new PreviewTimings(), NullLogger.Instance);
 
-        Assert.Equal($"{run:N}-preview", WorktreePreviewService.FeedFilePrefix(worktree, "preview"));
-        Assert.Equal($"{run:N}-install", WorktreePreviewService.FeedFilePrefix(worktree, "install"));
-        Assert.Equal("preview", WorktreePreviewService.FeedFilePrefix(_worktree, "preview"));
+        Assert.Equal($"{run:N}-preview", launcher.FeedFilePrefix(worktree, "preview"));
+        Assert.Equal($"{run:N}-install", launcher.FeedFilePrefix(worktree, "install"));
+        Assert.Equal("preview", launcher.FeedFilePrefix(_worktree, "preview"));
 
-        var service = new WorktreePreviewService(
-            new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
         var environment = new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = "/feeds/x.npmrc" };
-        var command = service.PreparedCommand(new WorktreePreviewService.ResolvedStep(
+        var command = launcher.PreparedCommand(new PreviewLauncher.ResolvedStep(
             "npm start", _worktree, environment, NetworkMode.Off, ["/feeds/x.npmrc"]));
 
         Assert.Equal(["/feeds/x.npmrc"], command.Files);

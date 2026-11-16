@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts.Isolated;
 using k8s;
 using Microsoft.Extensions.Logging;
 
@@ -11,7 +12,7 @@ public static class KubernetesRunHostFactory
     /// Reaches the cluster with ILD's own service account, or with the kubeconfig the settings name.
     /// </summary>
     public static RoutingRunHost Create(IRunHost local, Func<string, string?> setting, IProcessRunner runner, ILoggerFactory loggers,
-        Func<CancellationToken, Task<IReadOnlySet<Guid>>>? retainedRuns = null, ILD.Core.Services.Implementations.Network.EgressCredentials? credentials = null)
+        Func<CancellationToken, Task<IReadOnlySet<Guid>>>? retainedRuns = null, ILD.Core.Services.Implementations.Network.EgressCredentials? credentials = null, ExecRunHostServices? services = null)
     {
         var options = KubernetesRunHostOptions.From(setting);
         // The in-cluster configuration's namespace is ILD's own; a kubeconfig's is only a default, so there ILD must be told.
@@ -29,6 +30,10 @@ public static class KubernetesRunHostFactory
             ReadLimits = RunReadLimits.FromEnvironment(setting),
             Credentials = credentials ?? ILD.Core.Services.Implementations.Network.EgressCredentials.Random(),
             RetainedRuns = retainedRuns ?? (_ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>())),
+            Forwards = services?.Forwards,
+            Probe = services?.Probe,
+            Refusals = services?.Refusals,
+            PreviewData = services?.PreviewData,
         };
         return new RoutingRunHost(local, host);
     }

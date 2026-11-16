@@ -154,45 +154,63 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         private IReadOnlyList<CodexMcpServer> _mcpServers = [];
         private string? _codexHome;
         private string? _sessionsDirectory;
-        private string? _resumeId;
-        private CodexOutput? _stdout;
+        private (string SessionId, string? Path)? _rollout;
+        private StreamResult? _stdout;
 
         public override string BinaryPath { get; } = AiProviderConfig.Parse(ctx.Provider.Config)
             .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Codex, adapter.EnvironmentVariables));
 
-        public override async Task PrepareAsync()
+        public override Task PrepareAsync()
         {
-            _mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx), adapter._credentials);
+            _mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.NetworkMode, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx), adapter._credentials, ctx.NoTools);
 
             _codexHome = adapter.RunHost.RunHomeFor(worktreePath) is { } runHome
                 ? Path.Combine(runHome, ".codex")
                 : gateway.Value is null ? adapter.UserCodexHome() : RunCodexHome(OwnerOf(ctx));
             _sessionsDirectory = _codexHome is null ? null : Path.Combine(_codexHome, "sessions");
-            if (ctx.ManageSession && adapter.ScopeFactory is not null && IsSessionId(ctx.SessionId))
-            {
-                // Fork: seed a copy of the source session under the new id, so the
-                // restore below writes the copy and `resume` continues on it. A
-                // fork that fails fails the node, as for every adapter; a source
-                // with no snapshot leaves nothing to resume, so a new thread starts.
-                try
-                {
-                    await adapter.ForkManagedSessionAsync(ctx);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    throw Failed($"[codex-error] could not fork the codex session {ctx.ForkFromSessionId} into {ctx.SessionId}: {ex.Message}");
-                }
-                if (_sessionsDirectory is not null)
-                    await adapter.TryRestoreRolloutAsync(ctx, _sessionsDirectory, ctx.SessionId!);
-            }
+            return Task.CompletedTask;
+        }
 
-            _resumeId = await adapter.ResumableSessionAsync(ctx.SessionId, _sessionsDirectory, ctx.Cancel);
+        public override BlankOutput BlankOutput => BlankOutput.Failure;
+
+        // codex reports a failed turn as an event; the exit code does not say which failure it was.
+        public override bool ProviderErrorIsTheFailure => true;
+
+        public override bool IsSessionId(string sessionId) => CodexAdapter.IsSessionId(sessionId);
+
+        // A source with no snapshot leaves nothing to restore, so a new thread starts.
+        public override async Task<bool> RestoreSessionAsync(string sessionId)
+        {
+            if (_sessionsDirectory is not null)
+                await adapter.TryRestoreRolloutAsync(ctx, _sessionsDirectory, sessionId);
+            return true;
+        }
+
+        public override Task<string?> ReadSessionAsync(string? sessionId)
+            => adapter.ResumableSessionAsync(sessionId, _sessionsDirectory, ctx.Cancel);
+
+        // codex names its rollout files after the thread and writes them under its own home, so the file is looked for after the turn.
+        public override async Task<string?> SaveSessionAsync(string sessionId)
+        {
+            if (await RolloutAsync(sessionId) is { } rollout)
+                await adapter.PersistSessionFileAsync(ctx, sessionId, rollout, SessionSnapshotFormats.CodexJsonl, adapter._logger);
+            return null;
+        }
+
+        private async Task<string?> RolloutAsync(string sessionId)
+        {
+            if (_rollout is { } known && known.SessionId == sessionId) return known.Path;
+            var path = IsSessionId(sessionId) && _sessionsDirectory is not null
+                ? await adapter.TryFindRolloutAsync(_sessionsDirectory, sessionId, ctx.Cancel)
+                : null;
+            _rollout = (sessionId, path);
+            return path;
         }
 
         public override async Task<AgentLaunch> LaunchAsync()
         {
             var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-            var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, _resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, _mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
+            var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, ResumeSessionId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, _mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
             if (gateway.Value is { } lease && _codexHome is not null)
             {
                 await adapter.RunHost.CreateDirectoryAsync(_codexHome, ctx.Cancel);
@@ -213,50 +231,19 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         public override async Task ReadStdoutAsync(StreamReader stdout)
             => _stdout = await ReadEventsAsync(stdout, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel);
 
-        public override async Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
+        public override StreamResult ParseStream() => _stdout!;
+
+        public override async Task<TokenUsage?> UsageAsync()
         {
             var stdout = _stdout!;
-            stderr = StripNullChars(stderr);
-
-            var response = StripNullChars(string.Join("\n", stdout.Messages));
-            if (response.Length == 0 && !stdout.SawJsonEvents)
-                response = StripNullChars(stdout.RawStdout.Trim());
-
-            // codex reports a failed turn as an event; the exit code does not say
-            // which failure it was, so the event's own message is classified.
-            if (stdout.FailureMessage is { } failure)
-            {
-                var message = StripNullChars(failure);
-                return NodeExecutionResult.Fail(
-                    $"[codex-error] {message}", response.Length > 0 ? response : null,
-                    AiFailureClassifier.ClassifyProviderMessage(message));
-            }
-
-            if (exitCode != 0)
-                return NodeExecutionResult.Fail($"exit={exitCode} stderr={stderr}", response.Length > 0 ? response : null);
-
-            if (string.IsNullOrWhiteSpace(response))
-                return NodeExecutionResult.Fail(!string.IsNullOrWhiteSpace(stderr)
-                    ? $"[codex] no assistant text response. stderr: {stderr.Trim()}"
-                    : "[codex] no assistant text response from model");
-
-            var sessionId = stdout.ThreadId ?? _resumeId;
-            var store = ctx.ManageSession && adapter.ScopeFactory is not null;
-            var resumed = _resumeId is not null && (stdout.ThreadId is null || stdout.ThreadId == _resumeId);
-
-            var rollout = (store || resumed) && IsSessionId(sessionId) && _sessionsDirectory is not null
-                ? await adapter.TryFindRolloutAsync(_sessionsDirectory, sessionId!, ctx.Cancel)
-                : null;
-            if (store && rollout is not null)
-                await adapter.PersistSessionFileAsync(ctx, sessionId!, rollout, SessionSnapshotFormats.CodexJsonl, adapter._logger);
+            var sessionId = stdout.SessionId ?? ResumeSessionId;
+            var resumed = ResumeSessionId is not null && (stdout.SessionId is null || stdout.SessionId == ResumeSessionId);
 
             // A new thread counts from zero; a resumed one counts on from its earlier total.
-            var usage = !resumed ? AdapterUsageParser.ParseCodex(stdout.RawStdout, NoUsage)
-                : await adapter.TryReadTotalBeforeLastTurnAsync(rollout, sessionId!, ctx.Cancel) is { } totalBefore
-                    ? AdapterUsageParser.ParseCodex(stdout.RawStdout, totalBefore)
-                    : null;
-
-            return NodeExecutionResult.Ok(response, ctx.Prompt, sessionId, ctx.IncomingSessionId, usage);
+            if (!resumed) return AdapterUsageParser.ParseCodex(stdout.RawStdout, NoUsage);
+            return await adapter.TryReadTotalBeforeLastTurnAsync(await RolloutAsync(sessionId!), sessionId!, ctx.Cancel) is { } totalBefore
+                ? AdapterUsageParser.ParseCodex(stdout.RawStdout, totalBefore)
+                : null;
         }
 
         public override ValueTask DisposeAsync()
@@ -408,7 +395,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     /// <param name="credentials">What signs the proxy credential of the custom servers; without it they are given no proxy.</param>
     public static IReadOnlyList<CodexMcpServer> WriteMcpServers(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, NetworkMode mode,
-        Guid? chatSessionId = null, ILogger? logger = null, IProcessEnvironment? environment = null, EgressCredentials? credentials = null)
+        Guid? chatSessionId = null, ILogger? logger = null, IProcessEnvironment? environment = null, EgressCredentials? credentials = null, bool noTools = false)
     {
         logger ??= NullLogger.Instance;
         environment ??= ProcessEnvironment.Current;
@@ -422,9 +409,9 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             // tools; a required server that cannot start fails the run, saying why.
             // The call timeout sits above the server's own 100 s HTTP timeout, since
             // codex's 60 s default would cut a long call, like a clone, short.
-            var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, allowlist);
+            var selected = SelectMcpServers(TypeTraits, provider, allowlist, noTools, environment);
             if (dll is not null
-                && enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
+                && selected.Ild
                 && IldMcpServer.TryWriteConfigFile(
                     "ild-codex-mcp", runContext.LoopRunId, IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
                     logger, environment) is { } settingsFile)
@@ -433,7 +420,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                     + "required=true,startup_timeout_sec=30,tool_timeout_sec=120}"));
 
             // The parser reserves the "ild" name, so these can never clobber it.
-            var customServers = CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson);
+            var customServers = selected.Custom;
             if (customServers.Count == 0)
                 return servers;
 
@@ -510,7 +497,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         return sb.Append('"').ToString();
     }
 
-    private static async Task<CodexOutput> ReadEventsAsync(
+    private static async Task<StreamResult> ReadEventsAsync(
         StreamReader reader,
         Func<string, Task>? progressCallback,
         Action<string>? onSessionId,
@@ -582,8 +569,8 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             }
         }
 
-        return new CodexOutput(
-            raw.ToString(), messages, threadId, turnFailure ?? (turnCompleted ? null : lastError), sawJsonEvents);
+        return new StreamResult(
+            string.Join("\n", messages), threadId, turnFailure ?? (turnCompleted ? null : lastError), sawJsonEvents, raw.ToString());
     }
 
     private static string ToolMarker(string itemType, JsonElement item)
@@ -695,13 +682,6 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             _logger.LogWarning(ex, "Could not restore the codex session {SessionId}: {Reason}", sessionId, ex.Message);
         }
     }
-
-    private sealed record CodexOutput(
-        string RawStdout,
-        IReadOnlyList<string> Messages,
-        string? ThreadId,
-        string? FailureMessage,
-        bool SawJsonEvents);
 }
 
 /// <summary>

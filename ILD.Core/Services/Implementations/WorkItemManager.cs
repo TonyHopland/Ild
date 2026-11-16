@@ -22,7 +22,7 @@ namespace ILD.Core.Services.Implementations;
 /// </summary>
 public class WorkItemManager : IWorkItemManager
 {
-    private readonly IRunHost _runHost;
+    private readonly IRunReclaim _runHost;
     private readonly IRepositoryManager _repoManager;
     private readonly IProviderStore _providerStore;
     private readonly IEventLogService _eventLog;
@@ -50,7 +50,7 @@ public class WorkItemManager : IWorkItemManager
         IWorkItemServerClient server,
         IWorkItemServerOptionsResolver options,
         BootstrapCredentials instance,
-        IRunHost runHost,
+        IRunReclaim runHost,
         IWorkItemNotifier? notifier = null,
         IWorktreePreviewService? previewService = null,
         IWorkItemScheduler? scheduler = null,
@@ -1539,14 +1539,6 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    private async Task<bool> IsPrNodeAsync(LoopRun run, Guid loopNodeId)
-    {
-        if (run.LoopTemplateVersionId == Guid.Empty) return false;
-        var nodes = await _loopRunStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
-        var node = nodes.FirstOrDefault(n => n.Id == loopNodeId);
-        return node?.NodeType == NodeType.PR;
-    }
-
     public async Task<MergePullRequestResult?> MergePullRequestAsync(string workItemId, bool deleteBranch)
     {
         var wi = await GetWorkItemAsync(workItemId);
@@ -1963,17 +1955,5 @@ public class WorkItemManager : IWorkItemManager
         WorkItemStatus.WaitingForIld => RemoteWorkItemStatus.WaitingForIld,
         WorkItemStatus.Done => RemoteWorkItemStatus.Done,
         _ => RemoteWorkItemStatus.Backlog,
-    };
-
-    internal static WorkItemStatus MapFromRemote(RemoteWorkItemStatus s) => s switch
-    {
-        RemoteWorkItemStatus.Backlog => WorkItemStatus.Backlog,
-        RemoteWorkItemStatus.WorkQueue => WorkItemStatus.WorkQueue,
-        RemoteWorkItemStatus.Ready => WorkItemStatus.Ready,
-        RemoteWorkItemStatus.Running => WorkItemStatus.Running,
-        RemoteWorkItemStatus.HumanFeedback => WorkItemStatus.HumanFeedback,
-        RemoteWorkItemStatus.WaitingForIld => WorkItemStatus.WaitingForIld,
-        RemoteWorkItemStatus.Done => WorkItemStatus.Done,
-        _ => WorkItemStatus.Backlog,
     };
 }

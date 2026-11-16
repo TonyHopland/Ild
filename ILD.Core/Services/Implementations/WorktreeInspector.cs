@@ -19,12 +19,12 @@ public sealed partial class WorktreeInspector : IWorktreeInspector
 
     private readonly IWorkItemManager _workItems;
     private readonly IRepositoryManager _repos;
-    private readonly IRunHost _runHost;
+    private readonly IRunFiles _runHost;
     private readonly ILoopRunStore _loopRuns;
     private readonly IProviderStore _providers;
 
     public WorktreeInspector(
-        IWorkItemManager workItems, IRepositoryManager repos, IRunHost runHost, ILoopRunStore loopRuns, IProviderStore providers)
+        IWorkItemManager workItems, IRepositoryManager repos, IRunFiles runHost, ILoopRunStore loopRuns, IProviderStore providers)
     {
         _workItems = workItems;
         _repos = repos;

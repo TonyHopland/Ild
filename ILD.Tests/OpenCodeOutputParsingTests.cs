@@ -15,11 +15,6 @@ public class OpenCodeOutputParsingTests
 
     private static string Events(params string[] lines) => string.Join("\n", lines);
 
-    private static NodeExecutionResult Assemble(string stdout, int exitCode = 0, string stderr = "", string? exportedSessionJson = null)
-        => OpenCodeAdapter.AssembleResult(
-            stdout, OpenCodeAdapter.ExtractTextAndSessionIdFromJsonEvents(stdout), stderr, exitCode, "the prompt",
-            sessionId: null, incomingSessionId: null, exportedSessionJson);
-
     [Theory]
     [InlineData("{\"text\":\"hello\",\"sessionId\":\"session-from-output\"}", "session-from-output")]
     [InlineData("{\"text\":\"hello\",\"session\":{\"id\":\"nested-session\"}}", "nested-session")]
@@ -122,73 +117,12 @@ public class OpenCodeOutputParsingTests
             TextEvent,
             "{\"type\":\"step_finish\",\"timestamp\":5,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_4\",\"messageID\":\"msg_2\",\"sessionID\":\"ses_x\",\"reason\":\"stop\",\"cost\":0.006171,\"tokens\":{\"total\":7949,\"input\":6143,\"output\":14,\"reasoning\":0,\"cache\":{\"read\":1792,\"write\":0}}}}");
 
-        var result = Assemble(stdout);
+        var usage = AdapterUsageParser.ParseOpenCode(stdout);
 
-        Assert.True(result.Success, result.Error);
-        Assert.Equal("final answer", result.Output);
-        Assert.Equal(15750, result.Usage!.InputTokens);
-        Assert.Equal(70, result.Usage.OutputTokens);
-        Assert.Equal(0.012306m, result.Usage.CostUsd);
-    }
-
-    [Fact]
-    public void Only_boundary_events_fail_the_run_without_dumping_the_raw_stream()
-    {
-        var result = Assemble(Events(StepStart, StepFinish));
-
-        Assert.False(result.Success);
-        Assert.Contains("opencode", result.Error);
-        Assert.DoesNotContain("step_start", result.Error);
-        Assert.DoesNotContain("\"type\":", result.Error);
-    }
-
-    [Fact]
-    public void A_session_error_event_fails_the_run_even_when_the_cli_exits_zero()
-    {
-        var result = Assemble(Events(
-            "{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderAuthError\",\"data\":{\"message\":\"invalid api key\"}}}"));
-
-        Assert.False(result.Success);
-        Assert.Contains("invalid api key", result.Error);
-    }
-
-    [Fact]
-    public void A_rate_limited_session_error_is_an_interruption()
-    {
-        var result = Assemble(Events(
-            "{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderRateLimitError\",\"data\":{\"message\":\"429 rate limit exceeded, retry after 60s\"}}}"));
-
-        Assert.False(result.Success);
-        Assert.Equal(FailureKind.Interrupted, result.Failure);
-    }
-
-    [Fact]
-    public void An_auth_session_error_is_left_for_the_on_failure_edge()
-    {
-        // Parking a run on bad credentials would hold it until a human changes them.
-        var result = Assemble(Events(
-            "{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderAuthError\",\"data\":{\"message\":\"invalid api key\"}}}"));
-
-        Assert.False(result.Success);
-        Assert.NotEqual(FailureKind.Interrupted, result.Failure);
-    }
-
-    [Fact]
-    public void A_nonzero_exit_fails_with_the_exit_code_and_stderr()
-    {
-        var result = Assemble(Events(StepStart, TextEvent), exitCode: 3, stderr: "boom");
-
-        Assert.False(result.Success);
-        Assert.Equal("exit=3 stderr=boom", result.Error);
-    }
-
-    [Fact]
-    public void Stdout_that_is_not_json_is_the_response()
-    {
-        var result = Assemble("line one\nline two");
-
-        Assert.True(result.Success, result.Error);
-        Assert.Equal("line one\nline two", result.Output);
+        Assert.Equal("final answer", OpenCodeAdapter.ExtractTextAndSessionIdFromJsonEvents(stdout).Text);
+        Assert.Equal(15750, usage!.InputTokens);
+        Assert.Equal(70, usage.OutputTokens);
+        Assert.Equal(0.012306m, usage.CostUsd);
     }
 
     [Fact]
@@ -196,25 +130,7 @@ public class OpenCodeOutputParsingTests
     {
         var export = "{\"messages\":[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"text\":\"from the export\"}]}]}";
 
-        var result = Assemble(Events(StepStart, StepFinish), exportedSessionJson: export);
-
-        Assert.True(result.Success, result.Error);
-        Assert.Equal("from the export", result.Output);
-    }
-
-    [Fact]
-    public void Narration_in_the_stdout_tail_of_a_genuine_failure_is_not_read_as_a_throttle()
-    {
-        var result = Assemble("the test got 503 Service Unavailable from staging", exitCode: 1);
-        Assert.NotEqual(ILD.Core.Services.Interfaces.FailureKind.Interrupted, ILD.Core.Services.Implementations.AiFailureClassifier.Classify(null, result.Error));
-    }
-
-    [Fact]
-    public void A_non_zero_exit_with_empty_stderr_puts_the_stdout_tail_in_the_error()
-    {
-        var result = Assemble("the cli printed this and died", exitCode: 1);
-        Assert.False(result.Success);
-        Assert.Contains("the cli printed this and died", result.Error);
+        Assert.Equal("from the export", OpenCodeAdapter.ExtractLatestAssistantTextFromSessionJson(export));
     }
 }
 

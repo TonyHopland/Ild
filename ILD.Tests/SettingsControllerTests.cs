@@ -20,13 +20,13 @@ public sealed class SettingsControllerTests : IDisposable
     private readonly Mock<IPrStatusPoller> _prPoller = new();
     private readonly Mock<IEgressPolicy> _policy = new();
     private readonly Mock<INetworkNotifier> _networkNotifier = new();
-    private IRunHost _runHost = new FakeRunHost();
+    private IRunHostOperator _runHost = LocalRunHost.Shared;
 
     public void Dispose() => _db.Dispose();
 
     private SettingsController Build()
         => new(_db.Settings, _notifier.Object, _scheduler.Object, _schedulerSettings.Object,
-            _prPoller.Object, _policy.Object, _networkNotifier.Object,
+            _prPoller.Object, _db.NetworkEdits(_policy.Object, _networkNotifier.Object),
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _runHost);
 
     private static string RunHostJson(IActionResult result)

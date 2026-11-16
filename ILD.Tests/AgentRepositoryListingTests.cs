@@ -18,18 +18,16 @@ public class AgentRepositoryListingTests
         db.Context.Repositories.Add(new Repository { Id = Guid.NewGuid(), Name = "repo", CloneUrl = "https://u:secret@host/r.git", RemoteProviderId = remote.Id });
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
+        var workItems = new Mock<IWorkItemManager>().Object;
         var controller = new AgentController(
-            new Mock<IWorkItemManager>().Object,
+            workItems,
             new Mock<ILoopTemplateManager>().Object,
             db.LoopRuns,
             db.Context,
-            db.Providers,
-            NoPackageFeeds.Resolver,
-            new Mock<IWorktreePreviewService>().Object,
+            new Mock<IWorkItemPreview>().Object,
             new Mock<IChatLoopScratchpad>().Object,
             new Mock<IChatNotifier>().Object,
-            TestActors.Instance,
-            new Mock<IWorkItemNotifier>().Object);
+            AgentSessions.Resolver(db, workItems));
 
         var result = Assert.IsType<OkObjectResult>(await controller.ListRepositories());
         var json = JsonSerializer.Serialize(result.Value);

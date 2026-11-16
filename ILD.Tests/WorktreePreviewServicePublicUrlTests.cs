@@ -96,7 +96,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
         string serviceName = "app",
         bool singlePublicService = true,
         int? port = 5173)
-        => WorktreePreviewService.ComposePublicUrl(
+        => PreviewUrls.ComposePublicUrl(
             authored, PreviewProxyBase.Parse(proxyBase), workItemId, serviceName, "127.0.0.1", port, singlePublicService);
 
     [Fact]
@@ -158,7 +158,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
     [InlineData(null, "api", null)]
     [InlineData("", null, null)]
     public void A_preview_host_label_needs_a_work_item_id_and_a_dns_safe_service_name(string? workItemId, string? serviceName, string? expected)
-        => Assert.Equal(expected, WorktreePreviewService.BuildPreviewHostLabel(workItemId, serviceName));
+        => Assert.Equal(expected, PreviewUrls.BuildPreviewHostLabel(workItemId, serviceName));
 
     [Fact]
     public async Task A_started_preview_advertises_the_work_items_preview_hostname_when_a_proxy_base_is_set()
@@ -184,11 +184,11 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
     [Fact]
     public void The_local_url_is_the_loopback_address_of_the_allocated_port()
-        => Assert.Equal("http://127.0.0.1:5173", WorktreePreviewService.ComposeLocalUrl(5173));
+        => Assert.Equal("http://127.0.0.1:5173", PreviewUrls.ComposeLocalUrl(5173));
 
     [Fact]
     public void Without_an_allocated_port_there_is_no_local_url()
-        => Assert.Null(WorktreePreviewService.ComposeLocalUrl(null));
+        => Assert.Null(PreviewUrls.ComposeLocalUrl(null));
 
     [Fact]
     public async Task A_started_preview_keeps_the_local_url_on_loopback_when_a_proxy_base_is_set()

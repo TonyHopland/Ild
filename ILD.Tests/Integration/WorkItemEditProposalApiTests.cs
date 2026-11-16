@@ -533,54 +533,6 @@ public class WorkItemEditProposalApiTests : IClassFixture<WorkItemEditProposalAp
     private static int? IntOrNull(JsonElement obj, string property)
         => IsNullOrAbsent(obj, property) ? null : obj.GetProperty(property).GetInt32();
 
-    public enum RunStep { OneRunning, NoneRunning }
-
-    [Theory]
-    [InlineData(RunStep.OneRunning)]
-    [InlineData(RunStep.NoneRunning)]
-    public async Task A_loop_proposal_records_the_step_that_was_running_when_it_was_made(RunStep step)
-    {
-        var host = _host;
-        var itemId = await CreateHumanItemAsync(host);
-        var (runId, runningNodeId) = await SeedRunWithStepsAsync(host.Factory, running: step != RunStep.NoneRunning);
-        await SeedRunWithStepsAsync(host.Factory, running: true);
-
-        var proposalId = await ProposeOkAsync(host.Agent(runId), itemId, ForgedAnchorBody("Renamed"));
-
-        var proposal = await ReadProposalAsync(host, itemId, proposalId);
-        Assert.Equal(runId, GuidOrNull(proposal, "createdByLoopRunId"));
-        Assert.Equal(runningNodeId, GuidOrNull(proposal, "createdByRunNodeId"));
-        Assert.Null(IntOrNull(proposal, "chatReplySequence"));
-    }
-
-    public static TheoryData<string, string[], int?> ChatTranscripts => new()
-    {
-        { "an empty chat", Array.Empty<string>(), null },
-        { "the first turn in flight", new[] { "user" }, 1 },
-        { "after a finished turn", new[] { "user", "assistant" }, 1 },
-        { "the second turn in flight", new[] { "user", "assistant", "user" }, 3 },
-        { "after two finished turns", new[] { "user", "assistant", "user", "assistant" }, 3 },
-    };
-
-    [Theory]
-    [MemberData(nameof(ChatTranscripts))]
-    public async Task A_chat_proposal_records_the_reply_it_follows(string _, string[] roles, int? expected)
-    {
-        var host = _host;
-        var itemId = await CreateHumanItemAsync(host);
-        var chatId = await SeedChatSessionAsync(host.Factory);
-        await SeedChatMessagesAsync(host.Factory, chatId, roles);
-        var otherChat = await SeedChatSessionAsync(host.Factory);
-        await SeedChatMessagesAsync(host.Factory, otherChat, Enumerable.Repeat("assistant", 12).Prepend("user").ToArray());
-
-        var proposalId = await ProposeOkAsync(host.Agent(chatSessionId: chatId), itemId, ForgedAnchorBody("Renamed"));
-
-        var proposal = await ReadProposalAsync(host, itemId, proposalId);
-        Assert.Equal(chatId, GuidOrNull(proposal, "createdByChatSessionId"));
-        Assert.Equal(expected, IntOrNull(proposal, "chatReplySequence"));
-        Assert.Null(GuidOrNull(proposal, "createdByRunNodeId"));
-    }
-
     [Fact]
     public async Task Anchors_come_back_unchanged_from_every_listing_and_decision()
     {

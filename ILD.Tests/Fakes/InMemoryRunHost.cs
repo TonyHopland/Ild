@@ -11,7 +11,7 @@ namespace ILD.Tests.Fakes;
 /// <see cref="InMemoryExec"/> that <see cref="OnExec"/> answers, and what the engine was asked is kept in lists. For what the
 /// host does whichever engine holds its runs; what an engine does is tested against that engine's own fake.
 /// </summary>
-internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
+internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null), IDirectRouteEngine, IChatEngine
 {
     public const string ChatName = "chat";
     public const string Address = "10.9.0.7";
@@ -26,9 +26,11 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
 
     public RunTermination? RunEndedBy { get; set; }
 
+    /// <summary>Whether the engine has an environment for a run; a chat is never one.</summary>
+    public Func<Guid, bool> HoldsRun { get; set; } = _ => true;
+
     protected override Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct) => Task.FromResult(new RunState(RunPresent, RunEndedBy));
 
-    public void RememberTermination(Guid run, RunTermination termination) => Remember(run, termination);
 
     /// <summary>What a command does once it is started. By default it reads its input to the end and exits 0.</summary>
     public Func<InMemoryExec, Task> OnExec { get; set; } = async exec =>
@@ -42,7 +44,6 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
 
     public bool Revives { get; set; }
     public Exception? SignInFailure { get; set; }
-    public TaskCompletionSource? MakingChat { get; set; }
 
     public IReadOnlyList<InMemoryExec> Execs { get { lock (_gate) return _execs.ToList(); } }
     public List<Guid> Revived { get; } = [];
@@ -123,26 +124,38 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
         return Task.CompletedTask;
     }
 
-    public override bool HostsChats => true;
-    protected override TimeSpan ChatIdleTimeout => IdleTimeout;
-    protected override string ChatEnvironmentName => ChatName;
-    protected override Task<bool> ChatIsUpAsync(CancellationToken ct) => Task.FromResult(_chatUp);
+    /// <summary>Whether this host keeps chats in its chat container, as a Docker or Kubernetes host does.</summary>
+    public bool KeepsChats { get; init; } = true;
 
-    protected override async Task MakeChatAsync(CancellationToken ct)
+    public override bool HostsChats => KeepsChats;
+    protected override TimeSpan ChatIdleTimeout => IdleTimeout;
+    protected override IChatEngine ChatEngine => this;
+    string IChatEngine.Name => ChatName;
+    Task<bool> IChatEngine.IsUpAsync(CancellationToken ct) => Task.FromResult(_chatUp);
+    Task<bool> IChatEngine.ExistsAsync(CancellationToken ct) => Task.FromResult(_chatUp);
+
+    Task IChatEngine.MakeAsync(CancellationToken ct)
     {
-        if (MakingChat is { } making) await making.Task.WaitAsync(ct);
         ChatsMade++;
         _chatUp = true;
+        return Task.CompletedTask;
     }
 
-    protected override Task RemoveChatAsync(CancellationToken ct)
+    Task IChatEngine.RemoveAsync(CancellationToken ct)
     {
         ChatsRemoved++;
         _chatUp = false;
         return Task.CompletedTask;
     }
 
-    protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(!owner.Chat || _chatUp);
+    /// <summary>How many times the engine was asked whether a run has an environment: once per lookup of who holds an id.</summary>
+    public int RunLookups { get; private set; }
+
+    protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
+    {
+        if (!owner.Chat) RunLookups++;
+        return Task.FromResult(owner.Chat ? _chatUp : HoldsRun(owner.Id));
+    }
     protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => Task.FromResult(true);
     protected override Task<string> RunAddressAsync(Guid run, CancellationToken ct) => Task.FromResult(Address);
 
@@ -150,18 +163,67 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
     public override string LeftoverKind => "in-memory";
     public override TimeSpan SweepInterval => TimeSpan.FromMinutes(1);
     protected override string Noun => "pod";
-    protected override string IldUrl => "http://ild.example:8080";
+    /// <summary>The address ILD is known by to the run.</summary>
+    public string IldAddress { get; init; } = "http://ild.example:8080";
+
+    protected override string IldUrl => IldAddress;
     protected override int EgressProxyPort => 3128;
     protected override bool UsesToolStore => false;
     protected override string ToolZoneName(RunToolMount zone) => zone.Zone.ToString();
     protected override Task StartToolInstallerAsync(string name, Guid id, ToolInstaller installer, CancellationToken ct) => Task.CompletedTask;
     protected override Task RemoveToolInstallerAsync(string name) => Task.CompletedTask;
-    protected override Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
-    protected override Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
-    protected override Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(false);
-    public override Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<DirectRoute>>([]);
-    public override Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<RunLeftover>>([]);
-    public override Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default) => Task.FromResult(false);
+    protected override IDirectRouteEngine DirectRouteEngine => this;
+    Task IDirectRouteEngine.OpenAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
+    Task IDirectRouteEngine.CloseAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
+    Task<bool> IDirectRouteEngine.HasAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(false);
+    Task<IReadOnlyList<DirectRoute>> IDirectRouteEngine.ListAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<DirectRoute>>([]);
+    // -- Sweep: what the engine finds, and what it is asked to delete ----------------------
+
+    /// <summary>What the engine says it holds; the policy decides which of it is a leftover.</summary>
+    public SweepFacts Facts { get; set; } = SweepFacts.None;
+
+    /// <summary>The names the engine takes for open routes when a leftover is given by its location alone.</summary>
+    public HashSet<string> OpenRouteNames { get; } = [];
+
+    /// <summary>What the engine is asked to delete, by what it was handed.</summary>
+    public List<Guid> RunsDeleted { get; } = [];
+    public List<(string Name, bool IsInstaller)> SideEnvironmentsDeleted { get; } = [];
+    public List<string> OpenRoutesDeleted { get; } = [];
+
+    /// <summary>What a delete does instead of deleting: an engine failure, or a run whose pod is still there.</summary>
+    public bool EngineFails { get; set; }
+    public bool RunStays { get; set; }
+
+    /// <summary>The failure of the engine this host survives.</summary>
+    public sealed class EngineDownException : Exception;
+
+    protected override Task<SweepFacts> FindLeftoverFactsAsync(CancellationToken ct)
+        => EngineFails ? throw new EngineDownException() : Task.FromResult(Facts);
+
+    protected override Task<bool> DeleteRunAsync(Guid run, CancellationToken ct)
+    {
+        if (EngineFails) throw new EngineDownException();
+        if (RunStays) return Task.FromResult(false);
+        RunsDeleted.Add(run);
+        return Task.FromResult(true);
+    }
+
+    protected override Task<bool> DeleteSideEnvironmentAsync(string name, bool isInstaller, CancellationToken ct)
+    {
+        if (EngineFails) throw new EngineDownException();
+        SideEnvironmentsDeleted.Add((name, isInstaller));
+        return Task.FromResult(true);
+    }
+
+    protected override Task DeleteOpenRouteAsync(string name, CancellationToken ct)
+    {
+        if (EngineFails) throw new EngineDownException();
+        OpenRoutesDeleted.Add(name);
+        return Task.CompletedTask;
+    }
+
+    protected override bool IsOpenRoute(string location) => OpenRouteNames.Contains(location);
+    protected override bool IsEngineFailure(Exception ex) => ex is EngineDownException;
 }
 
 /// <summary>One command started on the <see cref="InMemoryRunHost"/>: what it was started with, and the means for a test to answer it.</summary>
@@ -209,7 +271,20 @@ internal sealed class InMemoryExec : IExecStream
         return Task.CompletedTask;
     }
 
-    public Task ResizeAsync(int cols, int rows, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>The sizes the terminal was resized to, as <c>COLSxROWS</c>.</summary>
+    public List<string> Resizes { get; } = [];
+
+    public Task ResizeAsync(int cols, int rows, CancellationToken ct = default)
+    {
+        lock (Resizes) Resizes.Add($"{cols}x{rows}");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>What was written to its input so far, as text.</summary>
+    public string StdinSoFar()
+    {
+        lock (_stdin) return Encoding.UTF8.GetString(_stdin.ToArray());
+    }
 
     /// <summary>What was written to its input, once the input was closed or the command was let go.</summary>
     public async Task<byte[]> ReadStdinToEndAsync()
@@ -230,6 +305,15 @@ internal sealed class InMemoryExec : IExecStream
         _stdout.Complete();
         _stderr?.Complete();
         _status.TrySetResult(code);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Ends the connection with the command still running: its streams end and it has no exit status.</summary>
+    public Task DropAsync()
+    {
+        _stdout.Complete();
+        _stderr?.Complete();
+        _status.TrySetResult(null);
         return Task.CompletedTask;
     }
 

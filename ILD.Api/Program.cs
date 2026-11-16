@@ -256,7 +256,7 @@ try
                 Log.Information("Added {Count} host(s) to the installers' default whitelist", installerDefaults);
 
             // Providers that predate the gateway being under the network policy (ADR-0031) get their upstream hosts whitelisted once.
-            var gatewayEntries = await new ILD.Core.Services.Implementations.Network.ProviderNetworkEntries(dbContext).SeedAsync();
+            var gatewayEntries = await scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Implementations.Network.NetworkPolicyEdits>().SeedProviderEntriesAsync();
             if (gatewayEntries > 0)
                 Log.Information("Whitelisted the model gateway upstream for {Count} provider(s)", gatewayEntries);
 

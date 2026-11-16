@@ -1,6 +1,6 @@
 # ADR-0032: Where a run's processes and files live is one interface, the run host
 
-> **Status: amended by [ADR-0036](./0036-runs-always-in-containers.md).** The run host is no longer a setting: ILD's image always uses containers, or pods in Kubernetes, and `local` exists only under `dotnet run`.
+> **Status: amended by [ADR-0036](./0036-runs-always-in-containers.md).** The run host is no longer a setting: ILD's image always uses containers, or pods in Kubernetes, and `local` exists only under `dotnet run`. It is also amended, below, so that callers depend on role views of the one host.
 
 The orchestrator used to start the agent's processes, open its terminals, read its transcripts and find its previews with code that assumed one machine and the uid split of [ADR-0014](./0014-agent-uid-isolation.md). To run the agent somewhere else, a container or a Kubernetes pod, that assumption has to sit behind one seam.
 
@@ -16,3 +16,14 @@ The orchestrator used to start the agent's processes, open its terminals, read i
 
 - **Detecting the backend** (a Kubernetes service account, a container runtime socket). Rejected: it makes a misconfigured deployment run somewhere nobody chose, with different trust.
 - **A host per call site.** Rejected: five adapters, the Cmd node, previews and terminals would each pick a backend; one interface keeps the choice in one place.
+
+## Amendment: one host, role views of it
+
+`IRunHost` had grown to about 47 members, each caller used a small slice, and every capability a backend did not have everywhere arrived as a default-bodied member, a side interface a caller found by downcasting (`is IIsolatedHostInfo`, `is IRunHostShutdown`, `is ISignInTerminalHost`) or a public member of the isolated host reached as `routing.Isolated`. The decision above stands: there is **one host and one backend, chosen once** (`RunHostSelection`, built where the setting is read), and "a host per call site" is still rejected. What changes is what a caller sees. "One interface" now means **one host that implements narrow role interfaces**, and a caller depends on the role it uses (`RunHostRoles.cs`):
+
+- **Roles of every host:** `IRunLifecycle`, `IRunCommands`, `IRunFiles`, `IRunHolders`, `IPreviewHost`, `IChatHost`, `IRunBundles`, `IRunTerminals`, `IRunLeftovers`. A caller that uses several together takes one named composite (`IRunWorkspace`, `IRunChats`, `IRunChatFolders`, `IRunReclaim`, `IRunRepositories`, `IRunShells`), which only puts roles together. `IRunHost` is all of them, and the one registration of the host; each role is a forwarding registration of it.
+- **Roles only some backends have:** `IRunHostOperator` (what the settings page and network guard ask, and the stop of what the host keeps), `IRunSweep` (the timer-driven sweep of pods and containers), `ISignInTerminalHost` (the sign-in container) and `ILocalTerminalCommands` (the routed command line a terminal on ILD's machine starts with). A backend that lacks one has none: `RunHostSelection` carries it as null, or as a host that answers nothing for the operator view. No caller tests the host's type, and none reaches a member of the isolated host.
+- **File reads** are `ReadTextFileAsync` (whole, under the read limit), `OpenFileForReadAsync` (a stream, shared with writers; null for a directory or nothing) and `ReadFileRangeAsync` (a range of a file too big to read whole). `OpenReadAsync` is gone: it was the same read.
+- **`RouteTerminalCommand`** is no longer on the isolated host, which could only refuse it.
+
+Adding a capability is an edit to the role that owns it and to the backends that have it, not to every implementer.

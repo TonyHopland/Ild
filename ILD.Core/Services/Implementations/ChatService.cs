@@ -55,7 +55,7 @@ public sealed class ChatService : IChatService
     private readonly ClaudeProjectFolders _claudeProjects;
     private readonly IEgressPolicy? _egressPolicy;
 
-    private readonly IRunHost _runHost;
+    private readonly IRunChatFolders _runHost;
     private readonly IAgentTokenService? _agentTokens;
     private readonly ChatPreparations _preparations;
 
@@ -68,7 +68,7 @@ public sealed class ChatService : IChatService
         ILoopRunStore runs,
         IChatLoopScratchpad loopScratchpad,
         ChatCloneCoordinator chatClones,
-        IRunHost runHost,
+        IRunChatFolders runHost,
         IWorkItemManager? workItems = null,
         ILogger<ChatService>? log = null,
         IChatTitleScheduler? titles = null,
@@ -515,7 +515,7 @@ public sealed class ChatService : IChatService
                 var worktreePath = activeRun?.WorktreePath;
                 if (!string.IsNullOrWhiteSpace(worktreePath))
                 {
-                    if (!ChatSharesHostWithRun(worktreePath, chatScratchPath))
+                    if (!_runHost.ChatSeesWorktree(worktreePath, chatScratchPath))
                     {
                         var note = "Its active run runs in an isolated container, so its worktree cannot be read or edited from this chat.";
                         if (!string.IsNullOrWhiteSpace(activeRun!.BranchName))
@@ -545,15 +545,6 @@ public sealed class ChatService : IChatService
 
         return (string.Join("\n", lines), allowedDirectories);
     }
-
-    /// <summary>
-    /// Whether the chat can read the run's worktree: both live on ILD's own disk. It cannot see the
-    /// folder when the run is in a container (<c>/ild-run/…</c>, which exists only there) and the chat
-    /// is in the chat container or is an older local chat, when a Kubernetes run has a local chat, or
-    /// when an older local run has its chat in the chat container (<c>/ild-chat/…</c>).
-    /// </summary>
-    private static bool ChatSharesHostWithRun(string worktreePath, string chatScratchPath)
-        => RunPaths.OwnerOf(worktreePath) is null && RunPaths.ChatOf(chatScratchPath) is null;
 
     /// <summary>
     /// What the Loop Editor half of the Chat Context owes a turn. The two underlying

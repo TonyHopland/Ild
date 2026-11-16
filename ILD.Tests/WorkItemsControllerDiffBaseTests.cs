@@ -412,11 +412,10 @@ public class WorkItemsControllerDiffBaseTests
         var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,
             new Mock<ILoopEngine>().Object,
-            new Mock<IWorktreePreviewService>().Object,
+            new Mock<IWorkItemPreview>().Object,
             repoManager.Object,
             db.LoopRuns,
             db.Providers,
-            NoPackageFeeds.Resolver,
             branchNames.Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
             NullLogger<WorkItemsController>.Instance));

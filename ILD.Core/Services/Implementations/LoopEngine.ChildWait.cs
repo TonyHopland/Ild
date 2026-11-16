@@ -89,7 +89,7 @@ public sealed partial class LoopEngine
     private async Task StopWaitedChildrenAsync(IServiceProvider sp, LoopRun run)
     {
         if (ChildWaitState.TryParse(run.ChildWaitJson) is not { } waiting) return;
-        try { await sp.GetRunHost().StopProcessesAsync(run.Id, waiting.Processes); }
+        try { await sp.GetRunCommands().StopProcessesAsync(run.Id, waiting.Processes); }
         catch (Exception ex) { _logger.LogWarning(ex, "Could not stop the processes run {RunId} was waiting for", run.Id); }
     }
 

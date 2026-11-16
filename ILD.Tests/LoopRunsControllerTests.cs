@@ -98,14 +98,17 @@ public class LoopRunsControllerTests
         var store = new Mock<ILoopRunStore>();
         if (run is not null) store.Setup(s => s.GetByIdAsync(run.Id)).ReturnsAsync(run);
         var controller = BuildController(store, new Mock<IRunReclaimer>());
-        controller.HttpContext.RequestServices = new ServiceCollection().AddSingleton(host.Object).BuildServiceProvider();
+        controller.HttpContext.RequestServices = new ServiceCollection().AddSingleton(host.Object).AddSingleton(host.As<IRunHostOperator>().Object).BuildServiceProvider();
         return controller;
     }
 
     private static Mock<IRunHost> EditorHost(RunHostKind kind, bool worktreeExists = true)
     {
-        var host = new Mock<IRunHost>();
+        var host = new Mock<IRunHost> { CallBase = true };
         host.SetupGet(h => h.Kind).Returns(kind);
+        host.As<IRunHostOperator>().SetupGet(h => h.Kind).Returns(kind);
+        host.As<IRunHostOperator>().Setup(h => h.AttachTargetFor(It.IsAny<string?>()))
+            .Returns((string? path) => kind == RunHostKind.Container && RunPaths.OwnerOf(path) is { } run ? RunNames.Run(run) : null);
         host.Setup(h => h.DirectoryExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(worktreeExists);
         return host;
     }
@@ -121,7 +124,7 @@ public class LoopRunsControllerTests
     {
         var run = ContainerRun();
         var host = EditorHost(RunHostKind.Container);
-        host.Setup(h => h.GetStatsAsync(run.Id, It.IsAny<CancellationToken>()))
+        host.As<IRunHostOperator>().Setup(h => h.GetStatsAsync(run.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ContainerStats(true, CpuCores: 1.2, CpuLimitCores: 4, MemoryBytes: 100, MemoryLimitBytes: 200, NetworkRxBytes: 5));
 
         var result = await EditorController(run, host).GetContainerStats(run.Id.ToString());
@@ -141,7 +144,7 @@ public class LoopRunsControllerTests
     {
         var run = ContainerRun();
         var host = EditorHost(RunHostKind.Container);
-        host.Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(ContainerStats.NotRunning);
+        host.As<IRunHostOperator>().Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(ContainerStats.NotRunning);
 
         var result = await EditorController(run, host).GetContainerStats(run.Id.ToString());
 
@@ -156,7 +159,7 @@ public class LoopRunsControllerTests
     {
         var run = ContainerRun();
         var host = EditorHost(kind);
-        host.Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((ContainerStats?)null);
+        host.As<IRunHostOperator>().Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((ContainerStats?)null);
 
         var result = await EditorController(run, host).GetContainerStats(run.Id.ToString());
 
@@ -169,7 +172,7 @@ public class LoopRunsControllerTests
     {
         var run = ContainerRun();
         var host = EditorHost(RunHostKind.Container);
-        host.Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ThrowsAsync(new IOException("socket gone"));
+        host.As<IRunHostOperator>().Setup(h => h.GetStatsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ThrowsAsync(new IOException("socket gone"));
 
         var result = await EditorController(run, host).GetContainerStats(run.Id.ToString());
 

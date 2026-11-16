@@ -20,7 +20,8 @@ public sealed class StartNodeExecutor : INodeExecutor
         var providerStore = sp.GetRequiredService<IProviderStore>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
-        var host = sp.GetRunHost();
+        var files = sp.GetRunFiles();
+        var lifecycle = sp.GetRunLifecycle();
 
         var wi = await workItems.GetWorkItemAsync(ctx.Run.WorkItemId);
         var repositoryId = RunRepository.IdOf(ctx.Run, wi);
@@ -47,14 +48,14 @@ public sealed class StartNodeExecutor : INodeExecutor
             System.Text.Json.JsonSerializer.Serialize(new { nodeType = "Start", message = "initialized" }));
 
         var hasHealthyWorktree = !string.IsNullOrEmpty(ctx.Run.WorktreePath)
-            && await host.DirectoryExistsAsync(ctx.Run.WorktreePath, ctx.CancellationToken)
+            && await files.DirectoryExistsAsync(ctx.Run.WorktreePath, ctx.CancellationToken)
             && await repoManager.ValidateWorktreeHealthAsync(ctx.Run.WorktreePath);
 
         string worktreePath;
         string branchName;
         if (!hasHealthyWorktree)
         {
-            var (ok, path, branch, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, host, ctx.Run, repo, wi, gitAuth);
+            var (ok, path, branch, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, lifecycle, ctx.Run, repo, wi, gitAuth);
             if (!ok)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "worktree setup failed");
@@ -127,7 +128,7 @@ public sealed class StartNodeExecutor : INodeExecutor
     }
 
     private static async Task<(bool Ok, string? Path, string? Branch, string? Error)> EnsureWorktreeAsync(
-        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager, IRunHost host,
+        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager, IRunLifecycle host,
         LoopRun run, Repository repo, WorkItemView wi, GitAuthOptions? gitAuth)
     {
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
@@ -165,7 +166,7 @@ public sealed class StartNodeExecutor : INodeExecutor
     /// after the mark is cleared.
     /// </summary>
     private static async Task<RunEnvironment> CreateEnvironmentAsync(
-        NodeExecutionContext ctx, IServiceProvider sp, IRunHost host, string workItemId, RunEnvironmentRequest request)
+        NodeExecutionContext ctx, IServiceProvider sp, IRunLifecycle host, string workItemId, RunEnvironmentRequest request)
     {
         var preparations = host.Kind == RunHostKind.Local ? null : sp.GetService<RunPreparations>();
         if (preparations is null) return await host.CreateAsync(request, ctx.CancellationToken);
