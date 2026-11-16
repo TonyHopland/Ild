@@ -86,39 +86,53 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     {
         private string? _mcpConfigPath;
         private decimal _sessionCostBefore;
-        private ClaudeStreamOutput? _stdout;
+        private StreamResult? _stdout;
 
         public override string BinaryPath { get; } = AiProviderConfig.Parse(ctx.Provider.Config)
             .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode, adapter.EnvironmentVariables));
 
-        public override async Task PrepareAsync()
+        public override Task PrepareAsync()
         {
             // Inject the ILD MCP server entry so the headless `claude` process
             // can call list/create tools through the agent-scoped API. The CLI
             // accepts a JSON config via `--mcp-config <file>`, which we merge
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
-            if (!ctx.NoTools)
-                _mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx));
+            _mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter._logger, adapter.RunFacingEnvironmentFor(ctx), ctx.NoTools);
+            return Task.CompletedTask;
+        }
 
-            await adapter.ForkManagedSessionAsync(ctx);
+        // Before invoking claude, if a managed session is in play and the
+        // turn JSONL is missing from $HOME/.claude/projects, materialize
+        // it from the snapshot store so `--resume` can pick up the
+        // history even when the on-disk cache has been wiped.
+        public override async Task<bool> RestoreSessionAsync(string sessionId)
+        {
+            await adapter.TryRestoreSessionJsonlAsync(ctx, sessionId, worktreePath);
+            return true;
+        }
 
-            // Before invoking claude, if a managed session is in play and the
-            // turn JSONL is missing from $HOME/.claude/projects, materialize
-            // it from the snapshot store so `--resume` can pick up the
-            // history even when the on-disk cache has been wiped.
-            if (ctx.ManageSession && !string.IsNullOrWhiteSpace(ctx.SessionId))
-                await adapter.TryRestoreSessionJsonlAsync(ctx, ctx.SessionId!, worktreePath);
+        // Read after the fork and restore, as it is what `--resume` restores from.
+        public override async Task<string?> ReadSessionAsync(string? sessionId)
+        {
+            if (!string.IsNullOrWhiteSpace(sessionId))
+                _sessionCostBefore = await adapter.ReadSessionCostBeforeAsync(sessionId, worktreePath, ctx.Cancel);
+            return sessionId;
+        }
 
-            // Read after the fork and restore, as it is what `--resume` restores from.
-            _sessionCostBefore = string.IsNullOrWhiteSpace(ctx.SessionId)
-                ? 0m
-                : await adapter.ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
+        // Copy the JSONL claude wrote at $HOME/.claude/projects/<encoded-cwd>/<sid>.jsonl
+        // into the snapshot store. This is what surfaces the run's session in
+        // the "Available AI Sessions" panel and lets us rehydrate the
+        // on-disk file on a later turn (see TryRestoreSessionJsonlAsync).
+        public override async Task<string?> SaveSessionAsync(string sessionId)
+        {
+            await adapter.TryPersistSessionJsonlAsync(ctx, sessionId, worktreePath);
+            return null;
         }
 
         public override Task<AgentLaunch> LaunchAsync()
         {
-            var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, ctx.SessionId, _mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
+            var psi = BuildRunProcessStartInfo(BinaryPath, worktreePath, ctx.Prompt, ResumeSessionId, _mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger));
             var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
             if (gateway.Value is { } lease) ApplyGateway(environment, lease, ctx.Provider);
             return Task.FromResult(new AgentLaunch(psi, environment, [_mcpConfigPath]));
@@ -127,20 +141,12 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         public override async Task ReadStdoutAsync(StreamReader stdout)
             => _stdout = await ReadStreamJsonAsync(stdout, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel, TurnEnded);
 
-        public override async Task<NodeExecutionResult> CompleteAsync(string stderr, int exitCode)
-        {
-            var result = AssembleResult(_stdout!, stderr, exitCode, ctx.Prompt, ctx.SessionId, ctx.IncomingSessionId, _sessionCostBefore);
+        public override StreamResult ParseStream() => _stdout!;
 
-            // On a successful managed-session turn, copy the JSONL claude
-            // wrote at $HOME/.claude/projects/<encoded-cwd>/<sid>.jsonl into
-            // the snapshot store. This is what surfaces the run's session in
-            // the "Available AI Sessions" panel and lets us rehydrate the
-            // on-disk file on a later turn (see TryRestoreSessionJsonlAsync).
-            if (result.Success && ctx.ManageSession && !string.IsNullOrWhiteSpace(result.SessionId))
-                await adapter.TryPersistSessionJsonlAsync(ctx, result.SessionId!, worktreePath);
-
-            return result;
-        }
+        // The earlier total only counts when Claude answered on the session it was asked to resume.
+        public override Task<TokenUsage?> UsageAsync()
+            => Task.FromResult(AdapterUsageParser.ParseClaude(
+                _stdout!.RawStdout, _stdout.SessionId is null || _stdout.SessionId == ResumeSessionId ? _sessionCostBefore : 0m));
 
         public override ValueTask DisposeAsync()
         {
@@ -150,47 +156,6 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
             return ValueTask.CompletedTask;
         }
-    }
-
-    /// <summary>Turns a finished run's parsed output, stderr and exit code into the node's result.</summary>
-    internal static NodeExecutionResult AssembleResult(
-        ClaudeStreamOutput stdout, string stderr, int exitCode, string prompt,
-        string? requestedSessionId, string? incomingSessionId, decimal sessionCostBefore)
-    {
-        var effectiveSessionId = stdout.SessionId ?? requestedSessionId;
-        var response = stdout.Content;
-
-        if (string.IsNullOrWhiteSpace(response))
-        {
-            if (!stdout.SawJsonEvents)
-                response = stdout.RawStdout;
-            else if (!string.IsNullOrWhiteSpace(stdout.ErrorMessage))
-                response = $"[claude-code-error] {stdout.ErrorMessage}";
-            else if (!string.IsNullOrWhiteSpace(stderr))
-                response = $"[claude-code] no assistant text response. stderr: {stderr.Trim()}";
-            else
-                response = "[claude-code] no assistant text response from model";
-        }
-
-        if (exitCode == 0 && !string.IsNullOrWhiteSpace(stdout.ErrorMessage))
-            // The result event's own error text is the provider's message,
-            // isolated — classify from it (same rationale as OpenCodeAdapter).
-            return NodeExecutionResult.Fail(
-                $"claude-code session error: {stdout.ErrorMessage}", response,
-                AiFailureClassifier.ClassifyProviderMessage(stdout.ErrorMessage));
-
-        if (exitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
-            return NodeExecutionResult.Fail(response);
-
-        // The earlier total only counts when Claude answered on the session it was asked to resume.
-        var costBeforeThisRun = stdout.SessionId is null || stdout.SessionId == requestedSessionId ? sessionCostBefore : 0m;
-
-        return exitCode == 0
-            ? NodeExecutionResult.Ok(response, prompt, effectiveSessionId, incomingSessionId, AdapterUsageParser.ParseClaude(stdout.RawStdout, costBeforeThisRun))
-            : NodeExecutionResult.Fail(
-                AdapterFailureText.NonZeroExit(exitCode, stderr, stdout.ErrorMessage, stdout.Content.Length > 0 ? stdout.Content : stdout.RawStdout),
-                response,
-                AiFailureClassifier.ClassifyProviderMessage(stdout.ErrorMessage));
     }
 
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
@@ -343,21 +308,15 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// </param>
     public static string? TryWriteIldMcpConfig(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist, Guid? chatSessionId = null,
-        ILogger? logger = null, IProcessEnvironment? environment = null)
+        ILogger? logger = null, IProcessEnvironment? environment = null, bool noTools = false)
     {
+        var selected = SelectMcpServers(TypeTraits, provider, toolAllowlist, noTools, environment);
         var servers = new Dictionary<string, object?>();
 
-        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, toolAllowlist);
-        if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
-        {
-            var entry = BuildIldMcpEntry(runContext, chatSessionId, environment);
-            if (entry != null)
-                servers["ild"] = entry;
-        }
+        if (selected.Ild && BuildIldMcpEntry(runContext, chatSessionId, environment) is { } ild)
+            servers["ild"] = ild;
 
-        // Provider-scoped custom MCP servers. The parser reserves the "ild" name,
-        // so these can never clobber the entry above.
-        foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
+        foreach (var server in selected.Custom)
             servers[server.Name] = CustomMcpServers.BuildCustomMcpEntry(server);
 
         return servers.Count == 0
@@ -367,7 +326,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 logger ?? NullLogger.Instance, environment);
     }
 
-    internal static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(
+    internal static async Task<StreamResult> ReadStreamJsonAsync(
         StreamReader reader,
         Func<string, Task>? progressCallback,
         Action<string>? onSessionId,
@@ -453,7 +412,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
         }
 
-        return new ClaudeStreamOutput(raw.ToString(), content.ToString(), sessionId, errorMessage, sawJsonEvents);
+        return new StreamResult(content.ToString(), sessionId, errorMessage, sawJsonEvents, raw.ToString());
     }
 
     private static string? ExtractAssistantText(JsonElement message)
@@ -594,11 +553,4 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     // snapshot persist/restore silently no-op'd. If Anthropic ever changes the
     // rule, restore/persist still no-op (path miss) rather than misbehave.
     public static string EncodeWorktreePath(string path) => path.Replace('/', '-').Replace('.', '-');
-
-    internal sealed record ClaudeStreamOutput(
-        string RawStdout,
-        string Content,
-        string? SessionId,
-        string? ErrorMessage,
-        bool SawJsonEvents);
 }

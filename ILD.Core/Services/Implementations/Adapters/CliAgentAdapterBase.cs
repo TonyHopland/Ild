@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations.Files;
+using ILD.Data;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -173,6 +174,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     private async Task<NodeExecutionResult> RunAsync(CliAgentTurn turn, AgentExecutionContext ctx)
     {
         await turn.PrepareAsync();
+        await PrepareSessionAsync(turn, ctx);
 
         var launchId = LaunchFingerprint is not null && ctx.ChatSessionId is null ? OwnerOf(ctx).ToString("N") : null;
         IRunProcess? started;
@@ -229,7 +231,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         var seenAtTheEnd = liveChildren.Count > 0;
         if (seenAtTheEnd) liveChildren = await StillRunningAfterExitAsync(ctx, liveChildren);
 
-        var result = await turn.CompleteAsync(stderr, process.ExitCode);
+        var result = await CompleteAsync(turn, ctx, stderr, process.ExitCode);
         if (!result.Success && process.Termination is { Kind: not RunTerminationKind.Other } ended)
             return result with { Error = ended.Describe(), Failure = FailureKind.Failed, Termination = ended };
         return result.Success && seenAtTheEnd ? result with { LiveChildren = liveChildren } : result;
@@ -290,14 +292,123 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         }
     }
 
+    /// <summary>Whether ILD keeps the execution's session (<see cref="AgentExecutionContext.ManageSession"/>) on a CLI that resumes sessions at all.</summary>
+    private bool ManagesSession(AgentExecutionContext ctx) => ctx.ManageSession && Traits.SupportsSessionResume;
+
     /// <summary>
-    /// Seeds a copy of the session the execution forks from under the session it runs on, so restoring that one brings up the copy
-    /// and the CLI continues on the fork while the source stays as it was.
+    /// The session protocol up to the launch, in the order it has to run in: fork the session the execution continues from, restore
+    /// the stored session where the CLI reads it, then read what the turn needs of it. A fork that fails fails the turn; a source
+    /// with no snapshot leaves nothing to resume, so a new session starts.
     /// </summary>
-    protected async Task ForkManagedSessionAsync(AgentExecutionContext ctx)
+    private async Task PrepareSessionAsync(CliAgentTurn turn, AgentExecutionContext ctx)
     {
-        if (ctx.ManageSession && !string.IsNullOrWhiteSpace(ctx.SessionId) && !string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
-            await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, ctx.SessionId!, ctx.Cancel);
+        var resume = Traits.SupportsSessionResume && !string.IsNullOrWhiteSpace(ctx.SessionId) ? ctx.SessionId : null;
+        if (ManagesSession(ctx) && resume is { } managed && turn.IsSessionId(managed))
+        {
+            await ForkManagedSessionAsync(ctx);
+            if (!await turn.RestoreSessionAsync(managed))
+                resume = null;
+        }
+        turn.ResumeSessionId = await turn.ReadSessionAsync(resume);
+    }
+
+    /// <summary>Seeds a copy of the session the execution forks from under the session it runs on, so restoring that one brings up the copy and the CLI continues on the fork while the source stays as it was.</summary>
+    private async Task ForkManagedSessionAsync(AgentExecutionContext ctx)
+    {
+        if (string.IsNullOrWhiteSpace(ctx.ForkFromSessionId)) return;
+        try
+        {
+            await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId, ctx.SessionId!, ctx.Cancel);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new AgentTurnFailedException(NodeExecutionResult.Fail(
+                $"[{CliName}-error] could not fork the {CliName} session {ctx.ForkFromSessionId} into {ctx.SessionId}: {ex.Message}"));
+        }
+    }
+
+    /// <summary>
+    /// The turn's result once the CLI has exited and its output is read: the session is saved first (whatever the turn is then
+    /// classified as, as long as the CLI exited cleanly: there is a transcript to resume from either way), then the outcome is decided.
+    /// </summary>
+    private async Task<NodeExecutionResult> CompleteAsync(CliAgentTurn turn, AgentExecutionContext ctx, string stderr, int exitCode)
+    {
+        var stream = turn.ParseStream();
+        var sessionId = stream.SessionId ?? turn.ResumeSessionId;
+
+        if (exitCode == 0 && ManagesSession(ctx) && !string.IsNullOrWhiteSpace(sessionId)
+            && await turn.SaveSessionAsync(sessionId) is { } saved && string.IsNullOrWhiteSpace(stream.Text))
+            stream = stream with { Text = saved };
+
+        var result = Classify(
+            stream, stderr, exitCode, CliName, ctx.Prompt, sessionId, Traits.SupportsSessionResume ? ctx.IncomingSessionId : null, turn.BlankOutputFails);
+        return result.Success ? result with { Usage = await turn.UsageAsync() } : result;
+    }
+
+    /// <summary>
+    /// What a finished turn is: the same for every CLI, from its parsed output, stderr and exit code.
+    /// <list type="bullet">
+    /// <item>No answer stands in for a diagnostic (the provider's error, else stderr, else a plain "no text"), except that the raw
+    /// output is the answer when it was not an event stream at all, blank as it may be unless the CLI fails on blank output.</item>
+    /// <item>A clean exit is still a failure when the provider reported an error, when the stream ended before its turn did, or when
+    /// there was no answer. A non-zero exit is always one, with the provider's error as its reason when it gave one.</item>
+    /// <item>NUL is stripped from everything: it is the one character a PostgreSQL text column cannot store.</item>
+    /// </list>
+    /// </summary>
+    internal static NodeExecutionResult Classify(
+        StreamResult stream, string stderr, int exitCode, string cliName, string prompt, string? sessionId, string? incomingSessionId,
+        bool blankOutputFails = false)
+    {
+        var text = StripNullChars(stream.Text);
+        var raw = StripNullChars(stream.RawStdout);
+        stderr = StripNullChars(stderr);
+        var providerError = string.IsNullOrWhiteSpace(stream.ProviderError) ? null : StripNullChars(stream.ProviderError);
+
+        var hasText = !string.IsNullOrWhiteSpace(text);
+        var rawIsAnswer = !hasText && !stream.SawJsonEvents && (!string.IsNullOrWhiteSpace(raw) || !blankOutputFails);
+        var response = hasText ? text
+            : rawIsAnswer ? raw.Trim()
+            : providerError is not null ? $"[{cliName}-error] {providerError}"
+            : !string.IsNullOrWhiteSpace(stderr) ? $"[{cliName}] no assistant text response. stderr: {stderr.Trim()}"
+            : $"[{cliName}] no assistant text response from model";
+
+        // The provider's own message, apart from the agent's narration, is what tells a rate limit from a real failure.
+        var failure = providerError is null ? FailureKind.Unknown : AiFailureClassifier.ClassifyProviderMessage(providerError);
+
+        if (exitCode != 0)
+            return NodeExecutionResult.Fail(
+                AdapterFailureText.NonZeroExit(exitCode, stderr, providerError, hasText ? text : raw), response, failure);
+        if (providerError is not null)
+            return NodeExecutionResult.Fail($"{cliName} session error: {providerError}", response, failure);
+        // The CLI can exit cleanly mid-turn (the provider closed the stream), leaving half a sentence that must not pass for the answer.
+        if (stream.Truncation is { } truncated)
+            return NodeExecutionResult.Fail(truncated, response);
+        // A turn that completed with no text (the provider dropped the request) is a failure the on_failure edge can recover from,
+        // not a diagnostic to pass on as the AI's output.
+        if (!hasText && !rawIsAnswer)
+            return NodeExecutionResult.Fail(response);
+
+        return NodeExecutionResult.Ok(response, prompt, sessionId, incomingSessionId);
+    }
+
+    /// <summary>
+    /// The MCP servers a launch is given, whichever way the CLI is told about them: ILD's own when the call's tool selection
+    /// has <c>ild</c> and its server can be started, then the provider's custom servers. A call that must have no tools has none.
+    /// </summary>
+    /// <param name="Ild">Whether the <c>ild</c> server is attached.</param>
+    /// <param name="Custom">The provider's custom servers; the parser reserves the <c>ild</c> name, so none can take its place.</param>
+    internal sealed record McpServerSet(bool Ild, IReadOnlyList<CustomMcpServer> Custom);
+
+    /// <summary>The servers a launch is given: see <see cref="McpServerSet"/>.</summary>
+    /// <param name="traits">The CLI's, which say how an allowlist reads.</param>
+    /// <param name="environment">Where the ILD MCP server's DLL is looked for.</param>
+    internal static McpServerSet SelectMcpServers(
+        AgentAdapterTraits traits, AiProvider provider, IReadOnlyList<string>? allowlist, bool noTools, IProcessEnvironment? environment)
+    {
+        if (noTools) return new McpServerSet(false, []);
+        var ild = AiToolCatalog.NormalizeSelectedToolKeys(traits, allowlist).Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
+            && IldMcpServer.ResolveServerDll(environment) is not null;
+        return new McpServerSet(ild, CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson));
     }
 
     public virtual CredentialPath? CredentialPathFor(AiProvider provider) => null;

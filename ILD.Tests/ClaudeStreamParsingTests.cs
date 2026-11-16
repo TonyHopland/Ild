@@ -1,10 +1,9 @@
 using ILD.Core.Services.Implementations.Adapters;
-using ILD.Core.Services.Interfaces;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// The stream-json parser and the result assembly of <see cref="ClaudeCodeAdapter"/>, fed real
+/// The stream-json parser of <see cref="ClaudeCodeAdapter"/>, fed real
 /// event shapes directly rather than through a stand-in CLI process.
 /// </summary>
 public class ClaudeStreamParsingTests
@@ -16,9 +15,6 @@ public class ClaudeStreamParsingTests
 
     private static string Result(string sid, bool isError, string result)
         => $"{{\"type\":\"result\",\"session_id\":\"{sid}\",\"is_error\":{(isError ? "true" : "false")},\"result\":\"{result}\"}}";
-
-    private static NodeExecutionResult Assemble(ClaudeCodeAdapter.ClaudeStreamOutput stdout, int exitCode = 0, string stderr = "")
-        => ClaudeCodeAdapter.AssembleResult(stdout, stderr, exitCode, "the prompt", requestedSessionId: null, incomingSessionId: null, sessionCostBefore: 0m);
 
     [Fact]
     public async Task Assistant_text_and_the_session_id_are_read_from_stream_json_and_text_is_streamed()
@@ -33,10 +29,10 @@ public class ClaudeStreamParsingTests
             onSessionId: null,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("Hello, world.", output.Content);
+        Assert.Equal("Hello, world.", output.Text);
         Assert.Equal("sess-abc", output.SessionId);
         Assert.True(output.SawJsonEvents);
-        Assert.Null(output.ErrorMessage);
+        Assert.Null(output.ProviderError);
         Assert.Equal(["Hello, world."], progress);
     }
 
@@ -58,7 +54,7 @@ public class ClaudeStreamParsingTests
         var marker = Assert.Single(progress, p => p.Contains("[tool: Bash]"));
         Assert.Equal("\n[tool: Bash] ls -la\n", marker);
         Assert.Contains("Listing files.", progress);
-        Assert.Equal("Listing files.", output.Content);
+        Assert.Equal("Listing files.", output.Text);
     }
 
     [Fact]
@@ -85,8 +81,8 @@ public class ClaudeStreamParsingTests
             AdapterStreamReaders.Of(Init, Result("sess-abc", true, "upstream broke")),
             null, null, TestContext.Current.CancellationToken);
 
-        Assert.Equal("upstream broke", output.ErrorMessage);
-        Assert.Equal("", output.Content);
+        Assert.Equal("upstream broke", output.ProviderError);
+        Assert.Equal("", output.Text);
     }
 
     [Fact]
@@ -102,36 +98,7 @@ public class ClaudeStreamParsingTests
     }
 
     [Fact]
-    public async Task An_error_result_fails_the_run_with_the_providers_message()
-    {
-        var output = await ClaudeCodeAdapter.ReadStreamJsonAsync(
-            AdapterStreamReaders.Of(Init, Result("sess-abc", true, "upstream broke")),
-            null, null, TestContext.Current.CancellationToken);
-
-        var result = Assemble(output);
-
-        Assert.False(result.Success);
-        Assert.Contains("upstream broke", result.Error);
-    }
-
-    [Fact]
-    public async Task A_usage_limit_result_error_is_classified_as_an_interruption()
-    {
-        // The result event's own error text is the provider's message, isolated, so it is classified from that.
-        var output = await ClaudeCodeAdapter.ReadStreamJsonAsync(
-            AdapterStreamReaders.Of(
-                Init,
-                Result("sess-abc", true, "Claude usage limit reached. Your limit will reset at 9:40am (UTC).")),
-            null, null, TestContext.Current.CancellationToken);
-
-        var result = Assemble(output);
-
-        Assert.False(result.Success);
-        Assert.Equal(FailureKind.Interrupted, result.Failure);
-    }
-
-    [Fact]
-    public async Task A_successful_stream_assembles_the_text_session_and_usage()
+    public async Task A_successful_stream_is_read_into_its_text_session_and_usage()
     {
         var output = await ClaudeCodeAdapter.ReadStreamJsonAsync(
             AdapterStreamReaders.Of(
@@ -140,89 +107,11 @@ public class ClaudeStreamParsingTests
                 "{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"sess-abc\",\"is_error\":false,\"result\":\"Hello, world.\",\"total_cost_usd\":0.5,\"usage\":{\"input_tokens\":100,\"cache_creation_input_tokens\":5,\"cache_read_input_tokens\":50,\"output_tokens\":40}}"),
             null, null, TestContext.Current.CancellationToken);
 
-        var result = Assemble(output);
+        var usage = AdapterUsageParser.ParseClaude(output.RawStdout, 0m);
 
-        Assert.True(result.Success, result.Error);
-        Assert.Equal("Hello, world.", result.Output);
-        Assert.Equal("sess-abc", result.SessionId);
-        Assert.Equal("the prompt", result.ResolvedPrompt);
-        Assert.Equal(155, result.Usage!.InputTokens);
-        Assert.Equal(40, result.Usage.OutputTokens);
-    }
-
-    [Fact]
-    public async Task A_clean_exit_with_json_events_but_no_text_fails_and_does_not_return_the_raw_stream()
-    {
-        var output = await ClaudeCodeAdapter.ReadStreamJsonAsync(
-            AdapterStreamReaders.Of(Init),
-            null, null, TestContext.Current.CancellationToken);
-
-        var result = Assemble(output);
-
-        Assert.False(result.Success);
-        Assert.Contains("[claude-code] no assistant text response from model", result.Error);
-        Assert.DoesNotContain("session_id", result.Error);
-    }
-
-    [Fact]
-    public async Task A_nonzero_exit_fails_with_the_exit_code_and_stderr()
-    {
-        var output = await ClaudeCodeAdapter.ReadStreamJsonAsync(
-            AdapterStreamReaders.Of(Init, Assistant("sess-abc", "{\"type\":\"text\",\"text\":\"partial\"}")),
-            null, null, TestContext.Current.CancellationToken);
-
-        var result = Assemble(output, exitCode: 2, stderr: "boom");
-
-        Assert.False(result.Success);
-        Assert.Equal("exit=2 stderr=boom", result.Error);
-        Assert.Equal("partial", result.Output);
-    }
-
-    [Theory]
-    [InlineData("You've hit your 5-hour limit · resets 9:40pm (UTC)")]
-    [InlineData("You've hit your session limit · resets 9:40pm (UTC)")]
-    [InlineData("You've hit your weekly limit · resets 9:40pm (UTC)")]
-    [InlineData("Claude AI usage limit reached|1762984800")]
-    public async Task A_limit_hit_in_the_result_event_with_empty_stderr_is_an_interruption_named_in_the_error(string notice)
-    {
-        var stdout = await ClaudeCodeAdapter.ReadStreamJsonAsync(
-            AdapterStreamReaders.Of(Init, Result("sess-abc", true, notice)),
-            null, onSessionId: null, TestContext.Current.CancellationToken);
-
-        var result = Assemble(stdout, exitCode: 1);
-
-        Assert.False(result.Success);
-        Assert.Equal(FailureKind.Interrupted, result.Failure);
-        Assert.Contains(notice, result.Error);
-    }
-
-    [Fact]
-    public async Task A_non_limit_failure_with_empty_stderr_still_fails_and_carries_the_stdout_tail()
-    {
-        var stdout = await ClaudeCodeAdapter.ReadStreamJsonAsync(
-            AdapterStreamReaders.Of(Init, Result("sess-abc", true, "Credit balance is too low")),
-            null, onSessionId: null, TestContext.Current.CancellationToken);
-
-        var result = Assemble(stdout, exitCode: 1);
-
-        Assert.False(result.Success);
-        Assert.NotEqual(FailureKind.Interrupted, result.Failure);
-        Assert.Contains("Credit balance is too low", result.Error);
-    }
-
-    [Fact]
-    public void A_failure_with_no_json_and_empty_stderr_puts_the_stdout_tail_in_the_error()
-    {
-        var stdout = new ClaudeCodeAdapter.ClaudeStreamOutput("boom from the cli", "", null, null, false);
-        Assert.Contains("boom from the cli", Assemble(stdout, exitCode: 1).Error);
-    }
-
-    [Fact]
-    public void Narration_in_the_stdout_tail_of_a_genuine_failure_is_not_read_as_a_throttle()
-    {
-        var stdout = new ClaudeCodeAdapter.ClaudeStreamOutput("x", "the test got 503 Service Unavailable from staging", null, null, true);
-        var result = Assemble(stdout, exitCode: 1);
-        Assert.Contains("503 Service Unavailable", result.Error);
-        Assert.NotEqual(FailureKind.Interrupted, ILD.Core.Services.Implementations.AiFailureClassifier.Classify(null, result.Error));
+        Assert.Equal("Hello, world.", output.Text);
+        Assert.Equal("sess-abc", output.SessionId);
+        Assert.Equal(155, usage!.InputTokens);
+        Assert.Equal(40, usage.OutputTokens);
     }
 }
