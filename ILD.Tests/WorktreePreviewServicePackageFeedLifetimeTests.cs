@@ -28,14 +28,13 @@ public sealed class WorktreePreviewServicePackageFeedLifetimeTests : IDisposable
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    /// <summary>Answers every health probe only once <paramref name="ready"/> says so, then gives up the start.</summary>
-    private sealed class GiveUpWhenHandler(Func<bool> ready, CancellationTokenSource giveUp) : HttpMessageHandler
+    /// <summary>Answers every health probe as unhealthy, and only once <paramref name="ready"/> says so.</summary>
+    private sealed class UnhealthyWhenHandler(Func<bool> ready) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             while (!ready())
                 await Task.Delay(20, cancellationToken);
-            await giveUp.CancelAsync();
             return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
         }
     }
@@ -94,19 +93,20 @@ public sealed class WorktreePreviewServicePackageFeedLifetimeTests : IDisposable
         };
         File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), JsonSerializer.Serialize(config));
 
-        using var giveUp = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>()))
-            .Returns(() => new HttpClient(new GiveUpWhenHandler(() => File.Exists(marker), giveUp)));
+            .Returns(() => new HttpClient(new UnhealthyWhenHandler(() => File.Exists(marker))));
         _service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
+        // The marker is written a moment before the service is gone, so the probe is asked again until it is.
+        _service.Timings.HealthPollDelay = TimeSpan.FromMilliseconds(20);
         var feeds = new[]
         {
             PackageFeedCredentialFilesTests.Feed("company", "https://pkgs.dev.azure.com/example-org/_packaging/company", "companyPAT-33cc"),
         };
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _service.StartServiceAsync(_worktree, "web", new WorktreePreviewStartOptions(PackageFeeds: feeds), giveUp.Token));
+            _service.StartServiceAsync(_worktree, "web", new WorktreePreviewStartOptions(PackageFeeds: feeds), Ct));
         Assert.Contains("exited with code 3", failure.Message);
 
         // The runtime stays registered, with its exited service on show.
