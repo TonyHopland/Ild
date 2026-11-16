@@ -235,7 +235,7 @@ public class AgentController : ControllerBase, IActionFilter
                 "You have no loop run or chat: loop variables, the current loop and chat clones are not available. Transitions other than into the work queue, linking a pull request and merging stay with the operator.",
                 "There are three levels. Read only: reads, nothing else. Read, create and propose: also creates and edits work items of your own and proposes. Control of work: also starts any work item, queues it, reorders it and answers human-feedback stops, so you can drive an item from Backlog to done. A request above your level answers 403.",
                 "Order: priority is the item's place in the board order and the lowest priority runs first; the scheduler starts the top-most Ready item. GET workitems?orderBy=priority returns items in that run order. Queueing keeps an item's place and a new item lands above every other one, so items queued in creation order run newest first; use reorder to set the order.",
-                "A grant that can start, queue, reorder and answer acts on any work item, not only its own, and its starts, reorders and answers appear in the item's history under this grant's name.",
+                "A grant that can start, queue, reorder and answer acts on any work item, not only its own, and its starts, queue moves and answers appear in the item's history under this grant's name. A reorder is not a history entry; it is only audited in the grant's activity.",
                 "Every request is audited under the grant, and each grant has a request budget per minute (429 when it is spent).",
             },
         });
