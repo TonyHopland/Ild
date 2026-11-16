@@ -21,12 +21,17 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
         string workItemId, AgentWorkItemEditProposalRequest request, AgentCaller caller, AgentProposer proposer, CancellationToken ct)
     {
         if (request.Title is null && request.Description is null && request.Tags is null
-            && request.BranchNameOverride is null && request.BaseBranchOverride is null
+            && request.BranchNameOverride is null && request.BaseBranchOverride is null && request.UseExistingBranch is null
             && request.AddDependencies is null && request.RemoveDependencies is null)
-            return Invalid("Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, addDependencies or removeDependencies.");
+            return Invalid("Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, useExistingBranch, addDependencies or removeDependencies.");
         if (request.Title is not null && string.IsNullOrWhiteSpace(request.Title))
             return Invalid("A proposed title cannot be blank.");
-        if (BranchNameRules.ValidateOverrides(request.BranchNameOverride, request.BaseBranchOverride) is { } branchError)
+        // A name is only needed from the item when the proposal does not give one.
+        var storedBranchName = request.UseExistingBranch == true && request.BranchNameOverride is null
+            ? (await _workItems.GetWorkItemAsync(workItemId))?.BranchNameOverride
+            : null;
+        if (BranchNameRules.ValidateOverrides(
+                request.BranchNameOverride, request.BaseBranchOverride, request.UseExistingBranch, storedBranchName) is { } branchError)
             return Invalid(branchError);
 
         var addDependencies = TrimIds(request.AddDependencies);
@@ -43,6 +48,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Tags = request.Tags,
             BranchNameOverride = request.BranchNameOverride,
             BaseBranchOverride = request.BaseBranchOverride,
+            UseExistingBranch = request.UseExistingBranch,
             AddDependencies = addDependencies,
             RemoveDependencies = removeDependencies,
             Rationale = request.Rationale,

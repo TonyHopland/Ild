@@ -45,6 +45,13 @@ public sealed class WorkItemView
     public string? BaseBranchOverride { get; set; }
 
     /// <summary>
+    /// When true, <see cref="BranchNameOverride"/> names a branch that already
+    /// exists on origin, and the item's runs check it out and push to it rather
+    /// than refusing the name as taken. Pinned onto each run at creation.
+    /// </summary>
+    public bool UseExistingBranch { get; set; }
+
+    /// <summary>
     /// The repository the item's next run is created on. Editable, and like the
     /// branch overrides never retroactive: see <see cref="RunRepositoryId"/>.
     /// </summary>

@@ -201,7 +201,14 @@ public sealed class PRNodeExecutor : INodeExecutor
             // what it is compared against is the forge's.
             var openedAt = DateTime.UtcNow - PrCommentLedger.ClockSkewAllowance;
             var createBudget = new RetryBudget();
-            while (true)
+            // A run continuing an existing branch may well find a pull request already
+            // open for it; that one is picked up rather than refused as a duplicate.
+            var reused = ctx.Run.UseExistingBranch
+                ? await remote.FindOpenPullRequestAsync(repo.CloneUrl, branch)
+                : null;
+            if (reused is not null)
+                prResult = reused;
+            while (reused is null)
             {
                 prResult = null;
                 err = null;

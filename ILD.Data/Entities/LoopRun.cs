@@ -218,6 +218,12 @@ public class LoopRun : IHasUpdatedAt
     [MaxLength(256)]
     public string? BaseBranchOverride { get; set; }
 
+    // The work item's "use existing branch" flag as it stood when this run was
+    // created: BranchName is then a branch that already exists on origin, which
+    // the run checks out and pushes to instead of creating it. Pinned for the
+    // same reason as BaseBranchOverride.
+    public bool UseExistingBranch { get; set; }
+
     [MaxLength(2048)]
     public string? PrUrl { get; set; }
 

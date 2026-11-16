@@ -22,6 +22,7 @@ public static class WorkItemHistoryFields
     public const string AiProviderOverrideId = "aiProviderOverrideId";
     public const string BranchNameOverride = "branchNameOverride";
     public const string BaseBranchOverride = "baseBranchOverride";
+    public const string UseExistingBranch = "useExistingBranch";
 
     /// <summary>An event, not a field: a PR linked to the item. Its value is the PR's URL.</summary>
     public const string PullRequestLinked = "pullRequest.linked";
@@ -49,6 +50,7 @@ public static class WorkItemHistoryFields
         (AiProviderOverrideId, nameof(WorkItem.AiProviderOverrideId)),
         (BranchNameOverride, nameof(WorkItem.BranchNameOverride)),
         (BaseBranchOverride, nameof(WorkItem.BaseBranchOverride)),
+        (UseExistingBranch, nameof(WorkItem.UseExistingBranch)),
     };
 
     /// <summary>Every tracked field of an item's values, encoded.</summary>
@@ -68,6 +70,7 @@ public static class WorkItemHistoryFields
         string s => s,
         Enum e => e.ToString(),
         Guid g => g.ToString("D"),
+        bool b => b ? "true" : "false",
         _ => throw new ArgumentException($"No history encoding for {value.GetType().Name}.", nameof(value)),
     };
 

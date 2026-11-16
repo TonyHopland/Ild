@@ -20,6 +20,13 @@ public interface IRemoteProvider
 {
     Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body);
     /// <summary>
+    /// The open pull request whose head is <paramref name="sourceBranch"/>, or
+    /// null when there is none or the forge could not be asked. Best-effort by
+    /// design: a caller that gets null goes on to create one, and the forge
+    /// refuses a duplicate if the answer was wrong.
+    /// </summary>
+    Task<RemotePrResult?> FindOpenPullRequestAsync(string repoUrl, string sourceBranch);
+    /// <summary>
     /// Merge the pull request. With <paramref name="expectedHeadSha"/> the forge must refuse if the head
     /// is a different commit, reported as <see cref="RemoteHeadMovedException"/> rather than false.
     /// </summary>

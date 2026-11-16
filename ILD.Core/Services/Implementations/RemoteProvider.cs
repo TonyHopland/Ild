@@ -43,6 +43,14 @@ public class RemoteProviderService : IRemoteProvider
         }
     }
 
+    public async Task<RemotePrResult?> FindOpenPullRequestAsync(string repoUrl, string sourceBranch)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null) return null;
+        try { return await resolved.Adapter.FindOpenPullRequestAsync(_http, resolved, sourceBranch); }
+        catch { return null; }
+    }
+
     public async Task<bool> MergePullRequestAsync(string repoUrl, string prNumber, string? expectedHeadSha = null)
     {
         var resolved = await ResolveAsync(repoUrl);

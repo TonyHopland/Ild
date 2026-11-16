@@ -40,6 +40,9 @@ public sealed class WorkItemDto
     /// <summary>The ref every run of this item branches from. Null = the repository's default branch.</summary>
     public string? BaseBranchOverride { get; set; }
 
+    /// <summary>The item's runs continue the existing origin branch named by <see cref="BranchNameOverride"/>.</summary>
+    public bool UseExistingBranch { get; set; }
+
     /// <summary>
     /// How many edit proposals on this item still wait for a human. Zero on the
     /// poll response, which stays bodiless.
@@ -80,6 +83,9 @@ public sealed class CreateWorkItemRequest
     /// from the repository's default branch.
     /// </summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Runs continue the existing origin branch named by <see cref="BranchNameOverride"/>.</summary>
+    public bool UseExistingBranch { get; set; }
 }
 
 public sealed class UpdateWorkItemRequest
@@ -108,6 +114,9 @@ public sealed class UpdateWorkItemRequest
     /// run: a run already under way keeps the base it was created with.
     /// </summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Null leaves the flag unchanged; like the branch name it only affects the item's next run.</summary>
+    public bool? UseExistingBranch { get; set; }
 
     /// <summary>
     /// Replaces the repository the item's runs work in. Null leaves it
@@ -290,6 +299,9 @@ public sealed class EditProposalFieldsDto
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
 
+    /// <summary>Proposed side: null = not proposed.</summary>
+    public bool? UseExistingBranch { get; set; }
+
     /// <summary>Proposed side only.</summary>
     public IReadOnlyList<EditProposalDependencyDto>? AddDependencies { get; set; }
 
@@ -337,6 +349,9 @@ public sealed class CreateEditProposalRequest
 
     /// <summary>Null = not proposed; blank = a proposal to clear it.</summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Null = not proposed.</summary>
+    public bool? UseExistingBranch { get; set; }
 
     /// <summary>Ids of items to add as dependencies. Null = none.</summary>
     public IReadOnlyList<string>? AddDependencies { get; set; }

@@ -50,4 +50,19 @@ public interface IBranchNameOverrideService
         Guid? repositoryId,
         string? workItemId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Same question for an item that continues a branch which already exists
+    /// on origin (<c>UseExistingBranch</c>). The branch being on origin and in
+    /// the base clone is the point, so neither is a conflict; a run row holding
+    /// it still is. Instead the branch must exist on origin: a missing one is a
+    /// <see cref="BranchNameVerdict.Conflict"/> telling the human to push it or
+    /// turn the option off. An origin that cannot be reached is not a conflict,
+    /// as in <see cref="InspectAsync"/>.
+    /// </summary>
+    Task<BranchNameVerdict> InspectExistingAsync(
+        string? branchName,
+        Guid? repositoryId,
+        string? workItemId,
+        CancellationToken cancellationToken = default);
 }

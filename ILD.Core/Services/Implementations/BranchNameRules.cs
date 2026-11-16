@@ -88,14 +88,18 @@ public static class BranchNameRules
 
     /// <summary>
     /// Why a work item's custom branch name or base branch cannot be used, or null when each is absent or legal.
-    /// The branch name is checked first.
+    /// The branch name is checked first. Asking to use an existing branch needs a branch name to
+    /// name it: the one given, or, when none is given, <paramref name="storedBranchName"/>.
     /// </summary>
-    public static string? ValidateOverrides(string? branchNameOverride, string? baseBranchOverride)
+    public static string? ValidateOverrides(
+        string? branchNameOverride, string? baseBranchOverride, bool? useExistingBranch = null, string? storedBranchName = null)
     {
         if (Normalize(branchNameOverride) is { } branchName && Validate(branchName) is { } branchError)
             return branchError;
         if (Normalize(baseBranchOverride) is { } baseBranch && Validate(baseBranch, BaseBranchSubject) is { } baseError)
             return baseError;
+        if (useExistingBranch == true && Normalize(branchNameOverride ?? storedBranchName) is null)
+            return "useExistingBranch needs a branchNameOverride naming the branch to continue.";
         return null;
     }
 

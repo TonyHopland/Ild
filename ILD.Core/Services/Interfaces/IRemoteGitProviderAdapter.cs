@@ -10,6 +10,13 @@ public interface IRemoteGitProviderAdapter
     string WebhookRouteSegment { get; }
     ResolvedRemoteRepository? TryResolve(RemoteProvider provider, Uri repoUri);
     Task<RemotePrResult> CreatePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch, string title, string body);
+    /// <summary>
+    /// The open pull request whose head is <paramref name="sourceBranch"/>, or
+    /// null when there is none or the forge could not be asked. Best-effort by
+    /// design: a caller that gets null goes on to create one, and the forge
+    /// refuses a duplicate if the answer was wrong.
+    /// </summary>
+    Task<RemotePrResult?> FindOpenPullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch);
     Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string? expectedHeadSha = null);
     Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
     Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);

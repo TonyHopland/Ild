@@ -262,6 +262,9 @@ public class WorkItemsController : ControllerBase
             && BranchNameRules.Validate(baseBranchOverride, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
 
+        if (BranchNameRules.ValidateOverrides(null, null, request.UseExistingBranch, branchNameOverride) is { } existingError)
+            return BadRequest(new { error = existingError });
+
         var id = await _workItemManager.CreateWorkItemAsync(
             user, request.Title, request.Description,
             repositoryId,
@@ -269,7 +272,8 @@ public class WorkItemsController : ControllerBase
             forceBacklog: false,
             tags: request.Tags,
             branchNameOverride: branchNameOverride,
-            baseBranchOverride: baseBranchOverride);
+            baseBranchOverride: baseBranchOverride,
+            useExistingBranch: request.UseExistingBranch == true);
 
         if (Enum.TryParse<RemoteAiProviderOverrideMode>(request.AiProviderOverride, ignoreCase: true, out var overrideMode)
             && overrideMode != RemoteAiProviderOverrideMode.None)
@@ -318,6 +322,14 @@ public class WorkItemsController : ControllerBase
             && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
 
+        // Continuing an existing branch needs a branch name: the one sent, or the one the item already has.
+        var storedBranchName = request.UseExistingBranch == true && request.BranchNameOverride is null
+            ? (await _workItemManager.GetWorkItemAsync(id))?.BranchNameOverride
+            : null;
+        if (BranchNameRules.ValidateOverrides(
+                request.BranchNameOverride, null, request.UseExistingBranch, storedBranchName) is { } existingError)
+            return BadRequest(new { error = existingError });
+
         // A blank repository leaves the stored one alone, so agent edits and
         // older clients that never send it keep working. The WorkItemServer has
         // no repository table to check against, so an unknown id is refused here.
@@ -332,7 +344,7 @@ public class WorkItemsController : ControllerBase
 
         var ok = await _workItemManager.UpdateAsync(
             user, id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId,
-            request.BranchNameOverride, request.BaseBranchOverride, repositoryId);
+            request.BranchNameOverride, request.BaseBranchOverride, repositoryId, request.UseExistingBranch);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
@@ -377,13 +389,16 @@ public class WorkItemsController : ControllerBase
         [FromQuery] string? name,
         [FromQuery] string? repositoryId,
         [FromQuery] string? workItemId,
+        [FromQuery] bool useExistingBranch,
         CancellationToken cancellationToken)
     {
         if (BranchNameRules.Normalize(name) is null)
             return Ok(new { error = (string?)null, warning = (string?)null });
 
         Guid? repoId = Guid.TryParse(repositoryId, out var parsed) ? parsed : null;
-        var verdict = await _branchNames.InspectAsync(name, repoId, workItemId, cancellationToken);
+        var verdict = useExistingBranch
+            ? await _branchNames.InspectExistingAsync(name, repoId, workItemId, cancellationToken)
+            : await _branchNames.InspectAsync(name, repoId, workItemId, cancellationToken);
         return Ok(new { error = verdict.ValidationError, warning = verdict.Conflict });
     }
 

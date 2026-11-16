@@ -46,6 +46,9 @@ public class WorkItemEditProposal
     [MaxLength(256)]
     public string? ProposedBaseBranchOverride { get; set; }
 
+    /// <summary>Null when the flag was not proposed.</summary>
+    public bool? ProposedUseExistingBranch { get; set; }
+
     /// <summary>JSON-serialized string[] of item ids; null when no dependency is proposed to be added.</summary>
     public string? ProposedAddDependenciesJson { get; set; }
 
@@ -65,6 +68,8 @@ public class WorkItemEditProposal
 
     [MaxLength(256)]
     public string? SnapshotBaseBranchOverride { get; set; }
+
+    public bool SnapshotUseExistingBranch { get; set; }
 
     /// <summary>
     /// The item's DependenciesJson when the proposal was made, taken only when

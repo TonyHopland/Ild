@@ -151,8 +151,9 @@ public sealed partial class LoopEngine : ILoopEngine
         if (branchOverride is not null)
         {
             var branchNames = sp.GetRequiredService<IBranchNameOverrideService>();
-            var verdict = await branchNames.InspectAsync(
-                branchOverride, wi.RepositoryId, workItemId, cancellationToken);
+            var verdict = wi.UseExistingBranch
+                ? await branchNames.InspectExistingAsync(branchOverride, wi.RepositoryId, workItemId, cancellationToken)
+                : await branchNames.InspectAsync(branchOverride, wi.RepositoryId, workItemId, cancellationToken);
             if (!verdict.IsUsable)
             {
                 await workItems.ParkWithoutRunAsync(SchedulerActor, workItemId, verdict.Problem!);
@@ -178,6 +179,8 @@ public sealed partial class LoopEngine : ILoopEngine
             // work item there would let an edit in between open a PR against a
             // branch the run was never rebased onto.
             BaseBranchOverride = BranchNameRules.Normalize(wi.BaseBranchOverride),
+            // Pinned like the name it qualifies, and only when there is a name.
+            UseExistingBranch = branchOverride is not null && wi.UseExistingBranch,
             // The per-template setting controls crash recovery; pin it on the
             // run the same way the template version is pinned.
             RecoveryPolicy = template?.RecoveryPolicy ?? RecoveryPolicy.AutoResume,

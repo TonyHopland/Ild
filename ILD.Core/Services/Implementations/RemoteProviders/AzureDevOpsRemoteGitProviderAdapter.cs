@@ -156,6 +156,19 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         return new RemotePrResult(PrApi(repo, prNumber), WebUrl(repo, prNumber), RemotePrStatus.Open, null);
     }
 
+    public override async Task<RemotePrResult?> FindOpenPullRequestAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string sourceBranch)
+    {
+        ApplyHeaders(http, repo.Provider);
+
+        var active = await GetArrayAsync(http, Versioned(
+            $"{GitApi(repo)}/pullrequests",
+            $"searchCriteria.status=active&searchCriteria.sourceRefName={Uri.EscapeDataString(RefName(sourceBranch))}"),
+            CollectionProperty);
+        var number = active?.Select(pr => ReadScalar(pr, "pullRequestId")).FirstOrDefault(id => id is not null);
+        return number is null ? null : new RemotePrResult(PrApi(repo, number), WebUrl(repo, number), RemotePrStatus.Open, null);
+    }
+
     protected override async Task<string?> ReadHeadShaAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         var pr = await GetObjectAsync(http, Versioned(PrApi(repo, prNumber)));

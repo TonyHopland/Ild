@@ -142,6 +142,14 @@
           "null"
         ],
         "default": null
+      },
+      "useExistingBranch": {
+        "description": "Optional. true makes the item continue a branch that ALREADY exists on origin: every run checks out branchNameOverride (required with this) at its latest commit, commits on top of it and pushes to that same branch, fast-forward only. ILD never force-pushes or deletes a remote branch. A run fails with a clear error if the branch is not on origin. Without it, a branchNameOverride that already exists on origin is refused as a name clash. baseBranchOverride (or the repository default) is only the branch the PR targets: the run is never rebased onto it. If a PR is already open for the branch it is reused. Omit for false.",
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "default": null
       }
     },
     "required": [
@@ -901,6 +909,14 @@
         ],
         "default": null
       },
+      "useExistingBranch": {
+        "description": "Proposed true or false for continuing a branch that ALREADY exists on origin: with true, runs check out the item's branchNameOverride (required, here or already on the item) at its latest commit, commit on top and push to it, fast-forward only — no force-push or deletion; a missing branch fails the run clearly. baseBranchOverride is only the PR target. Omit to leave it out of the proposal.",
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "default": null
+      },
       "addDependencies": {
         "description": "Proposed work item GUIDs for the item to start depending on. Each must exist, not already be a dependency, and not create a cycle. Omit to add none.",
         "type": [
@@ -1261,6 +1277,14 @@
         "description": "Optional replacement base branch the item's runs start from and open PRs against. Omit to leave it unchanged; pass an empty string to go back to the repository's default branch. Only the item's next run is affected.",
         "type": [
           "string",
+          "null"
+        ],
+        "default": null
+      },
+      "useExistingBranch": {
+        "description": "Optional. Omit to leave unchanged. true makes the item continue the branch that ALREADY exists on origin named by branchNameOverride (this call's or the item's current one; required): runs check it out at its latest commit, commit on top and push to it, fast-forward only — no force-push, no deletion, and a missing branch fails the run clearly. false goes back to a fresh branch (a name that exists on origin is then refused as a clash). baseBranchOverride is only the PR target. An already-open PR for the branch is reused. Only the item's next run is affected.",
+        "type": [
+          "boolean",
           "null"
         ],
         "default": null

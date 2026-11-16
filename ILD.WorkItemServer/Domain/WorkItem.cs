@@ -113,4 +113,12 @@ public class WorkItem
     /// </summary>
     [MaxLength(256)]
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// When true, <see cref="BranchNameOverride"/> names a branch that already
+    /// exists on origin: runs check it out, commit on top of it and push to it,
+    /// instead of refusing because the name is taken. Only meaningful with a
+    /// <see cref="BranchNameOverride"/>.
+    /// </summary>
+    public bool UseExistingBranch { get; set; }
 }
