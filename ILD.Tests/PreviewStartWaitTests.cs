@@ -88,7 +88,7 @@ public class PreviewStartWaitTests
             preview.Object,
             new Mock<IChatLoopScratchpad>().Object,
             new Mock<IChatNotifier>().Object,
-            TestActors.Instance,
+            AgentSessions.Resolver(db, workItems.Object),
             new Mock<IWorkItemNotifier>().Object);
         controller.ControllerContext = new ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() };
         return controller;

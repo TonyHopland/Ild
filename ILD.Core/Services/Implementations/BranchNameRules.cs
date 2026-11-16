@@ -86,6 +86,19 @@ public static class BranchNameRules
         return null;
     }
 
+    /// <summary>
+    /// Why a work item's custom branch name or base branch cannot be used, or null when each is absent or legal.
+    /// The branch name is checked first.
+    /// </summary>
+    public static string? ValidateOverrides(string? branchNameOverride, string? baseBranchOverride)
+    {
+        if (Normalize(branchNameOverride) is { } branchName && Validate(branchName) is { } branchError)
+            return branchError;
+        if (Normalize(baseBranchOverride) is { } baseBranch && Validate(baseBranch, BaseBranchSubject) is { } baseError)
+            return baseError;
+        return null;
+    }
+
     /// <summary>The subject mid-sentence, e.g. "a branch name".</summary>
     private static string LowerSubject(string subject)
         => "a " + char.ToLowerInvariant(subject[0]) + subject[1..];

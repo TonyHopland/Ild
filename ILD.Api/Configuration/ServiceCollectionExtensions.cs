@@ -49,6 +49,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
         services.AddScoped<IHumanInputProposalService, HumanInputProposalService>();
+        services.AddScoped<IAgentSessionResolver, AgentSessionResolver>();
+        services.AddScoped<IGlobalVariableProposalService, GlobalVariableProposalService>();
+        services.AddScoped<ILoopTemplateLookup, LoopTemplateLookup>();
+        services.AddScoped<ILoopTemplateProposalService, LoopTemplateProposalService>();
+        services.AddScoped<IWorkItemEditProposalService, WorkItemEditProposalService>();
         services.AddSingleton<IRepositoryManager>(sp =>
         {
             var runner = sp.GetRequiredService<IProcessRunner>();

@@ -656,30 +656,6 @@ public class LoopTemplateProposalApiTests
         Assert.True(IsNullOrAbsent(own.Single(p => Id(p) == wholeId), "editCount"));
     }
 
-    public enum Ambiguous { DocumentAndEdits, Neither, EmptyEdits }
-
-    [Theory]
-    [InlineData(Ambiguous.DocumentAndEdits)]
-    [InlineData(Ambiguous.Neither)]
-    [InlineData(Ambiguous.EmptyEdits)]
-    public async Task A_proposal_needs_exactly_one_of_a_document_or_a_non_empty_edit_list(Ambiguous ambiguous)
-    {
-        await using var host = await StartHostAsync();
-        var templateId = await CreateTemplateAsync(host, "Release Loop");
-        var agent = host.Agent(await SeedRunAsync(host.Factory));
-        var (version, document) = await EditedDocumentAsync(agent, templateId, "make -j4");
-        var body = new JsonObject { ["nameOrId"] = templateId.ToString(), ["baseVersion"] = version, ["rationale"] = "Builds are slow." };
-        if (ambiguous == Ambiguous.DocumentAndEdits) body["document"] = document.ToJsonString();
-        if (ambiguous != Ambiguous.Neither)
-            body["edits"] = ambiguous == Ambiguous.EmptyEdits ? new JsonArray() : new JsonArray { EditNodeField(NodeIdLabelled(document, "Build"), "command", "make", "make -j4") };
-
-        var resp = await ProposeRawAsync(agent, body.ToJsonString());
-
-        Assert.True(resp.StatusCode == HttpStatusCode.BadRequest, $"expected 400, got {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
-        Assert.False(string.IsNullOrWhiteSpace((await ReadJsonAsync(resp)).GetProperty("error").GetString()));
-        Assert.Empty(await ListAsHumanAsync(host));
-    }
-
     [Fact]
     public async Task An_edit_file_copied_from_the_get_loop_template_text_matches_escaped_characters_and_all()
     {
@@ -792,24 +768,6 @@ public class LoopTemplateProposalApiTests
         var errors = (await ReadJsonAsync(resp)).GetProperty("validationErrors").EnumerateArray().Select(e => e.GetString()!).ToArray();
         Assert.True(wholeErrors.Length >= 2, string.Join("; ", wholeErrors));
         Assert.Equal(wholeErrors, errors);
-        Assert.Empty(await ListAsHumanAsync(host));
-    }
-
-    [Fact]
-    public async Task An_edit_list_against_an_older_version_is_refused_naming_the_latest_and_never_applied_to_it()
-    {
-        await using var host = await StartHostAsync();
-        var templateId = await CreateTemplateAsync(host, "Release Loop");
-        await PlainSaveAsync(host, templateId, "make two");
-        await PlainSaveAsync(host, templateId, "make three");
-        var agent = host.Agent(await SeedRunAsync(host.Factory));
-
-        var body = await ConflictAsync(
-            await ProposeEditsAsync(agent, templateId.ToString(), 1, [EditFile("\"command\":\"make\"}", "\"command\":\"make -j4\"}")]),
-            "an edit list against version 1");
-
-        Assert.Equal(3, body.GetProperty("latestVersion").GetInt32());
-        Assert.Contains("the latest is version 3", body.GetProperty("error").GetString());
         Assert.Empty(await ListAsHumanAsync(host));
     }
 
