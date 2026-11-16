@@ -308,7 +308,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAgentAdapter, CodexAdapter>();
 
         services.AddHttpClient();
-        WorktreePreviewService.ConfigureHealthProbeClient(services.AddHttpClient(WorktreePreviewService.HealthProbeClientName));
+        PreviewHealthProbeClient.Configure(services.AddHttpClient(PreviewHealthProbeClient.Name));
 
         // Remote WorkItem server wiring. The poller is created
         // unconditionally but stays disabled until a RemoteProvider with a

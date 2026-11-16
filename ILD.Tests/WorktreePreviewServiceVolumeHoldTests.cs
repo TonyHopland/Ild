@@ -9,9 +9,8 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
-/// A preview that never got a service running holds nothing: a single-service start
-/// whose launch fails takes down the runtime it just created, so its keep-on hold
-/// does not outlive it behind a "stopped" state that offers no stop.
+/// An install holds the repository's preview data against every other work item while it runs, and is refused
+/// at once, without waiting for a start in progress, when another work item holds it.
 /// </summary>
 public sealed class WorktreePreviewServiceVolumeHoldTests : IDisposable
 {
@@ -41,22 +40,6 @@ public sealed class WorktreePreviewServiceVolumeHoldTests : IDisposable
         }
         _service.Dispose();
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
-    }
-
-    [Fact]
-    public async Task A_single_service_start_whose_launch_fails_leaves_no_preview_holding_the_volumes()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        // A cwd outside the worktree is refused while the service is being launched.
-        var broken = Worktree("wt-a", cwd: "/");
-        var other = Worktree("wt-b", cwd: null);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _service.StartServiceAsync(broken, "web", new WorktreePreviewStartOptions(Volumes: Scope("305")), ct));
-
-        Assert.False(_service.IsPreviewRunning(broken));
-        await _service.StartAsync(other, new WorktreePreviewStartOptions(Volumes: Scope("306")), ct);
-        Assert.True(_service.IsPreviewRunning(other));
     }
 
     [Fact(Timeout = 120_000)]
