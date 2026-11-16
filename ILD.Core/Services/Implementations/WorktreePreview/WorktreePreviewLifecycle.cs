@@ -49,6 +49,12 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
     /// <summary>How many starts still run after a wider start took the record over; lets a test order a stop after that.</summary>
     public int OvertakenStartCount => _overtaken.Count;
 
+    /// <summary>
+    /// Whether the start now on record brings up the whole preview. An overtaken start is listed before the wider
+    /// one is registered, so a test that means to stop after the takeover waits for this as well as the count.
+    /// </summary>
+    public bool IsStartingWhole => Volatile.Read(ref _start) is { InProgress: true } start && start.Scope.IsWhole;
+
     /// <summary>The runtime when it is leaving the lifecycle, so the caller can retire it.</summary>
     public PreviewRuntime? TakeRuntime() => Interlocked.Exchange(ref _runtime, null);
 
