@@ -21,9 +21,9 @@ export const GRANT_SCOPES: { value: ExternalAgentGrantScope; label: string; allo
   },
   {
     value: "Control",
-    label: "Control of work (start and answer)",
+    label: "Control of work (start, reorder and answer)",
     allows:
-      "Can also start and queue any work item and answer its human-feedback questions, so it can drive work to done without you. Starting work spends AI provider money. Merging and settings stay with you.",
+      "Can also start, queue and reorder any work item (within its status) and answer its human-feedback questions, so it can drive work to done without you. Starting work spends AI provider money. Merging and settings stay with you.",
   },
 ];
 
@@ -46,7 +46,7 @@ export function buildAccessInstructions(access: {
     scope === "ReadOnly"
       ? "This access is read-only: you can read but not create work items or make proposals."
       : scope === "Control"
-        ? "You can read, create work items, and make proposals. You can also start or queue any work item and answer its human-feedback stops (give input, respond, reject, pick an edge). Transitions to other statuses and merging stay with the operator."
+        ? "You can read, create work items, and make proposals. You can also start, queue or reorder any work item (reordering keeps its status; the lowest priority runs first) and answer its human-feedback stops (give input, respond, reject, pick an edge). Transitions to other statuses and merging stay with the operator."
         : "You can read, create work items in the Backlog, and make proposals. You cannot start work.",
     "Never put the token in a URL.",
   ].join("\n");

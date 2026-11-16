@@ -26,9 +26,9 @@ describe("buildAccessInstructions", () => {
     expect(buildAccessInstructions(access)).not.toContain("read-only");
   });
 
-  test("says a Control grant can start work and a Full one cannot", () => {
+  test("says a Control grant can start and reorder work and a Full one cannot", () => {
     expect(buildAccessInstructions({ ...access, scope: "Control" })).toContain(
-      "start or queue any work item",
+      "start, queue or reorder any work item",
     );
     expect(buildAccessInstructions(access)).toContain("cannot start work");
   });

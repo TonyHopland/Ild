@@ -434,6 +434,7 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
     [
         (HttpMethod.Post, "start", new { }),
         (HttpMethod.Post, "queue", new { }),
+        (HttpMethod.Post, "reorder", new { aboveId = Guid.NewGuid().ToString() }),
         (HttpMethod.Post, "human-feedback/input", new { runId = Guid.NewGuid(), input = "go" }),
         (HttpMethod.Post, "human-feedback/respond", new { runId = Guid.NewGuid(), input = "go" }),
         (HttpMethod.Post, "human-feedback/reject", new { runId = Guid.NewGuid() }),
@@ -480,6 +481,53 @@ public class ExternalAgentGrantTests(ExternalAgentGrantTests.Host host) : IClass
         var mine = history.EnumerateArray().Where(e => e.GetProperty("actorKind").GetString() == "ExternalAgent").ToList();
         Assert.NotEmpty(mine);
         Assert.All(mine, e => Assert.Contains($"driver (grant {grant.Id})", e.GetProperty("actorDetail").GetString()));
+    }
+
+    [Fact]
+    public async Task A_Control_grant_reorders_items_it_did_not_create_and_the_request_is_audited_under_the_grant()
+    {
+        var grant = await CreateGrantAsync("sorter", scope: "Control");
+        var older = await CreateOperatorItemAsync();
+        var newer = await CreateOperatorItemAsync();
+        async Task<double> PriorityAsync(string id)
+            => (await ReadAsync(await SendAsync(grant, HttpMethod.Get, $"/api/v1/agent/workitems/{id}", null))).GetProperty("priority").GetDouble();
+        // A new item lands above every other one.
+        Assert.True(await PriorityAsync(newer) < await PriorityAsync(older));
+
+        var response = await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{newer}/reorder", new { aboveId = older });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(await PriorityAsync(older) < await PriorityAsync(newer));
+        // The server does not track priority in an item's history, so the grant's activity is where the reorder shows.
+        var detail = await ReadAsync(await host.Operator.GetAsync($"/api/v1/external-grants/{grant.Id}", Ct));
+        Assert.Contains(detail.GetProperty("activity").EnumerateArray(), a => a.GetProperty("path").GetString()!.EndsWith($"/{newer}/reorder"));
+    }
+
+    [Fact]
+    public async Task A_Control_grant_reorder_refuses_a_bad_neighbour_and_an_unknown_item_and_never_changes_status()
+    {
+        var grant = await CreateGrantAsync(scope: "Control");
+        var id = await CreateOperatorItemAsync();
+        var other = await CreateOperatorItemAsync();
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/reorder", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/reorder", new { aboveId = id })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/reorder", new { aboveId = Guid.NewGuid().ToString() })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{Guid.NewGuid()}/reorder", new { aboveId = other })).StatusCode);
+        // A status in the body is not read: the item stays in the Backlog.
+        Assert.Equal(HttpStatusCode.OK, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/agent/workitems/{id}/reorder", new { aboveId = other, targetStatus = "WorkQueue" })).StatusCode);
+        var item = await ReadAsync(await host.Operator.GetAsync($"/api/v1/workitems/{id}", Ct));
+        Assert.Equal("Backlog", item.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task A_Control_grant_is_refused_on_the_operators_reorder_route()
+    {
+        var grant = await CreateGrantAsync(scope: "Control");
+        var id = await CreateOperatorItemAsync();
+        var other = await CreateOperatorItemAsync();
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await SendAsync(grant, HttpMethod.Post, $"/api/v1/workitems/{id}/reorder", new { aboveId = other })).StatusCode);
     }
 
     [Fact]

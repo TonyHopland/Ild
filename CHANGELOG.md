@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An outside AI with control of work can reorder work items.**
+
 ### Changed
 
 - **Starting one preview service now shows the preview as starting, and Stop ends it.**
