@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Core.Services.Interfaces;
@@ -104,10 +105,47 @@ public class CliAgentTurnOutcomeTests
     public async Task Blank_output_that_was_no_event_stream_fails_with_a_diagnostic_for_a_cli_that_fails_on_it()
     {
         var (result, _) = await RunAsync(
-            new StreamResult("", null, null, SawJsonEvents: false, RawStdout: "  \n"), stderr: "it died", configure: a => a.BlankOutputFails = true);
+            new StreamResult("", null, null, SawJsonEvents: false, RawStdout: "  \n"), stderr: "it died", configure: a => a.BlankOutput = BlankOutput.Failure);
 
         Assert.False(result.Success);
         Assert.Equal("[scripted] no assistant text response. stderr: it died", result.Error);
+    }
+
+    [Theory]
+    [InlineData("it died", "[scripted] no assistant text response. stderr: it died")]
+    [InlineData("", "[scripted] no assistant text response from model")]
+    public async Task Blank_output_that_was_no_event_stream_succeeds_with_a_diagnostic_for_a_cli_that_answers_with_one(string stderr, string expected)
+    {
+        var (result, _) = await RunAsync(
+            new StreamResult("", null, null, SawJsonEvents: false, RawStdout: "  \n"), stderr: stderr, configure: a => a.BlankOutput = BlankOutput.Diagnostic);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(expected, result.Output);
+    }
+
+    [Fact]
+    public async Task Narration_in_the_stdout_tail_of_a_genuine_failure_is_not_read_as_a_throttle()
+    {
+        var (result, _) = await RunAsync(Events("the test got 503 Service Unavailable from staging"), exitCode: 1);
+
+        Assert.False(result.Success);
+        Assert.Contains("503 Service Unavailable", result.Error);
+        Assert.NotEqual(FailureKind.Interrupted, AiFailureClassifier.Classify(null, result.Error));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task A_provider_error_that_is_the_whole_failure_keeps_stderr_out_of_the_error(int exitCode)
+    {
+        var (result, _) = await RunAsync(
+            Events("") with { ProviderError = "model not supported" }, exitCode, stderr: "retrying after 503 Service Unavailable",
+            configure: a => a.ProviderErrorIsTheFailure = true);
+
+        Assert.False(result.Success);
+        Assert.Equal("[scripted-error] model not supported", result.Error);
+        Assert.Null(result.Output);
+        Assert.Equal(FailureKind.Unknown, AiFailureClassifier.Classify(result.Output, result.Error));
     }
 
     [Fact]

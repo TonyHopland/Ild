@@ -43,7 +43,8 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
     public bool SupportsNoTools { get; set; } = true;
     public bool SupportsSessionResume { get; set; } = true;
     public bool OffersRetry { get; set; }
-    public bool BlankOutputFails { get; set; }
+    public BlankOutput BlankOutput { get; set; }
+    public bool ProviderErrorIsTheFailure { get; set; }
     public string? Fingerprint { get; set; }
     public string? PrepareFailure { get; set; }
     public Exception? ParseThrows { get; set; }
@@ -106,7 +107,9 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
             return adapter.PrepareFailure is { } failure ? throw Failed(failure) : Task.CompletedTask;
         }
 
-        public override bool BlankOutputFails => adapter.BlankOutputFails;
+        public override BlankOutput BlankOutput => adapter.BlankOutput;
+
+        public override bool ProviderErrorIsTheFailure => adapter.ProviderErrorIsTheFailure;
 
         public override bool IsSessionId(string sessionId) => adapter.AcceptsSessionId(sessionId);
 

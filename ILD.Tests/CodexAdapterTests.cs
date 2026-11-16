@@ -202,7 +202,8 @@ public sealed class CodexAdapterTests : IDisposable
         var result = await Adapter().ExecuteAsync(Context(script));
 
         Assert.False(result.Success);
-        Assert.Contains(ProviderMessage, result.Error);
+        Assert.Equal($"[codex-error] {ProviderMessage}", result.Error);
+        Assert.Equal("Halfway.", result.Output);
         Assert.Equal(AiFailureClassifier.ClassifyProviderMessage(ProviderMessage), result.Failure);
         Assert.Equal(FailureKind.Interrupted, result.Failure);
         // ILD is on by default, so its settings file was written; it is gone with the failed turn.

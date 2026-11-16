@@ -171,7 +171,10 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             return Task.CompletedTask;
         }
 
-        public override bool BlankOutputFails => true;
+        public override BlankOutput BlankOutput => BlankOutput.Failure;
+
+        // codex reports a failed turn as an event; the exit code does not say which failure it was.
+        public override bool ProviderErrorIsTheFailure => true;
 
         public override bool IsSessionId(string sessionId) => CodexAdapter.IsSessionId(sessionId);
 

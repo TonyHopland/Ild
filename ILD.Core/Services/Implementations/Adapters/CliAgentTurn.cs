@@ -13,6 +13,19 @@ public sealed record AgentLaunch(
     IReadOnlyDictionary<string, string?>? Environment = null,
     IEnumerable<string?>? AgentFiles = null);
 
+/// <summary>What a clean exit is when the output was not an event stream and was blank.</summary>
+public enum BlankOutput
+{
+    /// <summary>The blank output is passed on as the answer.</summary>
+    Answer,
+
+    /// <summary>The turn succeeds, and a note that there was no answer (with what stderr said) stands in for it.</summary>
+    Diagnostic,
+
+    /// <summary>The turn fails with that note.</summary>
+    Failure,
+}
+
 /// <summary>What one launch's standard output says, in the terms every CLI's stream is read into.</summary>
 /// <param name="Text">What the agent answered, as the CLI's stream carried it.</param>
 /// <param name="SessionId">The session the stream named, if it did.</param>
@@ -86,11 +99,14 @@ public abstract class CliAgentTurn : IAsyncDisposable
     /// <summary>What <see cref="ReadStdoutAsync"/> kept, in the terms the base classifies the turn from. Called once, after the read.</summary>
     public abstract StreamResult ParseStream();
 
+    /// <summary>What a clean exit whose output was not an event stream and was blank is: each CLI keeps what it has always done.</summary>
+    public virtual BlankOutput BlankOutput => BlankOutput.Answer;
+
     /// <summary>
-    /// Whether a clean exit whose output was not an event stream and was blank is a failure. It is for the CLIs that have always
-    /// failed it; the others have always passed the blank output on as the answer.
+    /// Whether the provider's error is the whole failure whatever the exit code, so that stderr is not part of the error text
+    /// the throttle classifier reads. For a CLI that reports a failed turn as an event and logs its retries to stderr.
     /// </summary>
-    public virtual bool BlankOutputFails => false;
+    public virtual bool ProviderErrorIsTheFailure => false;
 
     /// <summary>What a turn that succeeded used; null when the CLI does not say.</summary>
     public virtual Task<TokenUsage?> UsageAsync() => Task.FromResult<TokenUsage?>(null);

@@ -341,7 +341,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             stream = stream with { Text = saved };
 
         var result = Classify(
-            stream, stderr, exitCode, CliName, ctx.Prompt, sessionId, Traits.SupportsSessionResume ? ctx.IncomingSessionId : null, turn.BlankOutputFails);
+            stream, stderr, exitCode, CliName, ctx.Prompt, sessionId, Traits.SupportsSessionResume ? ctx.IncomingSessionId : null, turn.BlankOutput,
+            turn.ProviderErrorIsTheFailure);
         return result.Success ? result with { Usage = await turn.UsageAsync() } : result;
     }
 
@@ -349,15 +350,16 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// What a finished turn is: the same for every CLI, from its parsed output, stderr and exit code.
     /// <list type="bullet">
     /// <item>No answer stands in for a diagnostic (the provider's error, else stderr, else a plain "no text"), except that the raw
-    /// output is the answer when it was not an event stream at all, blank as it may be unless the CLI fails on blank output.</item>
+    /// output is the answer when it was not an event stream at all; what a blank one is, is the CLI's <see cref="BlankOutput"/>.</item>
     /// <item>A clean exit is still a failure when the provider reported an error, when the stream ended before its turn did, or when
-    /// there was no answer. A non-zero exit is always one, with the provider's error as its reason when it gave one.</item>
+    /// there was no answer. A non-zero exit is always one, with the provider's error as its reason when it gave one; with
+    /// <paramref name="providerErrorIsTheFailure"/> that error is the whole of the failure at any exit code, and stderr no part of it.</item>
     /// <item>NUL is stripped from everything: it is the one character a PostgreSQL text column cannot store.</item>
     /// </list>
     /// </summary>
     internal static NodeExecutionResult Classify(
         StreamResult stream, string stderr, int exitCode, string cliName, string prompt, string? sessionId, string? incomingSessionId,
-        bool blankOutputFails = false)
+        BlankOutput blankOutput = BlankOutput.Answer, bool providerErrorIsTheFailure = false)
     {
         var text = StripNullChars(stream.Text);
         var raw = StripNullChars(stream.RawStdout);
@@ -365,7 +367,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         var providerError = string.IsNullOrWhiteSpace(stream.ProviderError) ? null : StripNullChars(stream.ProviderError);
 
         var hasText = !string.IsNullOrWhiteSpace(text);
-        var rawIsAnswer = !hasText && !stream.SawJsonEvents && (!string.IsNullOrWhiteSpace(raw) || !blankOutputFails);
+        var blank = !hasText && !stream.SawJsonEvents && string.IsNullOrWhiteSpace(raw);
+        var rawIsAnswer = !hasText && !stream.SawJsonEvents && (!blank || blankOutput == BlankOutput.Answer);
         var response = hasText ? text
             : rawIsAnswer ? raw.Trim()
             : providerError is not null ? $"[{cliName}-error] {providerError}"
@@ -375,6 +378,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         // The provider's own message, apart from the agent's narration, is what tells a rate limit from a real failure.
         var failure = providerError is null ? FailureKind.Unknown : AiFailureClassifier.ClassifyProviderMessage(providerError);
 
+        if (providerError is not null && providerErrorIsTheFailure)
+            return NodeExecutionResult.Fail($"[{cliName}-error] {providerError}", hasText ? text : null, failure);
         if (exitCode != 0)
             return NodeExecutionResult.Fail(
                 AdapterFailureText.NonZeroExit(exitCode, stderr, providerError, hasText ? text : raw), response, failure);
@@ -385,7 +390,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             return NodeExecutionResult.Fail(truncated, response);
         // A turn that completed with no text (the provider dropped the request) is a failure the on_failure edge can recover from,
         // not a diagnostic to pass on as the AI's output.
-        if (!hasText && !rawIsAnswer)
+        if (!hasText && !rawIsAnswer && !(blank && blankOutput == BlankOutput.Diagnostic))
             return NodeExecutionResult.Fail(response);
 
         return NodeExecutionResult.Ok(response, prompt, sessionId, incomingSessionId);

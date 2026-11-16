@@ -80,6 +80,29 @@ public class CopilotAdapterTests
         }
     }
 
+    [Theory]
+    [InlineData("", "[copilot] no assistant text response from model")]
+    [InlineData("echo 'quota' >&2\n", "[copilot] no assistant text response. stderr: quota")]
+    public async Task A_clean_exit_that_printed_nothing_succeeds_with_a_note_that_there_was_no_answer(string stderrLine, string expected)
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-copilot.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\n" + stderrLine + "exit 0\n");
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        try
+        {
+            var result = await new CopilotAdapter().ExecuteAsync(BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir));
+
+            Assert.True(result.Success, result.Error);
+            Assert.Equal(expected, result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_strips_nul_bytes_from_stdout_and_stderr_so_they_are_db_safe()
     {

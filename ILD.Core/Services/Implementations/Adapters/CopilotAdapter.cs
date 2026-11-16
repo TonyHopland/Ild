@@ -163,6 +163,8 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         // Copilot's stdout is plain text: all of it is the answer. Single-turn: no session id is bound (see class remarks).
         public override StreamResult ParseStream() => new(_stdout.Trim(), null, null, SawJsonEvents: false, RawStdout: _stdout);
 
+        public override BlankOutput BlankOutput => BlankOutput.Diagnostic;
+
         public override ValueTask DisposeAsync()
         {
             foreach (var file in new[] { _mcpConfigPath, _caCopy })
