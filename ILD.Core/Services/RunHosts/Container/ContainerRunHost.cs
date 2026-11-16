@@ -626,8 +626,7 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
     // The networks of role open this instance made, those of one owner each and the old shared one.
     private async Task<List<string>> OpenNetworksAsync(CancellationToken ct)
     {
-        var filter = DockerApiClient.LabelFilter(
-            $"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}", $"{RunPaths.RoleLabel}={RunPaths.OpenRole}");
+        var filter = DockerApiClient.LabelFilter(RunNames.SelectorPairs(_options.Instance, RunPaths.OpenRole));
         return ((await _api.GetAsync($"/networks?filters={filter}", ct))?.AsArray() ?? [])
             .Select(n => n?["Name"]?.GetValue<string>()).OfType<string>().ToList();
     }
@@ -673,7 +672,7 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
             RemoveContainerAsync(name, name.StartsWith(RunNames.InstallerPrefix, StringComparison.Ordinal) ? "a toolchain installer" : "a sign-in container", ct)));
         try
         {
-            var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
+            var filter = DockerApiClient.LabelFilter(RunNames.SelectorPairs(_options.Instance));
             foreach (var listed in (await _api.GetAsync($"/containers/json?filters={filter}", ct))?.AsArray() ?? [])
                 if (listed?["Labels"]?[RunPaths.RunLabel]?.GetValue<string>() is { } run && Guid.TryParseExact(run, "N", out var owner))
                     work.Add(StopRunAsync(owner, ct));
@@ -853,7 +852,7 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
 
     protected override async Task<SweepFacts> FindLeftoverFactsAsync(CancellationToken ct)
     {
-        var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
+        var filter = DockerApiClient.LabelFilter(RunNames.SelectorPairs(_options.Instance));
         var runs = new List<string>();
         void Collect(JsonNode? items, Func<JsonNode, JsonNode?> labelsOf)
         {
@@ -960,7 +959,7 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
         {
             var self = await _api.GetAsync($"/containers/{Escaped(ild)}/json", ct, HttpStatusCode.NotFound);
             if (self is null) return;
-            var filter = DockerApiClient.LabelFilter($"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={_options.Instance}");
+            var filter = DockerApiClient.LabelFilter(RunNames.SelectorPairs(_options.Instance));
             var networks = new List<(string Network, string Subject)>();
             foreach (var listed in (await _api.GetAsync($"/containers/json?all=true&filters={filter}", ct))?.AsArray() ?? [])
             {

@@ -43,6 +43,17 @@ public static class RunNames
     /// The labels of an object ILD made: whose it is, and what it is for. A run's objects carry its id; the chat's, the sign-ins' and
     /// installers' carry none, so the sweep, which deletes what a run left, never takes them for a run's. The toolchain volumes carry no instance.
     /// </summary>
+    /// <summary>The <c>key=value</c> pairs that select the objects of an instance, and of one role of it: the labels of <see cref="Labels"/>.</summary>
+    public static string[] SelectorPairs(string instance, string? role = null)
+    {
+        var pairs = new List<string> { $"{RunPaths.ManagedByLabel}={RunPaths.ManagedByValue}", $"{RunPaths.InstanceLabel}={instance}" };
+        if (role is not null) pairs.Add($"{RunPaths.RoleLabel}={role}");
+        return [.. pairs];
+    }
+
+    /// <summary>The same as a Kubernetes label selector.</summary>
+    public static string Selector(string instance, string? role = null) => string.Join(',', SelectorPairs(instance, role));
+
     public static Dictionary<string, string> Labels(string? instance, string? role = null, Guid? runId = null)
     {
         var labels = new Dictionary<string, string> { [RunPaths.ManagedByLabel] = RunPaths.ManagedByValue };

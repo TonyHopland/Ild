@@ -459,7 +459,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     public override async Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default)
     {
         var policies = await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(
-            _namespace, labelSelector: $"{KubernetesNames.SelectorFor(_options.Instance)},{RunPaths.RoleLabel}={RunPaths.OpenRole}", cancellationToken: ct);
+            _namespace, labelSelector: RunNames.Selector(_options.Instance, RunPaths.OpenRole), cancellationToken: ct);
         return policies.Items
             .Select(p => p.Metadata.Labels.TryGetValue(RunPaths.RunLabel, out var run) && Guid.TryParseExact(run, "N", out var id)
                 ? new DirectRoute(id, Chat: false)
@@ -614,7 +614,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     /// <summary>The IPs of every pod ILD made (runs, the chat pod, installers, sign-ins): a cluster has no network of its own per run, so these are what a run must not reach.</summary>
     public override async Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default)
     {
-        var pods = await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: KubernetesNames.SelectorFor(_options.Instance), cancellationToken: ct);
+        var pods = await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct);
         return pods.Items
             .SelectMany(p => (p.Status?.PodIPs?.Select(i => i.Ip) ?? []).Append(p.Status?.PodIP))
             .Distinct()
@@ -647,8 +647,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     protected override async Task<SweepFacts> FindLeftoverFactsAsync(CancellationToken ct)
     {
-        var selector = KubernetesNames.SelectorFor(_options.Instance);
-        var runs = new List<string>();
+                var runs = new List<string>();
         void Collect(IEnumerable<IMetadata<V1ObjectMeta>> items)
         {
             foreach (var item in items)
@@ -656,26 +655,26 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
                     runs.Add(run);
         }
 
-        Collect((await _client.CoreV1.ListNamespacedConfigMapAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
-        Collect((await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
-        Collect((await _client.CoreV1.ListNamespacedPersistentVolumeClaimAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
-        Collect((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
+        Collect((await _client.CoreV1.ListNamespacedConfigMapAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct)).Items);
+        Collect((await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct)).Items);
+        Collect((await _client.CoreV1.ListNamespacedPersistentVolumeClaimAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct)).Items);
+        Collect((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct)).Items);
 
         // Sign-in and installer pods carry no run label; an installer's or sign-in's NetworkPolicy goes with its pod, and one left without a pod is found by its role.
         var sideEnvironments = new List<SideEnvironmentFact>();
         foreach (var role in new[] { RunPaths.SignInRole, RunPaths.ToolsRole })
             sideEnvironments.AddRange((await _client.CoreV1.ListNamespacedPodAsync(
-                    _namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={role}", cancellationToken: ct)).Items
+                    _namespace, labelSelector: RunNames.Selector(_options.Instance, role), cancellationToken: ct)).Items
                 .Where(p => p.Metadata.Name is not null).Select(p => new SideEnvironmentFact(p.Metadata.Name, role)));
         foreach (var role in new[] { RunPaths.SignInRole, RunPaths.ToolsRole })
             sideEnvironments.AddRange((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(
-                    _namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={role}", cancellationToken: ct)).Items
+                    _namespace, labelSelector: RunNames.Selector(_options.Instance, role), cancellationToken: ct)).Items
                 .Where(p => p.Metadata.Name is not null).Select(p => new SideEnvironmentFact(p.Metadata.Name, role)));
 
         // The chat's direct route belongs to its pod, which has no owner reference to take the policy with it.
         var chatRoute = RunNames.OpenPolicy(ChatPodName);
         var openRoutes = new List<OpenRouteFact>();
-        if ((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={RunPaths.OpenRole}", cancellationToken: ct)).Items
+        if ((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance, RunPaths.OpenRole), cancellationToken: ct)).Items
                 .Any(p => p.Metadata.Name == chatRoute))
             openRoutes.Add(new OpenRouteFact(chatRoute, Unused: await ChatPodStateAsync(ct) is null));
         return new SweepFacts(runs, sideEnvironments, openRoutes);

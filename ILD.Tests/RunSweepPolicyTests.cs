@@ -186,6 +186,8 @@ public class RunSweepPolicyTests
         Assert.Equal(
             new Dictionary<string, string> { ["app.kubernetes.io/managed-by"] = "ild", ["ild/role"] = "tools" },
             RunNames.Labels(null, RunPaths.ToolsRole));
+        Assert.Equal(["app.kubernetes.io/managed-by=ild", "ild/instance=main"], RunNames.SelectorPairs("main"));
+        Assert.Equal("app.kubernetes.io/managed-by=ild,ild/instance=main,ild/role=open", RunNames.Selector("main", RunPaths.OpenRole));
         Assert.Equal("open", RunPaths.OpenRole);
         Assert.Equal("ild/open-owner", RunPaths.OpenOwnerLabel);
     }

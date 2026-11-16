@@ -246,7 +246,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         _api.Created.Clear();
-        _api.Execs.Clear();
+        _api.ClearExecs();
 
         var again = await _host.CreateAsync(new RunEnvironmentRequest(_run, "/unused", "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
 
@@ -1353,7 +1353,11 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
                 Environment = new Dictionary<string, string> { ["ILD_API_TOKEN"] = ApiToken },
             }, NetworkMode.Monitor, TestContext.Current.CancellationToken);
 
-        var terminal = _api.Execs.Last();
+        // The terminal is opened on its own connection, which the fake registers a moment after the host returns.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!_api.Execs.Any(e => e.Tty) && DateTime.UtcNow < deadline)
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        var terminal = Assert.Single(_api.Execs, e => e.Tty);
         var write = Assert.Single(_api.Execs, e => e.Command.Contains(ExecRunHost.WriteEnvironmentFileScript));
         Assert.Contains($"export ILD_API_TOKEN='{ApiToken}'", write.StdinSoFar());
         Assert.Equal(write.Command[^1], terminal.Command[5]);
