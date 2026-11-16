@@ -84,7 +84,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         Dictionary<string, string>? configEnv = null,
         Dictionary<string, string>? customEnv = null,
         Dictionary<string, string>? feedEnv = null)
-        => WorktreePreviewService.MergePreviewEnvironment(
+        => PreviewLauncher.MergePreviewEnvironment(
             defaults, configEnv, value => $"templated({value})", customEnv ?? [], feedEnv ?? []);
 
     private static Dictionary<string, string> Defaults(params (string Key, string Value)[] entries)

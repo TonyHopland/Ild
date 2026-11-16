@@ -1440,7 +1440,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     public string PreviewStateDirectoryFor(string worktreePath)
         => RunPaths.OwnerOf(worktreePath) is { } run ? $"{RunPaths.RunRoot(run)}/preview-state"
-            : HostsChats && RunPaths.ChatOf(worktreePath) is { } chat ? $"{RunPaths.ChatRoot(chat)}/preview-state/{WorktreePreviewService.WorktreeSlug(worktreePath)}"
+            : HostsChats && RunPaths.ChatOf(worktreePath) is { } chat ? $"{RunPaths.ChatRoot(chat)}/preview-state/{PreviewPaths.WorktreeSlug(worktreePath)}"
             : throw new InvalidOperationException($"{worktreePath} is not a worktree in a run's or chat's {Noun}");
 
     public async Task<string?> PreviewDataFolderAsync(Guid repositoryId, string worktreePath, CancellationToken ct = default)

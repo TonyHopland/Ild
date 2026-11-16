@@ -65,7 +65,7 @@ public sealed class WorktreePreviewServiceRunHostTests
         var host = new FakeRunHost().WithDirectory(Worktree).WithFile(ConfigPath, Config("sleep 1000"));
         host.Script = _ => killFails ? FakeCommandScript.RefusesKill() : FakeCommandScript.SurvivesKill();
         using var service = Build(host);
-        service.KillGrace = TimeSpan.FromMilliseconds(200);
+        service.Timings.KillGrace = TimeSpan.FromMilliseconds(200);
         var ct = TestContext.Current.CancellationToken;
 
         await service.StartAsync(Worktree, cancellationToken: ct);

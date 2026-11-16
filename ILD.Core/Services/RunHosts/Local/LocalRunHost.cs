@@ -388,7 +388,7 @@ public sealed class LocalRunHost : IRunHost, IRunHostOperator, ILocalTerminalCom
 
     public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => configuredApiUrl ?? "http://localhost:5000";
 
-    public string PreviewStateDirectoryFor(string worktreePath) => WorktreePreviewService.StateDirectoryOf(worktreePath);
+    public string PreviewStateDirectoryFor(string worktreePath) => PreviewPaths.StateDirectoryOf(worktreePath);
 
     public Task<string?> PreviewDataFolderAsync(Guid repositoryId, string worktreePath, CancellationToken ct = default)
         => Task.FromResult(FindPreviewDataCopy(worktreePath));
@@ -400,12 +400,12 @@ public sealed class LocalRunHost : IRunHost, IRunHostOperator, ILocalTerminalCom
     /// whose it is, and for its worktree, so a preview, which knows only the worktree, finds it.
     /// </summary>
     internal static string PreviewDataCopyOf(Guid ownerId, string worktreePath)
-        => Path.Combine(PreviewDataCopiesRoot, $"{ownerId:N}-{WorktreePreviewService.WorktreeSlug(Path.GetFullPath(worktreePath))}");
+        => Path.Combine(PreviewDataCopiesRoot, $"{ownerId:N}-{PreviewPaths.WorktreeSlug(Path.GetFullPath(worktreePath))}");
 
     /// <summary>The copy of the run that holds <paramref name="worktreePath"/>; null when it has none.</summary>
     internal static string? FindPreviewDataCopy(string worktreePath)
     {
-        var slug = WorktreePreviewService.WorktreeSlug(Path.GetFullPath(worktreePath));
+        var slug = PreviewPaths.WorktreeSlug(Path.GetFullPath(worktreePath));
         try
         {
             return Directory.EnumerateDirectories(PreviewDataCopiesRoot, "*-" + slug)

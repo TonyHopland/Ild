@@ -362,7 +362,7 @@ internal sealed class FakeRunHost : IRunHost
     public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => configuredApiUrl ?? "http://fake-ild";
 
     /// <summary>Where <c>PreviewStateDirectoryFor</c> puts a preview's state directory: on this machine unless a test says otherwise.</summary>
-    public Func<string, string> StateDirectoryFor { get; set; } = WorktreePreviewService.StateDirectoryOf;
+    public Func<string, string> StateDirectoryFor { get; set; } = PreviewPaths.StateDirectoryOf;
 
     public string PreviewStateDirectoryFor(string worktreePath) => StateDirectoryFor(worktreePath);
 

@@ -57,11 +57,9 @@ public class WorktreePreviewServiceHealthTimeoutTests : IDisposable
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient(handler, disposeHandler: false));
         var environment = new TestProcessEnvironment { { "HOME", Path.Combine(_root, "home") } }.WithRealPath();
         var service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance, environment: environment, host: LocalRunHost.Shared)
-        {
-            HealthTimeoutUnit = Unit,
-            HealthPollDelay = TimeSpan.FromMilliseconds(2),
-        };
+            NullLogger<WorktreePreviewService>.Instance, environment: environment, host: LocalRunHost.Shared);
+        service.Timings.HealthTimeoutUnit = Unit;
+        service.Timings.HealthPollDelay = TimeSpan.FromMilliseconds(2);
         _services.Add(service);
         return service;
     }
@@ -123,7 +121,7 @@ public class WorktreePreviewServiceHealthTimeoutTests : IDisposable
     public async Task A_service_that_exits_fails_at_once_with_its_exit_code()
     {
         var service = BuildService(new SlowHealth(TimeSpan.FromDays(1)));
-        service.HealthTimeoutUnit = TimeSpan.FromSeconds(1);
+        service.Timings.HealthTimeoutUnit = TimeSpan.FromSeconds(1);
         var clock = Stopwatch.StartNew();
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -138,7 +136,7 @@ public class WorktreePreviewServiceHealthTimeoutTests : IDisposable
     {
         var service = BuildService(new SlowHealth(TimeSpan.FromDays(1)));
         var worktree = Worktree("own", "exit 4", JsonValue.Create(300));
-        service.HealthTimeoutUnit = TimeSpan.FromSeconds(1);
+        service.Timings.HealthTimeoutUnit = TimeSpan.FromSeconds(1);
         var clock = Stopwatch.StartNew();
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -176,5 +174,5 @@ public class WorktreePreviewServiceHealthTimeoutTests : IDisposable
 
     [Fact]
     public void The_default_health_timeout_is_longer_than_the_old_sixty_seconds()
-        => Assert.True(WorktreePreviewService.DefaultHealthTimeoutSeconds > 60);
+        => Assert.True(PreviewConfigLoader.DefaultHealthTimeoutSeconds > 60);
 }

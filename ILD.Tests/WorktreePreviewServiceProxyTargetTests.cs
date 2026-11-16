@@ -145,7 +145,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         workItems.VerifyNoOtherCalls();
     }
 
-    private static WorktreePreviewService.PreviewServiceRow Row(
+    private static PreviewUrls.PreviewServiceRow Row(
         string name, bool isPublic = false, bool running = true, int port = 0, bool rewriteHost = true)
         => new(name, isPublic, rewriteHost, running, "http", port == 0 ? 4000 : port);
 
@@ -158,7 +158,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     [InlineData("wi-12-work-item-server", "12", "work-item-server")]
     public void A_preview_host_label_is_a_numeric_work_item_id_and_an_optional_service_name(string label, string id, string? service)
     {
-        Assert.True(WorktreePreviewService.TryParsePreviewHostLabel(label, out var workItemId, out var serviceName));
+        Assert.True(PreviewUrls.TryParsePreviewHostLabel(label, out var workItemId, out var serviceName));
         Assert.Equal(id, workItemId);
         Assert.Equal(service, serviceName);
     }
@@ -171,14 +171,14 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     [InlineData("")]
     [InlineData(null)]
     public void Other_labels_are_not_preview_hostnames(string? label)
-        => Assert.False(WorktreePreviewService.TryParsePreviewHostLabel(label, out _, out _));
+        => Assert.False(PreviewUrls.TryParsePreviewHostLabel(label, out _, out _));
 
     [Fact]
     public void A_named_service_resolves_to_its_own_port()
     {
         var rows = new[] { Row("app", isPublic: true, port: 5001), Row("api", port: 5002), Row("work-item-server", port: 5003) };
 
-        var target = WorktreePreviewService.SelectPreviewTarget("7", "api", rows);
+        var target = PreviewUrls.SelectPreviewTarget("7", "api", rows);
 
         Assert.Equal(PreviewTargetOutcome.Resolved, target.Outcome);
         Assert.Equal(5002, target.Port);
@@ -190,7 +190,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         var rows = new[] { Row("app", isPublic: true), Row("work-item-server", port: 5003) };
 
-        var target = WorktreePreviewService.SelectPreviewTarget("7", "WORK-ITEM-SERVER", rows);
+        var target = PreviewUrls.SelectPreviewTarget("7", "WORK-ITEM-SERVER", rows);
 
         Assert.True(target.IsResolved);
         Assert.Equal(5003, target.Port);
@@ -200,8 +200,8 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     [Fact]
     public void The_bare_label_resolves_to_the_one_public_service_and_rewrites_the_host_unless_it_opts_out()
     {
-        var rewriting = WorktreePreviewService.SelectPreviewTarget("7", null, [Row("app", isPublic: true, port: 5001), Row("api", port: 5002)]);
-        var optedOut = WorktreePreviewService.SelectPreviewTarget("7", null, [Row("app", isPublic: true, port: 5001, rewriteHost: false)]);
+        var rewriting = PreviewUrls.SelectPreviewTarget("7", null, [Row("app", isPublic: true, port: 5001), Row("api", port: 5002)]);
+        var optedOut = PreviewUrls.SelectPreviewTarget("7", null, [Row("app", isPublic: true, port: 5001, rewriteHost: false)]);
 
         Assert.True(rewriting.IsResolved);
         Assert.Equal(5001, rewriting.Port);
@@ -216,8 +216,8 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         var rows = new[] { Row("app", isPublic: true), Row("api", running: false) };
 
-        var stopped = WorktreePreviewService.SelectPreviewTarget("7", "api", rows);
-        var unknown = WorktreePreviewService.SelectPreviewTarget("7", "nope", rows);
+        var stopped = PreviewUrls.SelectPreviewTarget("7", "api", rows);
+        var unknown = PreviewUrls.SelectPreviewTarget("7", "nope", rows);
 
         Assert.Equal(PreviewTargetOutcome.ServiceNotRunning, stopped.Outcome);
         Assert.Contains("api", stopped.Message);
@@ -229,7 +229,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         var rows = new[] { Row("app", isPublic: true, port: 5001), Row("api", isPublic: true, port: 5002) };
 
-        var ambiguous = WorktreePreviewService.SelectPreviewTarget("7", null, rows);
+        var ambiguous = PreviewUrls.SelectPreviewTarget("7", null, rows);
 
         // Serving whichever came first would put one application behind a hostname that describes the other just as well.
         Assert.Equal(PreviewTargetOutcome.AmbiguousService, ambiguous.Outcome);
@@ -237,7 +237,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         Assert.Contains("wi-7-api", ambiguous.Message);
 
         // Naming one is unambiguous and still works.
-        var named = WorktreePreviewService.SelectPreviewTarget("7", "api", rows);
+        var named = PreviewUrls.SelectPreviewTarget("7", "api", rows);
         Assert.True(named.IsResolved);
         Assert.Equal("api", named.ServiceName);
     }
@@ -247,7 +247,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         var rows = new[] { Row("app", isPublic: true, port: 5001), Row("api", isPublic: true, running: false, port: 5002) };
 
-        var target = WorktreePreviewService.SelectPreviewTarget("7", null, rows);
+        var target = PreviewUrls.SelectPreviewTarget("7", null, rows);
 
         Assert.True(target.IsResolved);
         Assert.Equal("app", target.ServiceName);
@@ -259,7 +259,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         var rows = new[] { Row("app", isPublic: true, running: false), Row("api") };
 
-        var target = WorktreePreviewService.SelectPreviewTarget("7", null, rows);
+        var target = PreviewUrls.SelectPreviewTarget("7", null, rows);
 
         Assert.Equal(PreviewTargetOutcome.ServiceNotRunning, target.Outcome);
         Assert.Contains("public", target.Message);
@@ -268,7 +268,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     [Fact]
     public void A_running_service_without_a_port_is_reported_as_not_running()
     {
-        var target = WorktreePreviewService.SelectPreviewTarget("7", "api", [new("api", false, true, true, "http", 0)]);
+        var target = PreviewUrls.SelectPreviewTarget("7", "api", [new("api", false, true, true, "http", 0)]);
 
         Assert.Equal(PreviewTargetOutcome.ServiceNotRunning, target.Outcome);
         Assert.Contains("'http'", target.Message, StringComparison.Ordinal);
