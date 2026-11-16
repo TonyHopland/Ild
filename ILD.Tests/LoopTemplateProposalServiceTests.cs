@@ -137,7 +137,7 @@ public sealed class LoopTemplateProposalServiceTests : IDisposable
 
         Assert.Equal(LoopTemplateProposalOutcome.AmbiguousName, result.Outcome);
         Assert.Equal("2 loop templates are named 'TWIN'; pass the id of the one you mean.", result.Error);
-        Assert.Equal([first.Id, second.Id], result.Candidates!.Select(t => t.Id).Order());
+        Assert.Equal(new[] { first.Id, second.Id }.Order(), result.Candidates!.Select(t => t.Id).Order());
         Assert.Empty(await StoredAsync());
     }
 
