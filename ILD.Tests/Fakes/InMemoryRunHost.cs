@@ -124,7 +124,10 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
         return Task.CompletedTask;
     }
 
-    public override bool HostsChats => true;
+    /// <summary>Whether this host keeps chats in its chat container, as a Docker or Kubernetes host does.</summary>
+    public bool KeepsChats { get; init; } = true;
+
+    public override bool HostsChats => KeepsChats;
     protected override TimeSpan ChatIdleTimeout => IdleTimeout;
     protected override IChatEngine ChatEngine => this;
     string IChatEngine.Name => ChatName;
@@ -145,7 +148,14 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
         return Task.CompletedTask;
     }
 
-    protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(owner.Chat ? _chatUp : HoldsRun(owner.Id));
+    /// <summary>How many times the engine was asked whether a run has an environment: once per lookup of who holds an id.</summary>
+    public int RunLookups { get; private set; }
+
+    protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct)
+    {
+        if (!owner.Chat) RunLookups++;
+        return Task.FromResult(owner.Chat ? _chatUp : HoldsRun(owner.Id));
+    }
     protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => Task.FromResult(true);
     protected override Task<string> RunAddressAsync(Guid run, CancellationToken ct) => Task.FromResult(Address);
 

@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
@@ -26,6 +27,28 @@ public interface IRunHost
 
     /// <summary>The setting value that selects this host.</summary>
     RunHostKind Kind { get; }
+
+    // -- Where a path is --------------------------------------------------------
+    // Which run or chat a path or a call belongs to is answered here, once, by RunHolders; callers ask the host and never read a path themselves.
+    // The defaults are the path format alone (ADR-0032, ADR-0034); only a host that routes by it answers otherwise.
+
+    /// <summary>The id of the run or chat whose directory <paramref name="path"/> names, whatever this host keeps; null when it names neither.</summary>
+    Guid? HolderOf(string? path) => RunPaths.HolderOf(path);
+
+    /// <summary>The id of the run whose directory <paramref name="path"/> is in; null when it is not in a run's.</summary>
+    Guid? RunOf(string? path) => RunHolders.Named(path) is { Kind: RunHolderKind.Run } holder ? holder.Id : null;
+
+    /// <summary>Whether a chat working in <paramref name="chatPath"/> can read the files of the run working in <paramref name="worktreePath"/>: neither is in an environment the other cannot see.</summary>
+    bool ChatSeesWorktree(string worktreePath, string chatPath) => RunHolders.Named(worktreePath).Kind != RunHolderKind.Run && RunHolders.Named(chatPath).Kind != RunHolderKind.Chat;
+
+    /// <summary>Whether <paramref name="path"/>, of a run or chat, is on ILD's own disk under a host that runs everything in containers: it is read and deleted but never run in.</summary>
+    bool PredatesContainers(string? path) => false;
+
+    /// <summary>The host for ILD's own base clone at <paramref name="path"/> when this host would refuse to reach it (a path that is in no run or chat); null when this host is the one to ask.</summary>
+    IRunHost? OwnDiskHostFor(string? path) => null;
+
+    /// <summary>The name a person attaches an editor to for the run whose directory is <paramref name="path"/>; null when this host has nothing to attach to.</summary>
+    string? AttachTargetFor(string? path) => null;
 
     // -- Lifecycle ---------------------------------------------------------------
 

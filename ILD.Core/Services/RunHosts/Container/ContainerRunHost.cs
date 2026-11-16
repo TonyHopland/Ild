@@ -46,6 +46,8 @@ public sealed class ContainerRunHost : ExecRunHost, IDirectRouteEngine, IChatEng
 
     public override RunHostKind Kind => RunHostKind.Container;
 
+    public override string? AttachTargetFor(string? path) => RunHolders.Named(path) is { Kind: RunHolderKind.Run } run ? RunNames.Run(run.Id) : null;
+
     public override string LeftoverKind => RunLeftoverKind;
 
     public override TimeSpan SweepInterval => _options.SweepInterval;

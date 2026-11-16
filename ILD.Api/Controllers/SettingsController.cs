@@ -158,7 +158,7 @@ public class SettingsController : ControllerBase
     public async Task<IActionResult> GetRunHost(CancellationToken ct) => Ok(new
     {
         kind = _runHost.Kind.ToString().ToLowerInvariant(),
-        warning = _runHost is RoutingRunHost routing ? await routing.Isolated.WarningAsync(ct) : null,
+        warning = _runHost is IIsolatedHostInfo info ? await info.WarningAsync(ct) : null,
     });
 
     [HttpGet("{key}")]

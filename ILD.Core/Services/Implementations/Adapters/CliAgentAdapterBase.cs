@@ -342,7 +342,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             await RunHost.StartCommandAsync(
                 RunCommand.Agent(
                     psi, OwnerOf(ctx), ctx.Provider.Id, ctx.NetworkMode, WithExecutionEnvironment(environment, ctx),
-                    (ctx.AgentFiles ?? []).Concat(agentFiles ?? []).Where(file => !string.IsNullOrEmpty(file)).Select(file => file!).ToList()) with { RunIn = RunPaths.HolderOf(psi.WorkingDirectory) ?? OwnerOf(ctx) },
+                    (ctx.AgentFiles ?? []).Concat(agentFiles ?? []).Where(file => !string.IsNullOrEmpty(file)).Select(file => file!).ToList()) with { RunIn = RunHost.HolderOf(psi.WorkingDirectory) ?? OwnerOf(ctx) },
                 ctx.Cancel),
             AgentOutputLimit);
 

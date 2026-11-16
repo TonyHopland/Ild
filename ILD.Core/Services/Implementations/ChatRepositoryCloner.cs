@@ -23,7 +23,7 @@ namespace ILD.Core.Services.Implementations;
 /// exactly as a run's Start node does, and never touches the chat's folder;
 /// everything in the chat's scratch folder is git with no credentials, filling the
 /// chat's clone from that base clone over the local disk. A chat that lives in the
-/// chat container (<see cref="RunPaths.ChatsRoot"/>) cannot see that disk: its
+/// chat container (<c>/ild-chat</c>) cannot see that disk: its
 /// branch goes in as a git bundle, as a run's code does.
 /// </summary>
 public sealed class ChatRepositoryCloner : IChatRepositoryCloner
@@ -197,7 +197,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)
     {
         var reposDir = Path.Combine(job.ScratchPath, ReposFolder);
-        var inChatContainer = RunPaths.ChatOf(job.ScratchPath) is not null;
+        var inChatContainer = _host.HolderOf(job.ScratchPath) is not null;
         var (folderName, exists) = await FindFolderAsync(reposDir, job.Repo.Id, Clean(job.Repo.Name), job.ChatSessionId, inChatContainer, ct);
         var folder = Path.Combine(reposDir, folderName);
         var relativePath = $"{ReposFolder}/{folderName}";
