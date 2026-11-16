@@ -14,7 +14,7 @@ namespace ILD.Core.Services.RunHosts;
 /// can open one itself. It is one host with one backend; what a caller depends on is the
 /// role it uses (<see cref="IRunCommands"/>, <see cref="IRunFiles"/> and the others in RunHostRoles.cs), which this puts together.
 /// </summary>
-public interface IRunHost : IRunWorkspace, IRunChats, IRunRepositories, IRunShells, IRunLeftovers;
+public interface IRunHost : IRunWorkspace, IRunReclaim, IRunChatFolders, IRunChats, IRunRepositories, IRunShells, IRunLeftovers;
 
 /// <summary>Which backend holds the runs (<see cref="RunHostOptions.Detect"/>).</summary>
 public enum RunHostKind

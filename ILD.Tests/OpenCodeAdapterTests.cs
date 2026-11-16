@@ -1318,7 +1318,7 @@ public class OpenCodeAdapterTests
         await connection.OpenAsync();
 
         var services = new ServiceCollection();
-        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunWorkspace>(LocalRunHost.Shared);
         services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 

@@ -34,9 +34,9 @@ public sealed class CmdNodeExecutor : INodeExecutor
             yield break;
         }
 
-        var host = ctx.Services.GetRunHost();
+        var files = ctx.Services.GetRunFiles();
         var worktree = ctx.Run.WorktreePath;
-        if (string.IsNullOrEmpty(worktree) || !await host.DirectoryExistsAsync(worktree, ctx.CancellationToken))
+        if (string.IsNullOrEmpty(worktree) || !await files.DirectoryExistsAsync(worktree, ctx.CancellationToken))
         {
             yield return new NodeOutcome.NodeStarting(command);
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, "No worktree available for Cmd node");
@@ -47,7 +47,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
 
         var feeds = await ctx.Services.GetRequiredService<IPackageFeedResolver>()
             .ResolveAsync(await RunRepository.IdOfAsync(ctx.Run, workItems), ctx.CancellationToken);
-        var (ok, output, error, termination) = await RunProcessAsync(host, command, worktree, feeds.Feeds, ctx);
+        var (ok, output, error, termination) = await RunProcessAsync(ctx.Services.GetRunCommands(), command, worktree, feeds.Feeds, ctx);
         if (!ok)
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "command failed", output, termination);
@@ -59,7 +59,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
     private sealed record ProcessResult(bool Ok, string Output, string? Error, RunTermination? Termination = null);
 
     private async Task<ProcessResult> RunProcessAsync(
-        IRunWorkspace host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
+        IRunCommands host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
         var err = new StringBuilder();

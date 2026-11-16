@@ -108,7 +108,12 @@ public static class ServiceCollectionExtensions
         // One host, one registration; each caller is given the role it uses (ADR-0032).
         services.AddSingleton<IRunHost>(sp => sp.GetRequiredService<RunHostSelection>().Host);
         services.AddSingleton<IRunWorkspace>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunReclaim>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunChatFolders>(sp => sp.GetRequiredService<IRunHost>());
         services.AddSingleton<IRunChats>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunCommands>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunLifecycle>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunHolders>(sp => sp.GetRequiredService<IRunHost>());
         services.AddSingleton<IRunRepositories>(sp => sp.GetRequiredService<IRunHost>());
         services.AddSingleton<IRunShells>(sp => sp.GetRequiredService<IRunHost>());
         services.AddSingleton<IRunFiles>(sp => sp.GetRequiredService<IRunHost>());

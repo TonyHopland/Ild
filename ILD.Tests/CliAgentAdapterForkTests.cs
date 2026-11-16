@@ -86,7 +86,7 @@ public class CliAgentAdapterForkTests
     private static ServiceProvider SnapshotServices(TestDb db)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(LocalRunHost.Shared);
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunWorkspace>(LocalRunHost.Shared);
         services.AddScoped<AppDbContext>(_ => db.OnOwnConnection());
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
         return services.BuildServiceProvider();

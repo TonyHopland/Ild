@@ -373,7 +373,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     {
         if (ScopeFactory is null) return LocalRunHost.Shared;
         using var scope = ScopeFactory.CreateScope();
-        return scope.ServiceProvider.GetRequiredService<IRunHost>();
+        return scope.ServiceProvider.GetRunWorkspace();
     }
 
 

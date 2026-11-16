@@ -264,10 +264,10 @@ public interface IRunSweep
     /// <summary>Removes the chat container or pod when it has been idle for the timeout.</summary>
     Task ReapIdleChatAsync(CancellationToken ct = default);
 
-    /// <inheritdoc cref="IRunLeftovers.ListLeftoversAsync"/>
+    /// <summary>The leftovers of this host's pods or containers alone. Not <see cref="IRunLeftovers"/>, which a host that also serves ILD's own disk answers for both, so the sweep and the startup sweep do not share an interface.</summary>
     Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default);
 
-    /// <inheritdoc cref="IRunLeftovers.DeleteLeftoverAsync"/>
+    /// <summary>Delete one leftover of this host's pods or containers. Returns whether it is gone.</summary>
     Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default);
 }
 
@@ -321,11 +321,17 @@ public interface ILocalTerminalCommands
 
 // Callers that use several roles together depend on one of these, so they take one parameter and a test makes one fake. Each is only roles put together; none has a member of its own.
 
-/// <summary>What the executors, the agent adapters, the preview and the reclaimer do with a run: make it, run commands in it, read and write its files, find its preview and which run a path is in.</summary>
-public interface IRunWorkspace : IRunLifecycle, IRunCommands, IRunFiles, IRunHolders, IPreviewHost;
+/// <summary>What the agent adapters and the preview do with a run: run commands in it, read and write its files, find its preview and which run a path is in.</summary>
+public interface IRunWorkspace : IRunCommands, IRunFiles, IRunHolders, IPreviewHost, IRunHostIdentity;
 
-/// <summary>What chats do: their folders and toolchains, a clone in one, and its files and commands.</summary>
+/// <summary>What the chat clone does: a chat's folder and toolchains, the git commands run in it, and its files.</summary>
 public interface IRunChats : IChatHost, IRunLifecycle, IRunCommands, IRunFiles, IRunHolders;
+
+/// <summary>What the chat service does: a chat's folder and toolchains, its files, and whether a path is in a run or chat.</summary>
+public interface IRunChatFolders : IChatHost, IRunLifecycle, IRunFiles, IRunHolders;
+
+/// <summary>What the run reclaimer does: end a run's environment and its preview state, and delete its files.</summary>
+public interface IRunReclaim : IRunLifecycle, IRunFiles, IPreviewHost;
 
 /// <summary>What the repository manager does: git in a clone the host vouches for, bundles in and out of it, and the files of a worktree.</summary>
 public interface IRunRepositories : IRunBundles, IRunCommands, IRunFiles, IRunHolders, IRunHostIdentity;

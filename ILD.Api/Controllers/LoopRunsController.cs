@@ -322,7 +322,7 @@ public class LoopRunsController : ControllerBase
     private async Task<IActionResult?> PredatesContainersAsync(Guid runId)
     {
         var run = await _loopRunStore.GetByIdAsync(runId);
-        return run is not null && PredatesContainersException.Applies(HttpContext.RequestServices.GetRunHost(), run.WorktreePath)
+        return run is not null && PredatesContainersException.Applies(HttpContext.RequestServices.GetRunHolders(), run.WorktreePath)
             ? BadRequest(new { error = PredatesContainersException.Text })
             : null;
     }
@@ -705,9 +705,9 @@ public class LoopRunsController : ControllerBase
         string? refusal = null;
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             refusal = "The terminal opens once the run stops executing: it is parked, done or failed.";
-        else if (PredatesContainersException.Applies(HttpContext.RequestServices.GetRunHost(), run.WorktreePath))
+        else if (PredatesContainersException.Applies(HttpContext.RequestServices.GetRunHolders(), run.WorktreePath))
             refusal = PredatesContainersException.Text;
-        else if (string.IsNullOrWhiteSpace(run.WorktreePath) || !await HttpContext.RequestServices.GetRunHost().DirectoryExistsAsync(run.WorktreePath, HttpContext.RequestAborted))
+        else if (string.IsNullOrWhiteSpace(run.WorktreePath) || !await HttpContext.RequestServices.GetRunFiles().DirectoryExistsAsync(run.WorktreePath, HttpContext.RequestAborted))
             refusal = "The run has no worktree any more: it was cleaned up.";
         if (refusal is not null)
         {
@@ -741,7 +741,7 @@ public class LoopRunsController : ControllerBase
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             return BadRequest(new { error = "The editor is not available while the run is still executing." });
         var op = HttpContext.RequestServices.GetRunHostOperator();
-        var host = HttpContext.RequestServices.GetRunHost();
+        var host = HttpContext.RequestServices.GetRunFiles();
         if (op.AttachTargetFor(run.WorktreePath) is not { } containerName)
             return Conflict(new { error = "Only a run in a Docker or Podman container can be opened in an editor." });
         if (!await host.DirectoryExistsAsync(run.WorktreePath!, HttpContext.RequestAborted))
@@ -764,7 +764,7 @@ public class LoopRunsController : ControllerBase
         var run = await _loopRunStore.GetByIdAsync(guid);
         if (run is null) return NotFound();
         var op = HttpContext.RequestServices.GetRunHostOperator();
-        if (op.Kind != RunHostKind.Container || HttpContext.RequestServices.GetRunHost().RunOf(run.WorktreePath) is not { } owner)
+        if (op.Kind != RunHostKind.Container || HttpContext.RequestServices.GetRunHolders().RunOf(run.WorktreePath) is not { } owner)
             return Ok(new { state = "unavailable" });
 
         ContainerStats? stats;

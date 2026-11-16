@@ -77,7 +77,7 @@ public sealed class ChildWaitService : BackgroundService
     private async Task CheckAsync(IServiceProvider sp, LoopRun run, TimeSpan timeout, CancellationToken ct)
     {
         var state = ChildWaitState.TryParse(run.ChildWaitJson);
-        var host = sp.GetRunHost();
+        var host = sp.GetRunCommands();
         var waited = state is null ? timeout : DateTime.UtcNow - state.StartedAt;
         IReadOnlyList<RunChildProcess> running;
         try
