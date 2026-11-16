@@ -814,7 +814,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 new List<ManagedPreviewProcess>(),
                 DotEnvParser.Parse(customEnv),
                 new PackageFeedFileShare(packageFeeds ?? [], FeedFilePrefix(normalized, "install"), _logger),
-                await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, volumes, stateDirectory, _logger, cancellationToken));
+                await PreviewVolumes.CreateFoldersAsync(_host, _host, normalized, profile.Volumes, volumes, stateDirectory, _logger, cancellationToken));
 
             await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken);
             return new WorktreeInstallResult(true);
@@ -1306,7 +1306,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             new List<ManagedPreviewProcess>(),
             DotEnvParser.Parse(options.CustomEnv),
             new PackageFeedFileShare(options.PackageFeeds ?? [], FeedFilePrefix(normalized, "preview"), _logger),
-            await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, options.Volumes, stateDirectory, _logger, cancellationToken),
+            await PreviewVolumes.CreateFoldersAsync(_host, _host, normalized, profile.Volumes, options.Volumes, stateDirectory, _logger, cancellationToken),
             lease,
             options.WorkItemId)
         {
