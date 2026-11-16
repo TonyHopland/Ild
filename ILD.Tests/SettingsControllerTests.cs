@@ -26,7 +26,7 @@ public sealed class SettingsControllerTests : IDisposable
 
     private SettingsController Build()
         => new(_db.Settings, _notifier.Object, _scheduler.Object, _schedulerSettings.Object,
-            _prPoller.Object, _policy.Object, _networkNotifier.Object,
+            _prPoller.Object, _db.NetworkEdits(_policy.Object, _networkNotifier.Object),
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _runHost);
 
     private static string RunHostJson(IActionResult result)

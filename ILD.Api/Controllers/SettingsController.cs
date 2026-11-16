@@ -25,8 +25,7 @@ public class SettingsController : ControllerBase
     private readonly IWorkItemScheduler _scheduler;
     private readonly ISchedulerSettingsService _schedulerSettings;
     private readonly ILD.Core.Services.Remote.IPrStatusPoller _prPoller;
-    private readonly IEgressPolicy _egressPolicy;
-    private readonly INetworkNotifier _networkNotifier;
+    private readonly NetworkPolicyEdits _networkEdits;
     private readonly AttachmentLimits _attachmentLimits;
     private readonly IRunHostOperator _runHost;
 
@@ -60,8 +59,7 @@ public class SettingsController : ControllerBase
         IWorkItemScheduler scheduler,
         ISchedulerSettingsService schedulerSettings,
         ILD.Core.Services.Remote.IPrStatusPoller prPoller,
-        IEgressPolicy egressPolicy,
-        INetworkNotifier networkNotifier,
+        NetworkPolicyEdits networkEdits,
         AttachmentLimits attachmentLimits,
         IRunHostOperator runHost)
     {
@@ -70,8 +68,7 @@ public class SettingsController : ControllerBase
         _scheduler = scheduler;
         _schedulerSettings = schedulerSettings;
         _prPoller = prPoller;
-        _egressPolicy = egressPolicy;
-        _networkNotifier = networkNotifier;
+        _networkEdits = networkEdits;
         _attachmentLimits = attachmentLimits;
         _runHost = runHost;
     }
@@ -177,7 +174,10 @@ public class SettingsController : ControllerBase
         if (request.Value is not { } sent) return BadRequest(new { error = "A value is required." });
         if (!TryCanonicalize(key, sent, out var value, out var error)) return BadRequest(new { error });
 
-        await _store.UpsertAsync(key, value, ct);
+        // The network mode is stored by the network policy module, which also tells the proxy: it judges the agent's next connection
+        // by the new mode and re-judges the tunnels already open under the old one.
+        if (key == AppSettingKeys.NetworkMode) await _networkEdits.SetModeAsync(value, ct);
+        else await _store.UpsertAsync(key, value, ct);
 
         // Settings drive scheduler behaviour: wake it so the change takes
         // effect immediately and broadcast so the UI can sync.
@@ -193,13 +193,6 @@ public class SettingsController : ControllerBase
             // Wake the poller so a shortened heartbeat takes effect now rather
             // than after the previous (possibly long) interval elapses.
             _prPoller.Pulse();
-        }
-        else if (key == AppSettingKeys.NetworkMode)
-        {
-            // The proxy judges the agent's next connection by the new mode, and
-            // re-judges the tunnels already open under the old one.
-            _egressPolicy.Invalidate();
-            await _networkNotifier.PolicyChangedAsync();
         }
 
         return Ok(new { key, value });

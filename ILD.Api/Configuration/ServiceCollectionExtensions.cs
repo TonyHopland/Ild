@@ -280,6 +280,7 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<IEgressPolicy, EgressPolicy>();
         services.AddSingleton<INetworkNotifier, SignalRNetworkNotifier>();
+        services.AddScoped<NetworkPolicyEdits>();
         services.AddSingleton<InstallerRefusals>();
         services.AddSingleton<NetworkLogRecorder>();
         services.AddSingleton<INetworkLogRecorder>(sp => sp.GetRequiredService<NetworkLogRecorder>());

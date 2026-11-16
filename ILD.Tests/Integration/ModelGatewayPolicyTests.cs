@@ -201,8 +201,8 @@ public class ModelGatewayPolicyTests : IAsyncLifetime
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await new ProviderNetworkEntries(db, _factory.Services.GetRequiredService<IEgressPolicy>())
-                .SyncAsync((await db.AiProviders.FindAsync([provider], TestContext.Current.CancellationToken))!, TestContext.Current.CancellationToken);
+            await scope.ServiceProvider.GetRequiredService<NetworkPolicyEdits>()
+                .SyncProviderAsync((await db.AiProviders.FindAsync([provider], TestContext.Current.CancellationToken))!, TestContext.Current.CancellationToken);
         }
 
         var (response, _) = await CallAsync(token);

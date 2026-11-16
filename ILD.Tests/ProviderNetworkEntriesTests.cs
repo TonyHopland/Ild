@@ -33,7 +33,8 @@ public class ProviderNetworkEntriesTests : IDisposable
         return new AiProvidersController(
             registry.Object, _db.Context, _db.Providers,
             new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance),
-            Mock.Of<IManagedAgentProvisioner>());
+            Mock.Of<IManagedAgentProvisioner>(),
+            _db.NetworkEdits());
     }
 
     private static AiProviderDto Dto(string type, string baseUrl) => new() { Name = "p-" + Guid.NewGuid().ToString("N")[..6], Type = type, BaseUrl = baseUrl, Model = "m" };
@@ -93,11 +94,11 @@ public class ProviderNetworkEntriesTests : IDisposable
         await _db.Providers.CreateAiProviderAsync(provider);
         _db.Context.NetworkPolicyEntries.Add(new NetworkPolicyEntry { Id = Guid.NewGuid(), Host = "llm.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = provider.Id });
         await _db.Context.SaveChangesAsync(Ct);
-        var entries = new ProviderNetworkEntries(_db.Context);
+        var entries = _db.NetworkEdits();
 
-        Assert.False(await entries.SyncAsync(provider, Ct));
+        Assert.False(await entries.SyncProviderAsync(provider, Ct));
         provider.BaseUrl = "https://elsewhere.example.com";
-        Assert.True(await entries.SyncAsync(provider, Ct));
+        Assert.True(await entries.SyncProviderAsync(provider, Ct));
 
         Assert.Equal([("elsewhere.example.com", true), ("llm.example.com", false)], (await EntriesAsync(provider.Id)).Select(e => (e.Host, e.AddedForProvider)));
     }
@@ -127,7 +128,7 @@ public class ProviderNetworkEntriesTests : IDisposable
         _db.Context.NetworkPolicyEntries.Add(new NetworkPolicyEntry { Id = Guid.NewGuid(), Host = "api.github.com", ListKind = NetworkListKind.Whitelist, AiProviderId = copilot.Id });
         await _db.Context.SaveChangesAsync(Ct);
 
-        Assert.Equal(2, await new ProviderNetworkEntries(_db.Context).SeedAsync(Ct));
+        Assert.Equal(2, await _db.NetworkEdits().SeedProviderEntriesAsync(Ct));
 
         Assert.Equal([(".githubcopilot.com", true), ("api.github.com", false)], (await EntriesAsync(copilot.Id)).Select(e => (e.Host, e.AddedForProvider)));
         Assert.Equal(["192.168.1.20"], (await EntriesAsync(upstream.Id)).Select(e => e.Host));
@@ -137,7 +138,7 @@ public class ProviderNetworkEntriesTests : IDisposable
         var before = await _db.Context.NetworkPolicyEntries.CountAsync(Ct);
         _db.Context.NetworkPolicyEntries.RemoveRange(_db.Context.NetworkPolicyEntries.Where(e => e.AiProviderId == upstream.Id));
         await _db.Context.SaveChangesAsync(Ct);
-        Assert.Equal(0, await new ProviderNetworkEntries(_db.Context).SeedAsync(Ct));
+        Assert.Equal(0, await _db.NetworkEdits().SeedProviderEntriesAsync(Ct));
         Assert.Equal(before - 1, await _db.Context.NetworkPolicyEntries.CountAsync(Ct));
     }
 
@@ -146,13 +147,13 @@ public class ProviderNetworkEntriesTests : IDisposable
     {
         var provider = new AiProvider { Id = Guid.NewGuid(), Name = "e", Type = "opencode", BaseUrl = "https://llm.example.com", Model = "m" };
         await _db.Providers.CreateAiProviderAsync(provider);
-        var entries = new ProviderNetworkEntries(_db.Context);
-        await entries.SyncAsync(provider, Ct);
+        var entries = _db.NetworkEdits();
+        await entries.SyncProviderAsync(provider, Ct);
         var managed = Assert.Single(await EntriesAsync(provider.Id));
 
         await _db.Network.UpdateEntryAsync(managed.Id, "llm.example.com", NetworkListKind.Whitelist, provider.Id, Ct);
         provider.BaseUrl = "https://next.example.com";
-        await entries.SyncAsync(provider, Ct);
+        await entries.SyncProviderAsync(provider, Ct);
 
         Assert.Equal([("llm.example.com", false), ("next.example.com", true)], (await EntriesAsync(provider.Id)).Select(e => (e.Host, e.AddedForProvider)));
     }

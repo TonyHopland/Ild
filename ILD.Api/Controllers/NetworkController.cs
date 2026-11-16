@@ -15,7 +15,7 @@ namespace ILD.Api.Controllers;
 /// The egress filter's lists and log (ADR-0019), and the declared forwards
 /// (ADR-0020). The mode toggle is an app setting (<c>network.mode</c>, via
 /// <see cref="SettingsController"/>); this is everything that does not fit in a
-/// setting value. Every edit here invalidates the proxy's cached policy, so the
+/// setting value. Every edit goes through <see cref="NetworkPolicyEdits"/>, which invalidates the proxy's cached policy, so the
 /// agent's next connection — and the forwarder's listener set — is judged by it.
 /// </summary>
 [ApiController]
@@ -24,34 +24,30 @@ public class NetworkController : ControllerBase
 {
     private const int DefaultLogTake = 200;
     private const int MaxLogTake = 1000;
-    private const int MaxForwardNameLength = 128;
 
     private readonly INetworkPolicyStore _store;
     private readonly INetworkForwardStore _forwards;
-    private readonly IProviderStore _providers;
     private readonly IEgressPolicy _policy;
     private readonly INetworkNotifier _notifier;
     private readonly NetworkEnforcementStatus _enforcement;
     private readonly IEgressForwarderState _forwarder;
     private readonly IRunHostOperator _runHost;
-    private readonly IAppSettingStore _settings;
+    private readonly NetworkPolicyEdits _edits;
 
     public NetworkController(
         INetworkPolicyStore store,
         INetworkForwardStore forwards,
-        IProviderStore providers,
         IEgressPolicy policy,
         INetworkNotifier notifier,
         NetworkEnforcementStatus enforcement,
         IEgressForwarderState forwarder,
         IRunHostOperator runHost,
-        IAppSettingStore settings)
+        NetworkPolicyEdits edits)
     {
-        _settings = settings;
         _runHost = runHost;
+        _edits = edits;
         _store = store;
         _forwards = forwards;
-        _providers = providers;
         _policy = policy;
         _notifier = notifier;
         _enforcement = enforcement;
@@ -128,13 +124,7 @@ public class NetworkController : ControllerBase
 
     [HttpPut("protected/{id}")]
     public async Task<IActionResult> SetProtected(string id, [FromBody] SetProtectedRequest request, CancellationToken ct)
-    {
-        var current = (await _policy.GetAsync(ct)).Protected.FirstOrDefault(p => p.Id == id);
-        if (current is null) return NotFound();
-        await _settings.UpsertAsync(ProtectedDestination.SettingKey(id), request.Enabled ? "true" : "false", ct);
-        await PolicyChangedAsync();
-        return Ok(View(current with { Enabled = request.Enabled }));
-    }
+        => await _edits.SetProtectedAsync(id, request.Enabled, ct) is { } updated ? Ok(View(updated)) : NotFound();
 
     [HttpGet("entries")]
     public async Task<IActionResult> GetEntries(CancellationToken ct)
@@ -142,65 +132,15 @@ public class NetworkController : ControllerBase
 
     [HttpPost("entries")]
     public async Task<IActionResult> AddEntry([FromBody] AddEntryRequest request, CancellationToken ct)
-    {
-        var (invalid, host) = await ValidateEntryAsync(request);
-        if (invalid is not null) return invalid;
-
-        var (entry, created) = await AddOrFindAsync(host, request.ListKind, request.AiProviderId, request.Installers, ct);
-        return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
-    }
+        => EntryResult(await _edits.AddEntryAsync(request.Host, request.ListKind, request.AiProviderId, request.Installers, ct));
 
     [HttpPut("entries/{id:guid}")]
     public async Task<IActionResult> UpdateEntry(Guid id, [FromBody] AddEntryRequest request, CancellationToken ct)
-    {
-        var (invalid, host) = await ValidateEntryAsync(request);
-        if (invalid is not null) return invalid;
-        if (await _store.FindEntryAsync(request.ListKind, host, request.AiProviderId, ct, request.Installers) is { } other && other.Id != id)
-            return RuleExists(request.ListKind, host);
-
-        NetworkPolicyEntry? entry;
-        try
-        {
-            entry = await _store.UpdateEntryAsync(id, host, request.ListKind, request.AiProviderId, ct, request.Installers);
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            // Deleted between the load and the save.
-            return NotFound();
-        }
-        catch (DbUpdateException)
-        {
-            // The unique index caught what the read above could not: two requests racing.
-            return RuleExists(request.ListKind, host);
-        }
-        if (entry is null) return NotFound();
-        await PolicyChangedAsync();
-        return Ok(View(entry));
-    }
-
-    private async Task<(IActionResult? Invalid, string Host)> ValidateEntryAsync(AddEntryRequest request)
-    {
-        if (!Enum.IsDefined(request.ListKind))
-            return (BadRequest(new { error = "listKind must be 'Whitelist' or 'Blacklist'" }), string.Empty);
-        if (!EgressRules.TryNormalizePattern(request.Host, out var host, out var error))
-            return (BadRequest(new { error }), string.Empty);
-        if (request.Installers && request.AiProviderId is not null)
-            return (BadRequest(new { error = "An entry is for the installers or for one provider, not both" }), string.Empty);
-        if (request.AiProviderId is { } providerId && await _providers.GetAiProviderByIdAsync(providerId) is null)
-            return (BadRequest(new { error = "Unknown AI provider" }), string.Empty);
-        return (null, host);
-    }
-
-    private BadRequestObjectResult RuleExists(NetworkListKind kind, string host)
-        => BadRequest(new { error = $"A {kind.ToString().ToLowerInvariant()} rule for {host} already exists for this scope" });
+        => EntryResult(await _edits.UpdateEntryAsync(id, request.Host, request.ListKind, request.AiProviderId, request.Installers, ct));
 
     [HttpDelete("entries/{id:guid}")]
     public async Task<IActionResult> DeleteEntry(Guid id, CancellationToken ct)
-    {
-        if (!await _store.DeleteEntryAsync(id, ct)) return NotFound();
-        await PolicyChangedAsync();
-        return NoContent();
-    }
+        => await _edits.DeleteEntryAsync(id, ct) ? NoContent() : NotFound();
 
     [HttpGet("forwards")]
     public async Task<IActionResult> GetForwards(CancellationToken ct)
@@ -211,89 +151,30 @@ public class NetworkController : ControllerBase
 
     [HttpPost("forwards")]
     public async Task<IActionResult> AddForward([FromBody] AddForwardRequest request, CancellationToken ct)
-    {
-        if (ValidateForward(request, out var name, out var host) is { } invalid) return invalid;
-        if (await _forwards.FindByLocalPortAsync(request.LocalPort, ct) is { } taken)
-            return LocalPortTaken(taken);
-
-        var forward = new NetworkForwardEntry
-        {
-            Id = Guid.NewGuid(),
-            Name = name,
-            Host = host,
-            Port = request.Port,
-            LocalPort = request.LocalPort,
-            CreatedAt = DateTime.UtcNow,
-        };
-        try
-        {
-            await _forwards.AddForwardAsync(forward, ct);
-        }
-        catch (DbUpdateException)
-        {
-            // The unique index caught what the read above could not: two requests racing.
-            return LocalPortRaced(request.LocalPort);
-        }
-        await PolicyChangedAsync();
-        return CreatedAtAction(nameof(GetForwards), View(forward, await _policy.GetAsync(ct)));
-    }
+        => await ForwardResultAsync(await _edits.AddForwardAsync(request.Name, request.Host, request.Port, request.LocalPort, ct), ct);
 
     [HttpPut("forwards/{id:guid}")]
     public async Task<IActionResult> UpdateForward(Guid id, [FromBody] AddForwardRequest request, CancellationToken ct)
-    {
-        if (ValidateForward(request, out var name, out var host) is { } invalid) return invalid;
-        if (await _forwards.FindByLocalPortAsync(request.LocalPort, ct) is { } taken && taken.Id != id)
-            return LocalPortTaken(taken);
-
-        NetworkForwardEntry? forward;
-        try
-        {
-            forward = await _forwards.UpdateForwardAsync(id, name, host, request.Port, request.LocalPort, ct);
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            // Deleted between the load and the save.
-            return NotFound();
-        }
-        catch (DbUpdateException)
-        {
-            // The unique index caught what the read above could not: two requests racing.
-            return LocalPortRaced(request.LocalPort);
-        }
-        if (forward is null) return NotFound();
-        await PolicyChangedAsync();
-        return Ok(View(forward, await _policy.GetAsync(ct)));
-    }
-
-    private BadRequestObjectResult LocalPortTaken(NetworkForwardEntry taken)
-        => BadRequest(new { error = $"Local port {taken.LocalPort} already forwards to {taken.Host}:{taken.Port}" });
-
-    private BadRequestObjectResult LocalPortRaced(int localPort)
-        => BadRequest(new { error = $"Local port {localPort} is already forwarded" });
-
-    private static IActionResult? ValidateForward(AddForwardRequest request, out string name, out string host)
-    {
-        host = string.Empty;
-        name = (request.Name ?? string.Empty).Trim();
-        if (name.Length == 0)
-            return new BadRequestObjectResult(new { error = "Give the forward a name, e.g. postgres" });
-        if (name.Length > MaxForwardNameLength)
-            return new BadRequestObjectResult(new { error = $"Names are at most {MaxForwardNameLength} characters" });
-        if (!EgressRules.TryNormalizeForwardHost(request.Host, out host, out var error))
-            return new BadRequestObjectResult(new { error });
-        if (request.Port is < 1 or > 65535)
-            return new BadRequestObjectResult(new { error = "The destination port must be between 1 and 65535" });
-        if (request.LocalPort is < 1 or > 65535)
-            return new BadRequestObjectResult(new { error = "The local port must be between 1 and 65535" });
-        return null;
-    }
+        => await ForwardResultAsync(await _edits.UpdateForwardAsync(id, request.Name, request.Host, request.Port, request.LocalPort, ct), ct);
 
     [HttpDelete("forwards/{id:guid}")]
     public async Task<IActionResult> DeleteForward(Guid id, CancellationToken ct)
+        => await _edits.DeleteForwardAsync(id, ct) ? NoContent() : NotFound();
+
+    private IActionResult EntryResult(NetworkEditResult<NetworkPolicyEntry> result) => result.Outcome switch
     {
-        if (!await _forwards.DeleteForwardAsync(id, ct)) return NotFound();
-        await PolicyChangedAsync();
-        return NoContent();
+        NetworkEditOutcome.Created => CreatedAtAction(nameof(GetEntries), View(result.Value!)),
+        NetworkEditOutcome.Refused => BadRequest(new { error = result.Error }),
+        NetworkEditOutcome.NotFound => NotFound(),
+        _ => Ok(View(result.Value!)),
+    };
+
+    private async Task<IActionResult> ForwardResultAsync(NetworkEditResult<NetworkForwardEntry> result, CancellationToken ct)
+    {
+        if (result.Outcome == NetworkEditOutcome.Refused) return BadRequest(new { error = result.Error });
+        if (result.Outcome == NetworkEditOutcome.NotFound) return NotFound();
+        var view = View(result.Value!, await _policy.GetAsync(ct));
+        return result.Outcome == NetworkEditOutcome.Created ? CreatedAtAction(nameof(GetForwards), view) : Ok(view);
     }
 
     [HttpGet("log")]
@@ -317,63 +198,7 @@ public class NetworkController : ControllerBase
         => AddFromLogAsync(id, NetworkListKind.Blacklist, request?.ScopeToProvider ?? false, request?.ScopeToInstallers ?? false, ct);
 
     private async Task<IActionResult> AddFromLogAsync(Guid logId, NetworkListKind kind, bool scopeToProvider, bool scopeToInstallers, CancellationToken ct)
-    {
-        var logged = await _store.GetLogEntryAsync(logId, ct);
-        if (logged is null) return NotFound();
-        // A host an agent wrote as a pattern is logged as sent; from the log it must stay a single host, never a suffix rule.
-        if (EgressRules.LooksLikePattern(logged.Host.Trim()))
-            return BadRequest(new { error = "This host was sent as a pattern, not a host name, so it cannot be added from the log" });
-        if (!EgressRules.TryNormalizePattern(logged.Host, out var host, out var error))
-            return BadRequest(new { error });
-
-        var providerId = scopeToProvider ? logged.AiProviderId : null;
-        if (providerId is { } id && await _providers.GetAiProviderByIdAsync(id) is null)
-            providerId = null;
-        var installers = scopeToInstallers && logged.Installer is not null;
-
-        var (entry, created) = await AddOrFindAsync(host, kind, providerId, installers, ct);
-        return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
-    }
-
-    /// <summary>
-    /// Adding an entry that already exists is a no-op that answers with the
-    /// existing row: the read-before-insert covers the common case, and the
-    /// unique index on (list, host, scope) covers two clicks racing, whose loser
-    /// re-reads the winner instead of failing.
-    /// </summary>
-    private async Task<(NetworkPolicyEntry Entry, bool Created)> AddOrFindAsync(string host, NetworkListKind kind, Guid? providerId, bool installers, CancellationToken ct)
-    {
-        if (await _store.FindEntryAsync(kind, host, providerId, ct, installers) is { } existing)
-            return (existing, false);
-
-        var entry = new NetworkPolicyEntry
-        {
-            Id = Guid.NewGuid(),
-            Host = host,
-            ListKind = kind,
-            AiProviderId = providerId,
-            Installers = installers,
-            CreatedAt = DateTime.UtcNow,
-        };
-        try
-        {
-            await _store.AddEntryAsync(entry, ct);
-        }
-        catch (DbUpdateException)
-        {
-            var winner = await _store.FindEntryAsync(kind, host, providerId, ct, installers);
-            if (winner is null) throw;
-            return (winner, false);
-        }
-        await PolicyChangedAsync();
-        return (entry, true);
-    }
-
-    private async Task PolicyChangedAsync()
-    {
-        _policy.Invalidate();
-        await _notifier.PolicyChangedAsync();
-    }
+        => EntryResult(await _edits.AddFromLogAsync(logId, kind, scopeToProvider, scopeToInstallers, ct));
 
     private static object View(NetworkPolicyEntry e)
         => new { id = e.Id, host = e.Host, listKind = e.ListKind, aiProviderId = e.AiProviderId, installers = e.Installers, createdAt = e.CreatedAt };
