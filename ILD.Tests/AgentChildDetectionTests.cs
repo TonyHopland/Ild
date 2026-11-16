@@ -212,6 +212,14 @@ public class AgentChildDetectionTests
         return path;
     }
 
+    /// <summary>
+    /// Starts <paramref name="command"/> in the background of the stand-in CLI and waits until it is that program: until then it is a
+    /// copy of the CLI's own shell, command line and all, which no real agent ends its turn on.
+    /// </summary>
+    private static string Background(string command)
+        => $"{command} >/dev/null 2>&1 &\n" +
+           "while read -r started < /proc/$!/cmdline; [ \"${started#sleep}\" = \"$started\" ]; do :; done";
+
     private static AgentExecutionContext Context(string binary, string worktree, Guid? chat = null)
         => new(
             new AiProvider { Name = "claude-test", Type = "claude-code", BaseUrl = "", Model = "", Config = $"{{\"binaryPath\":\"{binary}\"}}" },
@@ -233,7 +241,7 @@ public class AgentChildDetectionTests
         IReadOnlyList<RunChildProcess> children = [];
         try
         {
-            var cli = FakeCli(worktree, "sleep 61 >/dev/null 2>&1 &");
+            var cli = FakeCli(worktree, Background("sleep 61"));
 
             var result = await new ClaudeCodeAdapter().ExecuteAsync(Context(cli, worktree));
 
@@ -272,7 +280,7 @@ public class AgentChildDetectionTests
         try
         {
             // Alive when the result event is read, gone by the time the CLI has exited: what a CLI that cleans up on exit looks like.
-            var cli = FakeCli(worktree, "sleep 61 >/dev/null 2>&1 &\nkid=$!\ntrap 'kill $kid' EXIT");
+            var cli = FakeCli(worktree, Background("sleep 61") + "\nkid=$!\ntrap 'kill $kid' EXIT");
 
             var result = await new ClaudeCodeAdapter().ExecuteAsync(Context(cli, worktree));
 
@@ -288,7 +296,7 @@ public class AgentChildDetectionTests
         var worktree = Worktree();
         try
         {
-            var cli = FakeCli(worktree, "sleep 62 >/dev/null 2>&1 &");
+            var cli = FakeCli(worktree, Background("sleep 62"));
 
             var result = await new ClaudeCodeAdapter().ExecuteAsync(Context(cli, worktree, chat: Guid.NewGuid()));
 
