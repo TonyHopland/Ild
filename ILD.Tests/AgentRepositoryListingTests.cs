@@ -24,13 +24,10 @@ public class AgentRepositoryListingTests
             new Mock<ILoopTemplateManager>().Object,
             db.LoopRuns,
             db.Context,
-            db.Providers,
-            NoPackageFeeds.Resolver,
-            new Mock<IWorktreePreviewService>().Object,
+            new Mock<IWorkItemPreview>().Object,
             new Mock<IChatLoopScratchpad>().Object,
             new Mock<IChatNotifier>().Object,
-            AgentSessions.Resolver(db, workItems),
-            new Mock<IWorkItemNotifier>().Object);
+            AgentSessions.Resolver(db, workItems));
 
         var result = Assert.IsType<OkObjectResult>(await controller.ListRepositories());
         var json = JsonSerializer.Serialize(result.Value);
