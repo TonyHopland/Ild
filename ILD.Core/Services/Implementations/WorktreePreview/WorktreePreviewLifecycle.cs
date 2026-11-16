@@ -15,15 +15,17 @@ namespace ILD.Core.Services.Implementations;
 /// two differ are declared in <see cref="PlanFor"/>.
 /// <para>
 /// A start registers a progress record before it waits for the context's gate, so a queued start already reads as
-/// starting and a second start of no more than the same scope joins it. The record is removed when the start succeeds,
-/// finds nothing to do or is cancelled; a failed whole-profile start leaves it until the worktree's next start or
-/// stop, since it is all there is left to report once everything the start launched is down.
+/// starting and a second start of no more than the same scope joins it. A start asking for more takes the record
+/// over and queues at the gate; the start it overtook runs on, and a stop still ends both. The record is removed
+/// when the start succeeds, finds nothing to do or is cancelled; a failed whole-profile start leaves it until the
+/// worktree's next start or stop, since it is all there is left to report once everything the start launched is down.
 /// </para>
 /// </summary>
 internal sealed class WorktreePreviewLifecycle : IDisposable
 {
     private readonly PreviewLifecycleContext _ctx;
     private readonly ConcurrentDictionary<Task, byte> _ownedStarts = new();
+    private readonly ConcurrentDictionary<StartProgress, byte> _overtaken = new();
     private volatile PreviewRuntime? _runtime;
     private StartProgress? _start;
 
@@ -43,6 +45,9 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
 
     /// <summary>How many starts wait on the start in progress; lets a test order a stop after a join.</summary>
     public int JoinedStartCount => Volatile.Read(ref _start)?.Joined ?? 0;
+
+    /// <summary>How many starts still run after a wider start took the record over; lets a test order a stop after that.</summary>
+    public int OvertakenStartCount => _overtaken.Count;
 
     /// <summary>The runtime when it is leaving the lifecycle, so the caller can retire it.</summary>
     public PreviewRuntime? TakeRuntime() => Interlocked.Exchange(ref _runtime, null);
@@ -115,6 +120,8 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
     {
         if (Volatile.Read(ref _start) is { InProgress: true } starting)
             starting.Stop();
+        foreach (var overtaken in _overtaken.Keys)
+            overtaken.Stop();
 
         await _ctx.Gate.WaitAsync(cancellationToken);
         try
@@ -231,14 +238,18 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
             pending.Progress.Failed(ex);
             throw;
         }
+        finally
+        {
+            _overtaken.TryRemove(pending.Progress, out _);
+        }
     }
 
     /// <summary>
     /// Answers a preview that is already running as-is, and otherwise selects and validates the profile and
     /// registers a progress record for the start — before it waits for the gate, so a queued start already reads as
-    /// starting. A start already in progress for the worktree keeps its record, and this one then does not own the
-    /// start: when that start brings up at least what this one asks for it is handed the record to follow instead of
-    /// running a second start, and otherwise this one waits for it to end before registering its own.
+    /// starting. When a start already in progress brings up at least what this one asks for, this one is handed that
+    /// start's record to follow instead of running a second start. Otherwise it registers its own over it without
+    /// waiting, so a stop reaches it and a background start answers at once; the gate is what orders the two.
     /// </summary>
     private async Task<(PendingStart? Start, WorktreePreviewResponse? Running)> PrepareAsync(
         LoadedPreviewConfig loaded, PreviewStartScope scope, WorktreePreviewStartOptions options, CancellationToken cancellationToken)
@@ -258,22 +269,9 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
         while (true)
         {
             var current = Volatile.Read(ref _start);
-            if (current != null && Joinable(current))
-            {
-                if (current.Scope.Covers(scope))
-                    return (new PendingStart(profile, scope, options, current, Owned: false), null);
-
-                try
-                {
-                    await current.Outcome.WaitAsync(cancellationToken);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-                {
-                    // How that start ended is its owner's to report; this one only waits its turn.
-                }
-
-                continue;
-            }
+            var inFlight = current != null && Joinable(current);
+            if (inFlight && current!.Scope.Covers(scope))
+                return (new PendingStart(profile, scope, options, current, Owned: false), null);
 
             // Only a start that will own the record is refused up front: one that joins runs under its
             // owner's options. The claim inside the start still decides; this only answers sooner.
@@ -286,6 +284,13 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
                 scope);
             if (Interlocked.CompareExchange(ref _start, mine, current) != current)
                 continue;
+            if (inFlight)
+            {
+                // It may have ended since it was read, and then nothing is left to take it out again.
+                _overtaken[current!] = 0;
+                if (current!.Outcome.IsCompleted)
+                    _overtaken.TryRemove(current, out _);
+            }
 
             await _ctx.Notifier.PublishAsync(mine.WorkItemId);
             return (new PendingStart(profile, scope, options, mine, Owned: true), null);

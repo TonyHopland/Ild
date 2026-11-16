@@ -96,6 +96,14 @@ public sealed class WorktreePreviewLifecycleTests : IDisposable
         return false;
     }
 
+    private async Task WaitUntilOvertakenAsync(string worktree)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        while (Lifecycle(worktree).OvertakenStartCount == 0)
+            await Task.Delay(10, timeout.Token);
+    }
+
     private async Task WaitUntilJoinedAsync(string worktree)
     {
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
@@ -186,6 +194,49 @@ public sealed class WorktreePreviewLifecycleTests : IDisposable
         Assert.Equal(Row(first, "web").ProcessId, Row(again, "web").ProcessId);
         Assert.Single(_host.Started);
         Assert.False(Lifecycle(A).IsStarting);
+    }
+
+    // --- a wider start during a single-service start ---
+
+    [Fact]
+    public async Task A_stop_also_ends_a_whole_start_queued_behind_a_single_service_start()
+    {
+        Config(A, Web, Api);
+        _probe.Hold("web");
+        var service = StartAsync(A, Service("web"));
+        await _probe.ReachedAsync("web");
+        var launched = _host.Started.Count;
+        var whole = StartAsync(A);
+        await WaitUntilOvertakenAsync(A);
+
+        var stopped = await Lifecycle(A).StopAsync(Ct);
+
+        Assert.Equal("stopped", stopped.State);
+        await Assert.ThrowsAnyAsync<Exception>(() => whole);
+        await Assert.ThrowsAnyAsync<Exception>(() => service);
+        Assert.False(Lifecycle(A).IsStarting);
+        Assert.Null(Lifecycle(A).Runtime);
+        Assert.Equal(launched, _host.Started.Count);
+        Assert.Equal(0, Lifecycle(A).OvertakenStartCount);
+    }
+
+    [Fact]
+    public async Task A_background_start_answers_at_once_while_a_single_service_start_is_in_flight()
+    {
+        Config(A, Web, Api);
+        _probe.Hold("web");
+        var service = StartAsync(A, Service("web"));
+        await _probe.ReachedAsync("web");
+
+        var begun = await BeginAsync(A).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.False(service.IsCompleted);
+        Assert.True(Lifecycle(A).IsStarting);
+        Assert.Contains(begun.State, new[] { "starting", "installing", "partial" });
+
+        _probe.Release("web");
+        await service;
+        await Lifecycle(A).StopAsync(Ct);
     }
 
     // --- joining ---
