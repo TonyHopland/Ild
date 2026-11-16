@@ -168,7 +168,7 @@ Every path that learns something about a PR reports it to the server through `IW
 _Avoid_: PR list, linked PRs, past PRs
 
 **External-agent Grant**:
-Temporary access an operator hands an AI session outside ILD (Settings → Share access with an AI): a name, a token shown once and a lifetime of at most seven days, at one of three levels. **Read only** reads. **Read, create and propose** (stored `Full`) also creates work items into the Backlog, edits its own and proposes edits to others. **Control of work** (`Control`) also starts or queues any work item and answers a human-feedback stop, through the agent API and `/mcp`; merging, other transitions and settings stay with the operator. Its changes appear in history as actor kind `ExternalAgent`.
+Temporary access an operator hands an AI session outside ILD (Settings → Share access with an AI): a name, a token shown once and a lifetime of at most seven days, at one of three levels. **Read only** reads. **Read, create and propose** (stored `Full`) also creates work items into the Backlog, edits its own and proposes edits to others. **Control of work** (`Control`) also starts, queues or reorders (within its status) any work item and answers a human-feedback stop, through the agent API and `/mcp`; merging, other transitions and settings stay with the operator. Its changes appear in history as actor kind `ExternalAgent`.
 _Avoid_: API key, agent token (that is ILD's own per-run token)
 
 **Work Item Edit Proposal**:

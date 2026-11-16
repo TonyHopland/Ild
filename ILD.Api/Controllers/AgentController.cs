@@ -73,7 +73,7 @@ namespace ILD.Api.Controllers;
 /// (other than into the work queue), link-pr, or merge. Agents are not
 /// allowed to move work items out of Backlog; that gate is human-only,
 /// with one exception: an external-agent grant at the Control level (ADR-0039)
-/// may start work items, queue them and answer human feedback. Run and chat
+/// may start work items, queue them, reorder them within their status and answer human feedback. Run and chat
 /// agents never reach those routes.
 /// </summary>
 [ApiController]
@@ -212,7 +212,7 @@ public class AgentController : ControllerBase, IActionFilter
                     "POST workitems/{id}/edit-proposals, GET workitems/{id}/edit-proposals (propose an edit to any item; a human decides)",
                     "GET repositories, GET loop-templates, GET loop-runs, GET global-variables",
                     "POST global-variables/proposals, POST loop-templates/proposals, POST workitems/{id}/human-input-proposals (a human decides)",
-                    "Control level only: POST workitems/{id}/start (starts a Ready item, any item), POST workitems/{id}/queue (moves an item into the work queue)",
+                    "Control level only: POST workitems/{id}/start (starts a Ready item, any item), POST workitems/{id}/queue (moves an item into the work queue), POST workitems/{id}/reorder (places an item above or below another; any item, same status)",
                     "Control level only: POST workitems/{id}/human-feedback/input, /respond, /reject, /edge (answer a human-feedback stop; body {runId, input}, /edge also {name}; any item)",
                 },
             },
@@ -220,6 +220,7 @@ public class AgentController : ControllerBase, IActionFilter
             {
                 createWorkItem = "POST workitems: title (required, 1-512 chars), description, repositoryId (required; from GET repositories), tags (a list of strings; the tags pick the loop template that runs the item), dependencies (work item ids), branchNameOverride, baseBranchOverride, loopTemplateId, createdByLoopRunId (ignored for a grant).",
                 updateWorkItem = "PUT workitems/{id}: title, description, tags (replaces the list; picks the loop template), branchNameOverride, baseBranchOverride.",
+                reorderWorkItem = "POST workitems/{id}/reorder: aboveId and/or belowId (at least one: the id of the work item this one goes directly after / directly before). With aboveId the item lands directly after that card in the whole board order, otherwise directly before belowId. The item keeps its status; a request that would change it is refused.",
                 humanFeedback = "runId (required: the run the item is parked on), input (optional text, at most 8192 chars), name (the output name, /edge only).",
             },
             mcp = new
@@ -232,8 +233,9 @@ public class AgentController : ControllerBase, IActionFilter
             {
                 "You are your own session: you edit and delete only the work items you created. Everything else is changed by proposing, and a human approves or rejects each proposal.",
                 "You have no loop run or chat: loop variables, the current loop and chat clones are not available. Transitions other than into the work queue, linking a pull request and merging stay with the operator.",
-                "There are three levels. Read only: reads, nothing else. Read, create and propose: also creates and edits work items of your own and proposes. Control of work: also starts any work item, queues it and answers human-feedback stops, so you can drive an item from Backlog to done. A request above your level answers 403.",
-                "A grant that can start and answer acts on any work item, not only its own, and its starts and answers appear in the item's history under this grant's name.",
+                "There are three levels. Read only: reads, nothing else. Read, create and propose: also creates and edits work items of your own and proposes. Control of work: also starts any work item, queues it, reorders it and answers human-feedback stops, so you can drive an item from Backlog to done. A request above your level answers 403.",
+                "Order: priority is the item's place in the board order and the lowest priority runs first; the scheduler starts the top-most Ready item. GET workitems?orderBy=priority returns items in that run order. Queueing keeps an item's place and a new item lands above every other one, so items queued in creation order run newest first; use reorder to set the order.",
+                "A grant that can start, queue, reorder and answer acts on any work item, not only its own, and its starts, queue moves and answers appear in the item's history under this grant's name. A reorder is not a history entry; it is only audited in the grant's activity.",
                 "Every request is audited under the grant, and each grant has a request budget per minute (429 when it is spent).",
             },
         });
@@ -1257,14 +1259,14 @@ public class AgentController : ControllerBase, IActionFilter
     // -- Control of work (ADR-0037, amended by ADR-0039) -------------------------
     //
     // A grant at the Control level drives the work it is handed: it starts any
-    // work item, moves one into the work queue, and answers a human-feedback
+    // work item, moves one into the work queue, reorders one within its status, and answers a human-feedback
     // stop. Run and chat agents and the other grant levels are refused. Nothing
     // else moves: other transitions, link-pr and merge stay with the operator.
 
     private async Task<(WorkItemActor? Actor, IActionResult? Error)> ControlActorAsync()
     {
         if (!Caller.HasControlGrant)
-            return (null, StatusCode(403, new { error = "Only an external-agent grant with control of work can start work items, queue them or answer human feedback." }));
+            return (null, StatusCode(403, new { error = "Only an external-agent grant with control of work can start work items, queue them, reorder them or answer human feedback." }));
         return await _sessions.ActorAsync(Caller) is { Kind: RemoteWorkItemActorKind.ExternalAgent } actor
             ? (actor, null)
             : (null, StatusCode(403, new { error = "This grant no longer exists." }));
@@ -1321,6 +1323,33 @@ public class AgentController : ControllerBase, IActionFilter
             return await _workItems.MoveAsync(actor, id, RemoteWorkItemStatus.WorkQueue)
                 ? Ok()
                 : BadRequest(new { error = "Transition not allowed" });
+        }
+        catch (HttpRequestException ex)
+        {
+            return WorkItemServerUnreachable(ex);
+        }
+    }
+
+    /// <summary>
+    /// Place an item above or below another, as the operator's drop on the board does. Within the item's current status only:
+    /// the route has no target status, so it never transitions.
+    /// </summary>
+    [HttpPost("workitems/{id}/reorder")]
+    public async Task<IActionResult> ReorderWorkItem(string id, [FromBody] AgentWorkItemReorderRequest request)
+    {
+        var (actor, error) = await ControlActorAsync();
+        if (actor is null)
+            return error!;
+
+        try
+        {
+            return await _workItems.ReorderAsync(actor, id, request.AboveId, request.BelowId) switch
+            {
+                ReorderOutcome.NotFound => NotFound(),
+                ReorderOutcome.InvalidNeighbour => BadRequest(new { error = "aboveId or belowId must name another work item." }),
+                ReorderOutcome.TransitionRefused => BadRequest(new { error = "Transition not allowed" }),
+                _ => await _workItems.GetWorkItemAsync(id) is { } moved ? Ok(moved) : NotFound(),
+            };
         }
         catch (HttpRequestException ex)
         {

@@ -162,7 +162,7 @@ public class ExternalAgentMcpTests(ExternalAgentMcpTests.Host host) : IClassFixt
     }
 
     private static readonly string[] ControlTools =
-        ["start_workitem", "queue_workitem", "human_feedback_input", "human_feedback_respond", "human_feedback_reject", "human_feedback_edge"];
+        ["start_workitem", "queue_workitem", "reorder_workitem", "human_feedback_input", "human_feedback_respond", "human_feedback_reject", "human_feedback_edge"];
 
     [Theory]
     [InlineData("Full", false)]
