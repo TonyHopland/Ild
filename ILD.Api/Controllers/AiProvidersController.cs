@@ -23,7 +23,7 @@ public class AiProvidersController : ControllerBase
     private readonly IProviderStore _providerStore;
     private readonly InteractiveProviderSessionService _interactiveSessions;
     private readonly IManagedAgentProvisioner _agentProvisioner;
-    private readonly ProviderNetworkEntries _networkEntries;
+    private readonly NetworkPolicyEdits _networkEdits;
 
     public AiProvidersController(
         IAgentAdapterRegistry adapterRegistry,
@@ -31,7 +31,7 @@ public class AiProvidersController : ControllerBase
         IProviderStore providerStore,
         InteractiveProviderSessionService interactiveSessions,
         IManagedAgentProvisioner agentProvisioner,
-        IEgressPolicy? egressPolicy = null)
+        NetworkPolicyEdits networkEdits)
     {
         _adapterRegistry = adapterRegistry;
         _supportedProviderTypes = adapterRegistry.GetAllSupportedProviderTypes()
@@ -40,7 +40,7 @@ public class AiProvidersController : ControllerBase
         _providerStore = providerStore;
         _interactiveSessions = interactiveSessions;
         _agentProvisioner = agentProvisioner;
-        _networkEntries = new ProviderNetworkEntries(db, egressPolicy);
+        _networkEdits = networkEdits;
     }
 
     /// <summary>
@@ -274,7 +274,7 @@ public class AiProvidersController : ControllerBase
         if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.CreateAiProviderAsync(p, tags)) is { } conflict)
             return Conflict(new { error = conflict });
         // Whitelist mode must not stop the provider's own model calls (ADR-0031), so its gateway upstream hosts are listed for it.
-        await _networkEntries.SyncAsync(p);
+        await _networkEdits.SyncProviderAsync(p);
         // Agents aren't baked into the image; if this provider uses a managed
         // agent that isn't installed yet, install it in the background so the
         // first run doesn't fail on a missing CLI.
@@ -342,7 +342,7 @@ public class AiProvidersController : ControllerBase
         p.UpdatedAt = DateTime.UtcNow;
         if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.UpdateAiProviderAsync(p, tags)) is { } conflict)
             return Conflict(new { error = conflict });
-        await _networkEntries.SyncAsync(p);
+        await _networkEdits.SyncProviderAsync(p);
         // If the type was changed to a managed agent, make sure it is installed.
         _agentProvisioner.EnsureInstalledForProviderType(p.Type);
         return Ok(ToResponse(p));

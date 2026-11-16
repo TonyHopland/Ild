@@ -36,7 +36,8 @@ public sealed class NetworkControllerTests : IDisposable
     }
 
     private NetworkController Build(RunHostKind kind = RunHostKind.Container)
-        => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object, Proxied, _forwarder, Host(kind), _db.Settings);
+        => new(_db.Network, _db.NetworkForwards, _policy.Object, _notifier.Object, Proxied, _forwarder, Host(kind),
+            _db.NetworkEdits(_policy.Object, _notifier.Object));
 
     private sealed class StubForwarderState : IEgressForwarderState
     {
@@ -59,7 +60,7 @@ public sealed class NetworkControllerTests : IDisposable
     private sealed record EntryView(Guid Id, string Host, NetworkListKind ListKind, Guid? AiProviderId);
 
     [Fact]
-    public async Task Adding_an_entry_canonicalises_it_invalidates_the_proxy_and_broadcasts()
+    public async Task Adding_an_entry_canonicalises_it()
     {
         var controller = Build();
 
@@ -71,8 +72,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(NetworkListKind.Whitelist, view.ListKind);
         Assert.Null(view.AiProviderId);
         Assert.Equal(".github.com", Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken)).Host);
-        _policy.Verify(p => p.Invalidate(), Times.Once);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
     }
 
     private sealed record ProtectedView(string Id, string Name, string[] Hosts, string[] Addresses, string[] Ranges, bool Enabled);
@@ -99,7 +98,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"], listed[2].Ranges);
         Assert.False(set.Enabled);
         Assert.Equal("false", (await _db.Settings.GetByKeyAsync("network.protect.database", TestContext.Current.CancellationToken))!.Value);
-        _policy.Verify(p => p.Invalidate(), Times.Once);
         Assert.IsType<NotFoundResult>(await controller.SetProtected("nope", new NetworkController.SetProtectedRequest(), TestContext.Current.CancellationToken));
     }
 
@@ -115,7 +113,6 @@ public sealed class NetworkControllerTests : IDisposable
 
         Assert.Equal(first.Id, again.Id);
         Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 
     [Fact]
@@ -138,7 +135,6 @@ public sealed class NetworkControllerTests : IDisposable
 
         Assert.IsType<BadRequestObjectResult>(result);
         Assert.Empty(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
     }
 
     [Fact]
@@ -150,7 +146,6 @@ public sealed class NetworkControllerTests : IDisposable
 
         Assert.IsType<BadRequestObjectResult>(result);
         Assert.Empty(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
     }
 
     [Fact]
@@ -164,7 +159,7 @@ public sealed class NetworkControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Deleting_an_entry_invalidates_the_proxy()
+    public async Task Deleting_an_entry()
     {
         var entry = new NetworkPolicyEntry { Host = "api.example.com", ListKind = NetworkListKind.Blacklist };
         await _db.Network.AddEntryAsync(entry, TestContext.Current.CancellationToken);
@@ -174,7 +169,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.IsType<NotFoundResult>(await controller.DeleteEntry(entry.Id, TestContext.Current.CancellationToken));
 
         Assert.Empty(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 
     [Fact]
@@ -291,7 +285,7 @@ public sealed class NetworkControllerTests : IDisposable
         => new() { Name = name, Host = host, Port = port, LocalPort = localPort };
 
     [Fact]
-    public async Task Adding_a_forward_canonicalises_its_host_invalidates_the_policy_and_broadcasts()
+    public async Task Adding_a_forward_canonicalises_its_host()
     {
         var controller = Build();
 
@@ -302,8 +296,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(("postgres", "postgres", 5432, 15432), (view.Name, view.Host, view.Port, view.LocalPort));
         Assert.Equal(NetworkDecision.Advisory, view.Decision);
         Assert.Null(view.ListenError);
-        _policy.Verify(p => p.Invalidate(), Times.Once);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
     }
 
     [Theory]
@@ -317,7 +309,6 @@ public sealed class NetworkControllerTests : IDisposable
 
         Assert.Contains("not a pattern", Body<Dictionary<string, string>>(result)["error"]);
         Assert.Empty(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
     }
 
     [Theory]
@@ -335,7 +326,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.IsType<BadRequestObjectResult>(await controller.AddForward(Forward(name, host, port, localPort), TestContext.Current.CancellationToken));
 
         Assert.Empty(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
     }
 
     [Fact]
@@ -383,8 +373,6 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(
             await controller.AddForward(Forward(name, host, port, localPort), TestContext.Current.CancellationToken)));
-        _policy.Invocations.Clear();
-        _notifier.Invocations.Clear();
         return created;
     }
 
@@ -392,7 +380,7 @@ public sealed class NetworkControllerTests : IDisposable
         => Assert.Single(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken), f => f.Id == id);
 
     [Fact]
-    public async Task Updating_a_forward_changes_all_four_fields_keeps_its_identity_and_invalidates_the_policy_once()
+    public async Task Updating_a_forward_changes_all_four_fields_keeps_its_identity()
     {
         var controller = Build();
         var seeded = await SeedForwardAsync(controller);
@@ -408,8 +396,6 @@ public sealed class NetworkControllerTests : IDisposable
         var stored = await StoredAsync(seeded.Id);
         Assert.Equal(("cache", "redis.example", 6379, 16379), (stored.Name, stored.Host, stored.Port, stored.LocalPort));
         Assert.Equal(before.CreatedAt, stored.CreatedAt);
-        _policy.Verify(p => p.Invalidate(), Times.Once);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
     }
 
     [Theory]
@@ -444,8 +430,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(("redis", "cache", 6379, 16379), (storedMine.Name, storedMine.Host, storedMine.Port, storedMine.LocalPort));
         var storedOther = await StoredAsync(other.Id);
         Assert.Equal(("postgres", "postgres", 5432, 15432), (storedOther.Name, storedOther.Host, storedOther.Port, storedOther.LocalPort));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Never);
     }
 
     [Fact]
@@ -457,8 +441,6 @@ public sealed class NetworkControllerTests : IDisposable
 
         Assert.IsType<NotFoundResult>(result);
         Assert.Empty(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Never);
     }
 
     [Theory]
@@ -482,8 +464,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.False(string.IsNullOrWhiteSpace(Body<Dictionary<string, string>>(Assert.IsType<BadRequestObjectResult>(result))["error"]));
         var stored = await StoredAsync(seeded.Id);
         Assert.Equal(("postgres", "postgres", 5432, 15432), (stored.Name, stored.Host, stored.Port, stored.LocalPort));
-        _policy.Verify(p => p.Invalidate(), Times.Never);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Never);
     }
 
     [Fact]
@@ -511,17 +491,15 @@ public sealed class NetworkControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Deleting_a_forward_invalidates_the_policy()
+    public async Task Deleting_a_forward()
     {
         var controller = Build();
         var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(await controller.AddForward(Forward(), TestContext.Current.CancellationToken)));
-        _policy.Invocations.Clear();
 
         Assert.IsType<NoContentResult>(await controller.DeleteForward(created.Id, TestContext.Current.CancellationToken));
         Assert.IsType<NotFoundResult>(await controller.DeleteForward(created.Id, TestContext.Current.CancellationToken));
 
         Assert.Empty(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 
     [Theory]
@@ -562,14 +540,8 @@ public sealed class NetworkControllerTests : IDisposable
     private async Task<NetworkPolicyEntry> StoredRuleAsync(Guid id)
         => (await _db.Network.GetEntryAsync(id, TestContext.Current.CancellationToken))!;
 
-    private void AssertNothingInvalidated()
-    {
-        _policy.Verify(p => p.Invalidate(), Times.Never);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Never);
-    }
-
     [Fact]
-    public async Task Updating_a_rules_host_canonicalises_it_keeps_its_identity_and_invalidates_the_policy_once()
+    public async Task Updating_a_rules_host_canonicalises_it_and_keeps_its_identity()
     {
         var seeded = await SeedRuleAsync("typo.example.com");
         var before = await StoredRuleAsync(seeded.Id);
@@ -583,8 +555,6 @@ public sealed class NetworkControllerTests : IDisposable
         var stored = await StoredRuleAsync(seeded.Id);
         Assert.Equal((".example.com", NetworkListKind.Whitelist, (Guid?)null, before.CreatedAt), (stored.Host, stored.ListKind, stored.AiProviderId, stored.CreatedAt));
         Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Once);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
     }
 
     [Fact]
@@ -624,7 +594,7 @@ public sealed class NetworkControllerTests : IDisposable
     [Theory]
     [InlineData(".example.com")]
     [InlineData("*.example.com")]
-    public async Task A_rule_saved_unchanged_or_in_an_equivalent_spelling_stays_as_it_was_and_still_invalidates(string spelling)
+    public async Task A_rule_saved_unchanged_or_in_an_equivalent_spelling_stays_as_it_was(string spelling)
     {
         var seeded = await SeedRuleAsync(".example.com", NetworkListKind.Blacklist);
         var before = await StoredRuleAsync(seeded.Id);
@@ -637,8 +607,6 @@ public sealed class NetworkControllerTests : IDisposable
         var stored = await StoredRuleAsync(seeded.Id);
         Assert.Equal((".example.com", NetworkListKind.Blacklist, (Guid?)null, before.CreatedAt), (stored.Host, stored.ListKind, stored.AiProviderId, stored.CreatedAt));
         Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
-        _policy.Verify(p => p.Invalidate(), Times.Once);
-        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
     }
 
     [Fact]
@@ -658,7 +626,6 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(2, rules.Count);
         Assert.Equal("mine.example.com", (await StoredRuleAsync(mine.Id)).Host);
         Assert.Equal(".other.example.com", (await StoredRuleAsync(other.Id)).Host);
-        AssertNothingInvalidated();
     }
 
     [Fact]
@@ -676,77 +643,12 @@ public sealed class NetworkControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task The_unique_index_refusing_the_save_is_answered_like_a_duplicate()
-    {
-        var store = new Mock<INetworkPolicyStore>();
-        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
-            .ThrowsAsync(new DbUpdateException("unique"));
-        var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
-
-        var result = await controller.UpdateEntry(Guid.NewGuid(), Rule("api.example.com"), TestContext.Current.CancellationToken);
-
-        var bad = Assert.IsType<BadRequestObjectResult>(result);
-        var message = Body<Dictionary<string, string>>(bad)["error"];
-        Assert.Contains("already exists", message);
-        Assert.Contains("api.example.com", message);
-        AssertNothingInvalidated();
-    }
-
-    [Fact]
-    public async Task A_rule_deleted_between_the_load_and_the_save_is_not_found()
-    {
-        var store = new Mock<INetworkPolicyStore>();
-        store.Setup(s => s.UpdateEntryAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<NetworkListKind>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
-            .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
-        var controller = new NetworkController(store.Object, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
-            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
-
-        var result = await controller.UpdateEntry(Guid.NewGuid(), Rule(), TestContext.Current.CancellationToken);
-
-        Assert.IsType<NotFoundResult>(result);
-        AssertNothingInvalidated();
-    }
-
-    [Fact]
-    public async Task The_unique_index_refusing_a_forward_save_is_answered_like_a_taken_port()
-    {
-        var store = new Mock<INetworkForwardStore>();
-        store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new DbUpdateException("unique"));
-        var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
-            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
-
-        var result = await controller.UpdateForward(Guid.NewGuid(), Forward(localPort: 15432), TestContext.Current.CancellationToken);
-
-        var bad = Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Contains("15432 is already forwarded", Body<Dictionary<string, string>>(bad)["error"]);
-        AssertNothingInvalidated();
-    }
-
-    [Fact]
-    public async Task A_forward_deleted_between_the_load_and_the_save_is_not_found()
-    {
-        var store = new Mock<INetworkForwardStore>();
-        store.Setup(s => s.UpdateForwardAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new DbUpdateConcurrencyException("gone"));
-        var controller = new NetworkController(_db.Network, store.Object, _db.Providers, _policy.Object, _notifier.Object,
-            Proxied, _forwarder, Host(RunHostKind.Container), _db.Settings);
-
-        var result = await controller.UpdateForward(Guid.NewGuid(), Forward(), TestContext.Current.CancellationToken);
-
-        Assert.IsType<NotFoundResult>(result);
-        AssertNothingInvalidated();
-    }
-
-    [Fact]
     public async Task Updating_an_unknown_rule_is_not_found_and_creates_nothing()
     {
         var result = await Build().UpdateEntry(Guid.NewGuid(), Rule(), TestContext.Current.CancellationToken);
 
         Assert.IsType<NotFoundResult>(result);
         Assert.Empty(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
-        AssertNothingInvalidated();
     }
 
     [Fact]
@@ -770,7 +672,6 @@ public sealed class NetworkControllerTests : IDisposable
         }
         var stored = await StoredRuleAsync(seeded.Id);
         Assert.Equal(("api.example.com", NetworkListKind.Whitelist, (Guid?)null), (stored.Host, stored.ListKind, stored.AiProviderId));
-        AssertNothingInvalidated();
     }
 
     [Fact]
