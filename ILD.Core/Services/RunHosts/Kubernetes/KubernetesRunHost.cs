@@ -191,6 +191,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
         var name = RunNames.Run(owner);
         var pod = await ReadPodOrNullAsync(name, ct);
         if (pod is null || pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return;
+        Remember(owner, TerminationOf(pod));
         await DeletePodAndWaitAsync(name, ct);
     }
 
@@ -248,6 +249,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
             if (IsReady(pod) && pod.Metadata.DeletionTimestamp is null) return true;
             if (pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return false;
 
+            Remember(owner, TerminationOf(pod));
             Logger?.LogInformation("The pod of run {Run} ended ({Why}); making it again on its volume", owner, WhyNotReady(pod));
             await DeletePodAndWaitAsync(name, ct);
             var fresh = new V1Pod

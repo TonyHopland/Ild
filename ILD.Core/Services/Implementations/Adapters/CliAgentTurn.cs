@@ -99,7 +99,7 @@ public abstract class CliAgentTurn : IAsyncDisposable
     /// <summary>What <see cref="ReadStdoutAsync"/> kept, in the terms the base classifies the turn from. Called once, after the read.</summary>
     public abstract StreamResult ParseStream();
 
-    /// <summary>What a clean exit whose output was not an event stream and was blank is: each CLI keeps what it has always done.</summary>
+    /// <summary>What a clean exit whose output was not an event stream and was blank is.</summary>
     public virtual BlankOutput BlankOutput => BlankOutput.Answer;
 
     /// <summary>

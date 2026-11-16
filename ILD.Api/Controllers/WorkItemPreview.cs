@@ -101,41 +101,27 @@ public sealed class WorkItemPreview(
         => RunAsync<WorktreePreviewResponse>(workItemId, null, item => preview.GetStatusAsync(item.WorktreePath!));
 
     public Task<PreviewResult<WorktreePreviewResponse>> StartAsync(string workItemId, WorktreePreviewStartRequest? request)
-        => RunAsync<WorktreePreviewResponse>(workItemId, null, async item =>
+        => ChangeAsync(workItemId, null, async item =>
         {
             var options = await OptionsAsync(request, item);
-            var response = request?.Wait == false
+            return request?.Wait == false
                 ? await preview.BeginStartAsync(item.WorktreePath!, options)
                 : await preview.StartAsync(item.WorktreePath!, options);
-            await notifier.PreviewStateChangedAsync(workItemId);
-            return response;
         });
 
     public Task<PreviewResult<WorktreePreviewResponse>> StopAsync(string workItemId)
-        => RunAsync<WorktreePreviewResponse>(workItemId, null, async item =>
-        {
-            var response = await preview.StopAsync(item.WorktreePath!);
-            await notifier.PreviewStateChangedAsync(workItemId);
-            return response;
-        });
+        => ChangeAsync(workItemId, null, item => preview.StopAsync(item.WorktreePath!));
 
     public Task<PreviewResult<WorktreePreviewResponse>> StartServiceAsync(
         string workItemId, string service, WorktreePreviewStartRequest? request, bool startDependencies)
-        => RunAsync<WorktreePreviewResponse>(workItemId, service, async item =>
+        => ChangeAsync(workItemId, service, async item =>
         {
             var options = (await OptionsAsync(request, item)) with { StartDependencies = startDependencies };
-            var response = await preview.StartServiceAsync(item.WorktreePath!, service, options);
-            await notifier.PreviewStateChangedAsync(workItemId);
-            return response;
+            return await preview.StartServiceAsync(item.WorktreePath!, service, options);
         });
 
     public Task<PreviewResult<WorktreePreviewResponse>> StopServiceAsync(string workItemId, string service)
-        => RunAsync<WorktreePreviewResponse>(workItemId, service, async item =>
-        {
-            var response = await preview.StopServiceAsync(item.WorktreePath!, service);
-            await notifier.PreviewStateChangedAsync(workItemId);
-            return response;
-        });
+        => ChangeAsync(workItemId, service, item => preview.StopServiceAsync(item.WorktreePath!, service));
 
     public Task<PreviewResult<WorktreePreviewServiceConfigResponse>> GetServiceConfigAsync(string workItemId, string service)
         => RunAsync<WorktreePreviewServiceConfigResponse>(workItemId, service, async item =>
@@ -164,6 +150,16 @@ public sealed class WorkItemPreview(
     public Task<PreviewResult<WorktreePreviewLogResponse>> GetLogAsync(string workItemId, string service)
         => RunAsync<WorktreePreviewLogResponse>(workItemId, service, async item =>
             new WorktreePreviewLogResponse { Service = service, Content = await preview.GetServiceLogAsync(item.WorktreePath!, service) });
+
+    /// <summary>A start or stop: once it has answered, the work item's open Preview tabs are told to re-read.</summary>
+    private Task<PreviewResult<WorktreePreviewResponse>> ChangeAsync(
+        string workItemId, string? service, Func<WorkItemView, Task<WorktreePreviewResponse>> change)
+        => RunAsync<WorktreePreviewResponse>(workItemId, service, async item =>
+        {
+            var response = await change(item);
+            await notifier.PreviewStateChangedAsync(workItemId);
+            return response;
+        });
 
     /// <summary>
     /// The sequence every route shares: the service name (when the route has one), the work item and its worktree,

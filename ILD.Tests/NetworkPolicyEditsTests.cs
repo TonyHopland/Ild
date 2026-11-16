@@ -102,6 +102,19 @@ public sealed class NetworkPolicyEditsTests : IDisposable
         AssertChangedOnce();
     }
 
+    [Theory]
+    [InlineData(".example.com")]
+    [InlineData("*.example.com")]
+    public async Task An_entry_saved_unchanged_or_in_an_equivalent_spelling_still_invalidates_and_tells_the_listeners(string spelling)
+    {
+        var seeded = await SeedEntryAsync(".example.com", NetworkListKind.Blacklist);
+
+        var saved = await Edits().UpdateEntryAsync(seeded.Id, spelling, NetworkListKind.Blacklist, null, false, Ct);
+
+        Assert.Equal((NetworkEditOutcome.Updated, ".example.com"), (saved.Outcome, saved.Value!.Host));
+        AssertChangedOnce();
+    }
+
     [Fact]
     public async Task An_edit_that_is_refused_or_changes_nothing_neither_invalidates_nor_tells_anyone()
     {

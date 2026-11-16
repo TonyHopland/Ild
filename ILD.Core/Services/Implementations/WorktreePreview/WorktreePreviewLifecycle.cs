@@ -282,15 +282,15 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
                 _ctx.Responses.BuildPendingResponse(loaded, profile.Name, scope.ServiceName is { } name ? [name] : null),
                 options.WorkItemId,
                 scope);
-            if (Interlocked.CompareExchange(ref _start, mine, current) != current)
-                continue;
+            // Listed before the swap, so a stop never finds the new start without the one it overtook.
             if (inFlight)
-            {
-                // It may have ended since it was read, and then nothing is left to take it out again.
                 _overtaken[current!] = 0;
-                if (current!.Outcome.IsCompleted)
-                    _overtaken.TryRemove(current, out _);
-            }
+            var registered = Interlocked.CompareExchange(ref _start, mine, current) == current;
+            // It may have ended since it was read, and then nothing is left to take it out again.
+            if (inFlight && current!.Outcome.IsCompleted)
+                _overtaken.TryRemove(current, out _);
+            if (!registered)
+                continue;
 
             await _ctx.Notifier.PublishAsync(mine.WorkItemId);
             return (new PendingStart(profile, scope, options, mine, Owned: true), null);

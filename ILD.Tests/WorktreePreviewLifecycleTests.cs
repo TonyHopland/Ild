@@ -6,6 +6,7 @@ using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Tests.Fakes;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
 namespace ILD.Tests;
 
@@ -38,7 +39,9 @@ public sealed class WorktreePreviewLifecycleTests : IDisposable
 
     private sealed record Svc(string Name, string Command = "exec sleep 60");
 
-    private void Config(string worktree, params Svc[] services)
+    private void Config(string worktree, params Svc[] services) => Config(worktree, [], services);
+
+    private void Config(string worktree, string[] install, params Svc[] services)
     {
         var config = new
         {
@@ -49,6 +52,7 @@ public sealed class WorktreePreviewLifecycleTests : IDisposable
                 {
                     ["app"] = new
                     {
+                        install = install.Select(command => new { command }).ToList(),
                         services = services.Select(s => new
                         {
                             name = s.Name,
@@ -102,6 +106,14 @@ public sealed class WorktreePreviewLifecycleTests : IDisposable
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         while (Lifecycle(worktree).OvertakenStartCount == 0)
             await Task.Delay(10, timeout.Token);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> reached)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(30));
+        while (!reached())
+            await Task.Delay(5, limit.Token);
     }
 
     private async Task WaitUntilJoinedAsync(string worktree)
@@ -348,6 +360,26 @@ public sealed class WorktreePreviewLifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task A_stop_during_the_install_step_ends_the_start_and_no_service_is_launched_after_it()
+    {
+        Config(A, ["install-the-tools"], Web);
+        await BeginAsync(A);
+        await WaitUntilAsync(() => _host.Started.Count == 1);
+        var joined = StartAsync(A);
+        await WaitUntilJoinedAsync(A);
+
+        var stopped = await Lifecycle(A).StopAsync(Ct);
+
+        Assert.Equal("stopped", stopped.State);
+        var failure = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => joined);
+        Assert.Contains("stopped", failure.Message);
+        Assert.Contains("install-the-tools", CommandOf(Assert.Single(_host.Started)));
+        Assert.Null(Lifecycle(A).Runtime);
+        Assert.False(Lifecycle(A).IsStarting);
+        Assert.Equal("stopped", (await StatusAsync(A)).State);
+    }
+
+    [Fact]
     public async Task A_start_that_joined_one_stopped_during_its_launch_ends_with_it_and_nothing_is_launched_after_the_stop()
     {
         Config(A, Web);
@@ -473,6 +505,33 @@ public sealed class WorktreePreviewLifecycleTests : IDisposable
         Assert.Equal("partial", done.State);
         Assert.Equal("partial", Lifecycle(A).State());
         Assert.False(Lifecycle(A).IsStarting);
+    }
+
+    [Fact]
+    public async Task A_single_service_start_announces_the_launched_service_before_its_health_check_passes()
+    {
+        Config(A, Web, Api);
+        _probe.Hold("web");
+        var announced = new List<string>();
+        var notifier = new Mock<IWorkItemNotifier>();
+        using var context = new PreviewLifecycleContext(
+            _host, _probe, ports: new PreviewPorts(_ => true), notifier: new PreviewNotifier(notifier.Object, NullLogger.Instance), logger: NullLogger.Instance);
+        var loaded = await context.Config.LoadAsync(A, Ct);
+        notifier.Setup(n => n.PreviewStateChangedAsync("wi-7"))
+            .Returns(() =>
+            {
+                lock (announced) announced.Add(Row(context.For(A).Status(loaded), "web").Status);
+                return Task.CompletedTask;
+            });
+
+        var start = context.For(A).StartAsync(loaded, Service("web"), new WorktreePreviewStartOptions(WorkItemId: "wi-7"), Ct);
+        await _probe.ReachedAsync("web");
+
+        Assert.False(start.IsCompleted);
+        lock (announced) Assert.Contains("running", announced);
+
+        _probe.Release("web");
+        await start;
     }
 
     [Fact]

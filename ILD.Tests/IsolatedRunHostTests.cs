@@ -113,6 +113,27 @@ public class IsolatedRunHostTests
         Assert.Equal(1, host.ChatsRemoved);
     }
 
+    [Fact]
+    public async Task A_chat_that_is_held_is_not_idle_however_long_ago_it_started_and_the_time_counts_from_when_it_is_let_go()
+    {
+        var host = Host();
+        var path = RunPaths.ChatRoot(Guid.NewGuid());
+        await host.RunToolAsync(path, "git", ["status"], ct: Ct);
+
+        using (host.HoldChat(path))
+        {
+            _time.Advance(IdleTimeout * 2);
+            await host.ReapIdleChatAsync(Ct);
+            Assert.Equal(0, host.ChatsRemoved);
+        }
+
+        await host.ReapIdleChatAsync(Ct);
+        Assert.Equal(0, host.ChatsRemoved);
+        _time.Advance(IdleTimeout);
+        await host.ReapIdleChatAsync(Ct);
+        Assert.Equal(1, host.ChatsRemoved);
+    }
+
 
     [Fact]
     public async Task A_chat_command_runs_in_the_chats_environment_as_that_chat_with_its_home()

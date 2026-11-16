@@ -582,6 +582,9 @@ public class AgentController : ControllerBase, IActionFilter
         return copy;
     }
 
+    private async Task<IActionResult> ForCallerAsync(string workItemId, Task<PreviewResult<WorktreePreviewResponse>> preview)
+        => (await (await preview).MapAsync(response => ForCallerAsync(workItemId, response))).ToActionResult();
+
     /// <summary>
     /// The address an agent outside the work item's run opens <paramref name="publicUrl"/> at. A preview the proxy
     /// serves is given by its agents' hostname (<c>http://wi-12.preview.ild/</c>), which the agent's egress proxy hands
@@ -607,7 +610,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        return (await (await _preview.GetStatusAsync(id)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
+        return await ForCallerAsync(id, _preview.GetStatusAsync(id));
     }
 
     [HttpPost("workitems/{id}/preview/start")]
@@ -616,7 +619,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        return (await (await _preview.StartAsync(id, request)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
+        return await ForCallerAsync(id, _preview.StartAsync(id, request));
     }
 
     [HttpPost("workitems/{id}/preview/stop")]
@@ -625,7 +628,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        return (await (await _preview.StopAsync(id)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
+        return await ForCallerAsync(id, _preview.StopAsync(id));
     }
 
     [HttpPost("workitems/{id}/preview/services/{service}/start")]
@@ -634,7 +637,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        return (await (await _preview.StartServiceAsync(id, service, request, startDependencies: false)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
+        return await ForCallerAsync(id, _preview.StartServiceAsync(id, service, request, startDependencies: false));
     }
 
     [HttpPost("workitems/{id}/preview/services/{service}/stop")]
@@ -643,7 +646,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        return (await (await _preview.StopServiceAsync(id, service)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
+        return await ForCallerAsync(id, _preview.StopServiceAsync(id, service));
     }
 
     [HttpGet("workitems/{id}/preview/services/{service}/config")]

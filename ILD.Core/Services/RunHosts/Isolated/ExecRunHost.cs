@@ -433,7 +433,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private static readonly TimeSpan TerminationKept = TimeSpan.FromHours(1);
 
     // Keeps what ended the run's pod or container, for a command that ends after it is replaced.
-    private void Remember(Guid run, RunTermination? termination)
+    protected void Remember(Guid run, RunTermination? termination)
     {
         if (termination is null) return;
         var now = DateTimeOffset.UtcNow;

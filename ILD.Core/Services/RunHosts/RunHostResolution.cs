@@ -25,10 +25,7 @@ public static class RunHostResolution
 
     public static IRunHolders GetRunHolders(this IServiceProvider services) => services.GetService<IRunHolders>() ?? services.GetRunHost();
 
-    /// <summary>
-    /// The operator view of the run host registered with <paramref name="services"/>: the one registered, else the registered host's
-    /// own when it has one (so the two never name different hosts), else the local one's for a container that registers none.
-    /// </summary>
+    /// <summary>The operator view of the run host registered with <paramref name="services"/>, or that of the local one for a container that registers none.</summary>
     public static IRunHostOperator GetRunHostOperator(this IServiceProvider services)
-        => services.GetService<IRunHostOperator>() ?? services.GetService<IRunHost>() as IRunHostOperator ?? LocalRunHost.Shared;
+        => services.GetService<IRunHostOperator>() ?? LocalRunHost.Shared;
 }
