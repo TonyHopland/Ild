@@ -16,7 +16,7 @@ public sealed class RunHostShutdownService(IRunHost host, ILogger<RunHostShutdow
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (host is not RoutingRunHost { Isolated: IRunHostShutdown shutdown }) return;
+        if (host is not IRunHostShutdown shutdown) return;
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         limit.CancelAfter(Budget);
         try

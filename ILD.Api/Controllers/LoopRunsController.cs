@@ -741,12 +741,12 @@ public class LoopRunsController : ControllerBase
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             return BadRequest(new { error = "The editor is not available while the run is still executing." });
         var host = HttpContext.RequestServices.GetRunHost();
-        if (host.Kind != RunHostKind.Container || RunPaths.OwnerOf(run.WorktreePath) is not { } owner)
+        if (host.AttachTargetFor(run.WorktreePath) is not { } containerName)
             return Conflict(new { error = "Only a run in a Docker or Podman container can be opened in an editor." });
         if (!await host.DirectoryExistsAsync(run.WorktreePath!, HttpContext.RequestAborted))
             return BadRequest(new { error = "Run has no live worktree." });
 
-        return Ok(new { containerName = RunNames.Run(owner), folder = run.WorktreePath });
+        return Ok(new { containerName, folder = run.WorktreePath });
     }
 
     /// <summary>
@@ -763,7 +763,7 @@ public class LoopRunsController : ControllerBase
         var run = await _loopRunStore.GetByIdAsync(guid);
         if (run is null) return NotFound();
         var host = HttpContext.RequestServices.GetRunHost();
-        if (host.Kind != RunHostKind.Container || RunPaths.OwnerOf(run.WorktreePath) is not { } owner)
+        if (host.Kind != RunHostKind.Container || host.RunOf(run.WorktreePath) is not { } owner)
             return Ok(new { state = "unavailable" });
 
         ContainerStats? stats;

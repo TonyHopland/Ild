@@ -277,14 +277,14 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
     {
         var run = Guid.NewGuid();
         var worktree = ILD.Core.Services.RunHosts.Isolated.RunPaths.WorkingDirectory(run);
-
-        Assert.Equal($"{run:N}-preview", WorktreePreviewService.FeedFilePrefix(worktree, "preview"));
-        Assert.Equal($"{run:N}-install", WorktreePreviewService.FeedFilePrefix(worktree, "install"));
-        Assert.Equal("preview", WorktreePreviewService.FeedFilePrefix(_worktree, "preview"));
-
         var service = new WorktreePreviewService(
             new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims(), LocalRunHost.Shared);
+
+        Assert.Equal($"{run:N}-preview", service.FeedFilePrefix(worktree, "preview"));
+        Assert.Equal($"{run:N}-install", service.FeedFilePrefix(worktree, "install"));
+        Assert.Equal("preview", service.FeedFilePrefix(_worktree, "preview"));
+
         var environment = new Dictionary<string, string> { ["NPM_CONFIG_USERCONFIG"] = "/feeds/x.npmrc" };
         var command = service.PreparedCommand(new WorktreePreviewService.ResolvedStep(
             "npm start", _worktree, environment, NetworkMode.Off, ["/feeds/x.npmrc"]));

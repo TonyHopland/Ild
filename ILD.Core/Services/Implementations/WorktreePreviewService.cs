@@ -522,8 +522,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// </summary>
     private async Task EndLeftBehindAsync(string normalized, CancellationToken cancellationToken)
     {
-        if (RunPaths.HolderOf(normalized) is not { } holder) return;
-        if (_runtimes.Keys.Any(other => RunPaths.HolderOf(other) == holder)) return;
+        if (_host.HolderOf(normalized) is not { } holder) return;
+        if (_runtimes.Keys.Any(other => _host.HolderOf(other) == holder)) return;
         try
         {
             if (await _host.KillUnownedAsync(holder, cancellationToken) is > 0 and var ended)
@@ -2190,7 +2190,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// would otherwise start on ILD's own machine.
     /// </summary>
     private Guid? RunInFor(string worktreePath)
-        => RunPaths.HolderOf(worktreePath)
+        => _host.HolderOf(worktreePath)
             ?? (_host.Kind == RunHostKind.Local
                 ? null
                 : throw new InvalidOperationException(
@@ -2459,8 +2459,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         => resolved.NetworkMode == NetworkMode.Off || _credentials is null ? null : _egressProxy?.ClientUrl(_credentials, new LaunchScope(LaunchKind.Preview, resolved.RunIn));
 
     // The run id leads the name, which is how the run's files are found and what a host checks before it copies one in.
-    internal static string FeedFilePrefix(string worktreePath, string kind)
-        => RunPaths.OwnerOf(worktreePath) is { } run ? $"{run:N}-{kind}" : kind;
+    internal string FeedFilePrefix(string worktreePath, string kind)
+        => _host.RunOf(worktreePath) is { } run ? $"{run:N}-{kind}" : kind;
 
     private async Task<CommandResult> RunCommandAsync(ResolvedStep resolved, CancellationToken cancellationToken)
     {

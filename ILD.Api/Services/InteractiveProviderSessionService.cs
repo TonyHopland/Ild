@@ -65,7 +65,7 @@ public sealed class InteractiveProviderSessionService
         }
 
         // With the container run host the CLI runs in a short-lived container of its own, with the agent from the toolchain store.
-        if (_host is RoutingRunHost { Isolated: ISignInTerminalHost signIn })
+        if (_host is ISignInTerminalHost signIn)
         {
             await RunInContainerAsync(socket, provider, binaryPath, signIn, initialCols, initialRows, cancellationToken);
             return;

@@ -104,8 +104,10 @@ public class LoopRunsControllerTests
 
     private static Mock<IRunHost> EditorHost(RunHostKind kind, bool worktreeExists = true)
     {
-        var host = new Mock<IRunHost>();
+        var host = new Mock<IRunHost> { CallBase = true };
         host.SetupGet(h => h.Kind).Returns(kind);
+        host.Setup(h => h.AttachTargetFor(It.IsAny<string?>()))
+            .Returns((string? path) => kind == RunHostKind.Container && RunPaths.OwnerOf(path) is { } run ? RunNames.Run(run) : null);
         host.Setup(h => h.DirectoryExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(worktreeExists);
         return host;
     }

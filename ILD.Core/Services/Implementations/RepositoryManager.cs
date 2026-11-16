@@ -1110,8 +1110,8 @@ public class RepositoryManager : IRepositoryManager
     // ILD's own base clone is cloned, fetched and reset on this machine whatever the run host is. Which paths those are is
     // told by the repository rows, never by what a directory holds: a run's or chat's path, and any other path on this disk, stays with the routing host, which refuses it.
     private async ValueTask<IRunHost> HostOfAsync(string path, CancellationToken ct)
-        => _host is RoutingRunHost routing && !routing.HoldsPath(path) && await _isBaseRepository(Path.GetFullPath(path), ct)
-            ? routing.OwnDisk
+        => _host.OwnDiskHostFor(path) is { } ownDisk && await _isBaseRepository(Path.GetFullPath(path), ct)
+            ? ownDisk
             : _host;
 
     private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)

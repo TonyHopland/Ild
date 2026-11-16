@@ -57,20 +57,6 @@ public sealed class IsolatedRunHostRoutingTests : IDisposable
     // -- Runs ----------------------------------------------------------------------
 
     [Fact]
-    public async Task A_command_with_no_working_directory_goes_to_the_run_it_is_for_and_an_unknown_owner_is_refused()
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-
-        await RunAsync(routing, RunCommand.Prepared(Command("", "ls"), _run));
-        Assert.Empty(local.Started);
-        Assert.Equal(_host.NameOf(_run), _host.Execs.Last().Name);
-
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(RunCommand.Prepared(Command("", "ls"), Guid.NewGuid()), Ct));
-        Assert.Empty(local.Started);
-    }
-
-    [Fact]
     public async Task A_preview_step_in_its_state_directory_runs_in_the_runs_environment()
     {
         var local = new FakeRunHost();
@@ -82,38 +68,6 @@ public sealed class IsolatedRunHostRoutingTests : IDisposable
         Assert.Equal($"{RunPaths.RunRoot(_run)}/preview-state", state);
         Assert.Empty(local.Started);
         Assert.Equal(_host.NameOf(_run), _host.Execs.Last().Name);
-    }
-
-    [Theory]
-    [InlineData("/tmp/preview/0123abcd")]
-    [InlineData("/data/worktrees/.preview-volumes/11111111-1111-1111-1111-111111111111/data")]
-    [InlineData("/ild-run/22222222222222222222222222222222/repo")]
-    [InlineData("{run}/../22222222222222222222222222222222/repo")]
-    public async Task A_command_that_must_run_in_a_run_is_refused_outside_it_and_never_starts_on_ilds_machine(string directory)
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => routing.StartCommandAsync(
-            RunCommand.Prepared(Command(directory.Replace("{run}", RunPaths.RunRoot(_run)), "sh")) with { RunIn = _run }, Ct));
-
-        Assert.StartsWith("refusing to run sh", error.Message);
-        Assert.Empty(local.Started);
-        Assert.Empty(_host.Execs);
-    }
-
-    [Fact]
-    public async Task A_command_for_a_run_the_host_does_not_hold_is_refused_and_not_started_on_ilds_machine()
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        var gone = Guid.NewGuid();
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => routing.StartCommandAsync(
-            RunCommand.Prepared(Command(RunPaths.WorkingDirectory(gone), "sh")) with { RunIn = gone }, Ct));
-
-        Assert.Contains("never runs on ILD's own machine", error.Message);
-        Assert.Empty(local.Started);
     }
 
     [Fact]
@@ -132,35 +86,6 @@ public sealed class IsolatedRunHostRoutingTests : IDisposable
     }
 
     // -- Runs and chats from before isolation: read and deleted, never run -----------
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public async Task An_agent_launch_for_a_path_on_ilds_disk_starts_nothing_on_ilds_machine(int which)
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        var agent = RunCommand.Agent(Command(OldPaths[which], "claude"), _run, null, NetworkMode.Monitor, null) with { RunIn = RunPaths.HolderOf(OldPaths[which]) ?? _run };
-
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(agent, Ct));
-
-        Assert.Empty(local.Started);
-        Assert.Empty(_host.Execs);
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    public async Task A_command_without_a_run_for_a_path_on_ilds_disk_starts_nothing_on_ilds_machine(int which)
-    {
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-
-        await Assert.ThrowsAsync<PredatesContainersException>(() => routing.StartCommandAsync(
-            RunCommand.Prepared(Command(OldPaths[which], "git"), Guid.NewGuid()), Ct));
-
-        Assert.Empty(local.Started);
-    }
 
     [Theory]
     [InlineData(0)]
@@ -270,35 +195,6 @@ public sealed class IsolatedRunHostRoutingTests : IDisposable
     }
 
     // -- Chats ---------------------------------------------------------------------
-
-    [Fact]
-    public async Task A_command_with_no_working_directory_for_a_chat_goes_to_the_chats_environment_as_that_chat()
-    {
-        var chat = Guid.NewGuid();
-        var local = new FakeRunHost();
-        var routing = new RoutingRunHost(local, _host);
-        await routing.CreateChatFolderAsync(chat, "/data/chat-sessions", Ct);
-
-        await RunAsync(routing, RunCommand.Prepared(Command("", "ls"), chat));
-
-        Assert.Empty(local.Started);
-        var exec = _host.Execs.Last();
-        Assert.Equal(InMemoryRunHost.ChatName, exec.Name);
-        Assert.Contains($"HOME={RunPaths.ChatHome(chat)}", exec.Env);
-    }
-
-    [Fact]
-    public async Task A_title_launch_in_a_chats_folder_under_a_run_id_of_its_own_still_goes_to_the_isolated_host()
-    {
-        var chat = Guid.NewGuid();
-        var routing = new RoutingRunHost(new FakeRunHost(), _host);
-        await routing.CreateChatFolderAsync(chat, "/unused", Ct);
-        var folder = RunPaths.ChatRoot(chat);
-
-        await RunAsync(routing, RunCommand.Agent(Command(folder, "claude"), Guid.NewGuid(), null, NetworkMode.Monitor, null) with { RunIn = RunPaths.HolderOf(folder) });
-
-        Assert.Equal(InMemoryRunHost.ChatName, _host.Execs.Last().Name);
-    }
 
     [Fact]
     public async Task The_routing_host_keeps_chats_in_the_chats_environment_and_chats_from_before_on_the_local_host()

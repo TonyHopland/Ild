@@ -369,6 +369,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     public abstract TimeSpan SweepInterval { get; }
 
+    /// <summary>The name an editor attaches to for the run whose directory is <paramref name="path"/>; null for a host with no container to attach to.</summary>
+    public virtual string? AttachTargetFor(string? path) => null;
+
     /// <summary>What the environment is called in messages: "pod" or "container".</summary>
     protected abstract string Noun { get; }
 
@@ -835,16 +838,15 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     public async Task<IRunProcess> StartCommandAsync(RunCommand command, CancellationToken ct = default)
     {
-        var psi = command.Start;
-        // A command in a chat's folder is the chat's, whatever run or chat id its caller names to kill it by (a title is made under an id of its own).
-        // With no directory the id alone says whose command it is, and it is a chat's as readily as a run's.
-        var held = command.RunIn is { } runIn ? await HeldOwnerAsync(runIn, ct)
-            : string.IsNullOrEmpty(psi.WorkingDirectory) && command.OwnerId != Guid.Empty ? await HeldOwnerAsync(command.OwnerId, ct)
-            : null;
-        var owner = held ?? (RunPaths.ChatOf(psi.WorkingDirectory) is { } chat && HostsChats
-            ? new ExecOwner(chat, Chat: true)
-            : command.OwnerId != Guid.Empty ? command.OwnerId : RunPaths.OwnerOf(psi.WorkingDirectory)
-                ?? throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to"));
+        var holder = await RunHolders.ForCommandAsync(command, HostsChats, routed: false, Kind.ToString().ToLowerInvariant(), HeldOwnerAsync, ct);
+        if (holder.IsOwnDisk) throw new InvalidOperationException($"a command for a {Noun} needs the run it belongs to");
+        return await StartResolvedAsync(command, holder, ct);
+    }
+
+    /// <summary>Starts <paramref name="command"/> in <paramref name="holder"/>, which <see cref="RunHolders.ForCommandAsync"/> resolved for it.</summary>
+    internal async Task<IRunProcess> StartResolvedAsync(RunCommand command, RunHolder holder, CancellationToken ct)
+    {
+        var owner = holder.ToExecOwner();
 
         // The direct route first, so the launch never runs a moment without it; a proxied launch is where a route that no process
         // of mode Off needs any more is taken away.
@@ -1022,20 +1024,16 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         try { root = Path.GetFullPath(AgentReadRoot()); }
         catch (InvalidOperationException) { return (arguments, environment.ToDictionary(e => e.Key, e => e.Value, StringComparer.Ordinal)); }
 
-        var ownerSegment = owner.Id.ToString("N");
         var staged = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var declared in command.Files)
         {
             var local = Path.GetFullPath(declared);
-            var relative = Path.GetRelativePath(root, local);
-            var inside = relative != "." && !Path.IsPathRooted(relative)
-                && !relative.Split(Path.DirectorySeparatorChar).Contains("..");
-            if (!inside
-                || !relative.Contains(ownerSegment, StringComparison.OrdinalIgnoreCase) || !File.Exists(local))
+            if (!RunHolders.IsStageable(root, local, owner.Id) || !File.Exists(local))
             {
                 Logger?.LogWarning("Not staging {Path} into the run: it is not a file this launch wrote in the agent read root", declared);
                 continue;
             }
+            var relative = Path.GetRelativePath(root, local);
             staged[declared] = RunPaths.AgentReadDirectory + "/" + relative.Replace(Path.DirectorySeparatorChar, '/');
             if (local != declared) staged[local] = staged[declared];
         }
@@ -1738,8 +1736,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // -- Exec --------------------------------------------------------------------
 
     private ExecOwner OwnerFor(string path)
-        => RunPaths.OwnerOf(path) is { } run ? run
-            : RunPaths.ChatOf(path) is { } chat && HostsChats ? new ExecOwner(chat, Chat: true)
+        => RunHolders.FromPath(path, HostsChats) is { IsOwnDisk: false } holder ? holder.ToExecOwner()
             : throw new InvalidOperationException($"{path} is not a path in a run's or chat's {Noun}");
 
     private async Task<IExecStream> OpenExecAsync(

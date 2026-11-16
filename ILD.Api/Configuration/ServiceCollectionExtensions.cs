@@ -110,7 +110,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService(sp => new RunHostSweeper(
             sp.GetRequiredService<IRunHost>(),
             RetainedRuns(sp),
-            sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.SweepInterval : TimeSpan.FromMinutes(10),
+            sp.GetRequiredService<IRunHost>() is IIsolatedHostInfo info ? info.SweepInterval : TimeSpan.FromMinutes(10),
             sp.GetService<ILogger<RunHostSweeper>>()));
         services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, GitHubRemoteGitProviderAdapter>();
@@ -246,8 +246,8 @@ public static class ServiceCollectionExtensions
             var config = sp.GetRequiredService<IConfiguration>();
             string? Read(string name) => Environment.GetEnvironmentVariable(name) ?? config[name];
             return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>(),
-                isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]),
-                controlPlane: ct => sp.GetRequiredService<IRunHost>() is RoutingRunHost routing ? routing.Isolated.ControlPlaneAddressesAsync(ct) : Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]),
+                isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is IIsolatedHostInfo info ? info.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]),
+                controlPlane: ct => sp.GetRequiredService<IRunHost>() is IIsolatedHostInfo info ? info.ControlPlaneAddressesAsync(ct) : Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]),
                 logger: sp.GetRequiredService<ILogger<ProtectedDestinationSource>>(),
                 hostAddresses: ProtectedDestinationSource.HostMachineAddresses);
         });
