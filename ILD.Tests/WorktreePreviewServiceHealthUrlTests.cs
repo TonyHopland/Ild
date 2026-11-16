@@ -174,7 +174,9 @@ public sealed class WorktreePreviewServiceHealthUrlTests
                 },
             };
             File.WriteAllText(Path.Combine(worktree, "ild.config.json"), config.ToJsonString());
-            return await new PreviewConfigLoader(LocalRunHost.Shared).LoadProfileAsync(worktree, null, CancellationToken.None);
+            return PreviewConfigLoader.Resolve(
+                PreviewConfigLoader.RequireConfigured(await new PreviewConfigLoader(LocalRunHost.Shared).LoadAsync(worktree, CancellationToken.None)),
+                null);
         }
         finally
         {

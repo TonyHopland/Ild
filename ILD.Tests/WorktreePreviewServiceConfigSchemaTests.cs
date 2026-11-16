@@ -91,12 +91,17 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
         }
     }
 
+    private async Task<PreviewProfile> LoadProfileAsync()
+        => PreviewConfigLoader.Resolve(
+            PreviewConfigLoader.RequireConfigured(await new PreviewConfigLoader(LocalRunHost.Shared).LoadAsync(_worktree, CancellationToken.None)),
+            null);
+
     [Fact]
     public async Task Starter_validates_through_the_real_preview_parser_and_validator()
     {
         WriteStarterConfig();
 
-        var profile = await new PreviewConfigLoader(LocalRunHost.Shared).LoadProfileAsync(_worktree, null, CancellationToken.None);
+        var profile = await LoadProfileAsync();
 
         Assert.Equal("app", profile.Name);
         // The starter demonstrates two wired services; loading a profile runs the same per-service checks
@@ -131,7 +136,7 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
         starter["preview"]!["profiles"]!["app"]!["services"]![0]!["healthTimeoutSeconds"] = 600;
         File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), starter.ToJsonString());
 
-        var profile = await new PreviewConfigLoader(LocalRunHost.Shared).LoadProfileAsync(_worktree, null, CancellationToken.None);
+        var profile = await LoadProfileAsync();
 
         Assert.Equal("app", profile.Name);
     }

@@ -104,8 +104,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         public override async Task<bool> RestoreSessionAsync(string sessionId)
         {
             var restored = await adapter.RestoreManagedSessionAsync(BinaryPath, worktreePath, ctx, sessionId);
-            if (!string.IsNullOrEmpty(restored.Error))
-                throw Failed(restored.Error);
             return restored.SessionIdToUse is not null;
         }
 
@@ -331,11 +329,11 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     private sealed record OpencodeCommandResult(int ExitCode, string Stdout, string Stderr);
 
-    private sealed record ManagedSessionRestoreResult(string? Error, string? SessionIdToUse)
+    private sealed record ManagedSessionRestoreResult(string? SessionIdToUse)
     {
-        public static ManagedSessionRestoreResult Use(string sessionId) => new(null, sessionId);
+        public static ManagedSessionRestoreResult Use(string sessionId) => new(sessionId);
 
-        public static ManagedSessionRestoreResult StartFresh() => new(null, null);
+        public static ManagedSessionRestoreResult StartFresh() => new((string?)null);
     }
 
     private static bool IsValidJson(string value)
@@ -821,13 +819,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         return entry;
     }
-
-    /// <summary>
-    /// Locate the published <c>ild-mcp-server.dll</c>. Retained as a stable
-    /// entry point (covered by tests); delegates to <see cref="IldMcpServer"/>.
-    /// </summary>
-    /// <param name="environment">Where the override is read; the process environment by default.</param>
-    public static string? ResolveIldMcpServerDll(IProcessEnvironment? environment = null) => IldMcpServer.ResolveServerDll(environment);
 
     private static string SanitizeProviderId(string name)
     {

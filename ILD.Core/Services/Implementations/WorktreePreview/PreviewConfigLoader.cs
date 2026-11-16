@@ -44,10 +44,6 @@ internal sealed class PreviewConfigLoader(IRunFiles files)
         return new LoadedPreviewConfig(true, worktreePath, configPath, config, null);
     }
 
-    /// <summary>Loads the config and selects and validates one profile; throws when the worktree has none to start.</summary>
-    public async Task<PreviewProfile> LoadProfileAsync(string worktreePath, string? requestedProfile, CancellationToken cancellationToken)
-        => Resolve(RequireConfigured(await LoadAsync(worktreePath, cancellationToken)), requestedProfile);
-
     public static LoadedPreviewConfig RequireConfigured(LoadedPreviewConfig loaded)
         => loaded.Configured && loaded.Config != null
             ? loaded
