@@ -27,7 +27,13 @@ public sealed class NetworkControllerTests : IDisposable
 
     private static readonly NetworkEnforcementStatus Proxied = NetworkEnforcementStatus.FromEnvironment(EgressProxyOptions.Parse("3128"));
 
-    private static IRunHost Host(RunHostKind kind) => Mock.Of<IRunHost>(h => h.Kind == kind);
+    private static IRunHostOperator Host(RunHostKind kind)
+    {
+        var host = new Mock<IRunHostOperator>();
+        host.SetupGet(h => h.Kind).Returns(kind);
+        host.Setup(h => h.DirectRoutesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        return host.Object;
+    }
 
     private NetworkController Build(RunHostKind kind = RunHostKind.Container)
         => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object, Proxied, _forwarder, Host(kind), _db.Settings);

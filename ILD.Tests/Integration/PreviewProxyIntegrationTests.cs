@@ -39,7 +39,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     private Func<string, PreviewTarget> _resolve = null!;
 
     /// <summary>The run host the proxy asks for the target address; unset means the local one.</summary>
-    private ILD.Core.Services.RunHosts.IRunHost? _runHost;
+    private ILD.Core.Services.RunHosts.IPreviewHost? _runHost;
 
     public async ValueTask InitializeAsync()
     {
@@ -65,7 +65,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         builder.Services.AddSingleton(PreviewProxyBase.Parse(proxyBase));
         builder.Services.AddSingleton<IWorktreePreviewService>(new StubPreviewService(label => _resolve(label)));
         builder.Services.AddScoped(_ => Mock.Of<IWorkItemManager>());
-        builder.Services.AddSingleton(_runHost ?? LocalRunHost.Shared);
+        builder.Services.AddSingleton<ILD.Core.Services.RunHosts.IPreviewHost>(_runHost ?? LocalRunHost.Shared);
 
         _proxy = builder.Build();
         _proxy.UseWebSockets();
@@ -272,7 +272,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task A_run_host_with_no_address_yet_is_the_same_404_not_a_500()
     {
-        var host = new Mock<ILD.Core.Services.RunHosts.IRunHost>();
+        var host = new Mock<ILD.Core.Services.RunHosts.IPreviewHost>();
         host.Setup(h => h.PreviewTargetAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("no address yet"));
         _runHost = host.Object;

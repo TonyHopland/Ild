@@ -33,7 +33,7 @@ public class NetworkController : ControllerBase
     private readonly INetworkNotifier _notifier;
     private readonly NetworkEnforcementStatus _enforcement;
     private readonly IEgressForwarderState _forwarder;
-    private readonly IRunHost _runHost;
+    private readonly IRunHostOperator _runHost;
     private readonly IAppSettingStore _settings;
 
     public NetworkController(
@@ -44,7 +44,7 @@ public class NetworkController : ControllerBase
         INetworkNotifier notifier,
         NetworkEnforcementStatus enforcement,
         IEgressForwarderState forwarder,
-        IRunHost runHost,
+        IRunHostOperator runHost,
         IAppSettingStore settings)
     {
         _settings = settings;
@@ -110,8 +110,7 @@ public class NetworkController : ControllerBase
     // The runs and chats that have a direct route (network mode Off) now. The page shows the rest of the status when the engine or cluster cannot say.
     private async Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct)
     {
-        if (_runHost is not IIsolatedHostInfo isolated) return [];
-        try { return await isolated.DirectRoutesAsync(ct); }
+        try { return await _runHost.DirectRoutesAsync(ct); }
         catch (Exception) when (!ct.IsCancellationRequested)
         {
             return [];

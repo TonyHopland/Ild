@@ -28,7 +28,7 @@ public class SettingsController : ControllerBase
     private readonly IEgressPolicy _egressPolicy;
     private readonly INetworkNotifier _networkNotifier;
     private readonly AttachmentLimits _attachmentLimits;
-    private readonly IRunHost _runHost;
+    private readonly IRunHostOperator _runHost;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
@@ -63,7 +63,7 @@ public class SettingsController : ControllerBase
         IEgressPolicy egressPolicy,
         INetworkNotifier networkNotifier,
         AttachmentLimits attachmentLimits,
-        IRunHost runHost)
+        IRunHostOperator runHost)
     {
         _store = store;
         _notifier = notifier;
@@ -158,7 +158,7 @@ public class SettingsController : ControllerBase
     public async Task<IActionResult> GetRunHost(CancellationToken ct) => Ok(new
     {
         kind = _runHost.Kind.ToString().ToLowerInvariant(),
-        warning = _runHost is IIsolatedHostInfo info ? await info.WarningAsync(ct) : null,
+        warning = await _runHost.WarningAsync(ct),
     });
 
     [HttpGet("{key}")]

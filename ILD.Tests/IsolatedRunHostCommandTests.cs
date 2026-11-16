@@ -302,7 +302,7 @@ public sealed class IsolatedRunHostCommandTests : IDisposable
         };
         var path = $"{WorkingDirectory}/ild.config.json";
 
-        await using (var read = await _host.OpenReadAsync(path, Ct))
+        await using (var read = await _host.OpenFileForReadAsync(path, Ct))
             Assert.Equal("{\"a\":1}", await new StreamReader(read!).ReadToEndAsync(Ct));
         await _host.WriteFileAsync(path, "new", Ct);
 

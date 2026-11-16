@@ -74,7 +74,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         AllowTrailingCommas = true,
     };
 
-    private readonly IRunHost _host;
+    private readonly IRunWorkspace _host;
 
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
@@ -82,7 +82,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
         PreviewDataClaims claims,
-        IRunHost host,
+        IRunWorkspace host,
         IEgressPolicy? egressPolicy = null,
         IWorkItemNotifier? notifier = null,
         EgressCredentials? credentials = null)
@@ -109,7 +109,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         IConfiguration configuration,
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger,
-        IRunHost host,
+        IRunWorkspace host,
         EgressProxyOptions? egressProxy = null,
         EgressCredentials? credentials = null,
         IProcessEnvironment? environment = null,
@@ -814,7 +814,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 new List<ManagedPreviewProcess>(),
                 DotEnvParser.Parse(customEnv),
                 new PackageFeedFileShare(packageFeeds ?? [], FeedFilePrefix(normalized, "install"), _logger),
-                await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, volumes, stateDirectory, _logger, cancellationToken));
+                await PreviewVolumes.CreateFoldersAsync(_host, _host, normalized, profile.Volumes, volumes, stateDirectory, _logger, cancellationToken));
 
             await RunInstallStepsAsync(profile.Install, runtime, mode, cancellationToken);
             return new WorktreeInstallResult(true);
@@ -1030,7 +1030,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private async Task<LoadedPreviewConfig> LoadConfigAsync(string worktreePath, CancellationToken cancellationToken)
     {
         var configPath = Path.Combine(worktreePath, ConfigFileName);
-        await using var stream = await _host.OpenReadAsync(configPath, cancellationToken);
+        await using var stream = await _host.OpenFileForReadAsync(configPath, cancellationToken);
         if (stream is null)
         {
             return new LoadedPreviewConfig(false, worktreePath, configPath, null, $"No {ConfigFileName} found in worktree root.");
@@ -1051,7 +1051,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     // same as the strongly-typed loader.
     private async Task<JsonNode?> LoadConfigNodeAsync(string configPath, CancellationToken cancellationToken)
     {
-        await using var stream = await _host.OpenReadAsync(configPath, cancellationToken)
+        await using var stream = await _host.OpenFileForReadAsync(configPath, cancellationToken)
             ?? throw new FileNotFoundException(configPath);
         return await JsonNode.ParseAsync(
             stream,
@@ -1306,7 +1306,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             new List<ManagedPreviewProcess>(),
             DotEnvParser.Parse(options.CustomEnv),
             new PackageFeedFileShare(options.PackageFeeds ?? [], FeedFilePrefix(normalized, "preview"), _logger),
-            await PreviewVolumes.CreateFoldersAsync(_host, normalized, profile.Volumes, options.Volumes, stateDirectory, _logger, cancellationToken),
+            await PreviewVolumes.CreateFoldersAsync(_host, _host, normalized, profile.Volumes, options.Volumes, stateDirectory, _logger, cancellationToken),
             lease,
             options.WorkItemId)
         {
@@ -2102,7 +2102,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// run's pod or container is reached where the preview proxy reaches it, at the address the run host gives for the
     /// port. Any other host is refused: ILD never probes an address the agent chose.
     /// </summary>
-    internal static async Task<string> ReachableHealthUrlAsync(IRunHost host, string healthUrl, string worktreePath, CancellationToken cancellationToken)
+    internal static async Task<string> ReachableHealthUrlAsync(IRunWorkspace host, string healthUrl, string worktreePath, CancellationToken cancellationToken)
     {
         if (!IsOwnLoopbackHealthUrl(healthUrl))
             throw new InvalidOperationException("A preview's health URL must name the service's own loopback (127.0.0.1, localhost, [::1] or 0.0.0.0).");

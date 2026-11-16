@@ -32,7 +32,7 @@ public class CmdNodeExecutorTests : IDisposable
     {
         var services = new ServiceCollection();
         // Real-shell tests leave the host unset and get the local one.
-        if (host is not null) services.AddSingleton(host);
+        if (host is not null) services.AddSingleton<ILD.Core.Services.RunHosts.IRunCommands>(host).AddSingleton<ILD.Core.Services.RunHosts.IRunFiles>(host);
         services.AddSingleton(new Mock<IWorkItemManager>().Object);
         services.AddSingleton(NoPackageFeeds.Resolver);
         return new NodeExecutionContext(

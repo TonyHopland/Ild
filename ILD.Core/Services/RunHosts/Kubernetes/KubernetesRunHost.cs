@@ -16,7 +16,7 @@ namespace ILD.Core.Services.RunHosts.Kubernetes;
 /// The run host that puts each loop run in a pod of its own, with a volume of its own. The run's ConfigMap owns the pod,
 /// the volume claim and the network policy. A run is taken down pod first: the policies go only once the pod is gone.
 /// </summary>
-public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEngine, IRunHostShutdown
+public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEngine
 {
     public const string RunLeftoverKind = "kubernetes-run";
 
@@ -559,7 +559,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
     /// are in their claim, and the next chat makes the pod from the runner image as it is then. A run's pod stays: a
     /// pod cannot be stopped, and it is what a parked run resumes in.
     /// </summary>
-    public async Task ShutdownAsync(CancellationToken ct)
+    public override async Task ShutdownAsync(CancellationToken ct)
     {
         async Task RemoveAsync(string name)
         {

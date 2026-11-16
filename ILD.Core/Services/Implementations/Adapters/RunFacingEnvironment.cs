@@ -9,7 +9,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// whatever the process environment holds.
 /// </summary>
 public sealed class RunFacingEnvironment(
-    IProcessEnvironment inner, IRunHost host, string? workingDirectory, string? agentApiToken = null) : IProcessEnvironment
+    IProcessEnvironment inner, IPreviewHost host, string? workingDirectory, string? agentApiToken = null) : IProcessEnvironment
 {
     public string? Get(string name) => name switch
     {

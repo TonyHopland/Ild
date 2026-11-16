@@ -50,7 +50,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private readonly IConfiguration _config;
     private readonly IShutdownState _shutdown;
     private readonly ILogger<ChatRepositoryCloner> _log;
-    private readonly IRunHost _host;
+    private readonly IRunChats _host;
     private readonly IProcessRunner _runner;
 
     public ChatRepositoryCloner(
@@ -61,7 +61,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         IRepositoryManager git,
         IConfiguration config,
         IShutdownState shutdown,
-        IRunHost host,
+        IRunChats host,
         ILogger<ChatRepositoryCloner>? log = null,
         IProcessRunner? runner = null)
     {

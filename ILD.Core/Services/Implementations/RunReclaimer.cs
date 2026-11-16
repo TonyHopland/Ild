@@ -13,7 +13,7 @@ namespace ILD.Core.Services.Implementations;
 public sealed class RunReclaimer : IRunReclaimer
 {
     private readonly IRepositoryManager _repo;
-    private readonly IRunHost _host;
+    private readonly IRunReclaim _host;
     private readonly IProviderStore _providers;
     private readonly IWorktreePreviewService _preview;
     private readonly IWorkItemNotifier _notifier;
@@ -23,7 +23,7 @@ public sealed class RunReclaimer : IRunReclaimer
     public RunReclaimer(
         IRepositoryManager repo,
         IProviderStore providers,
-        IRunHost host,
+        IRunReclaim host,
         IWorktreePreviewService? preview = null,
         IWorkItemNotifier? notifier = null,
         IConfiguration? config = null,

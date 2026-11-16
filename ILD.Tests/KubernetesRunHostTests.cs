@@ -1137,7 +1137,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         SeedRun(orphan, Instance, secret: false);
         SeedRun(otherInstance, "other");
         SeedRun(notOurs, Instance, managedBy: "someone-else");
-        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }));
 
         await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
 
@@ -1585,7 +1585,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var (host, clock) = IdleHost();
         await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
-        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
 
         clock.Advance(IdleTimeout);
         await sweeper.SweepAsync(host, ct);
@@ -1614,7 +1614,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     public async Task The_sweeper_leaves_the_chat_objects_alone()
     {
         await _host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
-        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(FakeLocal(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
 
         await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
 

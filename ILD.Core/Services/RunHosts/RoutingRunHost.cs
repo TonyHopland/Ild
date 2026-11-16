@@ -12,21 +12,19 @@ namespace ILD.Core.Services.RunHosts;
 /// but never execute: a call that would start a process there is refused. What a call is about is told by the path it
 /// names, which for a run or chat is below its directory, or by the run it is for.
 /// </summary>
-public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunHost, IIsolatedHostInfo, ISignInTerminalHost, IRunHostShutdown
+public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunHost, IRunHostOperator, IRunSweep, ISignInTerminalHost
 {
     public RunHostKind Kind => isolated.Kind;
-
-    public ExecRunHost Isolated => isolated;
 
     // A chat's folder is in the isolated host only when it keeps chats; a chat from before, or on a host that does not, has a path on this disk.
     private bool OnIsolated(string? path) => !RunHolders.FromPath(path, isolated.HostsChats).IsOwnDisk;
 
-    bool IRunHost.PredatesContainers(string? path) => !string.IsNullOrEmpty(path) && !OnIsolated(path);
+    public bool PredatesContainers(string? path) => !string.IsNullOrEmpty(path) && !OnIsolated(path);
 
     // For ILD's own base clones only, which the repository manager finds by the repository's row: no call that names a path reaches this disk for execution.
-    IRunHost? IRunHost.OwnDiskHostFor(string? path) => OnIsolated(path) ? null : local;
+    public IRunRepositories? OwnDiskHostFor(string? path) => OnIsolated(path) ? null : local;
 
-    string? IRunHost.AttachTargetFor(string? path) => ((IRunHost)isolated).AttachTargetFor(path);
+    public string? AttachTargetFor(string? path) => isolated.AttachTargetFor(path);
 
     // -- What the isolated host says of itself --------------------------------------
 
@@ -43,7 +41,18 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task<SignInTerminal> OpenSignInAsync(ManagedAgent? agent, string command, IReadOnlyList<string> arguments, int cols, int rows, CancellationToken ct)
         => isolated.OpenSignInAsync(agent, command, arguments, cols, rows, ct);
 
-    public Task ShutdownAsync(CancellationToken ct) => isolated is IRunHostShutdown shutdown ? shutdown.ShutdownAsync(ct) : Task.CompletedTask;
+    public Task ShutdownAsync(CancellationToken ct) => isolated.ShutdownAsync(ct);
+
+    public Task CheckAsync(CancellationToken ct = default) => isolated.CheckAsync(ct);
+
+    public Task WarmAgentToolsAsync(CancellationToken ct = default) => isolated.WarmAgentToolsAsync(ct);
+
+    public Task ReapIdleChatAsync(CancellationToken ct = default) => isolated.ReapIdleChatAsync(ct);
+
+    // The sweep of a host with environments of its own looks at those alone; what is left on ILD's own disk is found at startup (IRunLeftovers).
+    Task<IReadOnlyList<RunLeftover>> IRunSweep.ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct) => isolated.ListLeftoversAsync(liveIds, ct);
+
+    Task<bool> IRunSweep.DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct) => isolated.DeleteLeftoverAsync(leftover, ct);
 
     private IRunHost For(string? path) => OnIsolated(path) ? isolated : local;
 
@@ -107,10 +116,6 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, NetworkMode mode, CancellationToken ct = default)
         => ForExecution(options.Cwd).OpenTerminalAsync(options, mode, ct);
 
-    // Only builds a command; the sign-in terminal that runs it goes through ISignInTerminalHost, and a run's terminal is refused in OpenTerminalAsync.
-    public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, NetworkMode mode)
-        => local.RouteTerminalCommand(fileName, arguments, providerId, mode);
-
     // -- Bundles -----------------------------------------------------------------
 
     public Task<RunHostResult> PushBundleAsync(string targetPath, string originUrl, Stream bundle, CancellationToken ct = default)
@@ -141,8 +146,6 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task<Stream> OpenFileForWriteAsync(string path, CancellationToken ct = default) => For(path).OpenFileForWriteAsync(path, ct);
 
     public Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default) => For(path).GetFileLengthAsync(path, ct);
-
-    public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default) => For(path).OpenReadAsync(path, ct);
 
     public Task ReadFileRangeAsync(string path, long offset, long count, Func<Stream, Task> consume)
         => For(path).ReadFileRangeAsync(path, offset, count, consume);

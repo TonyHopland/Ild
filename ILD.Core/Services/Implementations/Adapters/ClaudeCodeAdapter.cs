@@ -559,7 +559,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         => SessionFilePath(RunHost, worktreePath, sessionId, EnvironmentVariables);
 
     /// <summary>Where Claude keeps the session: under the home the run's host says its CLIs run with, otherwise under ours.</summary>
-    internal static string? SessionFilePath(IRunHost host, string worktreePath, string sessionId, IProcessEnvironment environment)
+    internal static string? SessionFilePath(IRunWorkspace host, string worktreePath, string sessionId, IProcessEnvironment environment)
         => host.RunHomeFor(worktreePath) is { } home && !string.IsNullOrEmpty(sessionId)
             ? Path.Combine(home, ".claude", "projects", EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl")
             : GetSessionFilePath(worktreePath, sessionId, environment);

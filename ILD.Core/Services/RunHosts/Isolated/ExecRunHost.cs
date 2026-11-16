@@ -33,7 +33,7 @@ public sealed record DirectRoute(Guid OwnerId, bool Chat);
 /// as bundles, so the environment never holds the git credential or the mirror. A subclass supplies the exec
 /// transport and the lifecycle of the environment: how it is made, found, deleted and swept.
 /// </summary>
-public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRunHost, ISignInTerminalHost
+public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRunHost, IRunHostOperator, IRunSweep, ISignInTerminalHost
 {
     /// <summary>How much of what a run holds or prints ILD reads before it stops.</summary>
     public RunReadLimits ReadLimits { get; init; } = RunReadLimits.Default;
@@ -275,7 +275,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// </summary>
     protected virtual bool HostsFileIsRoots => false;
 
-    /// <inheritdoc cref="IRunHost.GetStatsAsync"/>
+    /// <inheritdoc cref="IRunHostOperator.GetStatsAsync"/>
     public virtual Task<ContainerStats?> GetStatsAsync(Guid owner, CancellationToken ct = default) => Task.FromResult<ContainerStats?>(null);
 
     /// <summary>What ILD's own execs as root start with: the environment's PATH has directories the agent writes, which root must not run from.</summary>
@@ -368,6 +368,9 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public abstract string LeftoverKind { get; }
 
     public abstract TimeSpan SweepInterval { get; }
+
+    /// <summary>Puts away what the host keeps outside ILD when it stops; a host that keeps nothing there does nothing.</summary>
+    public virtual Task ShutdownAsync(CancellationToken ct) => Task.CompletedTask;
 
     /// <summary>The name an editor attaches to for the run whose directory is <paramref name="path"/>; null for a host with no container to attach to.</summary>
     public virtual string? AttachTargetFor(string? path) => null;
@@ -1253,9 +1256,6 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
     }
 
-    public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)
-        => throw new NotSupportedException("the provider sign-in terminal runs on the local run host");
-
     // -- Bundles -----------------------------------------------------------------
 
     public async Task<RunHostResult> PushBundleAsync(string targetPath, string originUrl, Stream bundle, CancellationToken ct = default)
@@ -1307,9 +1307,6 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         if (result.ExitCode == FileTooLarge) throw new ReadLimitExceededException(limit);
         return result.Success ? result.StdOut : null;
     }
-
-    public async Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default)
-        => await ReadAllAsync(path, ct);
 
     public async Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default)
         => await ReadAllAsync(path, ct);

@@ -20,7 +20,7 @@ namespace ILD.Core.Services.RunHosts.Container;
 /// its own that reaches only ILD, and all three carry the run's labels. There are no owner references: ending the
 /// run deletes the container, the volume and the network, and the sweeper deletes what a killed ILD left.
 /// </summary>
-public sealed class ContainerRunHost : ExecRunHost, IDirectRouteEngine, IChatEngine, IRunHostShutdown, IDisposable
+public sealed class ContainerRunHost : ExecRunHost, IDirectRouteEngine, IChatEngine, IDisposable
 {
     public const string RunLeftoverKind = "container-run";
 
@@ -668,7 +668,7 @@ public sealed class ContainerRunHost : ExecRunHost, IDirectRouteEngine, IChatEng
     /// it is then. Each run's container is stopped, not removed, so nothing runs while ILD is down while a parked run,
     /// its checkout and its agent session wait in it; ILD starts it again when the run next needs it.
     /// </summary>
-    public async Task ShutdownAsync(CancellationToken ct)
+    public override async Task ShutdownAsync(CancellationToken ct)
     {
         var work = new List<Task> { RemoveContainerAsync(ChatName, "the chat container", ct) };
         work.Add(RemoveOpenSideEnvironmentsAsync(name =>

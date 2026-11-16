@@ -549,7 +549,7 @@ public sealed partial class LoopEngine : ILoopEngine
     {
         try
         {
-            if (await sp.GetRunHost().KillAllAsync(runId) is > 0 and var killed)
+            if (await sp.GetRunCommands().KillAllAsync(runId) is > 0 and var killed)
                 _logger.LogInformation("Ended {Count} command(s) still running for run {RunId} before it resumed", killed, runId);
         }
         catch (Exception ex)

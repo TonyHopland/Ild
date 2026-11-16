@@ -40,7 +40,7 @@ public readonly record struct RunHolder(RunHolderKind Kind, Guid Id)
 /// <item>No working directory and an <see cref="RunCommand.OwnerId"/>: the id alone says whose it is, a run's or a chat's, found by asking the engine.</item>
 /// <item>The directory: a chat's folder (when the host keeps chats) is the chat's, whatever id its caller names to kill it by; then <see cref="RunCommand.OwnerId"/> as a run; then the run the directory is in.</item>
 /// </list>
-/// Other invariants of <see cref="RunCommand"/>: <see cref="RunCommand.OwnerId"/> makes <see cref="IRunHost.KillAllAsync"/> end the command and
+/// Other invariants of <see cref="RunCommand"/>: <see cref="RunCommand.OwnerId"/> makes <see cref="IRunCommands.KillAllAsync"/> end the command and
 /// <see cref="RunCommand.RunIn"/> does not, so a preview outlives a retry; and <see cref="RunCommand.Files"/> are staged into the run only when
 /// <see cref="IsStageable"/> says so.
 /// </summary>

@@ -358,22 +358,22 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         return merged;
     }
 
-    /// <summary>The run or chat an execution belongs to: whose processes <see cref="IRunHost.KillAllAsync"/> ends.</summary>
+    /// <summary>The run or chat an execution belongs to: whose processes <see cref="IRunWorkspace.KillAllAsync"/> ends.</summary>
     protected static Guid OwnerOf(AgentExecutionContext ctx) => ctx.ChatSessionId ?? ctx.RunContext.LoopRunId;
 
-    private IRunHost? _runHost;
+    private IRunWorkspace? _runHost;
 
     /// <summary>
     /// Where the agent's processes and files live: the run host registered with DI, which an adapter built with
     /// services must find. Only one built without services (a unit test's) runs on the local host.
     /// </summary>
-    protected IRunHost RunHost => _runHost ??= ResolveRunHost();
+    protected IRunWorkspace RunHost => _runHost ??= ResolveRunHost();
 
-    private IRunHost ResolveRunHost()
+    private IRunWorkspace ResolveRunHost()
     {
         if (ScopeFactory is null) return LocalRunHost.Shared;
         using var scope = ScopeFactory.CreateScope();
-        return scope.ServiceProvider.GetRequiredService<IRunHost>();
+        return scope.ServiceProvider.GetRunWorkspace();
     }
 
 

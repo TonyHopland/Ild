@@ -32,7 +32,7 @@ public sealed class RunReadLimitsTests
         var exec = new EndlessExec();
         var host = NewHost(exec, 100 * 1024);
 
-        await Assert.ThrowsAsync<ReadLimitExceededException>(() => host.OpenReadAsync(host.Path, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ReadLimitExceededException>(() => host.OpenFileForReadAsync(host.Path, TestContext.Current.CancellationToken));
 
         Assert.InRange(exec.Produced, 100 * 1024, 100 * 1024 + 2 * Chunk);
     }
@@ -43,7 +43,7 @@ public sealed class RunReadLimitsTests
         var exec = new EndlessExec();
         var host = NewHost(exec, 100 * 1024);
 
-        await Assert.ThrowsAsync<ReadLimitExceededException>(() => host.OpenReadAsync(host.Path, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ReadLimitExceededException>(() => host.OpenFileForReadAsync(host.Path, TestContext.Current.CancellationToken));
 
         var command = string.Join(' ', host.Commands.Single());
         Assert.Contains("stat -c %s", command);

@@ -75,7 +75,8 @@ public class StartNodeExecutorTests : IDisposable
         services.AddSingleton(workItems.Object);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(repoManager.Object);
-        services.AddSingleton<ILD.Core.Services.RunHosts.IRunHost>(host ?? new Fakes.FakeRunHost(repoManager.Object));
+        var runHost = host ?? new Fakes.FakeRunHost(repoManager.Object);
+        services.AddSingleton<ILD.Core.Services.RunHosts.IRunLifecycle>(runHost).AddSingleton<ILD.Core.Services.RunHosts.IRunFiles>(runHost);
         if (preparations is not null) services.AddSingleton(preparations);
         if (notifier is not null) services.AddSingleton(notifier);
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
