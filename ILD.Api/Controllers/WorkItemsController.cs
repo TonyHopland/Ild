@@ -24,27 +24,23 @@ public class WorkItemsController : ControllerBase
 
     private readonly IWorkItemManager _workItemManager;
     private readonly ILoopEngine _engine;
-    private readonly IWorktreePreviewService _worktreePreviewService;
+    private readonly IWorkItemPreview _preview;
     private readonly IRepositoryManager _repositoryManager;
     private readonly ILoopRunStore _loopRunStore;
     private readonly ILogger<WorkItemsController> _logger;
-    private readonly IWorkItemNotifier _notifier;
     private readonly IProviderStore _providerStore;
-    private readonly IPackageFeedResolver _packageFeeds;
     private readonly IBranchNameOverrideService _branchNames;
     private readonly AttachmentLimits _attachmentLimits;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IPackageFeedResolver packageFeeds, IBranchNameOverrideService branchNames, AttachmentLimits attachmentLimits, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorkItemPreview preview, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IBranchNameOverrideService branchNames, AttachmentLimits attachmentLimits, ILogger<WorkItemsController> logger)
     {
         _workItemManager = workItemManager;
         _engine = engine;
-        _worktreePreviewService = worktreePreviewService;
+        _preview = preview;
         _repositoryManager = repositoryManager;
         _loopRunStore = loopRunStore;
         _providerStore = providerStore;
-        _packageFeeds = packageFeeds;
         _logger = logger;
-        _notifier = notifier ?? new NoopWorkItemNotifier();
         _branchNames = branchNames;
         _attachmentLimits = attachmentLimits;
     }
@@ -393,160 +389,35 @@ public class WorkItemsController : ControllerBase
 
     [HttpGet("{id}/preview")]
     public async Task<IActionResult> GetPreview(string id)
-    {
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            return Ok(await _worktreePreviewService.GetStatusAsync(workItem!.WorktreePath!));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
+        => (await _preview.GetStatusAsync(id)).ToActionResult();
 
     [HttpPost("{id}/preview/start")]
     public async Task<IActionResult> StartPreview(string id, [FromBody] WorktreePreviewStartRequest? request)
-    {
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var options = await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds);
-            var response = request?.Wait == false
-                ? await _worktreePreviewService.BeginStartAsync(workItem!.WorktreePath!, options)
-                : await _worktreePreviewService.StartAsync(workItem!.WorktreePath!, options);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(response);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
+        => (await _preview.StartAsync(id, request)).ToActionResult();
 
     [HttpPost("{id}/preview/stop")]
     public async Task<IActionResult> StopPreview(string id)
-    {
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _worktreePreviewService.StopAsync(workItem!.WorktreePath!);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(response);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
+        => (await _preview.StopAsync(id)).ToActionResult();
 
     [HttpPost("{id}/preview/services/{service}/start")]
     public async Task<IActionResult> StartPreviewService(string id, string service, [FromBody] WorktreePreviewStartRequest? request)
-    {
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _worktreePreviewService.StartServiceAsync(
-                workItem!.WorktreePath!,
-                service,
-                (await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds)) with { StartDependencies = request?.StartDependencies == true });
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(response);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
+        => (await _preview.StartServiceAsync(id, service, request, startDependencies: request?.StartDependencies == true)).ToActionResult();
 
     [HttpPost("{id}/preview/services/{service}/stop")]
     public async Task<IActionResult> StopPreviewService(string id, string service)
-    {
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _worktreePreviewService.StopServiceAsync(workItem!.WorktreePath!, service);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(response);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
+        => (await _preview.StopServiceAsync(id, service)).ToActionResult();
 
     [HttpGet("{id}/preview/services/{service}/config")]
     public async Task<IActionResult> GetPreviewServiceConfig(string id, string service)
-    {
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var config = await _worktreePreviewService.GetServiceConfigAsync(workItem!.WorktreePath!, service);
-            if (config == null)
-                return NotFound(new { error = $"No preview config found for service '{service}'." });
-            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
+        => (await _preview.GetServiceConfigAsync(id, service)).ToActionResult();
 
     [HttpPut("{id}/preview/services/{service}/config")]
     public async Task<IActionResult> UpdatePreviewServiceConfig(string id, string service, [FromBody] WorktreePreviewServiceConfigUpdateRequest? request)
-    {
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-        if (request == null || string.IsNullOrWhiteSpace(request.Config))
-            return BadRequest(new { error = "config is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            await _worktreePreviewService.UpdateServiceConfigAsync(workItem!.WorktreePath!, service, request.Config);
-            var config = await _worktreePreviewService.GetServiceConfigAsync(workItem!.WorktreePath!, service);
-            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
+        => (await _preview.UpdateServiceConfigAsync(id, service, request)).ToActionResult();
 
     [HttpGet("{id}/preview/logs")]
     public async Task<IActionResult> GetPreviewLog(string id, [FromQuery] string service)
-    {
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var content = await _worktreePreviewService.GetServiceLogAsync(workItem!.WorktreePath!, service);
-            return Ok(new WorktreePreviewLogResponse { Service = service, Content = content });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
+        => (await _preview.GetLogAsync(id, service)).ToActionResult();
 
     [HttpGet("{id}/files/commits")]
     public async Task<IActionResult> GetFileCommits(string id)

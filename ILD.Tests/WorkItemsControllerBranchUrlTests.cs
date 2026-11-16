@@ -134,11 +134,10 @@ public class WorkItemsControllerBranchUrlTests
         var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,
             new Mock<ILoopEngine>().Object,
-            new Mock<IWorktreePreviewService>().Object,
+            new Mock<IWorkItemPreview>().Object,
             repoMgr.Object,
             db.LoopRuns,
             db.Providers,
-            NoPackageFeeds.Resolver,
             new Mock<IBranchNameOverrideService>().Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
             NullLogger<WorkItemsController>.Instance));

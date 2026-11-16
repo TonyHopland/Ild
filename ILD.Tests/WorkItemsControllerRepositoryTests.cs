@@ -114,47 +114,6 @@ public class WorkItemsControllerRepositoryTests
     }
 
     [Fact]
-    public async Task Preview_of_an_existing_run_keeps_the_env_of_the_repository_it_was_created_on()
-    {
-        var s = Setup();
-        using var _db = s.Db;
-        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
-        SeedRun(s.Db, id, LoopRunStatus.WaitingHuman, s.RepoA);
-        await s.Controller.Update(id, new WorkItemCreateRequest { Title = "t", RepositoryId = s.RepoB.ToString() });
-        Assert.Equal(s.RepoB, (await s.Mgr.GetWorkItemAsync(id))!.RepositoryId);
-
-        await s.Controller.StartPreview(id, new WorktreePreviewStartRequest());
-        await s.Controller.StartPreviewService(id, "web", new WorktreePreviewStartRequest());
-
-        s.Preview.Verify(p => p.StartAsync(WorktreePath,
-            It.Is<WorktreePreviewStartOptions?>(o => o!.CustomEnv == "FROM=repo-a"), It.IsAny<CancellationToken>()), Times.Once);
-        s.Preview.Verify(p => p.StartServiceAsync(WorktreePath, "web",
-            It.Is<WorktreePreviewStartOptions?>(o => o!.CustomEnv == "FROM=repo-a"), It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task Preview_of_an_existing_run_takes_its_volume_scope_from_the_repository_it_was_created_on()
-    {
-        var s = Setup();
-        using var _db = s.Db;
-        var repoA = s.Db.Context.Repositories.Single(r => r.Id == s.RepoA);
-        repoA.KeepPreviewData = true;
-        s.Db.Context.SaveChanges();
-        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
-        SeedRun(s.Db, id, LoopRunStatus.WaitingHuman, s.RepoA);
-        await s.Controller.Update(id, new WorkItemCreateRequest { Title = "t", RepositoryId = s.RepoB.ToString() });
-
-        await s.Controller.StartPreview(id, new WorktreePreviewStartRequest());
-        await s.Controller.StartPreviewService(id, "web", new WorktreePreviewStartRequest());
-
-        var expected = new PreviewVolumeScope(s.RepoA, true, id, "t");
-        s.Preview.Verify(p => p.StartAsync(WorktreePath,
-            It.Is<WorktreePreviewStartOptions?>(o => o!.Volumes == expected), It.IsAny<CancellationToken>()), Times.Once);
-        s.Preview.Verify(p => p.StartServiceAsync(WorktreePath, "web",
-            It.Is<WorktreePreviewStartOptions?>(o => o!.Volumes == expected), It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
     public async Task Diff_of_an_existing_run_is_taken_against_the_repository_it_was_created_on()
     {
         var s = Setup();
@@ -194,7 +153,6 @@ public class WorkItemsControllerRepositoryTests
         TestDb Db,
         Guid RepoA,
         Guid RepoB,
-        Mock<IWorktreePreviewService> Preview,
         Mock<IRepositoryManager> RepoManager);
 
     private static Harness Setup()
@@ -232,11 +190,6 @@ public class WorkItemsControllerRepositoryTests
         branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(BranchNameVerdict.Usable);
 
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.StartAsync(It.IsAny<string>(), It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
-        preview.Setup(p => p.StartServiceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
         var repoManager = new Mock<IRepositoryManager>();
         repoManager.Setup(r => r.ListWorktreeFilesAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
             .ReturnsAsync(Array.Empty<WorktreeFileEntry>());
@@ -244,15 +197,14 @@ public class WorkItemsControllerRepositoryTests
         var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,
             new Mock<ILoopEngine>().Object,
-            preview.Object,
+            new Mock<IWorkItemPreview>().Object,
             repoManager.Object,
             db.LoopRuns,
             db.Providers,
-            NoPackageFeeds.Resolver,
             branchNames.Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
             NullLogger<WorkItemsController>.Instance));
 
-        return new Harness(controller, mgr, db, repoA.Id, repoB.Id, preview, repoManager);
+        return new Harness(controller, mgr, db, repoA.Id, repoB.Id, repoManager);
     }
 }

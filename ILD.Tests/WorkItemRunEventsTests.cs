@@ -66,11 +66,10 @@ public class WorkItemRunEventsTests
     private static WorkItemsController Controller(Rig rig) => new(
         rig.Manager,
         rig.Engine.Object,
-        new Mock<IWorktreePreviewService>().Object,
+        new Mock<IWorkItemPreview>().Object,
         new Mock<IRepositoryManager>().Object,
         rig.Db.LoopRuns,
         rig.Db.Providers,
-        NoPackageFeeds.Resolver,
         new Mock<IBranchNameOverrideService>().Object,
         ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
         NullLogger<WorkItemsController>.Instance);

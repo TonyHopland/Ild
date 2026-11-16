@@ -134,12 +134,9 @@ public class AgentController : ControllerBase, IActionFilter
     private readonly ILoopTemplateManager _templates;
     private readonly ILoopRunStore _runs;
     private readonly AppDbContext _db;
-    private readonly IProviderStore _providerStore;
-    private readonly IPackageFeedResolver _packageFeeds;
-    private readonly IWorktreePreviewService _preview;
+    private readonly IWorkItemPreview _preview;
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IChatNotifier _chatNotifier;
-    private readonly IWorkItemNotifier _notifier;
     private readonly IAgentSessionResolver _sessions;
 
     public AgentController(
@@ -147,24 +144,18 @@ public class AgentController : ControllerBase, IActionFilter
         ILoopTemplateManager templates,
         ILoopRunStore runs,
         AppDbContext db,
-        IProviderStore providerStore,
-        IPackageFeedResolver packageFeeds,
-        IWorktreePreviewService preview,
+        IWorkItemPreview preview,
         IChatLoopScratchpad loopScratchpad,
         IChatNotifier chatNotifier,
-        IAgentSessionResolver sessions,
-        IWorkItemNotifier? notifier = null)
+        IAgentSessionResolver sessions)
     {
         _workItems = workItems;
         _templates = templates;
         _runs = runs;
         _db = db;
-        _providerStore = providerStore;
-        _packageFeeds = packageFeeds;
         _preview = preview;
         _loopScratchpad = loopScratchpad;
         _chatNotifier = chatNotifier;
-        _notifier = notifier ?? new NoopWorkItemNotifier();
         _sessions = sessions;
     }
 
@@ -616,16 +607,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            return Ok(await ForCallerAsync(id, await _preview.GetStatusAsync(workItem!.WorktreePath!)));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await (await _preview.GetStatusAsync(id)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
     }
 
     [HttpPost("workitems/{id}/preview/start")]
@@ -634,21 +616,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var options = await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds);
-            var response = request?.Wait == false
-                ? await _preview.BeginStartAsync(workItem!.WorktreePath!, options)
-                : await _preview.StartAsync(workItem!.WorktreePath!, options);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(await ForCallerAsync(id, response));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await (await _preview.StartAsync(id, request)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
     }
 
     [HttpPost("workitems/{id}/preview/stop")]
@@ -657,18 +625,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _preview.StopAsync(workItem!.WorktreePath!);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(await ForCallerAsync(id, response));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await (await _preview.StopAsync(id)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
     }
 
     [HttpPost("workitems/{id}/preview/services/{service}/start")]
@@ -677,24 +634,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _preview.StartServiceAsync(
-                workItem!.WorktreePath!,
-                service,
-                await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(await ForCallerAsync(id, response));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await (await _preview.StartServiceAsync(id, service, request, startDependencies: false)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
     }
 
     [HttpPost("workitems/{id}/preview/services/{service}/stop")]
@@ -703,21 +643,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var response = await _preview.StopServiceAsync(workItem!.WorktreePath!, service);
-            await _notifier.PreviewStateChangedAsync(id);
-            return Ok(await ForCallerAsync(id, response));
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await (await _preview.StopServiceAsync(id, service)).MapAsync(response => ForCallerAsync(id, response))).ToActionResult();
     }
 
     [HttpGet("workitems/{id}/preview/services/{service}/config")]
@@ -726,22 +652,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var config = await _preview.GetServiceConfigAsync(workItem!.WorktreePath!, service);
-            if (config == null)
-                return NotFound(new { error = $"No preview config found for service '{service}'." });
-            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await _preview.GetServiceConfigAsync(id, service)).ToActionResult();
     }
 
     [HttpPut("workitems/{id}/preview/services/{service}/config")]
@@ -750,23 +661,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-        if (request == null || string.IsNullOrWhiteSpace(request.Config))
-            return BadRequest(new { error = "config is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            await _preview.UpdateServiceConfigAsync(workItem!.WorktreePath!, service, request.Config);
-            var config = await _preview.GetServiceConfigAsync(workItem!.WorktreePath!, service);
-            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await _preview.UpdateServiceConfigAsync(id, service, request)).ToActionResult();
     }
 
     [HttpGet("workitems/{id}/preview/logs")]
@@ -775,20 +670,7 @@ public class AgentController : ControllerBase, IActionFilter
         if (await CallerMayTouchAsync(id) is { } forbidden)
             return forbidden;
 
-        if (string.IsNullOrWhiteSpace(service))
-            return BadRequest(new { error = "service is required." });
-
-        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
-        if (error != null) return error;
-        try
-        {
-            var content = await _preview.GetServiceLogAsync(workItem!.WorktreePath!, service);
-            return Ok(new WorktreePreviewLogResponse { Service = service, Content = content });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        return (await _preview.GetLogAsync(id, service)).ToActionResult();
     }
 
     /// <summary>

@@ -165,6 +165,7 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<PreviewDataClaims>();
         services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
+        services.AddScoped<ILD.Api.Controllers.IWorkItemPreview, ILD.Api.Controllers.WorkItemPreview>();
         services.AddSingleton<IPreviewDataService, PreviewDataService>();
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddScoped<IRunConversationService, RunConversationService>();
