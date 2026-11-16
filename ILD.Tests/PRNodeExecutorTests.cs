@@ -127,6 +127,51 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
+    public async Task A_run_continuing_a_branch_reuses_the_pull_request_already_open_for_it()
+    {
+        var b = new PrNodeBuilder();
+        b.Run.UseExistingBranch = true;
+        b.Run.BranchName = "Planning";
+        b.Remote.Setup(r => r.FindOpenPullRequestAsync(b.Repository.CloneUrl, "Planning"))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/7", RemotePrStatus.Open, null));
+
+        var outcomes = await b.RunAsync();
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Equal("https://example.com/o/r/pull/7", outcomes.OfType<NodeOutcome.PrCreated>().Single().PrUrl);
+        b.Remote.Verify(r => r.CreatePullRequestAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_run_continuing_a_branch_opens_a_pull_request_when_none_is_open()
+    {
+        var b = new PrNodeBuilder();
+        b.Run.UseExistingBranch = true;
+        b.Run.BranchName = "Planning";
+        b.Remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync((RemotePrResult?)null);
+        ExpectCreatedPr(b.Remote);
+
+        var outcomes = await b.RunAsync();
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
+        b.Remote.Verify(r => r.CreatePullRequestAsync(
+            b.Repository.CloneUrl, "Planning", "main", "T", It.IsAny<string>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_run_on_a_generated_branch_never_looks_for_an_existing_pull_request()
+    {
+        var b = new PrNodeBuilder();
+        ExpectCreatedPr(b.Remote);
+
+        await b.RunAsync();
+
+        b.Remote.Verify(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
     public async Task PR_is_opened_on_the_runs_repository_after_the_item_was_repointed()
     {
         // An edit to the item's repository is never retroactive: this run's

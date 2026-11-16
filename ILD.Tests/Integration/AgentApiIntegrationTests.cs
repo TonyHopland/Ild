@@ -306,6 +306,58 @@ public class AgentApiIntegrationTests(SharedApiFactory factory) : IClassFixture<
         Assert.Equal(JsonValueKind.Null, cleared.GetProperty("baseBranchOverride").ValueKind);
     }
 
+    [Fact]
+    public async Task CreateWorkItem_refuses_use_existing_branch_without_a_branch_name()
+    {
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        var resp = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
+        {
+            title = "no name",
+            description = "",
+            repositoryId = repoId.ToString(),
+            useExistingBranch = true,
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        Assert.Contains("useExistingBranch needs a branchNameOverride", await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task UpdateWorkItem_sets_and_leaves_use_existing_branch_alone()
+    {
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+
+        var create = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
+        {
+            Content = JsonContent.Create(new
+            {
+                title = "owned",
+                description = "",
+                repositoryId = repoId.ToString(),
+                branchNameOverride = "Planning",
+                useExistingBranch = true,
+            }),
+        };
+        create.ActAsRun(factory.Services, runId);
+        var createResp = await client.SendAsync(create, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, createResp.StatusCode);
+        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
+            .RootElement.GetProperty("id").GetString();
+
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
+        Assert.True(detail.GetProperty("useExistingBranch").GetBoolean());
+
+        var titleOnly = await PutAsync(client, itemId!, runId, new { title = "renamed", description = "" });
+        Assert.True(titleOnly.GetProperty("useExistingBranch").GetBoolean());
+
+        var off = await PutAsync(client, itemId!, runId, new { title = "renamed", description = "", useExistingBranch = false });
+        Assert.False(off.GetProperty("useExistingBranch").GetBoolean());
+    }
+
     private async Task<JsonElement> PutAsync(HttpClient client, string itemId, Guid runId, object body)
     {
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")

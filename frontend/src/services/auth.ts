@@ -270,11 +270,12 @@ export const workItemService = {
    */
   checkBranchName: async (
     name: string,
-    opts?: { repositoryId?: string; workItemId?: string },
+    opts?: { repositoryId?: string; workItemId?: string; useExistingBranch?: boolean },
   ): Promise<BranchNameCheck> => {
     const params = new URLSearchParams({ name });
     if (opts?.repositoryId) params.set("repositoryId", opts.repositoryId);
     if (opts?.workItemId) params.set("workItemId", opts.workItemId);
+    if (opts?.useExistingBranch) params.set("useExistingBranch", "true");
     return api.get<BranchNameCheck>(`/workitems/branch-name-check?${params}`);
   },
 

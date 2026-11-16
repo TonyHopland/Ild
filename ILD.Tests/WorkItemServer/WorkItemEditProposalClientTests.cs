@@ -67,6 +67,31 @@ public sealed class WorkItemEditProposalClientTests : IClassFixture<WorkItemEdit
     }
 
     [Fact]
+    public async Task Approving_a_proposal_to_continue_an_existing_branch_sets_the_flag_and_records_it_in_history()
+    {
+        var item = await CreateItemAsync();
+        Assert.False(item.UseExistingBranch);
+
+        var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest
+        {
+            UseExistingBranch = true,
+            Rationale = "The branch is already pushed.",
+        });
+
+        Assert.True(proposal.Proposed.UseExistingBranch);
+        Assert.False(proposal.Snapshot.UseExistingBranch);
+        Assert.False((await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.UseExistingBranch);
+
+        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken);
+
+        Assert.Equal(EditProposalDecisionOutcome.Applied, approved.Outcome);
+        Assert.True((await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.UseExistingBranch);
+        var change = (await _client.GetHistoryAsync(_opts, item.Id, TestContext.Current.CancellationToken))!
+            .First(e => e.Field == "useExistingBranch");
+        Assert.Equal("true", change.NewValue);
+    }
+
+    [Fact]
     public async Task A_proposal_snapshots_the_item_changes_nothing_and_approving_it_applies_exactly_the_proposed_fields()
     {
         var item = await CreateItemAsync();

@@ -47,6 +47,7 @@ export default function EditPanel({
   // "base" here is the baseline-value prefix every field above uses, applied to
   // the field named baseBranchOverride — not a doubling of the branch's base.
   const baseBaseBranchOverride = workItem?.baseBranchOverride ?? "";
+  const baseUseExistingBranch = workItem?.useExistingBranch ?? false;
 
   const [title, setTitle] = useState(baseTitle);
   const [description, setDescription] = useState(baseDescription);
@@ -59,6 +60,7 @@ export default function EditPanel({
   const [branchNameOverride, setBranchNameOverride] = useState(baseBranchNameOverride);
   const [branchNameCheck, setBranchNameCheck] = useState<BranchNameCheck | null>(null);
   const [baseBranchOverride, setBaseBranchOverride] = useState(baseBaseBranchOverride);
+  const [useExistingBranch, setUseExistingBranch] = useState(baseUseExistingBranch);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Problems with the two required fields, said beside them when Create or
@@ -74,7 +76,8 @@ export default function EditPanel({
   const hasAdvanced =
     baseAiProviderOverride !== AiProviderOverrideMode.None ||
     baseBranchNameOverride !== "" ||
-    baseBaseBranchOverride !== "";
+    baseBaseBranchOverride !== "" ||
+    baseUseExistingBranch;
   const attachments = detail.editAttachments;
 
   // Advice on the branch name, debounced while typing. Deliberately never gates
@@ -89,7 +92,7 @@ export default function EditPanel({
     let cancelled = false;
     const timer = setTimeout(() => {
       workItemService
-        .checkBranchName(name, { repositoryId, workItemId: workItem?.id })
+        .checkBranchName(name, { repositoryId, workItemId: workItem?.id, useExistingBranch })
         .then((result) => {
           if (!cancelled) setBranchNameCheck(result);
         })
@@ -102,7 +105,7 @@ export default function EditPanel({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [branchNameOverride, repositoryId, workItem?.id]);
+  }, [branchNameOverride, repositoryId, workItem?.id, useExistingBranch]);
 
   const branchNameProblem = branchNameCheck?.error ?? branchNameCheck?.warning ?? null;
 
@@ -116,6 +119,7 @@ export default function EditPanel({
     aiProviderOverrideId !== baseAiProviderOverrideId ||
     branchNameOverride !== baseBranchNameOverride ||
     baseBranchOverride !== baseBaseBranchOverride ||
+    useExistingBranch !== baseUseExistingBranch ||
     attachments.staged.length > 0;
 
   useEffect(() => {
@@ -157,6 +161,8 @@ export default function EditPanel({
       // Same convention: empty is a deliberate "back to the repository's
       // default branch", not "leave it alone".
       baseBranchOverride: baseBranchOverride.trim(),
+      // Only meaningful with a branch name, which the server insists on.
+      useExistingBranch: useExistingBranch && branchNameOverride.trim() !== "",
     };
 
     try {
@@ -387,6 +393,23 @@ export default function EditPanel({
           >
             {branchNameProblem ??
               "Used verbatim by every run of this item. Only the next run is affected."}
+          </small>
+        </div>
+        <div className="form-group">
+          <label htmlFor="wiv2-use-existing-branch">
+            <input
+              id="wiv2-use-existing-branch"
+              type="checkbox"
+              checked={useExistingBranch}
+              onChange={(e) => setUseExistingBranch(e.target.checked)}
+              aria-describedby="wiv2-use-existing-branch-hint"
+            />{" "}
+            Continue an existing branch
+          </label>
+          <small id="wiv2-use-existing-branch-hint" className="form-hint">
+            The branch name above must already exist on the remote. Runs check it out, commit on top
+            of it and push to it, never force-pushing; the base branch is only where the PR points.
+            Only the next run is affected.
           </small>
         </div>
         <div className="form-group">

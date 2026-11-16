@@ -20,6 +20,7 @@ const FIELD_LABELS: Record<string, string> = {
   aiProviderOverrideId: "AI provider",
   branchNameOverride: "Branch name",
   baseBranchOverride: "Base branch",
+  useExistingBranch: "Continue existing branch",
   "pullRequest.linked": "Pull request linked",
   "pullRequest.merged": "Pull request merged",
   deleted: "Title",

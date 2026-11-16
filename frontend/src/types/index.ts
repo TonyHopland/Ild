@@ -78,6 +78,13 @@ export interface WorkItem {
    * must exist on the remote when that run starts.
    */
   baseBranchOverride?: string | null;
+  /**
+   * When true, {@link branchNameOverride} names a branch that already exists on
+   * origin: runs check it out, commit on top of it and push to it (never
+   * force-pushing), and its PR targets {@link baseBranchOverride}. Only takes
+   * effect on the item's next run.
+   */
+  useExistingBranch?: boolean;
   prUrl: string | null;
   pullRequestBranch: string | null;
   humanFeedbackReason: string | null;
@@ -201,6 +208,7 @@ export interface WorkItemEditProposal {
     tags?: string[] | null;
     branchNameOverride?: string | null;
     baseBranchOverride?: string | null;
+    useExistingBranch?: boolean | null;
     addDependencies?: EditProposalDependency[] | null;
     removeDependencies?: EditProposalDependency[] | null;
   };
@@ -210,6 +218,7 @@ export interface WorkItemEditProposal {
     tags: string[] | null;
     branchNameOverride: string | null;
     baseBranchOverride: string | null;
+    useExistingBranch?: boolean | null;
     dependencies?: string[] | null;
   };
   rationale: string | null;

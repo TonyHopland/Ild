@@ -407,6 +407,23 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Update_sets_and_leaves_the_use_existing_branch_flag_alone()
+    {
+        var created = await _svc.CreateAsync(
+            new CreateWorkItemRequest { Title = "x", BranchNameOverride = "Planning", UseExistingBranch = true },
+            TestContext.Current.CancellationToken);
+        Assert.True(created.UseExistingBranch);
+
+        // Null means "not part of this edit".
+        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" }, TestContext.Current.CancellationToken);
+        Assert.True(titleOnly!.UseExistingBranch);
+
+        var off = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { UseExistingBranch = false }, TestContext.Current.CancellationToken);
+        Assert.False(off!.UseExistingBranch);
+        Assert.False((await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken))!.UseExistingBranch);
+    }
+
+    [Fact]
     public async Task Update_replaces_the_repository_and_leaves_it_alone_when_null()
     {
         var repoA = Guid.NewGuid();

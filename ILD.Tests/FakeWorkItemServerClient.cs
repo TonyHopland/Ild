@@ -62,6 +62,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         RepositoryId = dto.RepositoryId,
         BranchNameOverride = dto.BranchNameOverride,
         BaseBranchOverride = dto.BaseBranchOverride,
+        UseExistingBranch = dto.UseExistingBranch,
         AiProviderOverride = (RemoteAiProviderOverrideMode)(int)dto.AiProviderOverride,
         AiProviderOverrideId = dto.AiProviderOverrideId,
         PendingEditProposalCount = dto.PendingEditProposalCount,
@@ -84,6 +85,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             RepositoryId = req.RepositoryId,
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
+            UseExistingBranch = req.UseExistingBranch,
         }, ct);
         return ToRemote(dto);
     }
@@ -118,6 +120,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Tags = req.Tags?.ToList(),
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
+            UseExistingBranch = req.UseExistingBranch,
             RepositoryId = req.RepositoryId,
             Priority = req.Priority,
             AiProviderOverride = req.AiProviderOverride is { } mode ? (AiProviderOverrideMode)(int)mode : null,
@@ -272,6 +275,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Tags = req.Tags?.ToList(),
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
+            UseExistingBranch = req.UseExistingBranch,
             AddDependencies = req.AddDependencies?.ToList(),
             RemoveDependencies = req.RemoveDependencies?.ToList(),
             Rationale = req.Rationale,
@@ -352,6 +356,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         Tags = dto.Tags,
         BranchNameOverride = dto.BranchNameOverride,
         BaseBranchOverride = dto.BaseBranchOverride,
+        UseExistingBranch = dto.UseExistingBranch,
         AddDependencies = dto.AddDependencies?.Select(ToRemote).ToList(),
         RemoveDependencies = dto.RemoveDependencies?.Select(ToRemote).ToList(),
         Dependencies = dto.Dependencies,

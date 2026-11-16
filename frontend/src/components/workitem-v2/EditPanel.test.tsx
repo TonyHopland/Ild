@@ -136,3 +136,72 @@ describe("EditPanel priority", () => {
     expect(update.mock.calls[0][1]).not.toHaveProperty("priority");
   });
 });
+
+describe("EditPanel existing branch", () => {
+  test("ticking 'Continue an existing branch' saves the flag with the branch name", async () => {
+    vi.spyOn(authServices.workItemService, "checkBranchName").mockResolvedValue({
+      error: null,
+      warning: null,
+    });
+    const update = vi
+      .spyOn(authServices.workItemService, "update")
+      .mockResolvedValue(makeWorkItem());
+    const onDone = vi.fn();
+
+    render(
+      <EditPanel
+        workItem={makeWorkItem({ branchNameOverride: "Planning" })}
+        detail={makeDetail()}
+        onSave={vi.fn()}
+        onDone={onDone}
+      />,
+    );
+
+    const box = screen.getByLabelText(/Continue an existing branch/) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    });
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(update.mock.calls[0][1]).toMatchObject({
+      branchNameOverride: "Planning",
+      useExistingBranch: true,
+    });
+  });
+
+  test("the flag is not sent without a branch name", async () => {
+    vi.spyOn(authServices.workItemService, "checkBranchName").mockResolvedValue({
+      error: null,
+      warning: null,
+    });
+    const update = vi
+      .spyOn(authServices.workItemService, "update")
+      .mockResolvedValue(makeWorkItem());
+    const onDone = vi.fn();
+
+    render(
+      <EditPanel
+        workItem={makeWorkItem({ branchNameOverride: "Planning", useExistingBranch: true })}
+        detail={makeDetail()}
+        onSave={vi.fn()}
+        onDone={onDone}
+      />,
+    );
+
+    expect((screen.getByLabelText(/Continue an existing branch/) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    fireEvent.change(screen.getByLabelText("Branch name (optional)"), { target: { value: "" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    });
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(update.mock.calls[0][1]).toMatchObject({
+      branchNameOverride: "",
+      useExistingBranch: false,
+    });
+  });
+});

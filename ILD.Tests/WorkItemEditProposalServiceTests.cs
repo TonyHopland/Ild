@@ -38,11 +38,12 @@ public sealed class WorkItemEditProposalServiceTests : IDisposable
 
     public static TheoryData<string, AgentWorkItemEditProposalRequest, string> InvalidEdits => new()
     {
-        { "nothing proposed", new(), "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, addDependencies or removeDependencies." },
+        { "nothing proposed", new(), "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, useExistingBranch, addDependencies or removeDependencies." },
         { "only a rationale", new() { Rationale = "just because" }, "Propose at least one of" },
         { "empty title", new() { Title = "" }, "A proposed title cannot be blank." },
         { "blank title", new() { Title = "   " }, "A proposed title cannot be blank." },
         { "illegal branch name", new() { BranchNameOverride = "bad..name" }, "Branch name cannot contain '..'." },
+        { "using an existing branch with a blank name", new() { BranchNameOverride = "", UseExistingBranch = true }, "useExistingBranch needs a branchNameOverride" },
         { "illegal base branch", new() { BaseBranchOverride = "has space" }, "Base branch cannot contain spaces." },
         { "blank addition", new() { Title = "ok", AddDependencies = ["  "] }, "A dependency id cannot be blank." },
         { "blank removal", new() { Title = "ok", RemoveDependencies = [""] }, "A dependency id cannot be blank." },
