@@ -45,6 +45,7 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
     public bool OffersRetry { get; set; }
     public BlankOutput BlankOutput { get; set; }
     public bool ProviderErrorIsTheFailure { get; set; }
+    public bool RawEventsExplainFailure { get; set; }
     public string? Fingerprint { get; set; }
     public string? PrepareFailure { get; set; }
     public Exception? ParseThrows { get; set; }
@@ -110,6 +111,8 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
         public override BlankOutput BlankOutput => adapter.BlankOutput;
 
         public override bool ProviderErrorIsTheFailure => adapter.ProviderErrorIsTheFailure;
+
+        public override bool RawEventsExplainFailure => adapter.RawEventsExplainFailure;
 
         public override bool IsSessionId(string sessionId) => adapter.AcceptsSessionId(sessionId);
 

@@ -103,6 +103,12 @@ public abstract class CliAgentTurn : IAsyncDisposable
     public virtual BlankOutput BlankOutput => BlankOutput.Answer;
 
     /// <summary>
+    /// Whether a non-zero exit that gave no answer explains itself in its raw events, so the error ends with their tail
+    /// rather than with the plain "no text" note.
+    /// </summary>
+    public virtual bool RawEventsExplainFailure => false;
+
+    /// <summary>
     /// Whether the provider's error is the whole failure whatever the exit code, so that stderr is not part of the error text
     /// the throttle classifier reads. For a CLI that reports a failed turn as an event and logs its retries to stderr.
     /// </summary>

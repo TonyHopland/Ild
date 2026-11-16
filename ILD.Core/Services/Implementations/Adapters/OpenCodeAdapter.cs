@@ -80,8 +80,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     private sealed class Turn(OpenCodeAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
     {
-        private string _model = string.Empty;
-        private string _configJson = string.Empty;
+        private (string Model, string ConfigJson)? _config;
         private IReadOnlyList<string> _extraArgs = [];
         private string _stdout = string.Empty;
         private JsonEvents _events = new(string.Empty, null, null, false);
@@ -97,7 +96,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         public override Task PrepareAsync()
         {
-            (_model, _configJson) = BuildOpenCodeConfig(ctx.Provider, adapter.RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway.Value);
             _extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, adapter._logger);
             return Task.CompletedTask;
         }
@@ -127,12 +125,18 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 ? Launch(useWorktreeAsWorkingDirectory: false)
                 : null;
 
+        // The config carries the gateway lease, which is first read here: the fork and the restore before the launch hold none.
         private AgentLaunch Launch(bool useWorktreeAsWorkingDirectory)
-            => new(
+        {
+            var (model, configJson) = _config ??= BuildOpenCodeConfig(
+                ctx.Provider, adapter.RunFacingEnvironmentFor(ctx), ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId,
+                ctx.AdditionalAllowedDirectories, ctx.NoTools, gateway.Value);
+            return new(
                 BuildRunProcessStartInfo(
-                    BinaryPath, worktreePath, ctx.Prompt, _model, _configJson, ResumeSessionId,
+                    BinaryPath, worktreePath, ctx.Prompt, model, configJson, ResumeSessionId,
                     useWorktreeAsWorkingDirectory: useWorktreeAsWorkingDirectory, extraArgs: _extraArgs),
-                BuildRunEnvironment(_configJson));
+                BuildRunEnvironment(configJson));
+        }
 
         public override async Task ReadStdoutAsync(StreamReader stdout)
         {

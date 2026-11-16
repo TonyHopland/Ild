@@ -342,7 +342,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
         var result = Classify(
             stream, stderr, exitCode, CliName, ctx.Prompt, sessionId, Traits.SupportsSessionResume ? ctx.IncomingSessionId : null, turn.BlankOutput,
-            turn.ProviderErrorIsTheFailure);
+            turn.ProviderErrorIsTheFailure, turn.RawEventsExplainFailure);
         return result.Success ? result with { Usage = await turn.UsageAsync() } : result;
     }
 
@@ -353,13 +353,15 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// output is the answer when it was not an event stream at all; what a blank one is, is the CLI's <see cref="BlankOutput"/>.</item>
     /// <item>A clean exit is still a failure when the provider reported an error, when the stream ended before its turn did, or when
     /// there was no answer. A non-zero exit is always one, with the provider's error as its reason when it gave one; with
-    /// <paramref name="providerErrorIsTheFailure"/> that error is the whole of the failure at any exit code, and stderr no part of it.</item>
+    /// <paramref name="providerErrorIsTheFailure"/> that error is the whole of the failure at any exit code, and stderr no part of it.
+    /// With nothing else to go on its error ends with the answer, else with the "no text" note, or with the tail of the raw events
+    /// for a CLI whose <paramref name="rawEventsExplainFailure"/> says they explain it.</item>
     /// <item>NUL is stripped from everything: it is the one character a PostgreSQL text column cannot store.</item>
     /// </list>
     /// </summary>
     internal static NodeExecutionResult Classify(
         StreamResult stream, string stderr, int exitCode, string cliName, string prompt, string? sessionId, string? incomingSessionId,
-        BlankOutput blankOutput = BlankOutput.Answer, bool providerErrorIsTheFailure = false)
+        BlankOutput blankOutput = BlankOutput.Answer, bool providerErrorIsTheFailure = false, bool rawEventsExplainFailure = false)
     {
         var text = StripNullChars(stream.Text);
         var raw = StripNullChars(stream.RawStdout);
@@ -382,7 +384,9 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             return NodeExecutionResult.Fail($"[{cliName}-error] {providerError}", hasText ? text : null, failure);
         if (exitCode != 0)
             return NodeExecutionResult.Fail(
-                AdapterFailureText.NonZeroExit(exitCode, stderr, providerError, hasText ? text : raw), response, failure);
+                AdapterFailureText.NonZeroExit(
+                    exitCode, stderr, providerError, hasText ? text : stream.SawJsonEvents && !rawEventsExplainFailure ? response : raw),
+                response, failure);
         if (providerError is not null)
             return NodeExecutionResult.Fail($"{cliName} session error: {providerError}", response, failure);
         // The CLI can exit cleanly mid-turn (the provider closed the stream), leaving half a sentence that must not pass for the answer.

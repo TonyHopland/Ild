@@ -91,6 +91,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         public override string BinaryPath { get; } = AiProviderConfig.Parse(ctx.Provider.Config)
             .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode, adapter.EnvironmentVariables));
 
+        public override bool RawEventsExplainFailure => true;
+
         public override Task PrepareAsync()
         {
             // Inject the ILD MCP server entry so the headless `claude` process

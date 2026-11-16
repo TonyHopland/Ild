@@ -236,14 +236,24 @@ public class CliAgentTurnOutcomeTests
     }
 
     [Fact]
-    public async Task A_non_zero_exit_with_empty_stderr_ends_the_error_with_the_text_else_the_raw_output()
+    public async Task A_non_zero_exit_with_empty_stderr_ends_the_error_with_the_text_else_the_no_text_note()
     {
         var (withText, _) = await RunAsync(Events("what it said", raw: "raw one"), exitCode: 1);
-        var (withoutText, _) = await RunAsync(Events("", raw: "the cli printed this and died"), exitCode: 1);
+        var (withoutText, _) = await RunAsync(Events("", raw: "{\"type\":\"step\"}"), exitCode: 1);
 
         Assert.Equal("exit=1 stderr= stdout=what it said", withText.Error);
-        Assert.Equal("exit=1 stderr= stdout=the cli printed this and died", withoutText.Error);
+        Assert.Equal("exit=1 stderr= stdout=[scripted] no assistant text response from model", withoutText.Error);
         Assert.Equal("[scripted] no assistant text response from model", withoutText.Output);
+    }
+
+    [Fact]
+    public async Task A_cli_whose_raw_events_explain_a_failure_ends_the_error_with_their_tail_when_it_gave_no_text()
+    {
+        var (result, _) = await RunAsync(
+            Events("", raw: "the cli printed this and died"), exitCode: 1, configure: a => a.RawEventsExplainFailure = true);
+
+        Assert.Equal("exit=1 stderr= stdout=the cli printed this and died", result.Error);
+        Assert.Equal("[scripted] no assistant text response from model", result.Output);
     }
 
     [Fact]
